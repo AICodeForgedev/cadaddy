@@ -277,6 +277,86 @@ fn hostile_inputs_do_not_panic() {
     let _ = spanning_tree(&[Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0)], 0);
 }
 
+/// A 3/4" raceway routed before, laid along `pts` with its centre `z` over the floor (sheet
+/// inches, the floor at 0).
+fn laid(field: &Field, pts: &[[f64; 2]], z: f64) {
+    let run = super::printcond::run(BRANCH_SYSTEM, "L1", "", pts.to_vec(), 0.75, z / UPF);
+    field.lay_run(&run, 0.0, UPF, "LP1-1");
+}
+
+/// The clearance between the outsides of two 3/4" raceways `dz` (vertically) or `dy` apart.
+fn outside_gap(d: f64) -> f64 {
+    d.abs() - 0.375 - 0.375
+}
+
+#[test]
+fn a_route_across_a_raceway_laid_before_passes_over_it_a_tier_up() {
+    let field = Field::new(Vec::new(), UPF);
+    laid(&field, &[[-240.0, 60.0], [240.0, 60.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &tiers(), 0.375, &field, UPF, &[], rules());
+    assert!(leg.crossings.is_empty() && leg.blocked.is_empty(), "{leg:?}");
+    assert_eq!(leg.pts, vec![Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0)]);
+    assert_eq!(leg.z, vec![115.0]);
+    assert!(outside_gap(115.0 - 111.0) >= rules().clearance_in("conduit"));
+    // Nothing laid: the lowest tier, as before.
+    let free = Field::new(Vec::new(), UPF);
+    assert_eq!(route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &tiers(), 0.375, &free, UPF, &[], rules()).z, vec![111.0]);
+}
+
+#[test]
+fn a_route_alongside_a_raceway_laid_before_with_no_tier_free_runs_in_the_lane_beside_it() {
+    let field = Field::new(Vec::new(), UPF);
+    // Between the leg's boxes, along its line (never over the boxes themselves: a rise there
+    // would meet it).
+    laid(&field, &[[24.0, 0.0], [216.0, 0.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), &[111.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.crossings.is_empty() && leg.blocked.is_empty(), "{leg:?}");
+    assert!(square(&leg), "{leg:?}");
+    // Side by side: the clearance between the outsides, a lane over, never a detour round it.
+    let off = leg.pts.iter().map(|p| p.y).fold(0.0, |m: f64, y| if y.abs() > m.abs() { y } else { m });
+    assert!(outside_gap(off) >= rules().clearance_in("conduit") && off.abs() <= 6.0, "{leg:?}");
+    assert!(leg.pts.iter().filter(|p| (p.y - off).abs() < 1e-9).count() == 2, "{leg:?}");
+}
+
+#[test]
+fn raceways_meeting_at_their_box_are_not_a_crossing() {
+    let field = Field::new(Vec::new(), UPF);
+    // One raceway ends at the box at the origin; the next leaves it the other way.
+    laid(&field, &[[-120.0, 0.0], [0.0, 0.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(120.0, 0.0), &tiers(), 0.375, &field, UPF, &[], rules());
+    assert!(leg.crossings.is_empty(), "{leg:?}");
+    assert_eq!(leg.z, vec![111.0]);
+}
+
+#[test]
+fn a_crossing_no_tier_or_lane_clears_is_listed_for_the_field() {
+    let field = Field::new(Vec::new(), UPF);
+    laid(&field, &[[-2400.0, 60.0], [2400.0, 60.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &[111.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert_eq!(leg.crossings.len(), 1, "{leg:?}");
+    let x = leg.crossings.first().expect("crossing");
+    assert_eq!(x.other, "LP1-1");
+    assert!((x.at.y - 60.0).abs() < 1.0 && (x.at.z - 111.0).abs() < 1e-9, "{x:?}");
+}
+
+#[test]
+fn hostile_laid_raceways_do_not_panic() {
+    let field = Field::new(Vec::new(), UPF);
+    laid(&field, &[[f64::NAN, 0.0], [1e300, -1e300]], f64::INFINITY);
+    laid(&field, &[[-1e18, 0.0], [1e18, 0.0]], 111.0);
+    laid(&field, &[], 111.0);
+    field.lay_piece(Vec3::new(0.0, 0.0, f64::NAN), Vec3::new(1.0, 1.0, 1.0), f64::NAN, "");
+    let _ = route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &tiers(), 0.375, &field, UPF, &[], rules());
+    let _ = field.crosses_laid(Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 1e300), 111.0, -1.0, &[], f64::NAN, "", UPF, rules());
+    let _ = shifted(&[Vec2::new(0.0, 0.0)], 5, 1.0, 0.1);
+    let _ = shifted(&[Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)], 0, f64::NAN, 0.1);
+    // The shared empty field lays nothing.
+    let empty = Field::default();
+    laid(&empty, &[[-240.0, 60.0], [240.0, 60.0]], 111.0);
+    assert!(empty.crosses_laid(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), 111.0, 0.375, &[], 4.0, "", UPF, rules()).is_none());
+}
+
 /// I-joists along y (from y = -240 to 240) every 24" from x = 0 to 240, 2.5" wide, their depth
 /// from 112" to 124" (sheet inches); or trusses there from 112" to 136".
 fn joisted(truss: bool) -> Field {
@@ -952,11 +1032,11 @@ fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
     let (at, face, z0) = (Vec2::new(0.0, 1.0), Some(Vec2::new(0.0, 1.0)), 111.0);
     let (_, _, blocked) = rise_point(at, 4.0, face, z0, 0.375, &field, UPF, &[], rules());
     assert_eq!(blocked, Some(0), "the unit is over the box and along its wall");
-    let (q, z, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[Handle(0x55)], rules());
+    let (q, z, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[Handle(0x55)], "", rules());
     assert_eq!(blocked, None);
     assert!(q.x.abs() > 21.0 + 3.0 && (q.y - 1.0).abs() < 1e-9, "beside the unit, along its wall: {q:?}");
     assert!((z - 2.5).abs() < 1e-9, "out of the box's side, 1-1/2 in under its top: {z}");
-    let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
+    let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], "", rules());
     assert_eq!(blocked, Some(0));
 }
 

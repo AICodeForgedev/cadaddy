@@ -384,6 +384,34 @@ fn a_conduit_through_a_duct_is_a_clash_found_without_the_routers_report() {
 }
 
 #[test]
+fn routes_that_cross_or_run_alongside_keep_their_clearance_one_over_the_other() {
+    // Q6552: LP1-1's leg runs north through LP1-3's leg running east; LP1-5's leg runs along
+    // LP1-3's line over part of it. Each raceway keeps the conduit clearance of the others (a
+    // tier over, or a lane beside), never through them at one height.
+    let devices = vec![
+        receptacle(1, 40.0, 0.0, "LP1-1"),
+        receptacle(2, 40.0, 8.0, "LP1-1"),
+        receptacle(3, 35.0, 5.0, "LP1-3"),
+        receptacle(4, 44.0, 5.0, "LP1-3"),
+        receptacle(5, 37.0, 5.0, "LP1-5"),
+        receptacle(6, 47.0, 5.0, "LP1-5"),
+    ];
+    let mut s = building_of(devices, Some(20), |_| {});
+    let (_, fs) = screen(&mut s, &["G-CLASH"]);
+    let raceways: Vec<&Value> = of(&fs, "G-CLASH")
+        .into_iter()
+        .filter(|f| {
+            f["verdict"] == "fail" && (f["measured"]["b"]["category"] == "conduit" || f["measured"]["router_item"]["b"]["category"] == "conduit")
+        })
+        .collect();
+    assert!(raceways.is_empty(), "{raceways:?}");
+    assert!(of(&fs, "G-CLASH").iter().any(|f| f["verdict"] == "pass"), "{fs:?}");
+    // The routes are all there: every box joined to the panel.
+    let (_, fs) = screen(&mut s, &["E-CONDUIT-CONTINUITY"]);
+    assert_eq!(verdicts(&fs, "E-CONDUIT-CONTINUITY").get("pass"), Some(&6), "{:?}", of(&fs, "E-CONDUIT-CONTINUITY"));
+}
+
+#[test]
 fn a_takeoff_off_by_a_fitting_fails() {
     let mut s = building(Some(20), |_| {});
     // One coupling taken out of the model, the stored count index left as it was.

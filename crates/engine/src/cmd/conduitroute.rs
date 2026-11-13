@@ -29,6 +29,7 @@
 //! shows it, `conduit.takeoff` takes the routed model off (conduit, fittings, boxes, rings, straps,
 //! wire, cable and firestop by level, area and circuit) and prices it.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::OnceLock;
 
@@ -166,6 +167,11 @@ pub(crate) struct RouteGeom {
     pub drop_step_in: f64,
     pub bend_penalty_ft: f64,
     pub max_detour_ft: f64,
+    /// Raceways that cross (Q6552): the later one over the other a tier up (or round it), the
+    /// conduit clearance kept; within `box_meet_in` of a route's end box they are the box's own
+    /// entries, not a crossing. Where that comes from.
+    pub box_meet_in: f64,
+    pub crossing_source: String,
     /// A roof level's raceway (it has no ceiling, Q6489): on supports this high over the deck,
     /// its tiers up to `roof_band_in`, inches; where that comes from.
     pub roof_support_in: f64,
@@ -194,6 +200,12 @@ impl RouteGeom {
         let other = if self.branch_box_joints == 0 { 3 } else { self.branch_box_joints.clamp(2, 8) };
         let w = if self.branch_weight.is_finite() && (0.0..=1.0).contains(&self.branch_weight) { self.branch_weight } else { 0.5 };
         (root, other, w)
+    }
+
+    /// Where raceways meet at a box rather than cross (Q6552), sheet units round the box's point.
+    pub(crate) fn box_meet(&self, upf: f64) -> f64 {
+        let v = if self.box_meet_in.is_finite() && self.box_meet_in >= 0.0 { self.box_meet_in.min(24.0) } else { 4.0 };
+        v / 12.0 * upf
     }
 
     /// A roof level's raceway band over its deck, feet: (lowest, highest) (Q6489).
@@ -390,7 +402,7 @@ pub(crate) struct Entry {
 }
 
 impl RouteRules {
-    fn clearance_in(&self, category: &str) -> f64 {
+    pub(crate) fn clearance_in(&self, category: &str) -> f64 {
         let key = match category {
             "duct" | "pipe" | "fitting" | "terminal" | "equipment" | "conduit" => category,
             "beam" | "column" | "joist" | "truss" | "slab" | "structure" => "structure",
@@ -624,6 +636,39 @@ pub(crate) struct Field {
     grid: HashMap<(i64, i64), Vec<usize>>,
     /// The framing members among `obs` (by index).
     frames: HashMap<usize, Frame>,
+    /// The raceways routed on the level so far (Q6552): a later route keeps clear of them as of
+    /// any obstacle, but they are no model element (no handle to report).
+    laid: RefCell<Laid>,
+}
+
+/// The most raceway pieces a level keeps for the routes after them.
+const MAX_LAID: usize = 400_000;
+
+/// The pieces of the raceways routed on a level (Q6552), bucketed in plan as the obstacles are.
+#[derive(Default)]
+struct Laid {
+    pieces: Vec<LaidPiece>,
+    grid: HashMap<(i64, i64), Vec<usize>>,
+}
+
+/// A raceway piece routed before: its centreline's ends, its box round them grown by its radius,
+/// and what it carries.
+struct LaidPiece {
+    a: Vec3,
+    b: Vec3,
+    lo: Vec3,
+    hi: Vec3,
+    what: String,
+}
+
+/// A raceway laid before a piece that the piece could not keep clear of at any tier: where, and
+/// what that raceway carries.
+#[derive(Clone, Debug)]
+pub(crate) struct Crossing {
+    pub at: Vec3,
+    pub other: String,
+    /// The piece of the path that crosses it (by index).
+    pub piece: usize,
 }
 
 impl Field {
@@ -674,7 +719,7 @@ impl Field {
                 }
             }
         }
-        Field { obs, cell, grid, frames: HashMap::new() }
+        Field { obs, cell, grid, frames: HashMap::new(), laid: RefCell::default() }
     }
     fn c(v: f64, cell: f64) -> i64 {
         (v / cell).floor().clamp(-1e12, 1e12) as i64
@@ -763,6 +808,180 @@ impl Field {
 }
 
 impl Field {
+    /// Lays a routed run (its points on the level's plan, each piece at its height over `floor`,
+    /// its rises and drops between them) carrying `what` (Q6552).
+    pub(crate) fn lay_run(&self, run: &MepRun, floor: f64, upf: f64, what: &str) {
+        let rad = run.size_in[0].max(0.0) / 24.0 * upf;
+        let z = |k: usize| run.bottoms_ft.get(k).or(run.bottoms_ft.last()).map(|b| floor + b * upf);
+        for (k, w) in run.points.windows(2).enumerate().take(MAX_LAID) {
+            let ([a, b], Some(zk)) = (w, z(k)) else { continue };
+            // The rise or drop at its start.
+            if let Some(zp) = k.checked_sub(1).and_then(z)
+                && (zp - zk).abs() > 1e-9
+            {
+                self.lay_piece(Vec3::new(a[0], a[1], zp), Vec3::new(a[0], a[1], zk), rad, what);
+            }
+            self.lay_piece(Vec3::new(a[0], a[1], zk), Vec3::new(b[0], b[1], zk), rad, what);
+        }
+    }
+
+    /// Lays one straight piece from `a` to `b` (a drop: both at one plan point), radius `r`.
+    pub(crate) fn lay_piece(&self, a: Vec3, b: Vec3, r: f64, what: &str) {
+        let Ok(mut laid) = self.laid.try_borrow_mut() else { return };
+        let r = if r.is_finite() { r.max(0.0) } else { 0.0 };
+        let (lo, hi) =
+            (Vec3::new(a.x.min(b.x) - r, a.y.min(b.y) - r, a.z.min(b.z) - r), Vec3::new(a.x.max(b.x) + r, a.y.max(b.y) + r, a.z.max(b.z) + r));
+        if laid.pieces.len() >= MAX_LAID || !(lo.is_finite() && hi.is_finite()) || self.cell <= 0.0 {
+            return;
+        }
+        let (x0, y0, x1, y1) = (Self::c(lo.x, self.cell), Self::c(lo.y, self.cell), Self::c(hi.x, self.cell), Self::c(hi.y, self.cell));
+        let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+        if !(0..=512).contains(&w) || !(0..=512).contains(&h) || w.saturating_mul(h) > 4096 {
+            return;
+        }
+        let i = laid.pieces.len();
+        laid.pieces.push(LaidPiece { a, b, lo, hi, what: what.to_string() });
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                laid.grid.entry((x, y)).or_default().push(i);
+            }
+        }
+    }
+
+    /// Lays a routed path's square pieces (`pts`, each at its `z`, its centre; radius `r`)
+    /// carrying `what` (Q6552): the pieces only, its rises and drops laid with its run.
+    pub(crate) fn lay(&self, pts: &[Vec2], z: &[f64], r: f64, what: &str) {
+        for (k, w) in pts.windows(2).enumerate().take(MAX_LAID) {
+            let ([a, b], Some(z)) = (w, z.get(k).or(z.last())) else { continue };
+            self.lay_piece(Vec3::new(a.x, a.y, *z), Vec3::new(b.x, b.y, *z), r, what);
+        }
+    }
+
+    /// The raceway laid before that a rise or drop at `p` from `z0` to `z1` (radius `r`) passes
+    /// within the conduit clearance of (Q6552): one running over it. At a box (`at_box`), the
+    /// drops of others and the raceways that come to this box too (an end within `meet` of it)
+    /// enter it by knockouts of their own: no crossing; elsewhere (a rise moved along its wall)
+    /// another's rise there is.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn column_crosses_laid(
+        &self,
+        p: Vec2,
+        z0: f64,
+        z1: f64,
+        r: f64,
+        meet: f64,
+        at_box: bool,
+        own: &str,
+        upf: f64,
+        rl: &RouteRules,
+    ) -> Option<Crossing> {
+        let laid = self.laid.try_borrow().ok()?;
+        if laid.pieces.is_empty() || !(p.is_finite() && z0.is_finite() && z1.is_finite() && r.is_finite()) || self.cell <= 0.0 {
+            return None;
+        }
+        let (zlo, zhi) = (z0.min(z1), z0.max(z1));
+        let c = rl.clearance_in("conduit") / 12.0 * upf + r;
+        let tiny = upf / 192.0;
+        let plan = |v: Vec3| Vec2::new(v.x, v.y);
+        let (x0, y0, x1, y1) = (Self::c(p.x - c, self.cell), Self::c(p.y - c, self.cell), Self::c(p.x + c, self.cell), Self::c(p.y + c, self.cell));
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for &i in laid.grid.get(&(x, y)).into_iter().flatten() {
+                    if !seen.insert(i) {
+                        continue;
+                    }
+                    let Some(o) = laid.pieces.get(i) else { continue };
+                    let vertical = plan(o.a).dist(plan(o.b)) <= tiny;
+                    if !own.is_empty() && o.what == own {
+                        continue;
+                    }
+                    if at_box && (vertical || plan(o.a).dist(p) <= meet || plan(o.b).dist(p) <= meet) {
+                        continue;
+                    }
+                    let meets =
+                        p.x <= o.hi.x + c && p.x >= o.lo.x - c && p.y <= o.hi.y + c && p.y >= o.lo.y - c && zlo <= o.hi.z + c && zhi >= o.lo.z - c;
+                    if meets {
+                        let z = ((o.lo.z + o.hi.z) / 2.0).clamp(zlo, zhi);
+                        return Some(Crossing { at: Vec3::new(p.x, p.y, z), other: o.what.clone(), piece: 0 });
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The raceway laid before that a square piece `a`–`b` at height `z` (radius `r`) comes
+    /// within the conduit clearance of (Q6552): what it carries and the point on the piece, or
+    /// none. A route's own end boxes are where raceways meet: `ends` (each a box's point) clears
+    /// `meet` of the piece round each.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn crosses_laid(
+        &self,
+        a: Vec2,
+        b: Vec2,
+        z: f64,
+        r: f64,
+        ends: &[Vec2],
+        meet: f64,
+        own: &str,
+        upf: f64,
+        rl: &RouteRules,
+    ) -> Option<Crossing> {
+        let laid = self.laid.try_borrow().ok()?;
+        if laid.pieces.is_empty() || !(a.is_finite() && b.is_finite() && z.is_finite() && r.is_finite()) || self.cell <= 0.0 {
+            return None;
+        }
+        // The piece less its ends at a box (square pieces: along its axis).
+        let len = a.dist(b);
+        let (mut ta, mut tb) = (0.0_f64, len);
+        for e in ends {
+            if e.dist(a) <= meet {
+                ta = ta.max(meet - e.dist(a));
+            }
+            if e.dist(b) <= meet {
+                tb = tb.min(len - (meet - e.dist(b)));
+            }
+        }
+        if len > 1e-9 && tb <= ta {
+            return None;
+        }
+        let at = |t: f64| if len > 1e-9 { a + (b - a) * (t / len) } else { a };
+        let (pa, pb) = (at(ta), at(tb));
+        let c = rl.clearance_in("conduit") / 12.0 * upf + r;
+        let (lo, hi) = (Vec2::new(pa.x.min(pb.x), pa.y.min(pb.y)), Vec2::new(pa.x.max(pb.x), pa.y.max(pb.y)));
+        let (x0, y0, x1, y1) =
+            (Self::c(lo.x - c, self.cell), Self::c(lo.y - c, self.cell), Self::c(hi.x + c, self.cell), Self::c(hi.y + c, self.cell));
+        let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+        if !(0..=4096).contains(&w) || !(0..=4096).contains(&h) || w.saturating_mul(h) > 1_000_000 {
+            return None;
+        }
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for &i in laid.grid.get(&(x, y)).into_iter().flatten() {
+                    if !seen.insert(i) {
+                        continue;
+                    }
+                    let Some(o) = laid.pieces.get(i) else { continue };
+                    // Its own circuit's: one raceway where they run together (the pieces' rule).
+                    if !own.is_empty() && o.what == own {
+                        continue;
+                    }
+                    let (olo, ohi) = (o.lo, o.hi);
+                    // Away from the boxes, a box round each: the piece's (with the clearance) and
+                    // the raceway's (with its radius) meet.
+                    let meets = lo.x <= ohi.x + c && hi.x >= olo.x - c && lo.y <= ohi.y + c && hi.y >= olo.y - c && z <= ohi.z + c && z >= olo.z - c;
+                    if meets {
+                        let mid = Vec2::new(((olo.x + ohi.x) / 2.0).clamp(lo.x, hi.x), ((olo.y + ohi.y) / 2.0).clamp(lo.y, hi.y));
+                        return Some(Crossing { at: Vec3::new(mid.x, mid.y, z), other: o.what.clone(), piece: 0 });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// What the framing over the level does to a square piece `a`–`b` at height `z` (its centre,
     /// radius `r`): the holes it bores through joists' webs and the trusses it passes between
     /// the chords of, nearest first; or the first member that stops it and why.
@@ -981,19 +1200,40 @@ pub(crate) struct Leg {
     /// The holes it bores through the framing (a cost: labor at each); a pass through a truss's
     /// web is none.
     pub holes: usize,
+    /// The raceways laid before it that a piece crosses at every tier it is otherwise clear at
+    /// (Q6552): what the field must still offset.
+    pub crossings: Vec<Crossing>,
 }
 
-/// Each piece of `path` at the lowest of `tiers` it is clear at; a piece clear at none stays at
-/// the first, blocked.
-fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[Handle], rl: &RouteRules) -> Leg {
+/// Each piece of `path` at the lowest of `tiers` it is clear at, of the raceways laid before it
+/// too (one over the other where routes cross, Q6552); a piece clear of the obstacles only where
+/// it crosses one stays at the lowest such tier, the crossing listed; a piece clear at none stays
+/// at the first, blocked.
+#[allow(clippy::too_many_arguments)]
+fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[Handle], own: &str, rl: &RouteRules) -> Leg {
     let mut leg = Leg { pts: path.to_vec(), ..Leg::default() };
     let first = tiers.first().copied().unwrap_or(0.0);
-    for w in path.windows(2) {
+    // Its end boxes, where raceways meet.
+    let ends: Vec<Vec2> = path.first().into_iter().chain(path.last()).copied().collect();
+    let meet = rl.route.box_meet(upf);
+    for (k, w) in path.windows(2).enumerate() {
         let [a, b] = w else { continue };
         // Clear of the obstacles, and through the framing only where its web may be bored.
         let clear = |z: &f64| field.hit(*a, *b, *z, r, upf, skip, rl).is_none() && field.framing(*a, *b, *z, r, upf, rl).is_ok();
-        match tiers.iter().copied().find(clear) {
-            Some(z) => {
+        // Its rise from the lowest tier at its first box and its drop into its last: never
+        // through a raceway running over the box.
+        let column = |q: Option<&Vec2>, z: f64| q.and_then(|q| field.column_crosses_laid(*q, first, z, r, meet, true, own, upf, rl));
+        let crosses = |z: f64| {
+            field
+                .crosses_laid(*a, *b, z, r, &ends, meet, own, upf, rl)
+                .or_else(|| if k == 0 { column(path.first(), z) } else { None })
+                .or_else(|| if k + 2 == path.len() { column(path.last(), z) } else { None })
+        };
+        let apart = |z: &f64| crosses(*z).is_none();
+        let crossing = || tiers.iter().copied().find(clear).map(|z| (z, crosses(z)));
+        match tiers.iter().copied().find(|z| clear(z) && apart(z)).map(|z| (z, None)).or_else(crossing) {
+            Some((z, crossed)) => {
+                leg.crossings.extend(crossed.map(|c| Crossing { piece: k, ..c }));
                 // A pass through a truss's open web bores nothing: only bored holes are labor
                 // (Q6314: counted, a top floor's runs went round the trusses' ends, past the walls).
                 leg.holes += field.framing(*a, *b, z, r, upf, rl).map_or(0, |h| h.iter().filter(|h| h.dia_in > 0.0).count());
@@ -1044,15 +1284,29 @@ pub(crate) fn framing_tier_top(floor: f64, storey_top: f64, bottom: f64, top: f6
 
 /// The best square route from `a` to `b`: fewest blocked pieces, then shortest (bends cost).
 pub(crate) fn route_leg(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[Handle], rl: &RouteRules) -> Leg {
+    route_leg_of(a, b, tiers, r, field, upf, skip, "", rl)
+}
+
+/// [`route_leg`] for a raceway carrying `own` (what it is laid as, Q6552): the raceways laid
+/// before for the same are its own circuit's, one raceway where they run together.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn route_leg_of(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[Handle], own: &str, rl: &RouteRules) -> Leg {
     let eps = upf / 96.0;
     let detour = rl.route.max_detour_ft.max(0.0) * upf;
     let bend = rl.route.bend_penalty_ft.max(0.0) * upf;
     let bore = rl.framing.hole_penalty_ft.max(0.0) * upf;
     let score = |l: &Leg| {
         let tiers_changed = l.z.windows(2).filter(|w| matches!(w, [p, q] if (p - q).abs() > 1e-9)).count() as f64;
-        (l.blocked.len(), poly_len(&l.pts) + bend * (l.pts.len().saturating_sub(2) as f64 + tiers_changed) + bore * l.holes as f64)
+        // Blocked pieces first, then crossings of the raceways laid before (Q6552).
+        (
+            (l.blocked.len(), l.crossings.len()),
+            poly_len(&l.pts) + bend * (l.pts.len().saturating_sub(2) as f64 + tiers_changed) + bore * l.holes as f64,
+        )
     };
-    let mut best: Option<((usize, f64), Leg)> = None;
+    let mut best: Option<(((usize, usize), f64), Leg)> = None;
+    // The best shape by its blocked pieces and length only, whatever raceways it crosses: where
+    // the lanes beside it start from.
+    let mut plain: Option<((usize, f64), Leg)> = None;
     let mut cands = shapes(a, b, detour, eps);
     // Under framing: the run along the members kept to the bays beside its ends.
     for p in [a, b] {
@@ -1065,13 +1319,16 @@ pub(crate) fn route_leg(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Field, 
     }
     for p in cands {
         if p.len() < 2 {
-            let one = Leg { pts: vec![a, b], z: vec![tiers.first().copied().unwrap_or(0.0)], blocked: Vec::new(), holes: 0 };
+            let one = Leg { pts: vec![a, b], z: vec![tiers.first().copied().unwrap_or(0.0)], ..Leg::default() };
             return one;
         }
-        let leg = seat(&p, tiers, r, field, upf, skip, rl);
+        let leg = seat(&p, tiers, r, field, upf, skip, own, rl);
         let s = score(&leg);
+        if plain.as_ref().is_none_or(|(ps, _)| s.0.0 < ps.0 || (s.0.0 == ps.0 && s.1 < ps.1 - 1e-9)) {
+            plain = Some(((s.0.0, s.1), leg.clone()));
+        }
         if best.as_ref().is_none_or(|(bs, _)| s.0 < bs.0 || (s.0 == bs.0 && s.1 < bs.1 - 1e-9)) {
-            let clear = s.0 == 0;
+            let clear = s.0 == (0, 0);
             best = Some((s, leg));
             // The two Ls first: a clear L is never beaten by a longer shape.
             if clear && best.as_ref().is_some_and(|(s, _)| s.1 <= manhattan(a, b) + bend + 1e-9) {
@@ -1079,7 +1336,80 @@ pub(crate) fn route_leg(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Field, 
             }
         }
     }
+    // The shortest shape crossing a raceway laid before at every tier (alongside it, or every
+    // tier taken): its crossing piece beside it instead, a lane over at a time (Q6552: side by
+    // side, as the field runs parallel raceways), while that leaves fewer; taken where that
+    // beats the best shape.
+    let lane = 2.0 * r + rl.clearance_in("conduit") / 12.0 * upf + upf / 48.0;
+    let mut moved = plain.map(|(_, l)| (score(&l), l)).filter(|(_, l)| !l.crossings.is_empty());
+    for _ in 0..MAX_SHIFTS {
+        let Some((ms, ml)) = moved.as_ref() else { break };
+        if ml.crossings.is_empty() {
+            break;
+        }
+        let mut pieces: Vec<usize> = ml.crossings.iter().map(|c| c.piece).collect();
+        pieces.dedup();
+        let base = ml.pts.clone();
+        let ms = *ms;
+        let mut better: Option<(((usize, usize), f64), Leg)> = None;
+        'piece: for k in pieces {
+            for n in 1..=MAX_LANES {
+                for side in [1.0, -1.0] {
+                    let Some(p) = shifted(&base, k, lane * n as f64 * side, eps) else { continue };
+                    let leg = seat(&p, tiers, r, field, upf, skip, own, rl);
+                    let s = score(&leg);
+                    if s.0 < ms.0 && better.as_ref().is_none_or(|(b, _)| s.0 < b.0 || (s.0 == b.0 && s.1 < b.1 - 1e-9)) {
+                        better = Some((s, leg));
+                    }
+                }
+                if better.is_some() {
+                    break 'piece;
+                }
+            }
+        }
+        match better {
+            Some(b) => moved = Some(b),
+            None => break,
+        }
+    }
+    if let Some((ms, ml)) = moved
+        && best.as_ref().is_none_or(|(bs, _)| ms.0 < bs.0 || (ms.0 == bs.0 && ms.1 < bs.1 - 1e-9))
+    {
+        best = Some((ms, ml));
+    }
     best.map(|(_, l)| l).unwrap_or_default()
+}
+
+/// The most crossings a leg's lanes are moved for (Q6552).
+const MAX_SHIFTS: usize = 6;
+/// The most lanes over a piece is moved, each side.
+const MAX_LANES: usize = 4;
+
+/// `path` with its piece `k` moved `by` across itself (left of its way, sheet units), square:
+/// an inner piece moves with the ends of the pieces beside it; an end piece jogs out of its end
+/// and back. None for a point piece or one that isn't square.
+fn shifted(path: &[Vec2], k: usize, by: f64, eps: f64) -> Option<Vec<Vec2>> {
+    let (a, b) = (*path.get(k)?, *path.get(k + 1)?);
+    let d = b - a;
+    let len = d.len();
+    if !(len > eps && by.is_finite()) || (d.x.abs() > eps && d.y.abs() > eps) {
+        return None;
+    }
+    let n = Vec2::new(-d.y / len, d.x / len) * by;
+    let mut out: Vec<Vec2> = path.get(..k)?.to_vec();
+    if k == 0 {
+        out.push(a);
+    }
+    out.push(a + n);
+    out.push(b + n);
+    if k + 2 >= path.len() {
+        out.push(b);
+    }
+    out.extend(path.get(k + 2..).into_iter().flatten().copied());
+    let out = tidy(out, eps);
+    // Square still: an inner piece's neighbours run across it.
+    let square = out.windows(2).all(|w| matches!(w, [p, q] if (p.x - q.x).abs() <= eps || (p.y - q.y).abs() <= eps));
+    (square && out.len() >= 2).then_some(out)
 }
 
 /// A rectilinear spanning tree over `pts` (Prim, square distance) as an electrician chains the
@@ -2220,8 +2550,32 @@ pub(crate) fn rise_point(
     skip: &[Handle],
     rl: &RouteRules,
 ) -> (Vec2, f64, Option<usize>) {
+    rise_point_of(at, top, face, z0, r, field, upf, skip, "", rl)
+}
+
+/// [`rise_point`] for a raceway carrying `own` (Q6552): its own circuit's raceways laid before
+/// share its rise (one raceway), others' are kept clear of.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rise_point_of(
+    at: Vec2,
+    top: f64,
+    face: Option<Vec2>,
+    z0: f64,
+    r: f64,
+    field: &Field,
+    upf: f64,
+    skip: &[Handle],
+    own: &str,
+    rl: &RouteRules,
+) -> (Vec2, f64, Option<usize>) {
     let zj = (top + rl.route.in_wall_above_box_in.max(0.0) / 12.0 * upf).min(z0);
-    let Some(first) = field.hit_unworked(at, at, top, z0, r, upf, skip, rl) else { return (at, zj, None) };
+    // A raceway routed before running over the box (Q6552) is in the way of its rise too.
+    let meet = rl.route.box_meet(upf);
+    let laid = |q: Vec2, z: f64| field.column_crosses_laid(q, z, z0, r, meet, q.dist(at) <= meet, own, upf, rl).is_some();
+    let first = field.hit_unworked(at, at, top, z0, r, upf, skip, rl);
+    if first.is_none() && !laid(at, top) {
+        return (at, zj, None);
+    }
     let dirs: Vec<Vec2> = match face {
         Some(f) if f.x.abs() > 0.99 => vec![Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
         Some(f) if f.y.abs() > 0.99 => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)],
@@ -2230,15 +2584,21 @@ pub(crate) fn rise_point(
     };
     let step = rl.route.drop_step_in.max(1.0) / 12.0 * upf;
     let n = ((rl.route.drop_reach_ft.max(0.0) * upf) / step).floor().clamp(0.0, 48.0) as usize;
-    for k in 1..=n {
-        for dir in &dirs {
-            let q = at + *dir * (step * k as f64);
-            if field.hit_unworked(q, q, zj, z0, r, upf, skip, rl).is_none() && field.hit_unworked(at, q, zj, zj, r, upf, skip, rl).is_none() {
-                return (q, zj, None);
-            }
-        }
+    let spots: Vec<Vec2> = (1..=n).flat_map(|k| dirs.iter().map(move |dir| at + *dir * (step * k as f64))).collect();
+    let clear =
+        |q: &Vec2| field.hit_unworked(*q, *q, zj, z0, r, upf, skip, rl).is_none() && field.hit_unworked(at, *q, zj, zj, r, upf, skip, rl).is_none();
+    // Clear of the obstacles and of the raceways laid before; else of the obstacles only: a
+    // raceway crossing is listed for the field to offset, a pipe or duct is never gone through.
+    if let Some(q) = spots.iter().copied().find(|q| clear(q) && !laid(*q, zj)) {
+        return (q, zj, None);
     }
-    (at, zj, Some(first))
+    if first.is_none() {
+        return (at, zj, None);
+    }
+    if let Some(q) = spots.iter().copied().find(clear) {
+        return (q, zj, None);
+    }
+    (at, zj, first)
 }
 
 /// A device set in the floor: `mounting` (or `mount`) floor, or its kind or type names a floor
@@ -2453,9 +2813,10 @@ fn rise_point_under(
     upf: f64,
     skip: &[Handle],
     under: &[Handle],
+    own: &str,
     rl: &RouteRules,
 ) -> (Vec2, f64, Option<usize>) {
-    let found = rise_point(at, top, face, z0, r, field, upf, skip, rl);
+    let found = rise_point_of(at, top, face, z0, r, field, upf, skip, own, rl);
     if found.2.is_none() || under.is_empty() {
         return found;
     }
@@ -2724,6 +3085,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     for (k, fr) in framing.into_iter().filter(|(_, f)| !f.is_empty()) {
         fields.insert(k, Field::with_framing(Vec::new(), fr, upf));
+    }
+    // Every level a field of its own: the raceways routed on it are laid there (Q6552); the
+    // shared empty one lays none.
+    for l in sp.levels.iter().take(MAX_DEVICES) {
+        fields.entry(l.name.to_ascii_lowercase()).or_insert_with(|| Field::new(Vec::new(), upf));
     }
     let member_source = members.first().map(|m| m.source.clone()).unwrap_or_default();
     // The built ceilings by level (each room's from its elevations or RCP area, the RCPs'): their
@@ -3499,6 +3865,28 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut under_slab_ft = 0.0f64;
     let mut keynote_taken: BTreeSet<String> = BTreeSet::new();
     let r_of = |size_in: f64| size_in / 24.0 * upf;
+    // A raceway laid before that a route crosses at every tier it is otherwise clear at (Q6552):
+    // a clash item between the two raceways, for the field to offset.
+    let add_crossing = |clashes: &mut Vec<Value>, x: &Crossing, what: &str, circuit: &str, level: &str| {
+        if clashes.len() >= MAX_ITEMS {
+            return;
+        }
+        let need = rl.clearance_in("conduit");
+        let floor = sp.level(level).map_or(0.0, |l| l.elevation_ft * upf);
+        clashes.push(json!({
+            "kind": "clash",
+            "a": {"what": what, "circuit": circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
+            "b": {"category": "conduit", "system": BRANCH_SYSTEM, "circuit": x.other, "trade": "electrical"},
+            "pair": "electrical × electrical",
+            "level": level,
+            "at": [r2(x.at.x), r2(x.at.y), r2((x.at.z - floor) / upf)],
+            "clearance_in": need,
+            "fix": format!(
+                "the {what} crosses the raceway of {} at every tier the ceiling space has clear of the other trades: take one over the other ({need} in clear between them) or side by side ({})",
+                x.other, rl.route.crossing_source
+            ),
+        }));
+    };
     let add_clash = |clashes: &mut Vec<Value>, field: &Field, b: &Blocked, what: &str, circuit: &str, level: &str, size_in: f64| {
         if clashes.len() >= MAX_ITEMS {
             return;
@@ -3814,10 +4202,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 // Each end rises over its box, or along its wall where that is blocked.
                 let z0 = tiers.first().copied().unwrap_or(a.top.max(b.top));
                 let own: Vec<Handle> = gi.and_then(|i| gear.get(i)).map(|g| g.handle).into_iter().collect();
-                let (qa, ja, ba) = rise_point_under(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, &units_over(a, field, upf, rl), rl);
-                let (qb, jb, bb) = rise_point_under(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, &units_over(b, field, upf, rl), rl);
+                let (qa, ja, ba) =
+                    rise_point_under(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, &units_over(a, field, upf, rl), &c.label, rl);
+                let (qb, jb, bb) =
+                    rise_point_under(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, &units_over(b, field, upf, rl), &c.label, rl);
                 drops_moved += usize::from(qa.dist(a.at) > upf / 96.0) + usize::from(qb.dist(b.at) > upf / 96.0);
-                let leg = route_leg(qa, qb, tiers, r_of(size), field, upf, &[], rl);
+                let leg = route_leg_of(qa, qb, tiers, r_of(size), field, upf, &[], &c.label, rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "branch conduit", &c.label, &c.level, size);
                 }
@@ -3845,6 +4235,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 to_box(&mut pts, &mut bot, b.at, b.top, (qb, jb), floor, upf);
                 r.points = pts;
                 r.bottoms_ft = bot;
+                // Laid: the routes after it keep clear of it (Q6552).
+                field.lay_run(&r, floor, upf, &c.label);
+                for x in &leg.crossings {
+                    add_crossing(&mut clashes, x, "branch conduit", &c.label, &c.level);
+                }
                 tree_len += run_ft(&r, upf);
                 penetrate(&mut penetrations, &rated, &c.level, &leg, &c.label, size, upf, floor, rl);
                 for bl in bore(&mut bored, field, &leg, &c.label, &c.level, size, upf, rl) {
@@ -4159,12 +4554,26 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // the target, not an obstacle).
         let z0 = tiers.first().copied().unwrap_or(lead_dev.top);
         let under = units_over(lead_dev, field, upf, rl);
-        let (qa, ja, ba) =
-            rise_point_under(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, &[gear_el.handle], &under, rl);
+        // What the homerun is laid as: its own raceway (Q6552).
+        let home_of = format!("{} homerun {gn}", gear_el.tag);
+        let (qa, ja, ba) = rise_point_under(
+            lead_dev.at,
+            lead_dev.top,
+            lead_dev.face,
+            z0,
+            r_of(min_in.max(1.0)),
+            field,
+            upf,
+            &[gear_el.handle],
+            &under,
+            &home_of,
+            rl,
+        );
         drops_moved += usize::from(qa.dist(lead_dev.at) > upf / 96.0);
         let mut home_pts: Vec<Vec2> = vec![qa];
         let mut home_z: Vec<f64> = Vec::new();
         let mut blocked: Vec<Blocked> = Vec::new();
+        let mut crossed: Vec<Crossing> = Vec::new();
         let mut vertical: Vec<Blocked> = Vec::new();
         if let Some(i) = ba {
             vertical.push(Blocked { obstacle: i, at: Vec3::new(qa.x, qa.y, z0), z: z0, why: "" });
@@ -4195,11 +4604,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // makes a branch homerun more than 1").
         for w in plan.windows(2) {
             let [a, b] = w else { continue };
-            let leg = route_leg(*a, *b, &tiers, r_of(min_in.max(1.0)), field, upf, &skip, rl);
+            let leg = route_leg_of(*a, *b, &tiers, r_of(min_in.max(1.0)), field, upf, &skip, &home_of, rl);
             home_pts.extend(leg.pts.iter().skip(1).copied());
             home_z.extend(leg.z.iter().copied());
             blocked.extend(leg.blocked);
+            crossed.extend(leg.crossings);
         }
+        // Laid now: its members' taps keep clear of it (Q6552).
+        field.lay(&home_pts, &home_z, r_of(min_in.max(1.0)), &home_of);
         path_len_ft += poly_len(&home_pts) / upf;
         for i in g {
             let Some(h) = homes.get(*i) else { continue };
@@ -4221,7 +4633,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 let way = way_ceiling(&c.level, md.at, lead_dev.at).filter(|z| over.is_none_or(|o| *z > o + upf / 96.0));
                 let tap_tiers = way.map(|z| tiers_of(&c.level, Some(z)).1);
                 let tiers = tap_tiers.as_deref().unwrap_or(&tiers);
-                let leg = route_leg(md.at, lead_dev.at, tiers, r_of(min_in), field, upf, &[], rl);
+                let leg = route_leg_of(md.at, lead_dev.at, tiers, r_of(min_in), field, upf, &[], &c.label, rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "homerun tap", &c.label, &c.level, min_in);
                 }
@@ -4234,6 +4646,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 bot.push((lead_dev.top - floor) / upf);
                 r.points = pts;
                 r.bottoms_ft = bot;
+                field.lay_run(&r, floor, upf, &c.label);
+                for x in &leg.crossings {
+                    add_crossing(&mut clashes, x, "homerun tap", &c.label, &c.level);
+                }
                 r.id = format!("{}#tap", tag.id);
                 r.size_source = format!("minimum: {min_src}");
                 r.height_source = ROUTED.into();
@@ -4509,8 +4925,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             let prev = home_pts.last().copied().unwrap_or(last);
             let mut tail = vec![prev, Vec2::new(land.x, prev.y), land];
             tail = tidy(tail, upf / 96.0);
-            for _ in 1..tail.len() {
-                home_z.push(z);
+            // Seated as the rest (Q6552): over the raceways laid round the panel, not through
+            // them; its own height where nothing is clear.
+            let seated = seat(&tail, &tiers, r_of(min_in.max(1.0)), field, upf, &skip, &home_of, rl);
+            for k in 1..tail.len() {
+                home_z.push(if seated.crossings.iter().any(|c| c.piece + 1 == k) { z } else { seated.z.get(k - 1).copied().unwrap_or(z) });
             }
             home_pts.extend(tail.into_iter().skip(1));
         }
@@ -4624,6 +5043,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
         r.points = pts;
         r.bottoms_ft = bot;
+        field.lay_run(&r, floor, upf, &home_of);
+        for x in &crossed {
+            add_crossing(&mut clashes, x, "homerun", &labels.join(","), &lead_h.level);
+        }
         r.id = format!("{gid}#home");
         r.size_source = ssrc.clone();
         r.height_source = ROUTED.into();
