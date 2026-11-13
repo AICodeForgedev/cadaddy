@@ -625,6 +625,8 @@ pub(crate) struct View<'a> {
     pub read: Vec<&'a ReadDevice>,
     /// Its straight pieces, for the leaders its labels are set on (none: no leader is followed).
     pub leaders: Option<&'a super::labelspot::Leaders>,
+    /// Its short strokes, for switch symbols drawn as loose linework (Q6602; none: none looked for).
+    pub strokes: Option<&'a super::labelspot::Strokes>,
 }
 
 /// What the documents say the view's marks are: the fixture marks of the fixture schedule and
@@ -1065,9 +1067,10 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
                 continue;
             }
             // Else where a leader from it ends, else the switch symbol drawn by it that the import
-            // read as a big letter; else (said so) its lettering.
-            let glyphs = super::labelspot::glyph_symbols(t, &view.texts);
-            let (spot_at, spot) = super::labelspot::locate(t, &[], view.leaders, &glyphs, super::labelspot::SWITCH_SYMBOL_REACH_H);
+            // read as a big letter or left as loose linework (Q6602, none a device stands on);
+            // else (said so) its lettering.
+            let taken: Vec<Vec2> = view.read.iter().copied().chain(out.iter()).map(at_of).collect();
+            let (spot_at, spot) = super::labelspot::locate_switch(t, &view.texts, view.leaders, view.strokes, &taken);
             let mut dv = new(&tag, spot_at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
             dv.leg.clone_from(leg);
             dv.label_at = Some([t.at.x, t.at.y]);
@@ -1346,7 +1349,15 @@ mod tests {
         scene.extend(light([300.0, 100.0]));
         let sc = Scene::new(scene, 10.0);
         let texts = [text("Q-2", [108.0, 98.0]), text("1", [299.0, 98.0]), text("QP1-5", [295.0, 110.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 400.0, 200.0], texts: texts.iter().collect(), read: Vec::new(), leaders: None };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 400.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: None,
+            strokes: None,
+        };
         let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let found = find_symbols(&tps, &sc, view.rect, 4.0);
         assert_eq!(found.len(), 2, "both drawings match the legend's: {found:?}");
@@ -1385,6 +1396,7 @@ mod tests {
             texts: texts.iter().collect(),
             read: Vec::new(),
             leaders: Some(&leaders),
+            strokes: None,
         };
         let marks = Marks { luminaires: ["K2".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let got = read_view(&view, &[], &marks);
@@ -1419,7 +1431,15 @@ mod tests {
             powered: true,
         };
         let texts = [text("D,b", [66.0, 66.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new(), leaders: None };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: None,
+            strokes: None,
+        };
         let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let got = read_view(&view, &[sw], &marks);
         let switches: Vec<(String, String, [i64; 2])> = got
@@ -1431,12 +1451,72 @@ mod tests {
     }
 
     #[test]
+    fn a_switch_designation_by_an_s_drawn_as_loose_linework_makes_its_switch_on_the_s() {
+        // Q6602: `3,D,a` printed beside a switch's `S` drawn as loose strokes (no legend drawing of
+        // it, no letter read from it) about (60, 60); `c` beside an `S` a receptacle read already
+        // stands on, and `D,b` with nothing drawn by it.
+        let s_at = |c: [f64; 2]| -> EntityKind {
+            let (top, bottom) = (Vec2::new(c[0], c[1] + 3.5), Vec2::new(c[0], c[1] - 3.5));
+            let mut pts: Vec<Vec2> = (0..=10).map(|i| top + Vec2::from_angle((20.0 + 25.0 * f64::from(i)).to_radians()) * 3.5).collect();
+            pts.extend((1..=10).map(|i| bottom + Vec2::from_angle((90.0 - 25.0 * f64::from(i)).to_radians()) * 3.5));
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts.iter().map(|p| cadaddy_geom::PolyVertex { p: *p, bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect(),
+                closed: false,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        let objects = [s_at([60.0, 60.0]), s_at([140.0, 60.0])];
+        let strokes = super::super::labelspot::Strokes::of(objects.iter(), 4.0);
+        let texts = [text("3,D,a", [66.0, 58.0]), text("c", [146.0, 58.0]), text("D,b", [100.0, 160.0])];
+        let rec = read("REC", [140.0, 61.0], "Q-1", "");
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: vec![&rec],
+            leaders: None,
+            strokes: Some(&strokes),
+        };
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let mut switches: Vec<(String, String, [i64; 2])> = got
+            .iter()
+            .filter(|d| kind_of(d) == "switch")
+            .map(|d| (d.tag.clone(), d.leg.clone(), [d.at[0].round() as i64, d.at[1].round() as i64]))
+            .collect();
+        switches.sort();
+        assert_eq!(
+            switches,
+            [
+                ("S".to_string(), "c".to_string(), [146, 58]),
+                ("S3D".to_string(), "a".to_string(), [60, 60]),
+                ("SD".to_string(), "b".to_string(), [100, 160])
+            ],
+            "{got:?}"
+        );
+        let spot = |leg: &str| got.iter().find(|d| d.leg == leg).map(|d| d.spot.clone()).unwrap_or_default();
+        assert!(spot("a").starts_with("at the switch symbol drawn as linework nearest its label 3,D,a"), "{}", spot("a"));
+        assert!(spot("b").contains("location to check") && spot("c").contains("location to check"), "{got:?}");
+    }
+
+    #[test]
     fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
         // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
         // letter `d` printed over another circuit (`Q-11` with its legs `d,e`) is that circuit's
         // switch leg, though the letter is the same.
         let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new(), leaders: None };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: None,
+            strokes: None,
+        };
         let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let got = read_view(&view, &[], &marks);
         let luminaires: Vec<(String, String)> =
@@ -1497,6 +1577,7 @@ mod tests {
             texts: texts.iter().collect(),
             read: have.iter().collect(),
             leaders: None,
+            strokes: None,
         };
         let marks = Marks {
             luminaires: ["K2".to_string()].into(),

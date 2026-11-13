@@ -28,6 +28,9 @@ use cadaddy_mepfix::sheet_facts::TextItem;
 
 /// How far right of a feeder schedule's title its column headers may run (title heights).
 const HEADER_REACH_H: f64 = 160.0;
+/// How far past its designation a panel's catalog parts may run (characters of text: its
+/// breaker lines come between its section and its enclosure).
+const CATALOG_REACH: usize = 12_000;
 
 /// One feeder type of a feeder schedule.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -267,7 +270,192 @@ pub(crate) struct SubmittedGear {
     pub bottom_plate_in: Option<[f64; 2]>,
     /// `switchboard` when the submittal says so (else a panelboard).
     pub kind: String,
+    /// Its catalog parts as the submittal lists them, (part, catalog number): its section's
+    /// (`SECTION XQ30ML225T, ...`: the part empty) and each `<PART>, CATALOG NUMBER <n>`
+    /// (`enclosure`, `front`) (Q6591).
+    pub catalog: Vec<(String, String)>,
+    /// The submittal its catalog parts are from (another than `source` when two submittals
+    /// each give part of what it is).
+    pub catalog_source: String,
     pub source: String,
+}
+
+/// The equipment record's property (and its source's key) that holds its gear submittal's
+/// catalog parts, as one product text ([`SubmittedGear::product`]).
+pub(crate) const CATALOG_PROP: &str = "CATALOG_NUMBER";
+pub(crate) const CATALOG_SOURCE: &str = "catalog_number";
+/// Most catalog parts kept for one piece of gear, designations of one tag looked at, and how far
+/// a list of a type's copies may run to its dashes (characters).
+const MAX_CATALOG_PARTS: usize = 8;
+const MAX_DESIGNATIONS: usize = 50;
+const LIST_REACH: usize = 4_000;
+
+impl SubmittedGear {
+    /// Its catalog parts as one product: `XQ30ML225T, enclosure BX36, trim TR36F`.
+    pub(crate) fn product(&self) -> Option<String> {
+        let parts: Vec<String> = self.catalog.iter().map(|(part, n)| if part.is_empty() { n.clone() } else { format!("{part} {n}") }).collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+}
+
+/// What one more submittal says of gear (`more`, by tag) into what the earlier ones said: a tag
+/// they gave keeps their reading, its catalog parts taken from this one when they gave none.
+pub(crate) fn merge_submitted(gear: &mut BTreeMap<String, SubmittedGear>, more: BTreeMap<String, SubmittedGear>) {
+    for (k, v) in more {
+        match gear.entry(k) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(v);
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                let g = e.get_mut();
+                if g.catalog.is_empty() && !v.catalog.is_empty() {
+                    g.catalog = v.catalog;
+                    g.catalog_source = v.catalog_source;
+                }
+            }
+        }
+    }
+}
+
+/// Each piece of gear's catalog parts from its submittal (`gear`, by tag) onto its record as
+/// one product ([`CATALOG_PROP`], its source the submittal); a room's panel of a typical
+/// schedule's type (its `PANEL` names it) takes that type's. How many records took one.
+pub(crate) fn take_catalog(sp: &mut cadaddy_walk3d::BuildingSpec, gear: &BTreeMap<String, SubmittedGear>) -> usize {
+    let typical: BTreeSet<String> =
+        sp.mep.panel_schedules.iter().filter(|s| s.typical_of.is_some()).map(|s| s.panel.trim().to_ascii_uppercase()).collect();
+    let by_tag: BTreeMap<String, &SubmittedGear> = gear.iter().map(|(k, g)| (k.trim().to_ascii_uppercase(), g)).collect();
+    let mut n = 0;
+    for e in sp.mep.equipment.iter_mut() {
+        let tag = e.tag.trim().to_ascii_uppercase();
+        let of_type = e
+            .properties
+            .get("PANEL")
+            .map(|p| p.trim().to_ascii_uppercase())
+            .filter(|p| *p != tag && typical.contains(p) && super::panelheader::is_room_panel_kind(&e.kind));
+        let Some(g) = by_tag.get(&tag).or_else(|| of_type.and_then(|p| by_tag.get(&p))) else { continue };
+        let Some(product) = g.product() else { continue };
+        if e.properties.get(CATALOG_PROP) != Some(&product) {
+            e.properties.insert(CATALOG_PROP.into(), product);
+            e.sources.insert(CATALOG_SOURCE.into(), if g.catalog_source.is_empty() { g.source.clone() } else { g.catalog_source.clone() });
+            n += 1;
+        }
+    }
+    n
+}
+
+/// A catalog number as a submittal prints it: letters and digits (both), `-` and `/` allowed;
+/// the word's leading run of those (`LC1224M125.` and a page mark joined on are not its).
+fn catalog_code(w: &str) -> Option<String> {
+    let w = w.trim();
+    let run: String = w.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '/').collect();
+    let run = run.split("--").next().unwrap_or_default().trim_end_matches(['-', '/']);
+    let ok = (3..=40).contains(&run.len()) && run.chars().any(|c| c.is_ascii_digit()) && run.chars().any(|c| c.is_ascii_alphabetic());
+    ok.then(|| run.to_string())
+}
+
+/// A designation's catalog parts in its stretch of submittal text (one line of upper-case
+/// words): its section's catalog number (`SECTION <n>,`, the line's quantity and dash before it
+/// or not), each `<PART>, CATALOG NUMBER <n>`, and a catalog number its description gives
+/// inline (`..., CATALOG NUMBER: <n>.`) when no section did. A branch breaker's
+/// `CATALOG #:` is the breaker's, not the gear's.
+fn catalog_parts(win: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    // Its own number: the first of its section's and an inline one.
+    let mut section: Option<(usize, String)> = None;
+    let mut from = 0;
+    while let Some(i) = win.get(from..).and_then(|s| s.find("SECTION ")).map(|i| i + from) {
+        from = i + 8;
+        let word_start = win.get(..i).and_then(|b| b.chars().next_back()).is_none_or(|c| c == ' ' || c == '-');
+        if let Some(n) = win.get(from..).and_then(|r| r.split(' ').next()).filter(|w| word_start && w.ends_with(',')).and_then(catalog_code) {
+            section = Some((i, n));
+            break;
+        }
+    }
+    let inline =
+        win.find("CATALOG NUMBER:").and_then(|i| win.get(i + 15..).and_then(|r| r.split_whitespace().next()).and_then(catalog_code).map(|n| (i, n)));
+    if let Some((_, n)) = [section, inline].into_iter().flatten().min_by_key(|(i, _)| *i) {
+        out.push((String::new(), n));
+    }
+    let mut from = 0;
+    while let Some(i) = win.get(from..).and_then(|s| s.find(", CATALOG NUMBER ")).map(|i| i + from) {
+        from = i + 17;
+        let part = win.get(..i).and_then(|b| b.rsplit([' ', '-']).next()).unwrap_or_default().trim().to_ascii_lowercase();
+        let n = win.get(from..).and_then(|r| r.split(' ').next()).and_then(catalog_code);
+        if let Some(n) = n.filter(|_| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphabetic()))
+            && !out.iter().any(|(p, x)| *p == part && *x == n)
+        {
+            out.push((part, n));
+        }
+        if out.len() >= MAX_CATALOG_PARTS {
+            break;
+        }
+    }
+    out
+}
+
+/// Where each designation of `tag` (upper case) in a submittal's text (one line of upper-case
+/// words) ends: `<tag>--<description>`, `<tag>-PANELBOARD`, and a list of its copies
+/// `<tag>,<tag>_2,…,<tag>_<n>--<description>` (one product for every panel of a type).
+fn designations(up: &str, tag: &str) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for m in [format!(" {tag}--"), format!(" {tag}-PANELBOARD")] {
+        let mut from = 0;
+        while let Some(i) = up.get(from..).and_then(|s| s.find(m.as_str())).map(|i| i + from) {
+            from = i + m.len();
+            out.push(from);
+            if out.len() >= MAX_DESIGNATIONS {
+                return out;
+            }
+        }
+    }
+    let list = format!(" {tag},{tag}_");
+    let mut from = 0;
+    while let Some(i) = up.get(from..).and_then(|s| s.find(list.as_str())).map(|i| i + from) {
+        from = i + list.len();
+        let Some(rest) = up.get(i + 1..) else { break };
+        let Some(dash) = rest.get(..rest.len().min(LIST_REACH)).and_then(|r| r.find("--")) else { continue };
+        // Only the type's copies before the dashes: `G,G_2, G_3,…`.
+        let copies = rest.get(..dash).unwrap_or_default();
+        let own = copies.split([',', ' ']).filter(|c| !c.is_empty()).all(|c| {
+            c == tag
+                || c.strip_prefix(tag).and_then(|r| r.strip_prefix('_')).is_some_and(|n| !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit()))
+        });
+        if own {
+            out.push(i + 1 + dash + 2);
+            if out.len() >= MAX_DESIGNATIONS {
+                break;
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// A gear's catalog parts: those of its first designation that gives any, read up to the next
+/// designation (any panelboard's, or another tag's of `tags`), however far its breaker lines run.
+fn designation_catalog(up: &str, tag: &str, tags: &[String]) -> Vec<(String, String)> {
+    for start in designations(up, tag) {
+        let Some(all) = up.get(start..) else { continue };
+        let mut cut = all.len().min(CATALOG_REACH);
+        while cut > 0 && !all.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let all = all.get(..cut).unwrap_or_default();
+        let end = ["--PANELBOARD", "-PANELBOARD"]
+            .iter()
+            .filter_map(|d| all.find(d))
+            .chain(tags.iter().filter(|o| !o.eq_ignore_ascii_case(tag)).filter_map(|o| {
+                let o = o.to_ascii_uppercase();
+                [format!(" {o}--"), format!(" {o},{o}_"), format!(" {o} - 1 ")].iter().filter_map(|m| all.find(m.as_str())).min()
+            }))
+            .min()
+            .unwrap_or(all.len());
+        let parts = catalog_parts(all.get(..end).unwrap_or_default());
+        if !parts.is_empty() {
+            return parts;
+        }
+    }
+    Vec::new()
 }
 
 fn dims(t: &str) -> Option<[f64; 3]> {
@@ -490,7 +678,11 @@ pub(crate) fn submittal_gear(text: &str, tags: &[String], source: &str) -> BTree
                 }
             }
         }
-        if g.size_in != [0.0; 3] || g.main_lugs.is_some() || !g.feed.is_empty() {
+        g.catalog = designation_catalog(&up, &t, tags);
+        if !g.catalog.is_empty() {
+            g.catalog_source = source.to_string();
+        }
+        if g.size_in != [0.0; 3] || g.main_lugs.is_some() || !g.feed.is_empty() || !g.catalog.is_empty() {
             out.insert(tag.clone(), g);
         }
     }
@@ -1835,6 +2027,57 @@ mod tests {
         assert_eq!(dp1.branch_lug.as_deref(), Some("#14-3/0"));
         assert_eq!(g.get("A").map(|a| a.size_in), Some([74.0, 20.0, 5.75]));
         assert!(!g.contains_key("D"));
+    }
+
+    /// Q6591: each panelboard's catalog parts (its section's catalog number, its enclosure's and
+    /// trim's), however many breaker lines run between; a breaker's catalog number is not the
+    /// panel's, nor a summary table's line; a type's copies listed as one designation give it
+    /// their inline catalog number; a typical schedule's parts go on every room panel of its
+    /// type, not on gear fed from it.
+    #[test]
+    fn a_gear_submittals_catalog_parts_are_each_panels_product() {
+        let text = "--- page 2 of 9 --- Designation Type Box Size 41000 1 2HA - 1 XQ 480Y/277 MLO 225 Top Flush 36 X 20 X 5.75 \
+                    Enclosure, Catalog Number ZZ99 --- page 3 of 9 --- 41000 1 2HA--PANELBOARD XQ 1 - SECTION XQ30ML225T, System Voltage: \
+                    480Y/277 3\u{d8} 4W, Top Feed, Flush Mount, Bus Rating: 225A 1 - INTERIOR W/ 225A MAIN LUG - 12 20A /1P-BRK \
+                    Catalog #: QB1020H 1 - 6 30A /2P-BRK Catalog #: QB2030H 1 - Enclosure, Catalog Number BX36 36H X 20W BOX 1 - \
+                    Trim, Catalog Number TR36F FLUSH TRIM 1 - 42000 12 U,U_2,U_3,U_4,U_5,U_6, U_7,U_8,U_9,U_10,U_11,U_12--STD LC ML \
+                    12S/24C 1PH 125A Load Center Type: Load Center, Main Lug, Amp Rating: 125 A, Enclosure Height (in): 21.0, \
+                    Catalog Number: LC1224M125.\n--- page 4 of 9 ---\n6 12 Standard Product--2P 125A SUB FEED LUGS Catalog Number: SFL125.";
+        let g = submittal_gear(text, &["2HA".into(), "U".into(), "9Z".into()], "gear submittal");
+        // Another submittal giving a tag's size but no parts: its parts come from this one.
+        let mut all: BTreeMap<String, SubmittedGear> = BTreeMap::new();
+        let first = SubmittedGear { feed: "top".into(), source: "gear submittal rev 0".into(), ..Default::default() };
+        all.insert("U".into(), first);
+        merge_submitted(&mut all, g.clone());
+        let u = all.get("U").cloned().unwrap_or_default();
+        assert_eq!(
+            (u.feed.as_str(), u.source.as_str(), u.product().as_deref(), u.catalog_source.as_str()),
+            ("top", "gear submittal rev 0", Some("LC1224M125"), "gear submittal")
+        );
+        let ha = g.get("2HA").expect("2HA");
+        assert_eq!(ha.catalog, [("".to_string(), "XQ30ML225T".to_string()), ("enclosure".into(), "BX36".into()), ("trim".into(), "TR36F".into())]);
+        assert_eq!(ha.product().as_deref(), Some("XQ30ML225T, enclosure BX36, trim TR36F"));
+        // A type's copies listed as one designation, its catalog number inline (the first).
+        assert_eq!(g.get("U").and_then(SubmittedGear::product).as_deref(), Some("LC1224M125"));
+        assert!(!g.contains_key("9Z"));
+
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule { panel: "U".into(), typical_of: Some(12), ..Default::default() });
+        let eq = |tag: &str, kind: &str, panel: &str| cadaddy_walk3d::MepEquipment {
+            tag: tag.into(),
+            kind: kind.into(),
+            properties: [("PANEL".to_string(), panel.to_string())].into_iter().filter(|(_, v)| !v.is_empty()).collect(),
+            ..Default::default()
+        };
+        sp.mep.equipment =
+            vec![eq("2HA", "panelboard", ""), eq("U-210", "panelboard", "U"), eq("PB-4", "power_box", "U"), eq("2LB", "panelboard", "")];
+        assert_eq!(take_catalog(&mut sp, &g), 2);
+        let cat = |i: usize| sp.mep.equipment.get(i).and_then(|e| e.properties.get(CATALOG_PROP).cloned());
+        assert_eq!(cat(0).as_deref(), Some("XQ30ML225T, enclosure BX36, trim TR36F"));
+        assert_eq!(cat(1).as_deref(), Some("LC1224M125"));
+        assert_eq!((cat(2), cat(3)), (None, None));
+        assert_eq!(sp.mep.equipment.get(1).and_then(|e| e.sources.get(CATALOG_SOURCE)).map(String::as_str), Some("gear submittal"));
+        assert_eq!(take_catalog(&mut sp, &g), 0, "already taken");
     }
 
     #[test]

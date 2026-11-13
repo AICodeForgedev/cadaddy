@@ -666,7 +666,8 @@ pub(crate) fn made_here(r: &MepRun) -> bool {
     // Site work's runs a note calls are the site work step's (they carry the same mark).
     (r.height_source.starts_with(CALLED_PREFIX) && !r.source_sheet.starts_with(super::sitework::SOURCE_PREFIX))
         || r.source_sheet.starts_with(PROPOSAL_PREFIX)
-        || r.system.to_ascii_uppercase().starts_with(&format!("{P_UG}-"))
+        // The site services a civil plan brings in are the site work step's (Q6597).
+        || (r.system.to_ascii_uppercase().starts_with(&format!("{P_UG}-")) && !r.source_sheet.starts_with(super::sitework::SOURCE_PREFIX))
 }
 
 /// The feeder out of the site transformer `from` that reaches the service gear `to`, straight or
