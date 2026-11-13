@@ -1712,7 +1712,8 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         for (i, t) in read.tags.iter().enumerate() {
             consider(gap(&t.bbox, p) + 0.5 * reach, Obj::Tag(i));
         }
-        let sheet_outline = read.outlines.iter().find(|(o, _)| fit.outline.len() == o.len()).map(|(o, _)| o.as_slice());
+        // The outline the fit chose, as it carries it (another may have as many corners).
+        let sheet_outline = Some(fit.sheet_outline.as_slice()).filter(|o| o.len() >= 3);
         if let Some(q) = sheet_outline.filter(|_| fit.method != "view centre").and_then(|o| nearest_on(o, p)) {
             consider(dist(q, p) + 0.25 * reach, Obj::Building);
         }
@@ -2723,6 +2724,46 @@ mod tests {
         let fit = register(&read, &sp, "Level 1", true);
         assert_eq!(fit.method, "outline centre", "{}", fit.why);
         assert!(fit.why.contains("printed scale"));
+    }
+
+    /// A layerless site plan at its printed scale drawing two closed 4-point outlines: the
+    /// property line (300 x 200 ft) and the building (100 x 60 ft) inside it. One pole light's
+    /// dashed circuit runs to the building's north wall; another's stops at the property line.
+    #[test]
+    fn line_ends_snap_to_the_outline_the_fit_chose_not_another_with_as_many_corners() {
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "0", &[[9_000.0, 1_000.0], [12_600.0, 1_000.0], [12_600.0, 3_400.0], [9_000.0, 3_400.0]], true);
+        pline(&mut d, "0", &[[10_000.0, 2_000.0], [11_200.0, 2_000.0], [11_200.0, 2_720.0], [10_000.0, 2_720.0]], true);
+        let (l1, l2) = ([10_600.0, 3_100.0], [12_200.0, 2_400.0]);
+        for p in [l1, l2] {
+            pline(&mut d, "0", &square(p, 25.0), true);
+            text(&mut d, "SL1", p[0] + 40.0, p[1] + 40.0, h);
+        }
+        dashed(&mut d, "0", [l1[0], l1[1] - 25.0], [l1[0], 2_720.0], 30.0, 15.0);
+        dashed(&mut d, "0", [l2[0] + 25.0, l2[1]], [12_600.0, l2[1]], 30.0, 15.0);
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let read = read("E-001", &d, [8_000.0, 0.0, 14_000.0, 5_000.0], &types, 12.0);
+        assert_eq!(read.lights.len(), 2, "{:?}", read.lights);
+        assert!(read.outlines.len() >= 2 && read.outlines.iter().all(|(o, named)| o.len() == 4 && !named), "{:?}", read.outlines);
+        // The model's building: 100 x 60 ft, square to the model.
+        let mut sp = spec_with_slab();
+        sp.shells.insert(
+            "Level 1".into(),
+            vec![[100.0, 100.0, 1_300.0, 106.0], [100.0, 814.0, 1_300.0, 820.0], [100.0, 100.0, 106.0, 820.0], [1_294.0, 100.0, 1_300.0, 820.0]],
+        );
+        let fit = register(&read, &sp, "Level 1", true);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        let mut seq = Seq::default();
+        let built = plan(&sp, &read, &fit, "Level 1", &mut seq);
+        let drawn: Vec<&MepRun> = built.runs.iter().filter(|r| r.made == Made::Drawn && r.top_ft.is_none() && r.points.len() >= 2).collect();
+        // The run from the first pole ends on the building's north wall (model y 820).
+        let wall = [700.0, 820.0];
+        let to_wall = drawn.iter().filter(|r| r.points.iter().any(|p| dist(*p, wall) < 12.0)).count();
+        assert_eq!(to_wall, 1, "{drawn:?}");
+        // The line stopping at the property line enters no building: no run.
+        let to_property = drawn.iter().filter(|r| r.points.iter().any(|p| p[0] > 1_300.0 + 12.0 * 20.0)).count();
+        assert_eq!(to_property, 0, "{drawn:?}");
     }
 
     #[test]
