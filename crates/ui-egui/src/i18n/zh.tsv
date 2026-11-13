@@ -3569,23 +3569,23 @@
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	按属性更正元素 (BIM)
 	Read Elevator Hoistway	读取电梯井道
-Branches	支路
-Interior Walls	内墙
-Presentation	演示
-Supply Air	送风
-Return Air	回风
-Exhaust Air	排风
-Outside Air	新风
-Ductwork	风管
-Mechanical Equipment	机械设备
-Domestic Water	生活给水
-Sanitary and Vent	排水与通气
-Condensate	冷凝水
-Refrigerant	制冷剂
-Hydronic	空调水
-Plumbing Equipment	给排水设备
-Fire Alarm	火灾报警
-Low Voltage	弱电
-Electrical Power	强电
-Other Systems	其他系统
-Document Source	文档来源
+	Branches	支路
+	Interior Walls	内墙
+	Presentation	演示
+	Supply Air	送风
+	Return Air	回风
+	Exhaust Air	排风
+	Outside Air	新风
+	Ductwork	风管
+	Mechanical Equipment	机械设备
+	Domestic Water	生活给水
+	Sanitary and Vent	排水与通气
+	Condensate	冷凝水
+	Refrigerant	制冷剂
+	Hydronic	空调水
+	Plumbing Equipment	给排水设备
+	Fire Alarm	火灾报警
+	Low Voltage	弱电
+	Electrical Power	强电
+	Other Systems	其他系统
+	Document Source	文档来源

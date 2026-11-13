@@ -3489,23 +3489,23 @@ menu	View	عرض
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	تصحيح العناصر حسب الخاصية (BIM)
 	Read Elevator Hoistway	قراءة بئر المصعد
-Branches	الفروع
-Interior Walls	الجدران الداخلية
-Presentation	عرض تقديمي
-Supply Air	هواء الإمداد
-Return Air	هواء الراجع
-Exhaust Air	هواء العادم
-Outside Air	الهواء الخارجي
-Ductwork	مجاري الهواء
-Mechanical Equipment	المعدات الميكانيكية
-Domestic Water	مياه الاستخدام المنزلي
-Sanitary and Vent	الصرف الصحي والتهوية
-Condensate	المكثفات
-Refrigerant	مادة التبريد
-Hydronic	الأنظمة المائية
-Plumbing Equipment	معدات السباكة
-Fire Alarm	إنذار الحريق
-Low Voltage	الجهد المنخفض
-Electrical Power	القدرة الكهربائية
-Other Systems	أنظمة أخرى
-Document Source	مصدر المستندات
+	Branches	الفروع
+	Interior Walls	الجدران الداخلية
+	Presentation	عرض تقديمي
+	Supply Air	هواء الإمداد
+	Return Air	هواء الراجع
+	Exhaust Air	هواء العادم
+	Outside Air	الهواء الخارجي
+	Ductwork	مجاري الهواء
+	Mechanical Equipment	المعدات الميكانيكية
+	Domestic Water	مياه الاستخدام المنزلي
+	Sanitary and Vent	الصرف الصحي والتهوية
+	Condensate	المكثفات
+	Refrigerant	مادة التبريد
+	Hydronic	الأنظمة المائية
+	Plumbing Equipment	معدات السباكة
+	Fire Alarm	إنذار الحريق
+	Low Voltage	الجهد المنخفض
+	Electrical Power	القدرة الكهربائية
+	Other Systems	أنظمة أخرى
+	Document Source	مصدر المستندات
