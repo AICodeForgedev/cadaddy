@@ -1289,8 +1289,8 @@ mod tests {
         text(&mut s, [50.0, 550.0], "LEVEL 2 PLAN", 6.0);
         line(&mut s, [0.0, 450.0], [1800.0, 450.0]);
         line(&mut s, [0.0, 950.0], [1800.0, 950.0]);
-        let view = |level: &str, y0: f64, y1: f64| SheetRef { view: Some([0.0, y0, 2000.0, y1]), ..sheet("E-7", level, 0.0) };
-        let on = |level: &str, x: f64, y: f64, circuit: &str| ReadDevice { level: level.into(), ..dev("A", x, y, circuit, "E-7") };
+        let view = |level: &str, y0: f64, y1: f64| SheetRef { view: Some([0.0, y0, 2000.0, y1]), ..sheet("EX-2", level, 0.0) };
+        let on = |level: &str, x: f64, y: f64, circuit: &str| ReadDevice { level: level.into(), ..dev("A", x, y, circuit, "EX-2") };
         let devices = vec![
             on("2", 300.0, 700.0, "Q-4"),
             on("2", 600.0, 700.0, "Q-4"),
