@@ -194,6 +194,7 @@ pub mod pdfplans;
 mod perceive;
 pub(crate) mod pipefollow;
 pub mod review_impact;
+pub mod walledit;
 pub mod wiretable;
 /// The plan's rooms as last traced, by drawing state (kept in each drawing's state).
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
@@ -900,6 +901,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tags::specs());
         v.extend(mep::specs());
         v.extend(mepedit::specs());
+        v.extend(walledit::specs());
         v.extend(callouts::specs());
         v.extend(clashreport::specs());
         v.extend(concrete::specs());
