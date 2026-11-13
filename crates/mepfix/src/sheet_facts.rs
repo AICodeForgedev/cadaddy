@@ -1649,7 +1649,7 @@ mod tests {
         // Its headings and notes are lines of words; a plan's tags and marks are not.
         assert_eq!(c.word_lines, 9, "{c:?}");
         let mut tags = Drawing::default();
-        for (k, t) in ["S3", "A-1,3", "12x8", "200 CFM", "SD-1", "EF-2 ABOVE", "101"].iter().enumerate() {
+        for (k, t) in ["S3", "A-1,3", "12x8", "200 CFM", "SD-1", "EF-2 ABOVE", "12'-0\""].iter().enumerate() {
             text(&mut tags, t, 1.0, f64::from(u8::try_from(k).unwrap_or(0)), 0.1);
         }
         text(&mut tags, "SUPPLY AIR DIFFUSER", 1.0, 9.0, 0.1);
