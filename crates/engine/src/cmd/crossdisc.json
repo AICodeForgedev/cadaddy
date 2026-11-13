@@ -1,11 +1,23 @@
 {
-  "_what": "The architect's sheets against the engineer's (crossdisc.rs, Q6612): every electrical object the architect draws (a light on a reflected ceiling plan, a receptacle or a data outlet on a floor plan, a fan) compared room by room with what the electrical sheets draw, both ways. Each kind is a row of `kinds`: how the architect's legend names it, which engineer's devices are it, how far apart two sheets may draw one object, what the build makes of an object only the architect draws.",
-  "_basis": "Trade practice and the documents' own order: the architectural reflected ceiling plans, floor plans and interior elevations locate what the owner sees; the electrical plans give type, circuit and control. One object on one sheet and not on the other is a coordination gap the field finds on site; the electrician builds what the architect shows and asks for its type and circuit.",
-  "architect_disciplines": ["A", "I", "ID", "AS"],
+  "_what": "The objects the architect draws, built and completed by the electrical sheets (crossdisc.rs, Q6612): every electrical object the architect draws (a light on a reflected ceiling plan, a receptacle or a data outlet on a floor plan, a fan) is an object of the building; it must be completed the way an installer completes it (`requires`), and its completing object is the electrical sheets' object of its kind by it in its room. What no electrical sheet completes is the finding. Each kind is a row of `kinds`: how the architect's legend names it, which engineer's devices are it, how near its electrical copy must be, what it needs, what the build makes of it when no electrical sheet completes it.",
+  "_basis": "The documents' own order and the codes: the architectural reflected ceiling plans, floor plans and interior elevations locate what the owner sees; the electrical plans give each one its type, circuit and control (NEC 210.11: every outlet on a branch circuit; NEC 210.70 and the energy code's lighting controls). An object no electrical sheet completes is one the field finds on site: the electrician builds what the architect shows and asks for its type and circuit.",
+  "architect_disciplines": [
+    "A",
+    "I",
+    "ID",
+    "AS"
+  ],
   "_architect_disciplines": "The sheet disciplines whose drawings are the architect's (architecture, interiors).",
-  "architect_sheet_kinds": ["rcp", "plan", "enlarged_plan"],
+  "architect_sheet_kinds": [
+    "rcp",
+    "plan",
+    "enlarged_plan"
+  ],
   "_architect_sheet_kinds": "The architect's sheets read for objects: reflected ceiling plans, floor plans, enlarged plans (each placed on its level's plan).",
-  "legend_title_words": ["LEGEND", "SYMBOLS"],
+  "legend_title_words": [
+    "LEGEND",
+    "SYMBOLS"
+  ],
   "_legend_title_words": "A short heading holding one of these words heads a legend: the rows under it are its drawing beside its words.",
   "legend_title_max_words": 5,
   "_legend_title_max_words": "A heading of more words is a note that mentions a legend, not one.",
@@ -21,132 +33,316 @@
     {
       "kind": "light",
       "name": "lights",
-      "legend_any": ["LIGHT", "LUMINAIRE", "DOWNLIGHT", "SCONCE", "PENDANT", "TROFFER", "LINEAR FIXTURE", "STRIP FIXTURE", "WALL PACK", "CAN "],
-      "legend_none": ["EXIT", "SWITCH", "DIFFUSER", "REGISTER", "GRILLE", "SPRINKLER", "SPEAKER", "SMOKE", "DETECTOR", "CEILING TILE", "LIGHT GAUGE", "LIGHTWEIGHT", "SKYLIGHT", "CONTROL"],
-      "engineer_disciplines": ["E", "EL", "EP", "MEP"],
-      "engineer_kinds": ["luminaire"],
-      "engineer_ifc": ["IfcLightFixture"],
-      "engineer_kinds_none": ["exit"],
+      "legend_any": [
+        "LIGHT",
+        "LUMINAIRE",
+        "DOWNLIGHT",
+        "SCONCE",
+        "PENDANT",
+        "TROFFER",
+        "LINEAR FIXTURE",
+        "STRIP FIXTURE",
+        "WALL PACK",
+        "CAN "
+      ],
+      "legend_none": [
+        "EXIT",
+        "SWITCH",
+        "DIFFUSER",
+        "REGISTER",
+        "GRILLE",
+        "SPRINKLER",
+        "SPEAKER",
+        "SMOKE",
+        "DETECTOR",
+        "CEILING TILE",
+        "LIGHT GAUGE",
+        "LIGHTWEIGHT",
+        "SKYLIGHT",
+        "CONTROL"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "EP",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "luminaire"
+      ],
+      "engineer_ifc": [
+        "IfcLightFixture"
+      ],
+      "engineer_kinds_none": [
+        "exit"
+      ],
       "reach_ft": 4.0,
-      "_reach_ft": "Two sheets' copies of one light this near on the level's plan are one light (sheet registration and the electrical plan's schematic placing).",
+      "_reach_ft": "The electrical sheets' light this near the architect's in its room is that light (sheet registration and the electrical plan's schematic placing).",
       "cluster_ft": 15.0,
-      "_cluster_ft": "The architect's lights with no electrical light near them, this near each other in one room, are one finding (an alcove's lights).",
-      "count_tolerance": 1,
-      "_count_tolerance": "Counts in one room that differ by more than this (and by more than a quarter of the larger) are a finding.",
-      "rooms_without": true,
-      "_rooms_without": "A room with a ceiling and no light on any sheet is a finding (lower severity).",
-      "build": {"mark": "ARCH-LIGHT", "kind": "luminaire", "ifc": "IfcLightFixture", "proposed_control": "a single-pole switch at the room's door (NEC 210.70: a lighting outlet controlled by a switch at the entrance)", "proposed_circuit": "the nearest lighting circuit of the level the electrical plans give"},
-      "severity": {"architect_only": "high", "engineer_only": "medium", "differ": "low", "none": "low"}
+      "_cluster_ft": "Lights no electrical sheet completes, this near each other in one room, are one finding (an alcove's lights).",
+      "build": {
+        "mark": "ARCH-LIGHT",
+        "kind": "luminaire",
+        "ifc": "IfcLightFixture",
+        "proposed_control": "a single-pole switch at the room's door (NEC 210.70: a lighting outlet controlled by a switch at the entrance)",
+        "proposed_circuit": "the nearest lighting circuit of the level the electrical plans give"
+      },
+      "requires": [
+        "fixture type",
+        "circuit",
+        "control"
+      ],
+      "_requires": "the luminaire schedule (type); NEC 210.11 (every outlet on a branch circuit); NEC 210.70 and the energy code's lighting controls (control)",
+      "open_severity": "high"
     },
     {
       "kind": "exit_sign",
       "name": "exit signs",
-      "legend_any": ["EXIT SIGN", "EXIT LIGHT"],
+      "legend_any": [
+        "EXIT SIGN",
+        "EXIT LIGHT"
+      ],
       "legend_none": [],
-      "engineer_disciplines": ["E", "EL", "EP", "MEP"],
-      "engineer_kinds": ["exit"],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "EP",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "exit"
+      ],
       "engineer_ifc": [],
       "engineer_kinds_none": [],
       "reach_ft": 4.0,
-      "count_tolerance": 0,
-      "rooms_without": false,
-      "severity": {"architect_only": "high", "engineer_only": "medium", "differ": "medium", "none": "low"}
+      "requires": [
+        "type",
+        "circuit"
+      ],
+      "_requires": "IBC 1013 / NFPA 101 7.10 (an illuminated exit sign on its emergency source); NEC 700",
+      "open_severity": "high"
     },
     {
       "kind": "receptacle",
       "name": "receptacles",
-      "legend_any": ["RECEPTACLE", "DUPLEX OUTLET", "POWER OUTLET", "CONVENIENCE OUTLET"],
-      "legend_none": ["DATA", "TELE", "TV", "CABLE", "FLOOR BOX"],
-      "engineer_disciplines": ["E", "EL", "EP", "MEP"],
-      "engineer_kinds": ["receptacle"],
+      "legend_any": [
+        "RECEPTACLE",
+        "DUPLEX OUTLET",
+        "POWER OUTLET",
+        "CONVENIENCE OUTLET"
+      ],
+      "legend_none": [
+        "DATA",
+        "TELE",
+        "TV",
+        "CABLE",
+        "FLOOR BOX"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "EP",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "receptacle"
+      ],
       "engineer_ifc": [],
       "engineer_kinds_none": [],
       "reach_ft": 3.0,
-      "count_tolerance": 1,
-      "rooms_without": false,
-      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+      "requires": [
+        "circuit"
+      ],
+      "_requires": "NEC 210.11 (every outlet on a branch circuit)",
+      "open_severity": "medium"
     },
     {
       "kind": "data_outlet",
       "name": "data and telephone outlets",
-      "legend_any": ["DATA", "TELEPHONE", "TV OUTLET", "CATV", "COMMUNICATION OUTLET"],
-      "legend_none": ["PROJECTOR"],
-      "engineer_disciplines": ["E", "EL", "T", "LV", "MEP"],
-      "engineer_kinds": ["data", "tv_outlet", "telephone", "av_outlet"],
+      "legend_any": [
+        "DATA",
+        "TELEPHONE",
+        "TV OUTLET",
+        "CATV",
+        "COMMUNICATION OUTLET"
+      ],
+      "legend_none": [
+        "PROJECTOR"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "T",
+        "LV",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "data",
+        "tv_outlet",
+        "telephone",
+        "av_outlet"
+      ],
       "engineer_ifc": [],
       "engineer_kinds_none": [],
       "reach_ft": 3.0,
-      "count_tolerance": 1,
-      "rooms_without": false,
-      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+      "requires": [
+        "cable path"
+      ],
+      "_requires": "the telecommunications drawings (a cable and pathway to its room)",
+      "open_severity": "medium"
     },
     {
       "kind": "switch",
       "name": "switches",
-      "legend_any": ["SWITCH", "DIMMER"],
-      "legend_none": ["DISCONNECT", "TRANSFER", "SWITCHBOARD", "SWITCHGEAR"],
-      "engineer_disciplines": ["E", "EL", "MEP"],
-      "engineer_kinds": ["switch", "dimmer"],
-      "engineer_ifc": ["IfcSwitchingDevice"],
-      "engineer_kinds_none": ["disconnect"],
+      "legend_any": [
+        "SWITCH",
+        "DIMMER"
+      ],
+      "legend_none": [
+        "DISCONNECT",
+        "TRANSFER",
+        "SWITCHBOARD",
+        "SWITCHGEAR"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "switch",
+        "dimmer"
+      ],
+      "engineer_ifc": [
+        "IfcSwitchingDevice"
+      ],
+      "engineer_kinds_none": [
+        "disconnect"
+      ],
       "reach_ft": 3.0,
-      "count_tolerance": 1,
-      "rooms_without": false,
-      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+      "requires": [
+        "the lights it controls",
+        "circuit"
+      ],
+      "_requires": "NEC 404 and 210.70",
+      "open_severity": "medium"
     },
     {
       "kind": "fan",
       "name": "exhaust and ceiling fans",
-      "legend_any": ["EXHAUST FAN", "CEILING FAN"],
-      "legend_none": ["REGISTER", "GRILLE", "RE: MECH"],
-      "engineer_disciplines": ["E", "EL", "M", "MEP"],
-      "engineer_kinds": ["exhaust_fan", "fan"],
-      "engineer_ifc": ["IfcFan"],
+      "legend_any": [
+        "EXHAUST FAN",
+        "CEILING FAN"
+      ],
+      "legend_none": [
+        "REGISTER",
+        "GRILLE",
+        "RE: MECH"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "M",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "exhaust_fan",
+        "fan"
+      ],
+      "engineer_ifc": [
+        "IfcFan"
+      ],
       "engineer_kinds_none": [],
       "reach_ft": 4.0,
-      "count_tolerance": 0,
-      "rooms_without": false,
-      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+      "requires": [
+        "circuit",
+        "control"
+      ],
+      "_requires": "NEC 422 / 430 (a fan's branch circuit and disconnect)",
+      "open_severity": "medium"
     },
     {
       "kind": "door_power",
       "name": "powered door hardware (operators, card readers, electric strikes)",
-      "legend_any": ["DOOR OPERATOR", "AUTOMATIC DOOR", "POWER ASSIST", "CARD READER", "ELECTRIC STRIKE", "MAG LOCK", "MAGNETIC LOCK", "PUSH PLATE", "ACTUATOR"],
-      "legend_none": ["DAMPER", "VALVE"],
-      "engineer_disciplines": ["E", "EL", "T", "LV", "MEP"],
-      "engineer_kinds": ["door", "card", "access", "operator", "strike"],
+      "legend_any": [
+        "DOOR OPERATOR",
+        "AUTOMATIC DOOR",
+        "POWER ASSIST",
+        "CARD READER",
+        "ELECTRIC STRIKE",
+        "MAG LOCK",
+        "MAGNETIC LOCK",
+        "PUSH PLATE",
+        "ACTUATOR"
+      ],
+      "legend_none": [
+        "DAMPER",
+        "VALVE"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "T",
+        "LV",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "door",
+        "card",
+        "access",
+        "operator",
+        "strike"
+      ],
       "engineer_ifc": [],
-      "engineer_kinds_none": ["door_holder"],
+      "engineer_kinds_none": [
+        "door_holder"
+      ],
       "reach_ft": 4.0,
-      "count_tolerance": 0,
-      "rooms_without": false,
-      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+      "requires": [
+        "circuit",
+        "connection"
+      ],
+      "_requires": "NEC 210.11; the door hardware schedule",
+      "open_severity": "medium"
     },
     {
       "kind": "sign",
       "name": "illuminated signs",
-      "legend_any": ["ILLUMINATED SIGN", "LIGHTED SIGN", "SIGN LIGHT", "BACKLIT SIGN"],
-      "legend_none": ["EXIT"],
-      "engineer_disciplines": ["E", "EL", "MEP"],
-      "engineer_kinds": ["sign"],
+      "legend_any": [
+        "ILLUMINATED SIGN",
+        "LIGHTED SIGN",
+        "SIGN LIGHT",
+        "BACKLIT SIGN"
+      ],
+      "legend_none": [
+        "EXIT"
+      ],
+      "engineer_disciplines": [
+        "E",
+        "EL",
+        "MEP"
+      ],
+      "engineer_kinds": [
+        "sign"
+      ],
       "engineer_ifc": [],
-      "engineer_kinds_none": ["exit"],
+      "engineer_kinds_none": [
+        "exit"
+      ],
       "reach_ft": 6.0,
-      "count_tolerance": 0,
-      "rooms_without": false,
-      "severity": {"architect_only": "medium", "engineer_only": "low", "differ": "low", "none": "low"}
+      "requires": [
+        "circuit"
+      ],
+      "_requires": "NEC 600.5 (a sign outlet on its own branch circuit)",
+      "open_severity": "medium"
     }
   ],
   "rooms": {
-    "min_area_sqft": 25.0,
-    "_min_area_sqft": "A smaller room (a closet, a chase) is not asked about when it has no light.",
-    "except_words": ["CLOSET", "CLO.", "CHASE", "SHAFT", "ELEV", "HOISTWAY", "PIPE", "DUCT", "SOFFIT", "OPEN TO", "ATTIC", "CRAWL"],
-    "_except_words": "A room named with one of these words needs no light of its own (closets and chases; an elevator's car is its vendor's).",
     "reach_ft": 2.0,
-    "_reach_ft": "An object this near a room (just outside its traced outline: a wall's thickness) is that room's."
+    "_reach_ft": "An object this near a room (just outside its traced outline: a wall's thickness) is that room's; one outside every traced room is completed by one in a room only this near."
   },
   "max_findings": 400,
-  "_max_findings": "Findings filed per run at most (one per room and kind); the rest are counted in the report.",
+  "_max_findings": "Open groups filed per run at most (one per room and kind); the rest are counted in the report.",
   "max_sketches": 20,
-  "_max_sketches": "Marked-up plan crops made per run at most (the architect-only findings first)."
+  "_max_sketches": "Marked-up plan crops made per run at most."
 }

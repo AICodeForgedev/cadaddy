@@ -7746,8 +7746,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Every plan searched for the set's symbol table (Q6484): the shared library's symbols and
     // the set's legend rows, wherever they are drawn as linework.
     let symbol_report: Value;
-    // The architect's sheets against the electrical (Q6612).
-    let mut coordination_report = Value::Null;
+    // The objects the architect draws, completed by the electrical sheets (Q6612).
+    let mut architect_report = Value::Null;
     {
         let symbols_clock = web_time::Instant::now();
         let lib = super::symtable::library(None);
@@ -8577,18 +8577,20 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 false,
             );
         }
-        // The architect's sheets against the electrical (Q6612): what only one side draws, room
-        // by room, flagged; what only the architect draws built (inferred, unsure, no circuit).
-        let t_coord = web_time::Instant::now();
-        coordination_report =
-            match coordination_step(s, job, &mut devices, shells.as_deref().unwrap_or(&[]), reference.as_deref().unwrap_or("A"), &typical.views) {
+        // The objects the architect draws (Q6612): built like every drawn object and completed by
+        // the electrical sheets; what none completes (type, circuit, control) is the finding, its
+        // objects built inferred and unsure, completed by proposal.
+        let t_arch = web_time::Instant::now();
+        architect_report =
+            match architect_objects_step(s, job, &mut devices, shells.as_deref().unwrap_or(&[]), reference.as_deref().unwrap_or("A"), &typical.views)
+            {
                 Ok(v) => {
                     progress_line(&format!(
-                        "  the architect's sheets against the electrical: objects {}, findings {}, built {} in {:.1} s",
-                        v["objects"],
-                        v["findings"],
+                        "  the architect's objects completed by the electrical sheets: {}; open groups {}, built {} in {:.1} s",
+                        v["requirements"],
+                        v["open_groups"],
                         v["built"],
-                        t_coord.elapsed().as_secs_f64()
+                        t_arch.elapsed().as_secs_f64()
                     ));
                     v
                 }
@@ -9158,7 +9160,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["devices"] = v;
     }
     result["symbol_table"] = symbol_report;
-    result["coordination"] = coordination_report;
+    result["architect_objects"] = architect_report;
     // The circuits stay in the spec after the build's own steps.
     if !circuits.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
@@ -12744,14 +12746,15 @@ fn sheet_width(job: &GuidedJob, sheet: &str) -> Option<f64> {
     job.sheet_regions.iter().find(|r| sheet_key(&r.number) == key).map(|r| r.rect[2] - r.rect[0]).filter(|w| w.is_finite() && *w > 0.0)
 }
 
-/// The architect's sheets against the engineer's (Q6612, [`super::crossdisc`]), a standing step of
-/// every job: the architect's objects of each compared kind read off the architect's own legends
-/// and placed on their levels' plans beside the engineer's read devices (`devices`, on the plans
-/// already), compared room by room both ways. Each finding is an RFI (both sheets, the room, both
-/// counts, where) and a line of the job's report; what only the architect draws is added to
-/// `devices` to be built, inferred and unsure, with no circuit and its proposals beside it. Never
-/// stops the job: a step that can't run says why in its report.
-fn coordination_step(
+/// The objects the architect draws, built and completed by the electrical sheets (Q6612,
+/// [`super::crossdisc`]), a standing part of every job's build: each object of a kind the rule data
+/// lists, read off the architect's own legends and placed on its level's plan, is completed by the
+/// electrical sheets' object of its kind by it in its room (`devices`, on the plans already). What
+/// no electrical sheet completes is the finding: an RFI per group (both sheets, the room, both
+/// counts, where) and a line of the job's report; its objects are added to `devices` to be built,
+/// inferred and unsure, completed by the proposal (the nearest light's type, circuit and control).
+/// Never stops the job: a step that can't run says why in its report.
+fn architect_objects_step(
     s: &mut Session,
     job: &mut GuidedJob,
     devices: &mut Vec<super::readers::ReadDevice>,
@@ -12839,10 +12842,8 @@ fn coordination_step(
             hits.extend(found.into_iter().map(|f| (sh.number.clone(), [f.at.x, f.at.y], f.row)));
         }
     }
-    // The kinds some legend row draws a way the job can't read (a plain outline, a row with no
-    // drawing read): the architect's count of them is partial.
-    let mut partial: BTreeSet<usize> = unread.iter().map(|(k, _)| *k).collect();
-    partial.extend(plain.iter().filter_map(|&i| row_list.get(i)).map(|r| r.kind));
+    // The legend rows whose drawing the job can't read (a plain outline, a row with no drawing
+    // read): their objects are not built from the architect's sheets, said so.
     let mut not_read: Vec<String> = unread.iter().map(|(_, w)| w.clone()).collect();
     not_read.extend(plain.iter().filter_map(|&i| row_list.get(i)).map(|r| r.words.clone()));
     not_read.sort();
@@ -12928,14 +12929,14 @@ fn coordination_step(
             sheet: dv.sheet.clone(),
             architect,
             what: dv.tag.clone(),
-            typical: !dv.template.is_empty(),
             circuit: dv.circuit.clone(),
+            leg: dv.leg.clone(),
         });
         origin.push(None);
     }
     let rooms: Vec<cd::Room> = job_rooms(job).into_iter().map(|(name, level, outline, number)| cd::Room { level, name, number, outline }).collect();
-    let cmp = cd::compare(&objs, &rooms, rules, upf, &partial);
-    // The engineer's sheets of a level, for a finding no engineer's object names a sheet for.
+    let done = cd::complete(&objs, &rooms, rules, upf);
+    // The engineer's sheets of a level, for the group's other side.
     let engineer_sheets = |kind: usize, level: &str| -> Vec<String> {
         let key = cd::level_key(level);
         let Some(rule) = rules.kinds.get(kind) else { return Vec::new() };
@@ -12953,66 +12954,66 @@ fn coordination_step(
         v.dedup();
         v
     };
-    // The RFIs (each with a crop of the architect's sheet where it draws them, the first few), the
-    // report's lines.
-    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("coordination");
+    // Each open group: its RFI (with a crop of the architect's sheet where it draws them, the
+    // first few), its line, and its objects built, completed by the proposal.
+    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("architect-objects");
     let mut rfis: Vec<cadaddy_walk3d::Rfi> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
-    let mut by_case: BTreeMap<&str, usize> = BTreeMap::new();
     let mut sketches = 0usize;
     let mut added = 0usize;
-    for f in &cmp.findings {
-        *by_case.entry(f.case.name()).or_default() += 1;
-        let es = engineer_sheets(f.kind, &f.level);
-        lines.push(cd::line(f, &objs, &rooms, rules, &es));
-        let Some(mut rfi) = cd::to_rfi(f, &objs, &rooms, rules, &es, upf) else { continue };
-        if f.case == cd::Case::ArchitectOnly && sketches < rules.max_sketches {
-            let first = f.architect.iter().find_map(|&i| origin.get(i).copied().flatten());
+    for o in &done.open {
+        let es = engineer_sheets(o.kind, &o.level);
+        lines.push(cd::line(o, &objs, &rooms, rules, &es));
+        let Some(mut rfi) = cd::to_rfi(o, &objs, &rooms, rules, &es, upf) else { continue };
+        if sketches < rules.max_sketches {
+            let first = o.architect.iter().find_map(|&i| origin.get(i).copied().flatten());
             if let Some((at, Some(span))) = first
                 && let Some(path) =
-                    tag_crop(s, at, span, None, &crop_dir, &format!("coordination-{sketches}"), &rfi.sheets.first().cloned().unwrap_or_default())
+                    tag_crop(s, at, span, None, &crop_dir, &format!("open-{sketches}"), &rfi.sheets.first().cloned().unwrap_or_default())
             {
                 rfi.sketch = Some(path);
                 sketches += 1;
             }
         }
-        // What only the architect draws, built as the architect draws it (the kind's build rule).
-        if let (cd::Case::ArchitectOnly, Some(rule)) = (f.case, rules.kinds.get(f.kind))
+        if let Some(rule) = rules.kinds.get(o.kind)
             && let Some(build) = &rule.build
         {
-            let proposal = cd::proposal(f, &objs, rule, upf);
-            for &i in &f.architect {
+            let p = cd::proposal(o, &objs, rule, upf).unwrap_or_default();
+            let needs = rule.requires.join(", ");
+            for &i in &o.architect {
                 // (A device read off the architect's sheet is built already.)
-                let (Some(o), Some(Some(_))) = (objs.get(i), origin.get(i)) else { continue };
+                let (Some(x), Some(Some(_))) = (objs.get(i), origin.get(i)) else { continue };
                 let mut notes = vec![
                     ("confidence".to_string(), "unsure".to_string()),
-                    ("not_on_electrical".to_string(), format!("from architectural sheet {}, not on the electrical drawings", o.sheet)),
+                    ("not_on_electrical".to_string(), format!("from architectural sheet {}; no {needs} on any electrical sheet", x.sheet)),
                     ("rfi".to_string(), rfi.id.clone()),
                 ];
-                if let Some((circuit, control)) = &proposal {
-                    if let Some((c, ft)) = circuit {
-                        notes.push(("proposed_circuit".into(), format!("{c} ({}, {ft:.0} ft off)", build.proposed_circuit)));
-                    } else {
-                        notes.push((
-                            "proposed_circuit".into(),
-                            "a circuit of its room's panel (no circuit of its kind on its level's electrical plans)".into(),
-                        ));
-                    }
-                    if !control.is_empty() {
-                        notes.push(("proposed_control".into(), control.clone()));
-                    }
+                if let Some((t, ft)) = &p.type_mark {
+                    notes.push(("proposed_type".into(), format!("{t} (the nearest light's type, {ft:.0} ft off)")));
+                }
+                notes.push((
+                    "proposed_circuit".into(),
+                    p.circuit.as_ref().map_or_else(
+                        || "a circuit of its room's panel (no circuit of its kind on its level's electrical plans)".to_string(),
+                        |(c, ft)| format!("{c} ({}, {ft:.0} ft off)", build.proposed_circuit),
+                    ),
+                ));
+                if !p.control.is_empty() {
+                    notes.push(("proposed_control".into(), p.control.clone()));
                 }
                 devices.push(super::readers::ReadDevice {
-                    tag: build.mark.clone(),
-                    at: o.at,
-                    sheet: o.sheet.clone(),
-                    level: o.level.clone(),
+                    // Its type proposed from its neighbours (trade practice), so the takeoff and
+                    // the estimate price it as one; else the rule's mark.
+                    tag: p.type_mark.as_ref().map_or_else(|| build.mark.clone(), |(t, _)| t.clone()),
+                    at: x.at,
+                    sheet: x.sheet.clone(),
+                    level: x.level.clone(),
                     kind: build.kind.clone(),
-                    kind_source: format!("{} legend: {}", o.sheet, o.what),
+                    kind_source: format!("{} legend: {}", x.sheet, x.what),
                     ifc_class: build.ifc.clone(),
                     derived: format!(
-                        "inferred: drawn on the architectural sheet {} ({}), not on the electrical drawings: no fixture type, circuit or control given ({})",
-                        o.sheet, o.what, rfi.id
+                        "inferred: drawn on the architectural sheet {} ({}); no {needs} on any electrical sheet: completed by proposal ({})",
+                        x.sheet, x.what, rfi.id
                     ),
                     made: super::waterfill::INFERRED.into(),
                     notes,
@@ -13023,46 +13024,47 @@ fn coordination_step(
         }
         rfis.push(rfi);
     }
-    // Into the spec's RFI list, in place of the last run's.
+    // Into the spec's RFI list, in place of the last build's.
     if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-        sp.rfis.retain(|r| !r.topic.starts_with("coordination:"));
+        sp.rfis.retain(|r| !r.topic.starts_with(cd::COMPLETE_TOPIC));
         let room = cadaddy_walk3d::rfi::MAX_RFIS.saturating_sub(sp.rfis.len());
         let mut ids: BTreeSet<String> = sp.rfis.iter().map(|r| r.id.clone()).collect();
         sp.rfis.extend(rfis.iter().filter(|r| ids.insert(r.id.clone())).take(room).cloned());
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         s.touch();
     }
-    // The job's report: one finding per case, its rooms listed.
-    for (case, title, sev) in [
-        (cd::Case::ArchitectOnly, "Drawn by the architect, not on the electrical drawings", 1u8),
-        (cd::Case::EngineerOnly, "On the electrical drawings, not on the architect's sheets", 2),
-        (cd::Case::Differ, "The architect's and the electrical sheets' counts or places differ", 3),
-        (cd::Case::NoneAnywhere, "Rooms with a ceiling and no light on any sheet", 3),
-    ] {
-        let listed: Vec<String> =
-            cmp.findings.iter().zip(&lines).filter(|(f, _)| f.case == case).map(|(_, l)| l.clone()).take(MAX_COORDINATION_LISTED).collect();
-        if listed.is_empty() {
-            continue;
-        }
-        let n = cmp.findings.iter().filter(|f| f.case == case).count();
-        let more =
-            if n > listed.len() { format!("; and {} more (job.explain bim_build coordination, rfi.list)", n - listed.len()) } else { String::new() };
+    // The job's report: one finding at the build step, its groups listed.
+    if !lines.is_empty() {
+        let listed: Vec<String> = lines.iter().take(MAX_COORDINATION_LISTED).cloned().collect();
+        let more = if lines.len() > listed.len() {
+            format!("; and {} more (job.explain bim_build architect_objects, rfi.read {{topic: \"complete:\"}})", lines.len() - listed.len())
+        } else {
+            String::new()
+        };
         job.add_finding(
             StageName::BimBuild,
-            title,
-            &format!("{n} (each an RFI with both sheets and both counts): {}{more}", listed.join("; ")),
-            sev,
-            vec!["Answer each RFI (rfi.list, topic coordination): the model carries the architect's objects, marked inferred and unsure, until it is answered".into()],
+            "Objects the architect draws that no electrical sheet completes (type, circuit, control)",
+            &format!("{} groups (each an RFI with both sheets and both counts; built inferred and unsure, completed by proposal): {}{more}", lines.len(), listed.join("; ")),
+            1,
+            vec!["Answer each RFI (rfi.read {topic: \"complete:\"}): the model carries the architect's objects, marked inferred and unsure, completed by the proposal until it is answered".into()],
             None,
             false,
         );
     }
+    // What was required of the architect's objects, per kind: completed by an electrical sheet, or open.
+    report["requirements"] = json!(rules
+        .kinds
+        .iter()
+        .filter_map(|k| {
+            let (a, e) = done.objects.get(&k.name).copied().unwrap_or_default();
+            let completed = done.completed.get(&k.name).copied().unwrap_or_default();
+            (a > 0).then(|| (k.name.clone(), json!({"requires": k.requires, "architect": a, "completed_by_electrical": completed, "open": a.saturating_sub(completed), "electrical": e})))
+        })
+        .collect::<serde_json::Map<String, Value>>());
     report["objects"] =
-        json!(cmp.objects.iter().map(|(k, (a, e))| (k.clone(), json!({"architect": a, "engineer": e}))).collect::<serde_json::Map<String, Value>>());
-    report["roomless"] = json!({"architect": cmp.roomless.0, "engineer": cmp.roomless.1});
-    report["rooms_not_asked"] = json!(cmp.not_asked);
-    report["rooms_compared"] = json!(cmp.rooms_compared);
-    report["findings"] = json!(by_case);
+        json!(done.objects.iter().map(|(k, (a, e))| (k.clone(), json!({"architect": a, "engineer": e}))).collect::<serde_json::Map<String, Value>>());
+    report["roomless"] = json!({"architect": done.roomless.0, "engineer": done.roomless.1});
+    report["open_groups"] = json!(done.open.len());
     report["lines"] = json!(lines.iter().take(MAX_COORDINATION_LISTED).collect::<Vec<_>>());
     report["built"] = json!(added);
     report["rfis"] = json!(rfis.len());
@@ -13071,7 +13073,7 @@ fn coordination_step(
     Ok(report)
 }
 
-/// Findings of one way a coordination check lists in the job's report, at most.
+/// Open groups the job's report lists, at most.
 const MAX_COORDINATION_LISTED: usize = 40;
 
 /// The answers' drawings, as table entries (`symdraw:` rules).
@@ -37609,7 +37611,7 @@ mod tests {
     /// and four in the corridor; E-101 has the corridor's four luminaires only (`in_room`: and
     /// that many in the room). The room is a finding with both counts and both sheets, its two
     /// lights are built inferred and unsure with a proposed circuit, and `rfi.read` lists it.
-    fn coordination_set(in_room: usize) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>) {
+    fn architect_objects_set(in_room: usize) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>) {
         let mut s = crate::Session::new();
         let common = || Common { layer: "PDF".into(), ..Common::default() };
         let ceiling = |p: [f64; 2]| [p[0] + 2060.0, p[1] + 30.0];
@@ -37682,29 +37684,35 @@ mod tests {
 
     #[test]
     fn lights_on_the_architects_ceiling_plan_and_not_on_the_electrical_plan_are_flagged_and_built() {
-        let (mut s, mut job, mut devices) = coordination_set(0);
+        let (mut s, mut job, mut devices) = architect_objects_set(0);
         let before = devices.len();
-        let r = coordination_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["legend_rows"], json!(["A-601: RECESSED DOWN LIGHT (light)"]), "{r:#}");
         assert_eq!((r["architect_found"].clone(), r["architect_placed"].clone()), (json!(6), json!(6)), "{r:#}");
-        assert_eq!(r["findings"], json!({"architect_only": 1}), "{r:#}");
+        assert_eq!(r["open_groups"], json!(1), "{r:#}");
+        assert_eq!(
+            r["requirements"]["lights"],
+            json!({"requires": ["fixture type", "circuit", "control"], "architect": 6, "completed_by_electrical": 4, "open": 2, "electrical": 4}),
+            "{r:#}"
+        );
         assert_eq!(r["objects"]["lights"], json!({"architect": 6, "engineer": 4}), "{r:#}");
         assert!(r["lines"][0].as_str().is_some_and(|l| l.contains("SNACK ALCOVE 112") && l.contains("A: 2 on A-601, E: 0 on E-101")), "{r:#}");
         // The room's two lights, built as the architect draws them: inferred, unsure, no circuit,
-        // the nearest lighting circuit proposed.
+        // completed by proposal (the nearest light's type and circuit, a switch at the door).
         let added: Vec<_> = devices.iter().skip(before).collect();
         assert_eq!(added.len(), 2, "{added:?}");
         for dv in &added {
-            assert!(dv.made == "inferred" && dv.circuit.is_empty() && dv.kind == "luminaire" && dv.sheet == "A-601", "{dv:?}");
+            assert!(dv.made == "inferred" && dv.circuit.is_empty() && dv.kind == "luminaire" && dv.sheet == "A-601" && dv.tag == "A", "{dv:?}");
             assert!(dv.at[0] > 200.0 && dv.at[0] < 296.0 && dv.at[1] > 500.0 && dv.at[1] < 596.0, "{dv:?}");
             let note = |k: &str| dv.notes.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or_default();
             assert_eq!(note("confidence"), "unsure");
+            assert!(note("proposed_type").starts_with("A (the nearest light's type"), "{dv:?}");
             assert!(note("proposed_circuit").starts_with("L1-7"), "{dv:?}");
             assert!(note("proposed_control").contains("switch"), "{dv:?}");
         }
         // The job's report at the build stage.
         assert!(
-            job.findings.iter().any(|f| f.description.contains("not on the electrical drawings") && f.why.contains("SNACK ALCOVE 112")),
+            job.findings.iter().any(|f| f.description.contains("no electrical sheet completes") && f.why.contains("SNACK ALCOVE 112")),
             "{:?}",
             job.findings
         );
@@ -37716,7 +37724,7 @@ mod tests {
         for t in &tags {
             let f = |k: &str| t.fields.get(k).map(|f| f.value.clone()).unwrap_or_default();
             assert_eq!(f("status"), "inferred");
-            assert!(f("basis").contains("A-601") && f("basis").contains("not on the electrical drawings"), "{t:?}");
+            assert!(f("basis").contains("A-601") && f("basis").contains("no fixture type, circuit, control on any electrical sheet"), "{t:?}");
             assert_eq!(f("device_kind"), "luminaire");
             assert!(f("circuit").is_empty() && f("proposed_circuit").starts_with("L1-7"), "{t:?}");
         }
@@ -37742,23 +37750,24 @@ mod tests {
         assert_eq!(item["sheets"], json!(["A-601", "E-101"]));
         assert_eq!(item["severity"], json!("high"));
         assert_eq!(read["counts"]["by_kind"]["conflict"], json!(1), "{read:#}");
-        let only = s.execute("rfi.read", &json!({"topic": "coordination"})).unwrap_or_else(|e| panic!("{e}"));
+        let only = s.execute("rfi.read", &json!({"topic": "complete:"})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(only["total"], json!(1), "{only:#}");
         let other = s.execute("rfi.read", &json!({"topic": "lighting"})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(other["total"], json!(0), "{other:#}");
         // Run again (a rebuild): the same one item, not two.
         let mut again: Vec<super::super::readers::ReadDevice> = devices.iter().take(before).cloned().collect();
-        coordination_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        architect_objects_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
         let read = s.execute("rfi.read", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(read["counts"]["by_kind"]["conflict"], json!(1), "{read:#}");
     }
 
     #[test]
     fn an_architects_ceiling_plan_the_electrical_plan_agrees_with_gives_no_finding() {
-        let (mut s, mut job, mut devices) = coordination_set(2);
+        let (mut s, mut job, mut devices) = architect_objects_set(2);
         let before = devices.len();
-        let r = coordination_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(r["findings"], json!({}), "{r:#}");
+        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r["open_groups"], json!(0), "{r:#}");
+        assert_eq!(r["requirements"]["lights"]["completed_by_electrical"], json!(6), "{r:#}");
         assert_eq!(r["objects"]["lights"], json!({"architect": 6, "engineer": 6}), "{r:#}");
         assert_eq!(devices.len(), before);
         let read = s.execute("rfi.read", &json!({})).unwrap_or_else(|e| panic!("{e}"));

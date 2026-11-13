@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool, topic?: text (only items whose topic starts with it: coordination, lighting)} → {counts: {by_kind: {}, by_severity: {}}, items: first 20 (most severe first: id, kind, severity, level, sheets, about, issue, topic, proposed), total}: the building model's RFI list (the print readers' items, the job's cross-discipline coordination, the spec's own gaps; rfi.list has every item)")
+            .params("{apply?: bool, topic?: text (only items whose topic starts with it: complete: (what the build could not complete from the documents), lighting)} → {counts: {by_kind: {}, by_severity: {}}, items: first 20 (most severe first: id, kind, severity, level, sheets, about, issue, topic, proposed), total}: the building model's RFI list (the print readers' items, what the build could not complete, the spec's own gaps; rfi.list has every item)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -965,10 +965,10 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
     // A drawing with a building model: its RFI list as the readers and the job's checks left it
-    // (the print readers' items, the cross-discipline coordination, the spec's own gaps).
+    // (the print readers' items, what the build could not complete, the spec's own gaps).
     if let Ok((sp, true)) = super::bspec::current(_s, "rfi.read") {
         let mut list = cadaddy_walk3d::rfi::list(&sp);
-        // (Only the items of one check: `coordination` lists the architect-against-electrical ones.)
+        // (Only the items of one topic: `complete:` lists what the build could not complete.)
         if let Some(topic) = str_param(p, "topic").map(str::trim).filter(|t| !t.is_empty()) {
             let topic = topic.to_ascii_lowercase();
             list.retain(|r| r.topic.to_ascii_lowercase().starts_with(&topic));
@@ -1246,7 +1246,7 @@ pub(crate) fn device_kind(tag: &str) -> &'static str {
 const MAX_DEVICE_NOTES: usize = 16;
 /// The properties a check gives a device it made (Q6612) that its built element carries too: how
 /// sure it is, why no engineer's sheet has it, what is proposed for it, the RFI asking about it.
-pub(crate) const CHECK_FIELDS: [&str; 5] = ["confidence", "not_on_electrical", "proposed_circuit", "proposed_control", "rfi"];
+pub(crate) const CHECK_FIELDS: [&str; 6] = ["confidence", "not_on_electrical", "proposed_type", "proposed_circuit", "proposed_control", "rfi"];
 
 /// Devices listed at most per call, and read at most.
 const DEVICES_LISTED: usize = 500;
@@ -1542,7 +1542,7 @@ pub struct ReadDevice {
     /// when `derived` is given.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub made: String,
-    /// Properties a check gives it (`confidence` unsure, `proposed_circuit`, `proposed_control`),
+    /// Properties a check gives it (`confidence` unsure, `proposed_type`, `proposed_circuit`, `proposed_control`),
     /// each with its value: written onto its element as rule values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<(String, String)>,

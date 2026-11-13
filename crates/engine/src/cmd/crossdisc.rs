@@ -1,20 +1,23 @@
-//! The architect's sheets against the engineer's (Q6612): every electrical object the architect
-//! draws — a light on a reflected ceiling plan, a receptacle or a data outlet on a floor plan, a
-//! fan — compared room by room with what the electrical sheets draw, both ways, as a standing
-//! step of every job (nothing to turn on).
+//! The objects the architect draws, built and completed by the electrical sheets (Q6612): a light
+//! on a reflected ceiling plan (a receptacle or a data outlet on a floor plan, a fan) is an object
+//! of the building like any other drawn one, as a standing part of every job's build (nothing to
+//! turn on). The finding is what the build cannot complete, never a side comparison.
 //!
 //! - The architect's objects are read off the architect's own sheets by their legends: each row
-//!   of a titled legend (`RCP LEGEND`) whose words name a compared kind ([`crossdisc.json`]
-//!   `kinds`, rule data) is a drawing looked for on the architect's sheets of the set.
-//! - The engineer's are the job's read devices of the kind (their sheets the kind's disciplines).
-//! - Both are put on their level's plan; each room holds what lies in it. An object on one side
-//!   and missing on the other, counts or places that differ beyond the kind's tolerance, and a
-//!   room with a ceiling that no sheet lights are findings: an RFI each (both sheets, the room,
-//!   both counts, where), and a line of the job report.
-//! - What only the architect draws is built (the kind's `build` rule): an inferred, unsure
-//!   object marked "from the architectural sheet, not on the electrical drawings", with no
-//!   circuit, and its proposals (the nearest circuit of its kind, a switch at the door) beside it
-//!   so the takeoff and the estimate carry it and the RFI asks.
+//!   of a titled legend (`RCP LEGEND`) whose words name a kind of [`crossdisc.json`] (rule data)
+//!   is a drawing looked for on the architect's sheets of the set; each copy found is placed on its
+//!   level's plan.
+//! - Each must then be completed the way an installer must complete it (the kind's `requires`: a
+//!   luminaire's type, circuit and control). Its completing object is the electrical sheets'
+//!   object of its kind by it in its room (the job's read devices): that one is built with its
+//!   type, circuit and control, and the architect's copy of it adds nothing.
+//! - What no electrical sheet completes is the finding, raised in the build on those objects: an
+//!   RFI per group (both sheets, the room, both counts, where, a crop of the architect's sheet)
+//!   and a line of the job report. The build does not stop: the objects are built (the kind's
+//!   `build` rule), inferred and unsure, completed by the next source (trade practice: the
+//!   nearest light's type, the nearest circuit of the kind, that light's switch leg or a switch at
+//!   the door) as a proposal with its basis, so the takeoff and the estimate carry them and the
+//!   RFI asks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -76,15 +79,17 @@ pub(crate) struct KindRule {
     pub engineer_ifc: Vec<String>,
     pub engineer_kinds_none: Vec<String>,
     pub reach_ft: f64,
-    /// Objects only the architect draws this near each other in one room are one finding.
+    /// Objects no electrical sheet completes this near each other in one room are one finding.
     pub cluster_ft: f64,
-    pub count_tolerance: usize,
-    pub rooms_without: bool,
+    /// What an object of the kind needs before it can be installed (`fixture type`, `circuit`,
+    /// `control`): what no electrical sheet gives is the finding.
+    pub requires: Vec<String>,
+    /// How much an object no electrical sheet completes matters (`high`, `medium`, `low`).
+    pub open_severity: String,
     pub build: Option<BuildRule>,
-    pub severity: Severities,
 }
 
-/// What the build makes of an object only the architect draws.
+/// What the build makes of an object no electrical sheet completes.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct BuildRule {
@@ -97,18 +102,7 @@ pub(crate) struct BuildRule {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub(crate) struct Severities {
-    pub architect_only: String,
-    pub engineer_only: String,
-    pub differ: String,
-    pub none: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
 pub(crate) struct RoomRules {
-    pub min_area_sqft: f64,
-    pub except_words: Vec<String>,
     pub reach_ft: f64,
 }
 
@@ -144,20 +138,6 @@ impl KindRule {
         self.engineer_disciplines.iter().any(|d| d.eq_ignore_ascii_case(discipline.trim()))
     }
 
-    fn severity_of(&self, case: Case) -> Severity {
-        let s = match case {
-            Case::ArchitectOnly => &self.severity.architect_only,
-            Case::EngineerOnly => &self.severity.engineer_only,
-            Case::Differ => &self.severity.differ,
-            Case::NoneAnywhere => &self.severity.none,
-        };
-        Severity::parse(s).unwrap_or(match case {
-            Case::ArchitectOnly => Severity::High,
-            Case::EngineerOnly | Case::Differ => Severity::Medium,
-            Case::NoneAnywhere => Severity::Low,
-        })
-    }
-
     fn cluster(&self) -> f64 {
         if self.cluster_ft.is_finite() && self.cluster_ft > 0.0 { self.cluster_ft } else { 15.0 }
     }
@@ -182,11 +162,6 @@ impl Rules {
     /// The kind a legend row's words name (the first rule that names them).
     pub(crate) fn kind_of_row(&self, words: &str) -> Option<usize> {
         self.kinds.iter().position(|k| k.names(words))
-    }
-
-    fn excepted_room(&self, name: &str) -> bool {
-        let u = upper_padded(name);
-        self.rooms.except_words.iter().any(|w| !w.trim().is_empty() && u.contains(&w.to_ascii_uppercase()))
     }
 }
 
@@ -565,7 +540,7 @@ pub(crate) fn find(
     (out.into_iter().map(|(f, _)| f).collect(), plain)
 }
 
-// ─── The compare ────────────────────────────────────────────────────────────
+// ─── Completing the architect's objects ─────────────────────────────────────
 
 /// One object of a compared kind on its level's plan.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -578,12 +553,11 @@ pub(crate) struct Obj {
     pub sheet: String,
     /// Drawn by the architect (else by the engineer).
     pub architect: bool,
-    /// What it is on its sheet: the legend row it is drawn as, or the engineer's mark.
+    /// What it is on its sheet: the legend row it is drawn as, or the engineer's type mark.
     pub what: String,
-    /// Stamped from a typical room's view (its views speak for its room).
-    pub typical: bool,
-    /// The engineer's circuit, when one is given.
+    /// The engineer's circuit and switch leg, when given.
     pub circuit: String,
+    pub leg: String,
 }
 
 /// A room on its level's plan.
@@ -631,63 +605,36 @@ impl Room {
     }
 }
 
-/// Which way two disciplines' sheets disagree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Case {
-    /// Drawn by the architect, not on the engineer's sheets.
-    ArchitectOnly,
-    /// On the engineer's sheets, not on the architect's.
-    EngineerOnly,
-    /// Both draw it; counts or places differ beyond the tolerance.
-    Differ,
-    /// A room with a ceiling no sheet puts one in.
-    NoneAnywhere,
-}
-
-impl Case {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Case::ArchitectOnly => "architect_only",
-            Case::EngineerOnly => "engineer_only",
-            Case::Differ => "differ",
-            Case::NoneAnywhere => "none",
-        }
-    }
-}
-
-/// One finding: the kind, which way, the level, the room (none: the level's objects in no traced
-/// room, or the whole level), the objects of each side (indices into the compared list), where.
+/// A group of the architect's objects no electrical sheet completes: none of the engineer's
+/// objects of the kind is by them (in their room), so no type, circuit or control comes from any
+/// electrical sheet. Its kind, level, room (none: outside the traced rooms, or the whole level when
+/// no electrical sheet draws the kind there, `rooms` then the rooms it is in), its objects (indices
+/// into the list), what the room as traced holds of each side, where.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Finding {
+pub(crate) struct Open {
     pub kind: usize,
-    pub case: Case,
     pub level: String,
     pub room: Option<usize>,
-    /// The rooms a level-wide finding is about.
     pub rooms: Vec<usize>,
     pub architect: Vec<usize>,
-    pub engineer: Vec<usize>,
-    /// The places of each side that no copy on the other side is near.
-    pub unmatched: (usize, usize),
-    /// For the architect's objects alone in a room: what the room as traced holds of each side
-    /// (a room traced together with its neighbour holds the electrical's elsewhere in it).
+    /// What the room as traced holds of each side (a room traced together with its neighbour
+    /// holds the electrical's elsewhere in it).
     pub room_counts: Option<(usize, usize)>,
+    /// No electrical sheet draws the kind on the whole level.
+    pub level_wide: bool,
     pub at: [f64; 2],
     pub extent: Option<[[f64; 2]; 2]>,
 }
 
-/// The compare's counts for the report: per kind, objects of each side and findings by case.
+/// What completing the architect's objects came to: the open groups, and per kind name the
+/// architect's objects and the engineer's, the architect's completed from an electrical sheet.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Comparison {
-    pub findings: Vec<Finding>,
-    pub rooms_compared: usize,
-    /// Kind name → (architect's, engineer's) objects.
+pub(crate) struct Completion {
+    pub open: Vec<Open>,
     pub objects: BTreeMap<String, (usize, usize)>,
+    pub completed: BTreeMap<String, usize>,
     /// Objects in no traced room, per side.
     pub roomless: (usize, usize),
-    /// Rooms not asked about per kind name: the architect's legend draws the kind some way the job
-    /// can't read, so the architect's count there is partial.
-    pub not_asked: BTreeMap<String, usize>,
 }
 
 /// A level's key, whatever it is called (`1`, `LEVEL 1`, `Level 01` are one level).
@@ -701,28 +648,6 @@ pub(crate) fn level_key(l: &str) -> String {
         return "0".into();
     }
     l.trim().to_ascii_uppercase()
-}
-
-/// Pairs of `a` and `b` (points) within `reach`, nearest first: how many of each are left over.
-fn unmatched(a: &[[f64; 2]], b: &[[f64; 2]], reach: f64) -> (usize, usize) {
-    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
-    for (i, p) in a.iter().enumerate() {
-        for (j, q) in b.iter().enumerate() {
-            let d = (p[0] - q[0]).hypot(p[1] - q[1]);
-            if d <= reach {
-                pairs.push((d, i, j));
-            }
-        }
-    }
-    pairs.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let (mut ua, mut ub) = (BTreeSet::new(), BTreeSet::new());
-    for (_, i, j) in pairs {
-        if !ua.contains(&i) && !ub.contains(&j) {
-            ua.insert(i);
-            ub.insert(j);
-        }
-    }
-    (a.len() - ua.len(), b.len() - ub.len())
 }
 
 fn bounds(pts: impl Iterator<Item = [f64; 2]>) -> Option<[[f64; 2]; 2]> {
@@ -772,229 +697,125 @@ fn groups(ids: &[usize], key: impl Fn(usize) -> Option<usize>, near: impl Fn(usi
     out.into_values().collect()
 }
 
-/// Compare the architect's and the engineer's objects room by room (see the module docs). `upf`:
-/// drawing units per foot of the plans.
-pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64, partial: &BTreeSet<usize>) -> Comparison {
+/// Complete the architect's objects from the engineer's (see the module docs): each object the
+/// architect draws is the engineer's object of its kind by it in its room (within the kind's
+/// reach; one outside every traced room within a room's own reach of one in a room), which gives
+/// it its type, circuit and control; the ones with none are open, grouped by room and nearness.
+/// `upf`: drawing units per foot of the plans.
+pub(crate) fn complete(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64) -> Completion {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
-    let mut out = Comparison::default();
+    let mut out = Completion::default();
     let rooms: Vec<&Room> = rooms.iter().filter(|r| r.outline.len() >= 3).take(MAX_ROOMS).collect();
     let objs: Vec<&Obj> = objs.iter().take(MAX_OBJECTS).collect();
     let room_reach_ft = if rules.rooms.reach_ft.is_finite() && rules.rooms.reach_ft >= 0.0 { rules.rooms.reach_ft } else { 2.0 };
     let room_reach = room_reach_ft * upf;
-    // Each object's room: the one holding it, else the nearest within reach.
+    // Each object's room: the smallest one holding it, else the nearest within reach.
     let room_of: Vec<Option<usize>> = objs
         .iter()
         .map(|o| {
             let p = Vec2::new(o.at[0], o.at[1]);
             let key = level_key(&o.level);
-            let mine = rooms.iter().enumerate().filter(|(_, r)| level_key(&r.level) == key);
-            let mut best: Option<(usize, f64)> = None;
-            for (i, r) in mine {
-                if r.holds(p) {
-                    // The smallest room holding it (a closet in a suite's outline).
-                    let a = r.area();
-                    if best.is_none_or(|(_, b)| a < b) {
-                        best = Some((i, a));
-                    }
-                }
-            }
-            best.map(|(i, _)| i).or_else(|| {
-                rooms
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, r)| level_key(&r.level) == key)
-                    .map(|(i, r)| (i, r.distance(p)))
-                    .filter(|(_, d)| *d <= room_reach)
-                    .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map(|(i, _)| i)
+            let mine = || rooms.iter().enumerate().filter(|(_, r)| level_key(&r.level) == key);
+            mine().filter(|(_, r)| r.holds(p)).min_by(|a, b| a.1.area().total_cmp(&b.1.area())).map(|(i, _)| i).or_else(|| {
+                mine().map(|(i, r)| (i, r.distance(p))).filter(|(_, d)| *d <= room_reach).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
             })
         })
         .collect();
     out.roomless =
         objs.iter().zip(&room_of).filter(|(_, r)| r.is_none()).fold((0, 0), |(a, e), (o, _)| if o.architect { (a + 1, e) } else { (a, e + 1) });
     let max = if rules.max_findings > 0 { rules.max_findings } else { 400 };
-    let rooms_of_level = |key: &str| rooms.iter().enumerate().filter(|(_, r)| level_key(&r.level) == key).map(|(i, _)| i).collect::<Vec<_>>();
-    let mut compared_rooms: BTreeSet<usize> = BTreeSet::new();
+    let room_at = |i: usize| room_of.get(i).copied().flatten();
     for (k, rule) in rules.kinds.iter().enumerate() {
         let mine: Vec<usize> = (0..objs.len()).filter(|&i| objs.get(i).is_some_and(|o| o.kind == k)).collect();
         let a_n = mine.iter().filter(|&&i| objs.get(i).is_some_and(|o| o.architect)).count();
-        let e_n = mine.len() - a_n;
-        out.objects.insert(rule.name.clone(), (a_n, e_n));
-        // The architect draws none of the kind anywhere: nothing of it to compare.
+        out.objects.insert(rule.name.clone(), (a_n, mine.len() - a_n));
         if a_n == 0 {
             continue;
         }
-        let side_levels = |architect: bool| -> BTreeSet<String> {
-            mine.iter().filter_map(|&i| objs.get(i)).filter(|o| o.architect == architect).map(|o| level_key(&o.level)).collect()
-        };
-        let (a_levels, e_levels) = (side_levels(true), side_levels(false));
+        let e_levels: BTreeSet<String> = mine.iter().filter_map(|&i| objs.get(i)).filter(|o| !o.architect).map(|o| level_key(&o.level)).collect();
         let reach = rule.reach() * upf;
-        let mut levels: Vec<String> = a_levels.union(&e_levels).cloned().collect();
+        let mut levels: Vec<String> = mine.iter().filter_map(|&i| objs.get(i)).filter(|o| o.architect).map(|o| level_key(&o.level)).collect();
         levels.sort();
+        levels.dedup();
+        let mut completed = 0usize;
         for key in &levels {
             let on_level: Vec<usize> = mine.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| level_key(&o.level) == *key)).collect();
-            let level_name = on_level.iter().find_map(|&i| objs.get(i)).map_or_else(|| key.clone(), |o| o.level.clone());
+            let level_name = on_level.iter().filter_map(|&i| objs.get(i)).find(|o| o.architect).map_or_else(|| key.clone(), |o| o.level.clone());
             let points = |ids: &[usize]| ids.iter().filter_map(|&i| objs.get(i)).map(|o| o.at).collect::<Vec<_>>();
-            let engineer_level = e_levels.contains(key);
-            let architect_level = a_levels.contains(key);
             let (arch, eng): (Vec<usize>, Vec<usize>) = on_level.iter().partition(|&&i| objs.get(i).is_some_and(|o| o.architect));
-            // By position first: the architect's objects with no engineer's object of the kind near
-            // in the same room (a light across a wall lights another room); one outside every
-            // traced room is the copy of one in a room only as near as a room's own reach (the
-            // trace's outline and the sheets' registration put one light either side of it).
-            let room_at = |i: usize| room_of.get(i).copied().flatten();
-            let near_engineer = |i: usize, o: &Obj| {
+            // Its completing object: the engineer's of the kind by it in its room (a light across a
+            // wall lights another room; the trace's outline and the sheets' registration may put
+            // one light either side of a room's edge).
+            let completes = |i: usize, o: &Obj| {
                 eng.iter().filter_map(|&j| Some((j, objs.get(j)?))).any(|(j, x)| {
                     let d = (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]);
                     d <= reach && (room_at(i) == room_at(j) || ((room_at(i).is_none() || room_at(j).is_none()) && d <= room_reach))
                 })
             };
-            let bare: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !near_engineer(i, o))).collect();
-            let bare_set: BTreeSet<usize> = bare.iter().copied().collect();
-            let room_counts = |ri: Option<usize>| {
-                ri.map(|ri| {
+            let open: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !completes(i, o))).collect();
+            completed += arch.len() - open.len();
+            if open.is_empty() || out.open.len() >= max {
+                continue;
+            }
+            if !e_levels.contains(key) {
+                // No electrical sheet draws the kind on the whole level: one group for the level.
+                let mut hit: Vec<usize> = open.iter().filter_map(|&i| room_at(i)).collect();
+                hit.sort_unstable();
+                hit.dedup();
+                let extent = bounds(points(&open).into_iter());
+                out.open.push(Open {
+                    kind: k,
+                    level: level_name.clone(),
+                    room: None,
+                    rooms: hit,
+                    architect: open,
+                    room_counts: None,
+                    level_wide: true,
+                    at: middle(extent),
+                    extent,
+                });
+                continue;
+            }
+            // Each group of them (in one room, each near another): its room its label.
+            let cluster = rule.cluster() * upf;
+            let near = |i: usize, j: usize| match (objs.get(i), objs.get(j)) {
+                (Some(a), Some(b)) => (a.at[0] - b.at[0]).hypot(a.at[1] - b.at[1]) <= cluster,
+                _ => false,
+            };
+            for group in groups(&open, room_at, near) {
+                if out.open.len() >= max {
+                    break;
+                }
+                let room = group.first().and_then(|&i| room_at(i));
+                let room_counts = room.map(|ri| {
                     let n = |architect: bool| {
-                        on_level
-                            .iter()
-                            .filter(|&&i| room_of.get(i).copied().flatten() == Some(ri) && objs.get(i).is_some_and(|o| o.architect == architect))
-                            .count()
+                        on_level.iter().filter(|&&i| room_at(i) == Some(ri) && objs.get(i).is_some_and(|o| o.architect == architect)).count()
                     };
                     (n(true), n(false))
-                })
-            };
-            let push = |out: &mut Comparison, f: Finding| {
-                if out.findings.len() < max {
-                    out.findings.push(f);
-                }
-            };
-            if !engineer_level {
-                // The engineer draws none of the kind on the whole level: one finding for the level.
-                if !bare.is_empty() {
-                    let mut hit: Vec<usize> = bare.iter().filter_map(|&i| room_of.get(i).copied().flatten()).collect();
-                    hit.sort_unstable();
-                    hit.dedup();
-                    let extent = bounds(points(&bare).into_iter());
-                    let n = bare.len();
-                    push(
-                        &mut out,
-                        Finding {
-                            kind: k,
-                            case: Case::ArchitectOnly,
-                            level: level_name.clone(),
-                            room: None,
-                            rooms: hit,
-                            architect: bare.clone(),
-                            engineer: Vec::new(),
-                            unmatched: (n, 0),
-                            at: middle(extent),
-                            extent,
-                            room_counts: None,
-                        },
-                    );
-                }
-            } else {
-                // Each group of them (in one room, each near another): a finding, its room its label.
-                let cluster = rule.cluster() * upf;
-                for group in groups(
-                    &bare,
-                    |i| room_of.get(i).copied().flatten(),
-                    |i, j| match (objs.get(i), objs.get(j)) {
-                        (Some(a), Some(b)) => (a.at[0] - b.at[0]).hypot(a.at[1] - b.at[1]) <= cluster,
-                        _ => false,
-                    },
-                ) {
-                    let room = group.first().and_then(|&i| room_of.get(i).copied().flatten());
-                    let extent = bounds(points(&group).into_iter());
-                    let n = group.len();
-                    push(
-                        &mut out,
-                        Finding {
-                            kind: k,
-                            case: Case::ArchitectOnly,
-                            level: level_name.clone(),
-                            room,
-                            rooms: Vec::new(),
-                            architect: group,
-                            engineer: Vec::new(),
-                            unmatched: (n, 0),
-                            at: middle(extent),
-                            extent,
-                            room_counts: room_counts(room),
-                        },
-                    );
-                }
-            }
-            // Then room by room, the rest: what the engineer alone draws, counts that differ, a
-            // room no sheet lights.
-            for ri in rooms_of_level(key) {
-                let Some(room) = rooms.get(ri) else { continue };
-                let here: Vec<usize> = on_level.iter().copied().filter(|&i| room_of.get(i).copied().flatten() == Some(ri)).collect();
-                let all_a = here.iter().filter(|&&i| objs.get(i).is_some_and(|o| o.architect)).count();
-                let a: Vec<usize> = here.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| o.architect) && !bare_set.contains(&i)).collect();
-                let e: Vec<usize> = here.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !o.architect)).collect();
-                compared_rooms.insert(ri);
-                let typical = e.iter().any(|&i| objs.get(i).is_some_and(|o| o.typical));
-                let (ua, ue) = unmatched(&points(&a), &points(&e), reach);
-                let case = match (all_a, a.len(), e.len()) {
-                    (0, _, 0) => {
-                        let area_sqft = room.area() / (upf * upf);
-                        (rule.rooms_without
-                            && area_sqft >= rules.rooms.min_area_sqft
-                            && !rules.excepted_room(&room.name)
-                            && architect_level
-                            && engineer_level)
-                            .then_some(Case::NoneAnywhere)
-                    }
-                    // (Where the architect's legend draws the kind some way the job can't read, a
-                    // room with none of the architect's read is no finding.)
-                    (0, _, _) if partial.contains(&k) => {
-                        *out.not_asked.entry(rule.name.clone()).or_default() += 1;
-                        None
-                    }
-                    (0, _, _) => (architect_level && !typical).then_some(Case::EngineerOnly),
-                    // (The architect's alone here are their own finding above.)
-                    (_, 0, _) | (_, _, 0) => None,
-                    (_, na, ne) => {
-                        let tol = rule.count_tolerance.max(na.max(ne) / 4);
-                        let counts = na.abs_diff(ne) > tol;
-                        let places = ua.min(ue) > rule.count_tolerance && 2 * ua.min(ue) > na.min(ne);
-                        if partial.contains(&k) && na < ne && (counts || places) {
-                            *out.not_asked.entry(rule.name.clone()).or_default() += 1;
-                            None
-                        } else {
-                            (!typical && (counts || places)).then_some(Case::Differ)
-                        }
-                    }
-                };
-                let Some(case) = case else { continue };
-                let pts: Vec<[f64; 2]> = points(&a).into_iter().chain(points(&e)).collect();
-                let extent = bounds(pts.iter().copied()).or_else(|| bounds(room.outline.iter().map(|p| [p.x, p.y])));
-                push(
-                    &mut out,
-                    Finding {
-                        kind: k,
-                        case,
-                        level: level_name.clone(),
-                        room: Some(ri),
-                        rooms: Vec::new(),
-                        architect: a,
-                        engineer: e,
-                        unmatched: (ua, ue),
-                        at: middle(extent),
-                        extent,
-                        room_counts: None,
-                    },
-                );
+                });
+                let extent = bounds(points(&group).into_iter());
+                out.open.push(Open {
+                    kind: k,
+                    level: level_name.clone(),
+                    room,
+                    rooms: Vec::new(),
+                    architect: group,
+                    room_counts,
+                    level_wide: false,
+                    at: middle(extent),
+                    extent,
+                });
             }
         }
+        out.completed.insert(rule.name.clone(), completed);
     }
-    out.rooms_compared = compared_rooms.len();
-    out.findings
-        .sort_by(|a, b| a.case.cmp(&b.case).then_with(|| level_key(&a.level).cmp(&level_key(&b.level))).then_with(|| a.at[0].total_cmp(&b.at[0])));
+    out.open.sort_by(|a, b| {
+        level_key(&a.level).cmp(&level_key(&b.level)).then_with(|| a.at[0].total_cmp(&b.at[0])).then_with(|| a.at[1].total_cmp(&b.at[1]))
+    });
     out
 }
 
-// ─── What a finding says ────────────────────────────────────────────────────
+// ─── What an open group says ────────────────────────────────────────────────
 
 /// The sheets of `ids`' objects, in order.
 fn sheets_of(objs: &[Obj], ids: &[usize]) -> Vec<String> {
@@ -1016,117 +837,111 @@ fn drawn_as(objs: &[Obj], ids: &[usize]) -> String {
     by.iter().map(|(w, n)| if w.is_empty() { format!("{n}") } else { format!("{n} as {w}") }).collect::<Vec<_>>().join(", ")
 }
 
-/// A finding's place, for its words: the room and level, or the level.
-pub(crate) fn place_of(f: &Finding, rooms: &[Room]) -> String {
-    match f.room.and_then(|i| rooms.get(i)) {
-        Some(r) => format!("{} (level {})", r.label(), f.level),
-        None if f.rooms.is_empty() => format!("level {}, outside the traced rooms", f.level),
-        None => format!("level {}", f.level),
+/// An open group's place, for its words: the room and level, or the level.
+pub(crate) fn place_of(o: &Open, rooms: &[Room]) -> String {
+    match o.room.and_then(|i| rooms.get(i)) {
+        Some(r) => format!("{} (level {})", r.label(), o.level),
+        None if o.level_wide => format!("level {}", o.level),
+        None => format!("level {}, outside the traced rooms", o.level),
     }
 }
 
-/// The proposals for what only the architect draws (the kind's build rule): the nearest circuit
-/// of its kind the engineer gives on its level and how far, and the control.
-pub(crate) fn proposal(f: &Finding, objs: &[Obj], rule: &KindRule, upf: f64) -> Option<(Option<(String, f64)>, String)> {
-    let build = rule.build.as_ref()?;
-    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
-    let key = level_key(&f.level);
-    let mine: Vec<[f64; 2]> = f.architect.iter().filter_map(|&i| objs.get(i)).map(|o| o.at).collect();
-    let circuit = objs
-        .iter()
-        .filter(|o| !o.architect && o.kind == f.kind && level_key(&o.level) == key && !o.circuit.trim().is_empty())
-        .filter_map(|o| {
-            mine.iter().map(|p| (p[0] - o.at[0]).hypot(p[1] - o.at[1])).min_by(f64::total_cmp).map(|d| (o.circuit.trim().to_string(), d / upf))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1));
-    Some((circuit, build.proposed_control.clone()))
+/// How an open group is completed meanwhile, by the next source after the documents (trade
+/// practice: its neighbours): the type of the nearest of the engineer's objects of its kind on its
+/// level, the nearest circuit of its kind (and how far, feet), and its control (that object's
+/// switch leg, else the kind's rule).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Proposal {
+    pub type_mark: Option<(String, f64)>,
+    pub circuit: Option<(String, f64)>,
+    pub control: String,
 }
 
-/// A finding as the RFI list's item (kind `conflict`, each side cited): its words, both sheets and
-/// both counts, its place.
-pub(crate) fn to_rfi(f: &Finding, objs: &[Obj], rooms: &[Room], rules: &Rules, engineer_sheets: &[String], upf: f64) -> Option<Rfi> {
-    let rule = rules.kinds.get(f.kind)?;
-    let place = place_of(f, rooms);
-    let (na, ne) = (f.architect.len(), f.engineer.len());
-    let a_sheets = sheets_of(objs, &f.architect);
-    let e_sheets = {
-        let s = sheets_of(objs, &f.engineer);
-        if s.is_empty() { engineer_sheets.to_vec() } else { s }
-    };
-    let a_doc = if a_sheets.is_empty() { "the architectural sheets".to_string() } else { a_sheets.join(", ") };
-    let e_doc = if e_sheets.is_empty() { "the electrical sheets".to_string() } else { e_sheets.join(", ") };
-    let counts = format!("A: {na}, E: {ne}");
-    let name = &rule.name;
-    let (issue, assumed, proposed) = match f.case {
-        Case::ArchitectOnly => {
-            let what = if f.room.is_some() || !f.rooms.is_empty() {
-                let traced = match f.room_counts {
-                    Some((ra, re)) if re > 0 => format!(
-                        "; none of the electrical's within {:.0} ft of them (the room as traced holds A: {ra}, E: {re}: the electrical's are elsewhere in it)",
-                        rule.reach()
-                    ),
-                    _ => String::new(),
-                };
-                format!("{name} drawn by the architect, not on the electrical drawings: no fixture type, circuit or control ({counts}){traced}")
-            } else {
-                format!("{name} drawn by the architect outside the traced rooms, none on the electrical drawings near them ({counts})")
-            };
-            let built = rule.build.as_ref().map_or_else(
-                || format!("not built until answered: the architect's {na} {name} are listed here"),
-                |_| format!("built as the architect draws them: {na} {name} marked inferred and unsure (from the architectural sheet, not on the electrical drawings), with no circuit"),
-            );
-            let proposed = proposal(f, objs, rule, upf).map(|(c, control)| {
-                let circuit = c.map_or_else(
-                    || "a circuit of the room's panel (no circuit of the kind on the level's electrical plans)".to_string(),
-                    |(c, d)| format!("circuit {c} (the nearest one of its kind on the level's electrical plans, {d:.0} ft off)"),
-                );
-                format!("give each a fixture type; connect them to {circuit}; control: {control}")
-            });
-            (what, built, proposed)
+pub(crate) fn proposal(o: &Open, objs: &[Obj], rule: &KindRule, upf: f64) -> Option<Proposal> {
+    let build = rule.build.as_ref()?;
+    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let key = level_key(&o.level);
+    let mine: Vec<[f64; 2]> = o.architect.iter().filter_map(|&i| objs.get(i)).map(|x| x.at).collect();
+    let dist = |x: &Obj| mine.iter().map(|p| (p[0] - x.at[0]).hypot(p[1] - x.at[1])).fold(f64::INFINITY, f64::min) / upf;
+    let theirs = || objs.iter().filter(|x| !x.architect && x.kind == o.kind && level_key(&x.level) == key);
+    let type_mark = theirs().filter(|x| !x.what.trim().is_empty()).map(|x| (x, dist(x))).min_by(|a, b| a.1.total_cmp(&b.1));
+    let circuited = theirs().filter(|x| !x.circuit.trim().is_empty()).map(|x| (x, dist(x))).min_by(|a, b| a.1.total_cmp(&b.1));
+    let control = match circuited {
+        Some((x, _)) if !x.leg.trim().is_empty() => {
+            format!("switch leg {} of circuit {} (the nearest light's control)", x.leg.trim(), x.circuit.trim())
         }
-        Case::EngineerOnly => (
-            format!("{name} on the electrical drawings, not on the architect's sheets ({counts})"),
-            "built as the electrical drawings place them".to_string(),
-            Some("confirm the architect's ceiling or wall layout shows them, or that they are omitted".to_string()),
-        ),
-        Case::Differ => (
-            format!(
-                "{name} drawn by both, the counts or places differ ({counts}; {} of the architect's and {} of the electrical places with no copy near on the other)",
-                f.unmatched.0, f.unmatched.1
-            ),
-            "built as the electrical drawings place them".to_string(),
-            Some("confirm which sheet's count and layout is right".to_string()),
-        ),
-        Case::NoneAnywhere => (
-            format!("a room with a ceiling and no {name} on any sheet ({counts})"),
-            "built with none".to_string(),
-            Some(format!("confirm the room has no {name}, or give their layout and type")),
-        ),
+        _ => build.proposed_control.clone(),
     };
-    let rooms_named: Vec<String> = f.rooms.iter().filter_map(|&i| rooms.get(i)).map(Room::label).take(MAX_ROOMS_NAMED).collect();
+    Some(Proposal {
+        type_mark: type_mark.map(|(x, d)| (x.what.trim().to_string(), d)),
+        circuit: circuited.map(|(x, d)| (x.circuit.trim().to_string(), d)),
+        control,
+    })
+}
+
+/// An open group as the RFI list's item (kind `conflict`, each side cited): what no electrical
+/// sheet gives for it, both sheets and both counts, its place, how it is completed meanwhile.
+pub(crate) fn to_rfi(o: &Open, objs: &[Obj], rooms: &[Room], rules: &Rules, engineer_sheets: &[String], upf: f64) -> Option<Rfi> {
+    let rule = rules.kinds.get(o.kind)?;
+    let place = place_of(o, rooms);
+    let n = o.architect.len();
+    let a_sheets = sheets_of(objs, &o.architect);
+    let a_doc = if a_sheets.is_empty() { "the architectural sheets".to_string() } else { a_sheets.join(", ") };
+    let e_doc = if engineer_sheets.is_empty() { "the electrical sheets".to_string() } else { engineer_sheets.join(", ") };
+    let name = &rule.name;
+    let needs = if rule.requires.is_empty() { "type, circuit or control".to_string() } else { rule.requires.join(", ") };
+    let traced = match o.room_counts {
+        Some((ra, re)) if re > 0 => {
+            format!(
+                "; none of the electrical's within {:.0} ft of them (the room as traced holds A: {ra}, E: {re}: the electrical's are elsewhere in it)",
+                rule.reach()
+            )
+        }
+        _ => String::new(),
+    };
+    let issue = if o.level_wide {
+        format!(
+            "{n} {name} from the architect's {a_doc} on a level no electrical sheet draws {name} on: no {needs} on any electrical sheet (A: {n}, E: 0)"
+        )
+    } else {
+        format!("{n} {name} from the architect's {a_doc}: no {needs} on any electrical sheet (A: {n}, E: 0){traced}")
+    };
+    let assumed = match &rule.build {
+        Some(_) => format!("built as the architect draws them: {n} {name}, inferred and unsure, completed by the proposal until answered"),
+        None => format!("not built until answered: the architect's {n} {name} are listed here"),
+    };
+    let proposed = proposal(o, objs, rule, upf).map(|p| {
+        let ty = p
+            .type_mark
+            .map_or_else(|| "a type from the luminaire schedule".to_string(), |(t, d)| format!("type {t} (the nearest light's, {d:.0} ft off)"));
+        let circuit = p.circuit.map_or_else(
+            || "a circuit of the room's panel (no circuit of the kind on the level's electrical plans)".to_string(),
+            |(c, d)| format!("circuit {c} (the nearest one of its kind, {d:.0} ft off)"),
+        );
+        format!("{ty}; {circuit}; control: {}", p.control)
+    });
+    let rooms_named: Vec<String> = o.rooms.iter().filter_map(|&i| rooms.get(i)).map(Room::label).take(MAX_ROOMS_NAMED).collect();
     let about = if rooms_named.is_empty() {
         format!("{name} in {place}")
     } else {
-        let more = f.rooms.len().saturating_sub(rooms_named.len());
+        let more = o.rooms.len().saturating_sub(rooms_named.len());
         format!("{name} on {place}: {}{}", rooms_named.join(", "), if more > 0 { format!(" and {more} more rooms") } else { String::new() })
     };
-    let a_says = if na == 0 { format!("no {name}") } else { format!("{na} {name} ({})", drawn_as(objs, &f.architect)) };
-    let e_says = if ne == 0 { format!("no {name}") } else { format!("{ne} {name}") };
-    let topic = format!("coordination: {name} {}", f.case.name().replace('_', " "));
+    let topic = format!("{COMPLETE_TOPIC} {name}");
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in format!("{topic}|{about}|{}", level_key(&f.level)).bytes() {
+    for b in format!("{topic}|{about}|{}", level_key(&o.level)).bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
     }
     let mut sheets = a_sheets.clone();
-    sheets.extend(e_sheets.iter().filter(|s| !a_sheets.contains(s)).cloned());
+    sheets.extend(engineer_sheets.iter().filter(|s| !a_sheets.contains(s)).cloned());
     sheets.truncate(8);
     Some(Rfi {
         id: format!("RFI-X{:08x}", h as u32),
         kind: Some(RfiKind::Conflict),
-        severity: rule.severity_of(f.case),
-        level: f.level.clone(),
-        at: f.at,
-        extent: f.extent,
+        severity: Severity::parse(&rule.open_severity).unwrap_or(Severity::High),
+        level: o.level.clone(),
+        at: o.at,
+        extent: o.extent,
         sheets,
         about,
         issue,
@@ -1134,23 +949,22 @@ pub(crate) fn to_rfi(f: &Finding, objs: &[Obj], rooms: &[Room], rules: &Rules, e
         proposed,
         topic,
         sides: vec![
-            RfiSide { document: format!("architectural: {a_doc}"), says: a_says },
-            RfiSide { document: format!("electrical: {e_doc}"), says: e_says },
+            RfiSide { document: format!("architectural: {a_doc}"), says: format!("{n} {name} ({})", drawn_as(objs, &o.architect)) },
+            RfiSide { document: format!("electrical: {e_doc}"), says: format!("no {name} there: no {needs}") },
         ],
         ..Rfi::default()
     })
 }
 
-/// The finding's one line for the job report (`SNACK ALCOVE 12 (level 1): lights A: 2 on A-601, E: 0 on E-101`).
-pub(crate) fn line(f: &Finding, objs: &[Obj], rooms: &[Room], rules: &Rules, engineer_sheets: &[String]) -> String {
-    let name = rules.kinds.get(f.kind).map_or("objects", |k| k.name.as_str());
-    let a = sheets_of(objs, &f.architect);
-    let e = {
-        let s = sheets_of(objs, &f.engineer);
-        if s.is_empty() { engineer_sheets.to_vec() } else { s }
-    };
+/// The topic every open group's RFI starts with (`rfi.read {topic: "complete:"}`).
+pub(crate) const COMPLETE_TOPIC: &str = "complete:";
+
+/// The group's one line for the job report (`SNACK ALCOVE 12 (level 1): lights A: 2 on A-601, E: 0 on E-101`).
+pub(crate) fn line(o: &Open, objs: &[Obj], rooms: &[Room], rules: &Rules, engineer_sheets: &[String]) -> String {
+    let name = rules.kinds.get(o.kind).map_or("objects", |k| k.name.as_str());
+    let a = sheets_of(objs, &o.architect);
     let on = |v: &[String]| if v.is_empty() { String::new() } else { format!(" on {}", v.join(", ")) };
-    format!("{}: {name} A: {}{}, E: {}{}", place_of(f, rooms), f.architect.len(), on(&a), f.engineer.len(), on(&e))
+    format!("{}: {name} A: {}{}, E: 0{}", place_of(o, rooms), o.architect.len(), on(&a), on(engineer_sheets))
 }
 
 #[cfg(test)]
@@ -1315,15 +1129,19 @@ mod tests {
 
     fn obj(architect: bool, x: f64, y: f64) -> Obj {
         Obj {
-            kind: 0,
+            kind: light(),
             level: "LEVEL 1".into(),
             at: [x, y],
             sheet: if architect { "A-601".into() } else { "E-101".into() },
             architect,
             what: if architect { "DOWN LIGHT".into() } else { "A".into() },
             circuit: if architect { String::new() } else { "L1-7".into() },
-            ..Obj::default()
+            leg: if architect { String::new() } else { "b".into() },
         }
+    }
+
+    fn light() -> usize {
+        rules().kinds.iter().position(|k| k.kind == "light").unwrap_or(0)
     }
 
     /// The task's two-sheet set (12 units a foot): a small named room the architect lights with
@@ -1342,80 +1160,55 @@ mod tests {
     }
 
     #[test]
-    fn a_room_only_the_architect_lights_is_a_finding_with_both_counts_and_sheets() {
+    fn lights_no_electrical_sheet_completes_are_the_finding_with_both_counts_and_sheets() {
         let r = rules();
-        let light = r.kinds.iter().position(|k| k.kind == "light").unwrap_or(0);
-        let (mut objs, rooms) = two_sheets(0);
-        for o in &mut objs {
-            o.kind = light;
-        }
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        assert_eq!(c.findings.len(), 1, "{c:?}");
-        let f = c.findings.first().unwrap_or_else(|| panic!("no finding"));
-        assert_eq!((f.case, f.room, f.architect.len(), f.engineer.len()), (Case::ArchitectOnly, Some(0), 2, 0));
-        let rfi = to_rfi(f, &objs, &rooms, r, &["E-101".to_string()], 12.0).unwrap_or_else(|| panic!("no rfi"));
-        assert!(rfi.issue.contains("A: 2, E: 0") && rfi.issue.contains("not on the electrical drawings"), "{rfi:?}");
+        let (objs, rooms) = two_sheets(0);
+        let c = complete(&objs, &rooms, r, 12.0);
+        assert_eq!(c.open.len(), 1, "{c:?}");
+        assert_eq!(c.completed.get("lights"), Some(&4));
+        let o = c.open.first().unwrap_or_else(|| panic!("none open"));
+        assert_eq!((o.room, o.architect.len(), o.level_wide), (Some(0), 2, false));
+        let es = ["E-101".to_string()];
+        let rfi = to_rfi(o, &objs, &rooms, r, &es, 12.0).unwrap_or_else(|| panic!("no rfi"));
+        assert!(rfi.issue.contains("A: 2, E: 0") && rfi.issue.contains("no fixture type, circuit, control on any electrical sheet"), "{rfi:?}");
         assert!(rfi.about.contains("SNACK ALCOVE 12"), "{rfi:?}");
         assert_eq!(rfi.sheets, ["A-601", "E-101"]);
         assert_eq!(rfi.severity, Severity::High);
-        assert!(rfi.proposed.as_deref().is_some_and(|p| p.contains("L1-7") && p.contains("switch")), "{rfi:?}");
-        assert!(line(f, &objs, &rooms, r, &["E-101".to_string()]).contains("SNACK ALCOVE 12 (level LEVEL 1): lights A: 2 on A-601, E: 0 on E-101"));
+        assert!(rfi.topic.starts_with(COMPLETE_TOPIC), "{rfi:?}");
+        // Completed meanwhile by its neighbours: their type, circuit and switch leg.
+        let p = rfi.proposed.unwrap_or_default();
+        assert!(p.contains("type A") && p.contains("circuit L1-7") && p.contains("switch leg b"), "{p}");
+        assert!(line(o, &objs, &rooms, r, &es).contains("SNACK ALCOVE 12 (level LEVEL 1): lights A: 2 on A-601, E: 0 on E-101"));
     }
 
     #[test]
-    fn sheets_that_agree_give_no_finding() {
-        let r = rules();
-        let light = r.kinds.iter().position(|k| k.kind == "light").unwrap_or(0);
-        let (mut objs, rooms) = two_sheets(2);
-        for o in &mut objs {
-            o.kind = light;
-        }
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        assert!(c.findings.is_empty(), "{c:?}");
+    fn lights_every_electrical_sheet_completes_give_no_finding() {
+        let (objs, rooms) = two_sheets(2);
+        let c = complete(&objs, &rooms, rules(), 12.0);
+        assert!(c.open.is_empty(), "{c:?}");
         assert_eq!(c.objects.get("lights"), Some(&(6, 6)));
+        assert_eq!(c.completed.get("lights"), Some(&6));
     }
 
+    /// The electrical sheets' lights the architect doesn't draw, or more of them, or a room no
+    /// sheet lights: no requirement of an architect's object is open there, so no finding (the
+    /// build needs none of it).
     #[test]
-    fn the_other_ways_two_sheets_disagree() {
-        let r = rules();
-        let light = r.kinds.iter().position(|k| k.kind == "light").unwrap_or(0);
-        let mut rooms = vec![room("OFFICE", "20", (0.0, 0.0), (120.0, 120.0)), room("LOUNGE", "21", (200.0, 0.0), (440.0, 240.0))];
-        rooms.push(room("STORAGE", "22", (500.0, 0.0), (620.0, 120.0)));
-        rooms.push(room("CLOSET", "23", (700.0, 0.0), (820.0, 120.0)));
-        // The office: the engineer's two, the architect's none. The lounge: the architect's two,
-        // each with the engineer's by it, among the engineer's six.
-        let mut objs = vec![obj(false, 40.0, 60.0), obj(false, 80.0, 60.0)];
-        for x in [260.0, 380.0] {
-            objs.push(obj(true, x, 100.0));
+    fn the_electrical_sheets_drawing_more_than_the_architect_is_no_finding() {
+        let rooms = vec![room("OFFICE", "20", (0.0, 0.0), (120.0, 120.0)), room("LOUNGE", "21", (200.0, 0.0), (440.0, 240.0))];
+        let mut objs = vec![obj(false, 40.0, 60.0), obj(false, 80.0, 60.0), obj(true, 260.0, 100.0)];
+        for x in [262.0, 300.0, 340.0, 420.0] {
+            objs.push(obj(false, x, 100.0));
         }
-        for x in [262.0, 382.0, 230.0, 300.0, 340.0, 420.0] {
-            objs.push(obj(false, x, 180.0 - 80.0 * f64::from(u8::from(x == 262.0 || x == 382.0))));
-        }
-        for o in &mut objs {
-            o.kind = light;
-        }
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        let cases: Vec<(Case, String)> =
-            c.findings.iter().map(|f| (f.case, f.room.and_then(|i| rooms.get(i)).map_or_else(String::new, Room::label))).collect();
-        assert_eq!(
-            cases,
-            [(Case::EngineerOnly, "OFFICE 20".to_string()), (Case::Differ, "LOUNGE 21".to_string()), (Case::NoneAnywhere, "STORAGE 22".to_string())],
-            "{c:?}"
-        );
-        // A typical room's stamped lights speak for themselves.
-        for o in objs.iter_mut().filter(|o| !o.architect) {
-            o.typical = true;
-        }
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        assert!(c.findings.iter().all(|f| f.case == Case::NoneAnywhere), "{c:?}");
+        let c = complete(&objs, &rooms, rules(), 12.0);
+        assert!(c.open.is_empty(), "{c:?}");
     }
 
-    /// Position first: an alcove traced together with the lounge beside it (one room) holds the
-    /// architect's three lights with none of the electrical's near them, the electrical's being
-    /// in the lounge part: that group is the finding, labelled by the room, with what the room
-    /// holds besides.
+    /// An alcove traced together with the lounge beside it (one room) holds the architect's three
+    /// lights with none of the electrical's by them, the electrical's being in the lounge part:
+    /// that group is open, labelled by the room, with what the room holds besides.
     #[test]
-    fn the_architects_lights_with_no_electrical_light_near_are_a_finding_in_a_room_traced_with_its_neighbour() {
+    fn lights_with_no_electrical_light_by_them_are_open_in_a_room_traced_with_its_neighbour() {
         let r = rules();
         let rooms = vec![room("LOUNGE", "30", (0.0, 0.0), (480.0, 240.0))];
         let mut objs: Vec<Obj> = [40.0, 80.0, 120.0].iter().map(|x| obj(true, *x, 220.0)).collect();
@@ -1423,53 +1216,56 @@ mod tests {
             objs.push(obj(true, x, 60.0));
             objs.push(obj(false, x + 4.0, 62.0));
         }
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        assert_eq!(c.findings.len(), 1, "{c:?}");
-        let f = c.findings.first().unwrap_or_else(|| panic!("none"));
-        assert_eq!((f.case, f.room, f.architect.len(), f.room_counts), (Case::ArchitectOnly, Some(0), 3, Some((6, 3))));
-        let rfi = to_rfi(f, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
+        let c = complete(&objs, &rooms, r, 12.0);
+        assert_eq!(c.open.len(), 1, "{c:?}");
+        let o = c.open.first().unwrap_or_else(|| panic!("none"));
+        assert_eq!((o.room, o.architect.len(), o.room_counts), (Some(0), 3, Some((6, 3))));
+        let rfi = to_rfi(o, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
         assert!(rfi.issue.contains("A: 3, E: 0") && rfi.issue.contains("holds A: 6, E: 3"), "{rfi:?}");
-        // One outside every traced room a foot from one in a room is its copy.
+        // One outside every traced room a foot and a half from one in a room is completed by it.
         let edge = vec![obj(true, 50.0, 270.0), obj(false, 50.0, 290.0)];
-        let c3 = compare(&edge, &[room("ALCOVE", "31", (0.0, 300.0), (100.0, 400.0))], r, 12.0, &BTreeSet::new());
-        assert!(c3.findings.iter().all(|f| f.case != Case::ArchitectOnly), "{c3:?}");
-        // A light across a wall (another room's) is no copy of one by it.
+        let c3 = complete(&edge, &[room("ALCOVE", "31", (0.0, 300.0), (100.0, 400.0))], r, 12.0);
+        assert!(c3.open.is_empty(), "{c3:?}");
+        // A light across a wall (another room's) completes none by it.
         let mut walled = vec![room("ALCOVE", "31", (0.0, 300.0), (100.0, 400.0)), room("CLOSET", "32", (104.0, 300.0), (160.0, 400.0))];
         walled.push(room("HALL", "33", (0.0, 410.0), (300.0, 470.0)));
-        let across = vec![obj(true, 90.0, 350.0), obj(false, 120.0, 350.0), obj(true, 150.0, 440.0), obj(false, 152.0, 440.0)];
-        let c2 = compare(&across, &walled, r, 12.0, &BTreeSet::new());
-        let alcove: Vec<_> = c2.findings.iter().filter(|f| f.case == Case::ArchitectOnly).map(|f| (f.room, f.architect.len())).collect();
-        assert_eq!(alcove, [(Some(0), 1)], "{c2:?}");
+        let across = vec![obj(true, 90.0, 350.0), obj(false, 120.0, 350.0), obj(true, 150.0, 440.0), obj(false, 151.0, 440.0)];
+        let c2 = complete(&across, &walled, r, 12.0);
+        let open: Vec<_> = c2.open.iter().map(|o| (o.room, o.architect.len())).collect();
+        assert_eq!(open, [(Some(0), 1)], "{c2:?}");
         // Two groups far apart in one room are two findings.
         objs.push(obj(true, 40.0, 20.0));
         objs.push(obj(true, 60.0, 20.0));
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        let mut sizes: Vec<usize> = c.findings.iter().map(|f| f.architect.len()).collect();
+        let c = complete(&objs, &rooms, r, 12.0);
+        let mut sizes: Vec<usize> = c.open.iter().map(|o| o.architect.len()).collect();
         sizes.sort_unstable();
         assert_eq!(sizes, [2, 3], "{c:?}");
     }
 
     #[test]
-    fn a_level_the_engineer_draws_no_lights_on_is_one_finding() {
+    fn a_level_no_electrical_sheet_lights_is_one_finding() {
         let r = rules();
         let rooms = vec![room("ROOM", "1", (0.0, 0.0), (100.0, 100.0)), room("ROOM", "2", (200.0, 0.0), (300.0, 100.0))];
         let objs: Vec<Obj> = vec![obj(true, 50.0, 50.0), obj(true, 250.0, 50.0), obj(true, 900.0, 900.0)];
-        let c = compare(&objs, &rooms, r, 12.0, &BTreeSet::new());
-        assert_eq!(c.findings.len(), 1, "{c:?}");
-        let f = c.findings.first().unwrap_or_else(|| panic!("none"));
-        assert_eq!((f.room, f.rooms.len(), f.architect.len()), (None, 2, 3));
-        let rfi = to_rfi(f, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
-        assert!(rfi.about.contains("ROOM 1, ROOM 2"), "{rfi:?}");
+        let c = complete(&objs, &rooms, r, 12.0);
+        assert_eq!(c.open.len(), 1, "{c:?}");
+        let o = c.open.first().unwrap_or_else(|| panic!("none"));
+        assert_eq!((o.room, o.rooms.len(), o.architect.len(), o.level_wide), (None, 2, 3, true));
+        let rfi = to_rfi(o, &objs, &rooms, r, &[], 12.0).unwrap_or_else(|| panic!("no rfi"));
+        assert!(rfi.about.contains("ROOM 1, ROOM 2") && rfi.issue.contains("no electrical sheet draws lights on"), "{rfi:?}");
+        // Proposed: no light of the level to take a type or circuit from.
+        assert!(
+            rfi.proposed.as_deref().is_some_and(|p| p.contains("a type from the luminaire schedule") && p.contains("switch at the room's door")),
+            "{rfi:?}"
+        );
     }
 
     /// A legend row naming lights with no drawing the job can read (its bar left out of the row's
-    /// cell) makes the architect's count of lights partial: a room only the electrical lights is
-    /// not asked about then, and said so.
+    /// cell) is said so; a paragraph of notes under the heading is no row.
     #[test]
-    fn a_legend_row_the_job_cant_read_makes_the_architects_count_partial() {
+    fn a_legend_row_with_no_drawing_read_is_listed_and_a_paragraph_is_no_row() {
         let (mut texts, drawn) = legend_sheet();
         texts.push(t("LINEAR LIGHT", 130.0, 395.0, 3.0));
-        // A paragraph of notes under it naming lights among much else is no row.
         texts.push(t(
             "COORDINATE THE LOCATION OF WALL MOUNTED DEVICES INCLUDING RECEPTACLES SWITCHES LIGHT FIXTURES AND DATA BOXES",
             130.0,
@@ -1477,17 +1273,7 @@ mod tests {
             3.0,
         ));
         let l = legends(&texts, &drawn, rules());
-        let light = rules().kinds.iter().position(|k| k.kind == "light").unwrap_or(0);
-        assert_eq!(l.unread, [(light, "LINEAR LIGHT".to_string())], "{l:?}");
-        let rooms = vec![room("OFFICE", "20", (0.0, 0.0), (120.0, 120.0)), room("HALL", "21", (200.0, 0.0), (440.0, 240.0))];
-        let mut objs = vec![obj(false, 40.0, 60.0), obj(true, 300.0, 100.0), obj(false, 302.0, 100.0)];
-        for o in &mut objs {
-            o.kind = light;
-        }
-        let partial: BTreeSet<usize> = [light].into();
-        let c = compare(&objs, &rooms, rules(), 12.0, &partial);
-        assert!(c.findings.is_empty(), "{c:?}");
-        assert_eq!(c.not_asked.get("lights"), Some(&1));
+        assert_eq!(l.unread, [(light(), "LINEAR LIGHT".to_string())], "{l:?}");
     }
 
     #[test]
