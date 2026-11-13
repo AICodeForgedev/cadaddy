@@ -2391,10 +2391,14 @@ fn rcp_sheet_title(sh: &Value) -> bool {
 /// MEP goes in) and the partition (wall type) legend (how each wall the plans tag is built); never
 /// a sheet of the specification.
 fn loaded_as_plan(sh: &Value) -> bool {
+    let title = sh.get("title").and_then(Value::as_str).unwrap_or("");
     !is_spec_sheet(sh)
         && (matches!(sheet_kind(sh), "plan" | "enlarged_plan" | "rcp")
             || rcp_sheet_title(sh)
-            || wall_legend_title(sh.get("title").and_then(Value::as_str).unwrap_or("")))
+            || wall_legend_title(title)
+            // A civil utility plan titled with no PLAN in it (`UTILITY LAYOUT`): its services into
+            // the building are built (Q6597).
+            || super::civilsvc::utility_sheet(sh.get("discipline").and_then(Value::as_str).unwrap_or(""), title))
 }
 
 /// The start of the finding of a print set that has no plan view (the job declines at classify).
@@ -24671,7 +24675,76 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
             }
         }
     }
-    let runs = all.runs.clone();
+    // The civil utility plans' services into the building (Q6597): each site/civil sheet that
+    // labels a water, fire, sewer or gas service, laid on the slab level by the building it
+    // draws; the services carried to the wall, joined to the building's entries and split at the
+    // point of connection. The sheet labelling the most first: a line two sheets draw is built once.
+    let mut civil_runs: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+    let mut civil_lines: Vec<String> = Vec::new();
+    let mut civil_findings: Vec<String> = Vec::new();
+    let mut civil_feet: BTreeMap<String, f64> = BTreeMap::new();
+    {
+        use super::civilsvc;
+        let d = s.doc()?;
+        let texts_in = |page: &cadaddy_doc::Drawing, area: [f64; 4]| -> Vec<cadaddy_mepfix::sheet_facts::TextItem> {
+            cadaddy_mepfix::sheet_facts::texts_with_tags(page)
+                .into_iter()
+                .filter(|t| {
+                    t.at.x >= area[0].min(area[2])
+                        && t.at.x <= area[0].max(area[2])
+                        && t.at.y >= area[1].min(area[3])
+                        && t.at.y <= area[1].max(area[3])
+                })
+                .collect()
+        };
+        let mut candidates: Vec<(usize, usize)> = Vec::new();
+        let mut civil_seen: BTreeSet<String> = BTreeSet::new();
+        for (i, r) in job.sheet_regions.iter().enumerate() {
+            if r.not_built != "site/civil" || picked.contains(&i) || !civil_seen.insert(r.number.to_ascii_uppercase()) {
+                continue;
+            }
+            let Some(sh) = refs.get(i) else { continue };
+            let page = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
+            let n = civilsvc::is_utility_plan(&texts_in(&page, r.area.unwrap_or(r.rect)));
+            if n > 0 {
+                candidates.push((n, i));
+            }
+            civil_lines.push(format!("{}: {n} service label(s)", r.number));
+        }
+        candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (_, i) in candidates.into_iter().take(civilsvc::rules().max_sheets.max(1)) {
+            let (Some(r), Some(sh)) = (job.sheet_regions.get(i), refs.get(i)) else { continue };
+            let page = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
+            let area = r.area.unwrap_or(r.rect);
+            let sheet_real = job
+                .sheet_scales
+                .iter()
+                .find(|x| x.sheet.split('/').next().unwrap_or(&x.sheet).trim().eq_ignore_ascii_case(&r.number))
+                .is_some_and(|x| x.scale > 1.0);
+            let read = sitework::read(&r.number, &page, area, &lum_types, upf);
+            let texts = texts_in(&page, area);
+            let fit = sitework::register(&read, &sp, &slab, sheet_real);
+            // A building outline drawn in pieces (no closed line its size): by its linework.
+            let fit = if fit.fitted() { fit } else { civilsvc::register_by_linework(&read, &texts, &sp, &slab, sheet_real).unwrap_or(fit) };
+            let built = civilsvc::runs(&sp, &read, &texts, &fit, &slab);
+            civil_lines.push(format!("{}: laid on {slab} by {} ({}); {} run(s)", r.number, fit.method, fit.why, built.runs.len()));
+            // A line an earlier sheet built (the same service on two sheets) once.
+            let earlier = civil_runs.len();
+            for run in built.runs {
+                if !civil_runs.iter().take(earlier).any(|x| civilsvc::same_service(x, &run, 2.0 * upf)) {
+                    civil_runs.push(run);
+                }
+            }
+            for (k, v) in built.feet {
+                *civil_feet.entry(k).or_default() += v;
+            }
+            civil_lines.extend(built.lines);
+            civil_findings.extend(built.findings);
+        }
+    }
+    super::civilsvc::systems(&mut sp, &civil_runs);
+    let mut runs = all.runs.clone();
+    runs.extend(civil_runs.iter().cloned());
     if !runs.is_empty() || !new_tags.is_empty() {
         let _ = build_new_mep(s, sp, runs, &new_tags)?;
     }
@@ -24719,6 +24792,20 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
     if !asked.is_empty() {
         progress_line(&format!("  site work: site loads no site plan carries (the breakers' review asks where each is): {}", asked.join("; ")));
     }
+    for l in &civil_lines {
+        progress_line(&format!("  site services: {l}"));
+    }
+    if !civil_findings.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Site services: {} item(s) to check", civil_findings.len()),
+            &civil_findings.iter().take(20).cloned().collect::<Vec<_>>().join("; "),
+            2,
+            vec!["review.list {}".into()],
+            None,
+            false,
+        );
+    }
     result["site_work"] = json!({
         "sheets": lines,
         "promoted": promoted,
@@ -24735,6 +24822,13 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
         "buried_circuits": sized,
         "findings": all.findings,
         "basis": [rules.trade_source.clone(), rules.register.source.clone(), rules.line_source.clone()],
+        "civil_services": {
+            "sheets": civil_lines,
+            "runs": civil_runs.len(),
+            "feet": civil_feet,
+            "findings": civil_findings,
+            "basis": [super::civilsvc::rules().line_source.clone(), super::civilsvc::rules().scope_source.clone()],
+        },
     });
     Ok(())
 }
