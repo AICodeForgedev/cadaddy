@@ -3501,3 +3501,23 @@
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Corregir elementos por propiedad (BIM)
 	Read Elevator Hoistway	Leer hueco del ascensor
+Branches	Ramales
+Interior Walls	Muros interiores
+Presentation	Presentación
+Supply Air	Aire de impulsión
+Return Air	Aire de retorno
+Exhaust Air	Aire de extracción
+Outside Air	Aire exterior
+Ductwork	Conductos
+Mechanical Equipment	Equipos mecánicos
+Domestic Water	Agua sanitaria
+Sanitary and Vent	Saneamiento y ventilación
+Condensate	Condensados
+Refrigerant	Refrigerante
+Hydronic	Hidrónico
+Plumbing Equipment	Equipos de fontanería
+Fire Alarm	Alarma contra incendios
+Low Voltage	Baja tensión
+Electrical Power	Energía eléctrica
+Other Systems	Otros sistemas
+Document Source	Origen de los documentos

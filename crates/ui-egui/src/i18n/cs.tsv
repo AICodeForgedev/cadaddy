@@ -3475,3 +3475,23 @@ menu	Modify	Modifikace
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Opravit prvky podle vlastnosti (BIM)
 	Read Elevator Hoistway	Načíst výtahovou šachtu
+Branches	Větve
+Interior Walls	Vnitřní stěny
+Presentation	Prezentace
+Supply Air	Přiváděný vzduch
+Return Air	Vratný vzduch
+Exhaust Air	Odpadní vzduch
+Outside Air	Venkovní vzduch
+Ductwork	Vzduchotechnické potrubí
+Mechanical Equipment	Strojní zařízení
+Domestic Water	Pitná voda
+Sanitary and Vent	Kanalizace a odvětrání
+Condensate	Kondenzát
+Refrigerant	Chladivo
+Hydronic	Otopná a chladicí voda
+Plumbing Equipment	Zdravotechnická zařízení
+Fire Alarm	Požární signalizace
+Low Voltage	Slaboproud
+Electrical Power	Silnoproud
+Other Systems	Další systémy
+Document Source	Zdroj dokumentů

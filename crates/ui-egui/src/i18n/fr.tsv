@@ -3283,3 +3283,23 @@
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Corriger des éléments par propriété (BIM)
 	Read Elevator Hoistway	Lire la gaine d'ascenseur
+Branches	Branches
+Interior Walls	Murs intérieurs
+Presentation	Présentation
+Supply Air	Air soufflé
+Return Air	Air de reprise
+Exhaust Air	Air extrait
+Outside Air	Air neuf
+Ductwork	Gaines
+Mechanical Equipment	Équipements mécaniques
+Domestic Water	Eau sanitaire
+Sanitary and Vent	Évacuation et ventilation
+Condensate	Condensats
+Refrigerant	Frigorigène
+Hydronic	Hydronique
+Plumbing Equipment	Équipements de plomberie
+Fire Alarm	Alarme incendie
+Low Voltage	Courants faibles
+Electrical Power	Courants forts
+Other Systems	Autres systèmes
+Document Source	Source des documents

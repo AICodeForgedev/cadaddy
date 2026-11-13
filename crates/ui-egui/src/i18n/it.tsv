@@ -3567,3 +3567,23 @@ menu	Modify	Edita
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Correggi elementi per proprietà (BIM)
 	Read Elevator Hoistway	Leggi vano ascensore
+Branches	Diramazioni
+Interior Walls	Pareti interne
+Presentation	Presentazione
+Supply Air	Aria di mandata
+Return Air	Aria di ripresa
+Exhaust Air	Aria di estrazione
+Outside Air	Aria esterna
+Ductwork	Canalizzazioni
+Mechanical Equipment	Apparecchiature meccaniche
+Domestic Water	Acqua sanitaria
+Sanitary and Vent	Scarichi e ventilazione
+Condensate	Condensa
+Refrigerant	Refrigerante
+Hydronic	Idronico
+Plumbing Equipment	Apparecchiature idrauliche
+Fire Alarm	Rivelazione incendi
+Low Voltage	Correnti deboli
+Electrical Power	Energia elettrica
+Other Systems	Altri impianti
+Document Source	Origine dei documenti
