@@ -107,7 +107,7 @@ fn import_sorted_casework_is_no_wall_and_rooms_reach_their_walls() {
 }
 
 /// The outside wall's last 10' drawn lighter (on the leftover layer, in line with the heavy wall
-/// and meeting its end): still the outside wall, the kitchen closed by it.
+/// and meeting its end): still the outside wall, though the layer holds casework too.
 #[test]
 fn a_stretch_of_wall_drawn_lighter_in_line_stays_a_wall() {
     let walls = cadaddy_io::pdf_read::content_wall_layer();
@@ -129,9 +129,10 @@ fn a_stretch_of_wall_drawn_lighter_in_line_stays_a_wall() {
     line(&mut s, [240.0, 6.0], [354.0, 6.0]);
     casework(&mut s, "PDF-GEOMETRY");
     tags(&mut s);
-    let got = areas(&mut s);
-    let kitchen = area(&got, "702");
-    assert!((kitchen - 315.0).abs() <= 0.03 * 315.0, "kitchen {kitchen} sf: {got:?}");
+    s.execute("bspec.draft", &json!({"store": true})).unwrap();
+    let sp = s.execute("bspec.get", &json!({})).unwrap();
+    let casework = sp["spec"]["layers"].as_array().unwrap().iter().any(|l| l["layer"] == "PDF-GEOMETRY");
+    assert!(!casework, "the layer holds the kitchen's casework: no wall layer: {sp}");
     let walls = planned(&mut s);
     assert!(walls.iter().any(|(a, b)| (a[1] - 3.0).abs() < 1.0 && (b[1] - 3.0).abs() < 1.0 && a[0].max(b[0]) > 340.0), "{walls:?}");
 }
