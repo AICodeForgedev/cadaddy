@@ -73,6 +73,10 @@ pub(crate) struct Register {
     pub area_ratio_max: f64,
     pub scale_tolerance: f64,
     pub on_wall_ft: f64,
+    /// The share of the outline's corners that must land on the model's walls (within
+    /// `on_wall_ft`) for the sheet to count as laid on the building by it: the measured
+    /// agreement, never the size the scale was solved to match.
+    pub on_wall_min: f64,
     pub source: String,
 }
 
@@ -980,7 +984,7 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
     let theta = wall_angle(poly);
     let rot = |p: [f64; 2], phi: f64, s: f64| [s * (phi.cos() * p[0] - phi.sin() * p[1]), s * (phi.sin() * p[0] + phi.cos() * p[1])];
     let tol = r.on_wall_ft.max(0.5) * upf;
-    let mut best: Option<(f64, f64, f64, f64, [f64; 2])> = None; // (score, |phi|, phi, s, t)
+    let mut best: Option<(f64, f64, f64, f64, [f64; 2], f64)> = None; // (score, |phi|, phi, s, t, rms off)
     for k in 0..4 {
         let mut phi = -theta + f64::from(k) * std::f64::consts::FRAC_PI_2;
         while phi > std::f64::consts::PI {
@@ -996,39 +1000,59 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
         let placed: Vec<[f64; 2]> = turned.iter().map(|p| [p[0] * s, p[1] * s]).collect();
         let pc = centre(&bbox_of(&placed));
         let t = [fc[0] - pc[0], fc[1] - pc[1]];
-        let on = placed
+        // Each corner's distance to the model's walls (the footprint's edge where no walls are
+        // known).
+        let off: Vec<f64> = placed
             .iter()
             .map(|p| [p[0] + t[0], p[1] + t[1]])
-            .filter(|p| {
+            .map(|p| {
                 if shells.is_empty() {
-                    let inner = [fp[0] + tol, fp[1] + tol, fp[2] - tol, fp[3] - tol];
-                    gap(&fp, *p) <= tol && !(inner[0] < inner[2] && inner[1] < inner[3] && gap(&inner, *p) <= 0.0)
+                    let to_edge = (p[0] - fp[0]).abs().min((p[0] - fp[2]).abs()).min((p[1] - fp[1]).abs()).min((p[1] - fp[3]).abs());
+                    if gap(&fp, p) > 0.0 { gap(&fp, p) } else { to_edge }
                 } else {
-                    shells.iter().any(|b| gap(b, *p) <= tol)
+                    shells.iter().map(|b| gap(b, p)).fold(f64::INFINITY, f64::min)
                 }
             })
-            .count();
+            .collect();
+        let on = off.iter().filter(|d| **d <= tol).count();
         let score = on as f64 / placed.len().max(1) as f64;
+        let rms = (off.iter().map(|d| d.min(1e12).powi(2)).sum::<f64>() / off.len().max(1) as f64).sqrt();
         let better = best.is_none_or(|(bs, bphi, ..)| score > bs + 1e-9 || ((score - bs).abs() <= 1e-9 && phi.abs() < bphi));
         if better {
-            best = Some((score, phi.abs(), phi, s, t));
+            best = Some((score, phi.abs(), phi, s, t, rms));
         }
     }
-    let Some((score, _, phi, s, t)) = best else { return none("the building outline gave no fit".into()) };
+    let Some((score, _, phi, s, t, rms)) = best else { return none("the building outline gave no fit".into()) };
     let (a, b) = (s * phi.cos(), s * phi.sin());
-    let reg = SheetRegistration { reference, method: String::new(), a, b, tx: t[0], ty: t[1], matched: poly.len(), residual: None };
+    let residual = rms.is_finite().then_some(rms);
+    let reg = SheetRegistration { reference, method: String::new(), a, b, tx: t[0], ty: t[1], matched: poly.len(), residual };
     let outline: Vec<[f64; 2]> = poly.iter().map(|p| reg.to_project(*p)).collect();
     let ob = bbox_of(&outline);
     let ratio = if fp_area > 0.0 { ((ob[2] - ob[0]) * (ob[3] - ob[1])).abs() / fp_area } else { 0.0 };
-    let fits = ratio >= r.area_ratio_min && ratio <= r.area_ratio_max && (!sheet_real || (s - 1.0).abs() <= r.scale_tolerance);
+    // The size agrees (at its printed scale, the scale too; on a paper-size sheet the scale was
+    // solved to make the sizes equal, so that says nothing), and the walls agree: enough of its
+    // corners on the model's walls. That is the measured test; the size alone never is.
+    let sized_ok = ratio >= r.area_ratio_min && ratio <= r.area_ratio_max && (!sheet_real || (s - 1.0).abs() <= r.scale_tolerance);
+    let walls_ok = score + 1e-9 >= r.on_wall_min;
     let turn = phi.to_degrees();
-    let (method, why) = if fits {
+    let (method, why) = if sized_ok && walls_ok {
         (
             "building outline",
             format!(
-                "laid on {slab} by the building outline it draws: turned {turn:.1} deg, its walls on the model's ({:.0}% of its corners), {:.0}% of the footprint's size",
+                "laid on {slab} by the building outline it draws: turned {turn:.1} deg, its walls on the model's ({:.0}% of its corners, {:.1} ft off on average), {:.0}% of the footprint's size",
                 score * 100.0,
+                rms / upf,
                 ratio * 100.0
+            ),
+        )
+    } else if sized_ok {
+        (
+            "outline centre",
+            format!(
+                "the building outline it draws does not lie on {slab}'s walls ({:.0}% of its corners on them, {:.0}% needed; {:.1} ft off on average): placed by its centre, turned {turn:.1} deg (it may not be the building's footprint; verify where the site work stands)",
+                score * 100.0,
+                r.on_wall_min * 100.0,
+                rms / upf
             ),
         )
     } else {
@@ -2778,6 +2802,90 @@ mod tests {
         // The line stopping at the property line enters no building: no run.
         let to_property = drawn.iter().filter(|r| r.points.iter().any(|p| p[0] > 1_300.0 + 12.0 * 20.0)).count();
         assert_eq!(to_property, 0, "{drawn:?}");
+    }
+
+    /// Q6446: a paper-size site sheet (no printed scale) drawing one closed line on a layer named
+    /// for the building, two pole lights beside it (drawing units: the sheet's own).
+    fn paper_site_sheet(outline: &[[f64; 2]], layer: &str) -> (Drawing, [f64; 4]) {
+        let mut d = Drawing::default();
+        let h = 9.0;
+        pline(&mut d, layer, outline, true);
+        for p in [[1_400.0, 200.0], [1_400.0, 700.0]] {
+            pline(&mut d, "E-LGHT", &square(p, 12.0), true);
+            text(&mut d, "SL1", p[0] + 20.0, p[1] - 5.0, h);
+        }
+        (d, [-200.0, -200.0, 1_800.0, 1_200.0])
+    }
+
+    /// The slab level's walls: a 100 x 60 ft rectangle, square to the model.
+    fn spec_100_by_60() -> BuildingSpec {
+        let mut sp = spec_with_slab();
+        sp.shells.insert(
+            "Level 1".into(),
+            vec![[100.0, 100.0, 1_300.0, 106.0], [100.0, 814.0, 1_300.0, 820.0], [100.0, 100.0, 106.0, 820.0], [1_294.0, 100.0, 1_300.0, 820.0]],
+        );
+        sp
+    }
+
+    /// The L-shaped setback line of [`paper_site_sheet`]: no corner of it is the building's.
+    const SETBACK_L: [[f64; 2]; 6] = [[0.0, 0.0], [900.0, 0.0], [900.0, 300.0], [300.0, 300.0], [300.0, 900.0], [0.0, 900.0]];
+
+    #[test]
+    fn a_paper_size_outline_off_the_walls_is_not_laid_on_the_building() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_100_by_60();
+        // The setback: its scale solved to the footprint's size, but none of its corners on the
+        // walls. Not laid on the building, and said why.
+        let (d, area) = paper_site_sheet(&SETBACK_L, "BUILDING SETBACK");
+        let read = read("E-001", &d, area, &types, 12.0);
+        assert!(read.outlines.first().is_some_and(|(p, named)| *named && p.len() == 6), "{:?}", read.outlines);
+        let fit = register(&read, &sp, "Level 1", false);
+        assert!(!fit.fitted(), "{}: {}", fit.method, fit.why);
+        assert_eq!(fit.method, "outline centre", "{}", fit.why);
+        assert!(fit.why.contains("does not lie on Level 1's walls") && fit.why.contains("0% of its corners"), "{}", fit.why);
+        assert_eq!(fit.reg.method, "outline centre");
+        assert!(fit.reg.residual.is_some_and(|r| r > 3.0 * 12.0), "{:?}", fit.reg.residual);
+        // The building drawn at half size on the same paper: its corners on the walls, laid on it.
+        let (d, area) = paper_site_sheet(&[[0.0, 0.0], [600.0, 0.0], [600.0, 360.0], [0.0, 360.0]], "A-BLDG");
+        let drawn = super::read("E-001", &d, area, &types, 12.0);
+        let fit = register(&drawn, &sp, "Level 1", false);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert!((fit.reg.a.hypot(fit.reg.b) - 2.0).abs() < 1e-6, "{:?}", fit.reg);
+        assert!(fit.reg.residual.is_some_and(|r| r <= 3.0 * 12.0), "{:?}", fit.reg.residual);
+        let corner = fit.to_model([0.0, 0.0]);
+        assert!(dist(corner, [100.0, 100.0]) < 1e-6, "{corner:?}");
+    }
+
+    #[test]
+    fn the_job_says_a_paper_size_site_plan_off_the_walls_is_not_laid_on_the_building() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = paper_site_sheet(&SETBACK_L, "BUILDING SETBACK");
+        let sp = spec_100_by_60();
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        // No printed scale for the sheet: a paper-size sheet.
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let said = job.findings.iter().find(|f| f.description.contains("not laid on the building by its outline"));
+        assert!(said.is_some_and(|f| f.why.contains("E-001") && f.why.contains("does not lie on")), "{:#?} {:#}", job.findings, result["site_work"]);
     }
 
     #[test]
