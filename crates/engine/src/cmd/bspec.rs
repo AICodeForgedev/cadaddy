@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved, guess?: why it was guessed}], built: bool}")
             .noundo(),
         CommandSpec::new("bspec.set", "Set Building Spec", run_set).params(
-            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layer roles by layer, {\"remove\": true} removes one; a build-up list (an assembly's or a ceiling type's layers) is replaced whole, never appended to), replace?: bool} → {spec, errors, warnings}",
+            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layer roles by layer, {\"remove\": true} removes one; a build-up list (an assembly's or a ceiling type's layers) is replaced whole, never appended to; a new `walls` list is a wall edit where it differs: an entry whose centreline moved moves the wall built there, one removed deletes it, one added builds a wall of its type, kept in `wall_edits` and honoured by every build — the same entry put back takes the edit back), replace?: bool} → {spec, errors, warnings, wallEdits?: {made, taken_back, refused}}",
         ),
         CommandSpec::new("bspec.validate", "Validate Building Spec", run_validate)
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
@@ -66,13 +66,32 @@ pub(crate) fn current(s: &Session, cmd: &str) -> Result<(BuildingSpec, bool)> {
 /// The current spec with `patch` merged in (or `patch` alone with `replace`).
 /// With `replace` the stored spec is never read, so an unreadable one can still be replaced.
 fn merged(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Result<BuildingSpec> {
-    let Some(patch) = patch.filter(|v| !v.is_null()) else { return Ok(current(s, cmd)?.0) };
+    Ok(merged_with_edits(s, cmd, patch, replace)?.0)
+}
+
+/// [`merged`], and the wall edits a change to the wall list made (Q6613): merged into the spec,
+/// an entry of `walls` moved, removed or added moves, deletes or adds the wall built there
+/// ([`BuildingSpec::record_wall_list_changes`]), unless the patch gives `wall_edits` itself.
+/// A replaced spec is the spec as given.
+fn merged_with_edits(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Result<(BuildingSpec, cadaddy_walk3d::walledits::ListChange)> {
+    let Some(patch) = patch.filter(|v| !v.is_null()) else { return Ok((current(s, cmd)?.0, Default::default())) };
     if !patch.is_object() {
         return Err(bad(cmd, "`spec` must be an object"));
     }
-    let mut v = if replace { json!({}) } else { serde_json::to_value(current(s, cmd)?.0).map_err(|e| bad(cmd, e.to_string()))? };
+    let old = if replace { None } else { Some(current(s, cmd)?.0) };
+    let mut v = match &old {
+        None => json!({}),
+        Some(o) => serde_json::to_value(o).map_err(|e| bad(cmd, e.to_string()))?,
+    };
     cadaddy_walk3d::merge(&mut v, patch);
     let mut sp = BuildingSpec::from_json(&v.to_string()).map_err(|e| bad(cmd, e))?;
+    let mut change = cadaddy_walk3d::walledits::ListChange::default();
+    if let Some(old) = &old
+        && patch.get("walls").is_some()
+        && patch.get("wall_edits").is_none()
+    {
+        change = sp.record_wall_list_changes(&old.walls);
+    }
     // Replacing the spec replaces the spec, not the data other commands keep beside it in the
     // same text (saved views, colour schemes…): those stay unless the new spec gives them. A
     // stored spec that can't be read keeps nothing.
@@ -81,7 +100,7 @@ fn merged(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Resul
             sp.kept.entry(k).or_insert(val);
         }
     }
-    Ok(sp)
+    Ok((sp, change))
 }
 
 fn issue_json(i: &Issue) -> Value {
@@ -503,7 +522,7 @@ fn run_get(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(patch) = p.get("spec").filter(|v| !v.is_null()) else { return Err(bad("bspec.set", "`spec` is required")) };
-    let mut sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
+    let (mut sp, walls) = merged_with_edits(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
     // Gear placed, moved or put on another floor: the feeders that land on it are routed again
     // (Q6523); model.build builds them.
     let feeders = super::feederfollow::follow(&mut sp, super::feederfollow::Mode::Moved);
@@ -512,6 +531,15 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = report(&issues);
     if feeders.changed() {
         r["feeders"] = feeders.json();
+    }
+    if !walls.is_empty() {
+        r["wallEdits"] = json!({"made": walls.made, "taken_back": walls.dropped, "refused": walls.refused});
+        if walls.refused > 0 {
+            s.echo(format!(
+                "{} wall list changes not kept: the spec holds the most wall edits it keeps (wall.edits revert takes some back)",
+                walls.refused
+            ));
+        }
     }
     r["spec"] = serde_json::to_value(&sp).unwrap_or(Value::Null);
     if let Some(o) = r.as_object_mut() {

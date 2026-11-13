@@ -845,6 +845,16 @@ pub(crate) fn planned_walls(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, leve
     plan_level(d, &g, lv, upf, &mut Vec::new()).walls.iter().map(|w| (w.a, w.b, w.thickness)).collect()
 }
 
+/// Whether a wall of the level's plan (or one an earlier wall edit placed) is built on the line
+/// `from` (plan units): what a wall edit taking a wall from there finds (Q6613).
+pub(crate) fn wall_on_line(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str, from: [[f64; 2]; 2]) -> bool {
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let Some(lv) = g.rules.levels.iter().find(|l| l.sheet.is_none() && l.name.eq_ignore_ascii_case(level)) else { return false };
+    let (a, b) = (Vec2::new(from[0][0], from[0][1]), Vec2::new(from[1][0], from[1][1]));
+    plan_level(d, &g, lv, upf, &mut Vec::new()).walls.iter().any(|w| on_edit_line(w, a, b, upf))
+}
+
 /// What `model.build` makes of one storey's openings: the extents of its planned walls (none
 /// when it has no walls) and the openings of its plan it built no door or window for, and why.
 pub(crate) struct StoreyOpenings {
@@ -1827,7 +1837,25 @@ struct PlanWall {
     /// Why it stands where the plan draws no wall (an inferred wall's basis, its provenance);
     /// None for a wall the plan draws.
     basis: Option<&'static str>,
+    /// The wall edit that put it here (Q6613): built to its ends as the edit gives them.
+    edit: Option<Box<EditedWall>>,
 }
+
+/// What a wall edit's wall carries: the edit's id, its basis (its provenance), and where the
+/// plan built the wall it moved (the design's place, kept beside the corrected one).
+#[derive(Clone, Debug, PartialEq)]
+struct EditedWall {
+    id: String,
+    basis: String,
+    design: Option<(Vec2, Vec2)>,
+}
+
+/// A built wall's tag: the wall edit that put it there (`edit:WE-1`).
+pub(crate) const EDIT_TAG: &str = "edit:";
+/// A moved wall's tag: where the plan built it (`edited_from:x0,y0,x1,y1`, plan units).
+pub(crate) const EDITED_FROM_TAG: &str = "edited_from:";
+/// A wall edit's line finds the wall built on it this close (inches across it).
+const EDIT_MATCH_IN: f64 = 1.0;
 
 /// A door leaf (hinge to its open end) or a window pane, with what it came from.
 struct Leaf {
@@ -2008,6 +2036,7 @@ pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f6
         fixed_top: false,
         head: None,
         basis: None,
+        edit: None,
     };
     let leaf = Leaf {
         a: at(s0),
@@ -2122,6 +2151,7 @@ impl PlanLevel {
                     .map(|n| format!("type:{}", n.chars().take(250).collect::<String>()))
                     .chain(w.head.iter().map(|h| format!("{}{}", heads::HEAD_TAG, h.chars().take(240).collect::<String>())))
                     .chain(w.basis.into_iter().flat_map(|b| super::provenance::tags(cadaddy_walk3d::Made::Inferred, b)).map(|t| t.value))
+                    .chain(w.edit.iter().flat_map(|x| edited_tags(x)))
                     .collect();
                 out.push((Part::Wall, m, w.source, extra));
             }
@@ -2372,6 +2402,116 @@ fn tag_in_gap(at: Vec2, g0: Vec2, g1: Vec2, reach: f64) -> bool {
     s >= 0.0 && s <= len && u.perp().dot(at - g0).abs() <= reach
 }
 
+/// The build tags of a wall an edit placed: its provenance (not drawn there), the edit, and the
+/// plan's place of a wall it moved.
+fn edited_tags(x: &EditedWall) -> Vec<String> {
+    let mut v: Vec<String> = super::provenance::tags(cadaddy_walk3d::Made::Inferred, &x.basis).into_iter().map(|t| t.value).collect();
+    v.push(format!("{EDIT_TAG}{}", x.id.chars().take(40).collect::<String>()));
+    if let Some((a, b)) = x.design {
+        v.push(format!("{EDITED_FROM_TAG}{},{},{},{}", a.x, a.y, b.x, b.y));
+    }
+    v
+}
+
+/// Whether the wall `w` is the one built on the line `a`–`b`: along it, its centreline within
+/// [`EDIT_MATCH_IN`] (or a tenth of its thickness) of it, overlapping most of the shorter.
+fn on_edit_line(w: &PlanWall, a: Vec2, b: Vec2, upf: f64) -> bool {
+    let (len, ml) = (w.a.dist(w.b), a.dist(b));
+    if !(len > 1e-9 && ml > 1e-9 && len.is_finite() && ml.is_finite()) {
+        return false;
+    }
+    let u = (w.b - w.a) * (1.0 / len);
+    if u.cross((b - a) * (1.0 / ml)).abs() > 0.02 {
+        return false;
+    }
+    let tol = (EDIT_MATCH_IN * upf / 12.0).max(0.1 * w.thickness);
+    if u.perp().dot(a - w.a).abs() > tol || u.perp().dot(b - w.a).abs() > tol {
+        return false;
+    }
+    let (s0, s1) = (u.dot(a - w.a), u.dot(b - w.a));
+    let overlap = s0.max(s1).min(len) - s0.min(s1).max(0.0);
+    overlap >= 0.5 * len.min(ml)
+}
+
+/// Apply the spec's wall edits of this level to its walls, in the order made (Q6613): each takes
+/// away the walls built on its `from` line (those the plan gives, and those an earlier edit
+/// placed), then builds its wall on its `to` line: of its type (else the wall's it moved), to
+/// the ends it gives, with its basis. An edit whose `from` finds no wall is said (the plan
+/// changed under it); its `to` wall is still built.
+fn edit_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, pl: &mut PlanLevel, upf: f64, notes: &mut Vec<String>) {
+    let edits: Vec<&cadaddy_walk3d::WallEdit> = sp
+        .wall_edits
+        .iter()
+        .filter(|e| e.level.trim().eq_ignore_ascii_case(level.trim()) && e.finite())
+        .take(cadaddy_walk3d::walledits::MAX_EDITS)
+        .collect();
+    if edits.is_empty() {
+        return;
+    }
+    let v = |p: [f64; 2]| Vec2::new(p[0], p[1]);
+    let k = upf / 12.0;
+    let (mut applied, mut lost) = (Vec::new(), Vec::new());
+    for e in edits {
+        let mut taken: Vec<PlanWall> = Vec::new();
+        if let Some([a, b]) = e.from {
+            pl.walls.retain(|w| {
+                let hit = on_edit_line(w, v(a), v(b), upf);
+                if hit {
+                    taken.push(w.clone());
+                }
+                !hit
+            });
+        }
+        let was = taken.first();
+        if let Some([a, b]) = e.to.filter(|[a, b]| v(*a).dist(v(*b)) > 1e-9)
+            && pl.walls.len() < MAX_OBJECTS
+        {
+            let ty = Some(e.wall_type.trim())
+                .filter(|t| !t.is_empty())
+                .map(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(t)).map_or_else(|| t.to_string(), |x| x.name.clone()))
+                .or_else(|| was.and_then(|w| w.wall_type.clone()));
+            let of_type = ty.as_deref().and_then(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(t)));
+            let thickness = of_type
+                .map(|t| t.thickness_in)
+                .or(e.thickness_in)
+                .filter(|t| t.is_finite() && *t > 0.0)
+                .map(|t| t * k)
+                .or_else(|| was.map(|w| w.thickness))
+                .unwrap_or(6.0 * k);
+            let height = e.height_ft.or(of_type.and_then(|t| t.height_ft)).filter(|h| h.is_finite() && *h > 0.0);
+            let design = e.from.filter(|_| e.op != "add").map(|[a, b]| (v(a), v(b)));
+            let design = was.and_then(|w| w.edit.as_ref()).and_then(|x| x.design).or(design);
+            pl.walls.push(PlanWall {
+                a: v(a),
+                b: v(b),
+                thickness,
+                top: height.map_or_else(|| was.map_or(pl.top, |w| w.top), |h| pl.z0 + h * upf),
+                source: was.map_or(Handle(0), |w| w.source),
+                cuts: Vec::new(),
+                extra: Vec::new(),
+                wall_type: ty,
+                fixed_top: height.is_some() || was.is_some_and(|w| w.fixed_top),
+                head: None,
+                basis: None,
+                edit: Some(Box::new(EditedWall { id: e.id.clone(), basis: e.basis(), design })),
+            });
+        }
+        if e.from.is_some() && taken.is_empty() {
+            lost.push(e.id.clone());
+        } else {
+            applied.push(e.id.clone());
+        }
+    }
+    let mut note = format!("{level}: wall edits applied: {}", if applied.is_empty() { "none".to_string() } else { applied.join(", ") });
+    if !lost.is_empty() {
+        note.push_str(&format!(
+            "; found no wall where these took one from (the plan changed under them; their walls are still built where they say): {}",
+            lost.join(", ")
+        ));
+    }
+    notes.push(format!("{note}."));
+}
+
 /// Give each wall the spec's wall mark on its centreline (on this level, along it and within its
 /// thickness, overlapping most of the shorter): the mark's wall type, and its height when it has
 /// one (else its type's).
@@ -2382,7 +2522,8 @@ fn mark_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, z0: f64, upf: f64,
     }
     for w in walls.iter_mut() {
         let len = w.a.dist(w.b);
-        if len <= 1e-9 {
+        // A wall an edit placed with its type keeps it: a mark beside it is the wall it moved.
+        if len <= 1e-9 || w.edit.is_some() && w.wall_type.is_some() {
             continue;
         }
         let u = (w.b - w.a) * (1.0 / len);
@@ -2680,6 +2821,11 @@ fn plan_level_with(
                 layers.join(", ")
             )
         });
+        // A wall edit adds walls where the plan has none (Q6613).
+        if let Some(sp) = &g.spec {
+            edit_walls(sp, &level.name, &mut pl, upf, notes);
+            mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
+        }
         return pl;
     }
     // Layers whose wall type draws the centreline aren't paired: each line is a wall.
@@ -2819,6 +2965,7 @@ fn plan_level_with(
             fixed_top: fixed_of(&p.layer),
             head: None,
             basis: None,
+            edit: None,
         };
         if pl.walls.iter().any(|x| same_wall(x, &w, k)) {
             overlapping += 1;
@@ -2872,12 +3019,15 @@ fn plan_level_with(
                     fixed_top: fixed_of(&sg.layer),
                     head: None,
                     basis: None,
+                    edit: None,
                 });
             }
         }
     }
-    // Walls the plans tag: their type, and the height its rule gives there.
+    // Walls the plans tag: their type, and the height its rule gives there. First the walls
+    // the spec's wall edits move, delete or add (Q6613).
     if let Some(sp) = &g.spec {
+        edit_walls(sp, &level.name, &mut pl, upf, notes);
         mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
         // Then each typed wall's top by its type's head rule (to the ceiling beside it).
         heads::head_walls(sp, level, ceilings, z0, level_top, upf, &mut pl.walls, notes);
@@ -2889,7 +3039,8 @@ fn plan_level_with(
     let ext_grid = WallGrid::build(&snapshot, 1.5 * max_thick);
     for w in &mut pl.walls {
         let len = w.a.dist(w.b);
-        if len <= 1e-9 {
+        // A wall an edit placed stands to the ends it gives.
+        if len <= 1e-9 || w.edit.is_some() {
             continue;
         }
         let u = (w.b - w.a) * (1.0 / len);
@@ -3667,6 +3818,7 @@ fn plan_level_with(
                     fixed_top: like.fixed_top,
                     head: like.head.clone(),
                     basis: Some(OPEN_END_WALL_WHY),
+                    edit: None,
                 };
                 let source = wall.source;
                 pl.walls.push(wall);
@@ -5771,6 +5923,7 @@ mod tests {
             fixed_top: false,
             head: None,
             basis: None,
+            edit: None,
         }
     }
 
@@ -6447,6 +6600,7 @@ mod tests {
             fixed_top: false,
             head: None,
             basis: None,
+            edit: None,
         };
         let (p, nrm) = (Vec2::new(50.0, 10.0), Vec2::new(0.0, 1.0));
         // Alone: outside both ways.
@@ -6478,6 +6632,7 @@ mod tests {
             fixed_top: false,
             head: None,
             basis: None,
+            edit: None,
         };
         // Pieces 0 and 1 on x = 0 (y -100..-3 and 63..160); corridor walls on y = 0 and y = 60.
         let corridor =
@@ -6675,6 +6830,7 @@ mod tests {
             fixed_top: false,
             head: None,
             basis: None,
+            edit: None,
         };
         assert!(!same_wall(&w((0.0, 3.0), (100.0, 3.0), 6.0), &w((0.0, 8.0), (100.0, 8.0), 4.0), 1.0));
         // Two readings whose bodies overlap: one.
@@ -6718,6 +6874,7 @@ mod tests {
             fixed_top: false,
             head: None,
             basis: None,
+            edit: None,
         };
         // Rooms 10' square in a 3 x 2 grid (inches), on a 1,000" sheet region.
         let mut walls = Vec::new();
@@ -6773,6 +6930,7 @@ mod tests {
             fixed_top: false,
             head: None,
             basis: None,
+            edit: None,
         }
     }
 

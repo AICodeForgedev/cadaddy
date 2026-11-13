@@ -37,6 +37,7 @@ pub mod validate;
 pub mod validate_kinds;
 pub mod video;
 mod walker;
+pub mod walledits;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, level_bases, rooms};
 pub use doors::DoorLeaf;
@@ -62,3 +63,4 @@ pub use spec::{
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
 pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};
 pub use walker::Walker;
+pub use walledits::WallEdit;

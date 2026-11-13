@@ -167,6 +167,11 @@ pub struct BuildingSpec {
     /// Walls whose type (and height) the plans give: the wall built on each centreline gets them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<WallMark>,
+    /// Built walls moved, resized or deleted and walls added (Q6613): by `wall.edit`, or by a
+    /// change to [`Self::walls`] (an entry moved, removed or added). Every build honours them,
+    /// in the order made, whatever the plan's line pairs build there ([`crate::walledits`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_edits: Vec<crate::walledits::WallEdit>,
     /// Gaps and conflicts in the prints the readers found (with the sheets involved), and their
     /// status and answers: see [`crate::rfi`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3263,6 +3268,7 @@ impl BuildingSpec {
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
+            wall_edits: Vec::new(),
             rfis: Vec::new(),
             procurement: None,
             prints: None,
