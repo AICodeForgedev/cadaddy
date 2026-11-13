@@ -516,14 +516,19 @@ fn system(name: &str, bottom: f64) -> MepSystem {
     }
 }
 
-/// Whether `dv` was read on `sh`.
+/// Whether `dv` was read on `sh`. One view of a several-view sheet (each level's plan on one
+/// sheet, read as a sheet of its own that keeps the sheet's number) holds only what its frame
+/// holds (Q6625): a device of the view's level (the level read where it stands), else one inside
+/// the view; never the other plan's.
 fn on_sheet(dv: &ReadDevice, sh: &SheetRef) -> bool {
-    if dv.sheet.is_empty() {
-        let [x0, y0, x1, y1] = sh.rect;
-        dv.at[0] >= x0 && dv.at[0] <= x1 && dv.at[1] >= y0 && dv.at[1] <= y1
-    } else {
-        dv.sheet.eq_ignore_ascii_case(&sh.number)
+    let inside = |[x0, y0, x1, y1]: [f64; 4]| dv.at[0] >= x0 && dv.at[0] <= x1 && dv.at[1] >= y0 && dv.at[1] <= y1;
+    let sheet = if dv.sheet.is_empty() { inside(sh.rect) } else { dv.sheet.eq_ignore_ascii_case(&sh.number) };
+    let Some(view) = sh.view.filter(|_| sheet) else { return sheet };
+    let level = dv.level.trim();
+    if level.is_empty() {
+        return inside(view);
     }
+    level.eq_ignore_ascii_case(sh.level.trim()) || sh.levels.iter().any(|l| l.trim().eq_ignore_ascii_case(level))
 }
 
 /// Read every electrical plan among `sheets` of `d` (`upf` drawing units per foot): drawn
@@ -1273,6 +1278,39 @@ mod tests {
         // A room's load center takes no lug kit (the building's panel A does).
         let lug = |c: &&Value| c["item"] == "Lug kit" && c["detail"].as_str().is_some_and(|d| d.contains("panel G"));
         assert!(!bom["spec_check"].as_array().into_iter().flatten().any(|c| lug(&c)), "{bom:#}");
+    }
+
+    #[test]
+    fn a_two_plan_sheet_books_each_circuit_label_to_the_view_holding_it() {
+        // Q6625: one sheet printing two levels' plans, read as one sheet per view (both keep the
+        // sheet's number). A label printed only in one view is that view's level's circuit.
+        let mut s = Session::new();
+        text(&mut s, [50.0, 50.0], "LEVEL 1 PLAN", 6.0);
+        text(&mut s, [50.0, 550.0], "LEVEL 2 PLAN", 6.0);
+        line(&mut s, [0.0, 450.0], [1800.0, 450.0]);
+        line(&mut s, [0.0, 950.0], [1800.0, 950.0]);
+        let view = |level: &str, y0: f64, y1: f64| SheetRef { view: Some([0.0, y0, 2000.0, y1]), ..sheet("E-7", level, 0.0) };
+        let on = |level: &str, x: f64, y: f64, circuit: &str| ReadDevice { level: level.into(), ..dev("A", x, y, circuit, "E-7") };
+        let devices = vec![
+            on("2", 300.0, 700.0, "Q-4"),
+            on("2", 600.0, 700.0, "Q-4"),
+            on("1", 300.0, 200.0, "Q-1"),
+            // No level read for it: the view whose frame holds it says.
+            on("", 900.0, 750.0, "Q-6"),
+        ];
+        let d = s.doc().expect("doc").clone();
+        let r = read_sheets(&d, &[view("1", 0.0, 500.0), view("2", 500.0, 1000.0)], 12.0, &devices);
+        let mut booked: Vec<(String, String, String)> =
+            r.circuits.iter().map(|t| (t.fields["circuit"].value.clone(), t.level.clone(), t.fields["devices"].value.clone())).collect();
+        booked.sort();
+        let want = |c: &str, l: &str, n: &str| (c.to_string(), l.to_string(), n.to_string());
+        assert_eq!(
+            booked,
+            vec![want("Q-1", "Level 1", "1"), want("Q-4", "Level 2", "2"), want("Q-6", "Level 2", "1")],
+            "{:?} {:?}",
+            r.circuits,
+            r.warnings
+        );
     }
 
     #[test]
