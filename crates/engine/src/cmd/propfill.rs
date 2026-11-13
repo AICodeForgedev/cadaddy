@@ -592,7 +592,8 @@ pub(crate) fn reseat_ceiling_devices(d: &mut Drawing, sp: &BuildingSpec) -> usiz
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
         .filter_map(|e| {
             let level = super::bspec::made_level(e)?.trim().to_ascii_uppercase();
-            let number = super::bimlook::made_tag(e, "number")?.trim().to_ascii_uppercase();
+            // Its number as corrected (Q6593).
+            let number = super::bspec::room_value(e, "number")?.to_ascii_uppercase();
             let ft = super::bimlook::made_tag(e, "ceiling_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
             Some(((level, number), ft))
         })
@@ -2589,6 +2590,133 @@ impl RoomShape {
     fn holds(&self, p: Vec2) -> bool {
         self.bounds.contains(p) && cadaddy_geom::point_in_polygon(&self.outline, p)
     }
+}
+
+/// How far past a room's outline an element still counts as its (a device in the wall's face):
+/// feet.
+const ROOM_FOLLOW_FT: f64 = 2.0;
+
+/// One room identity (Q6593): the elements of a room whose label changed (a person or a later
+/// reader set its number or name) take its new label as their `room`. `changed`: each room
+/// element and the labels it had ([`super::bspec::room_element_labels`]: number-or-name, as the
+/// readers fill elements; name and number, as the trade pieces carry it). An element follows when
+/// its `room` is still an old label as found (a person's own value stays), in that label's style,
+/// and it stands in the room's outline on its level, or within [`ROOM_FOLLOW_FT`] of it and in no
+/// other room; the spec's read devices whose element followed take it too. How many elements
+/// followed.
+pub(crate) fn follow_room_labels(d: &mut Drawing, changed: &[(Handle, (String, String))]) -> usize {
+    struct Relabel {
+        level: String,
+        outline: Vec<Vec2>,
+        bounds: Bounds2,
+        /// (old, new) in each style.
+        labels: [(String, String); 2],
+    }
+    let outline_of = |e: &Entity| -> Option<Vec<Vec2>> {
+        let EntityKind::Mesh(m) = &e.kind else { return None };
+        let o: Vec<Vec2> = m.vertices.iter().take(10_000).map(|v| Vec2::new(v.x, v.y)).filter(|p| p.is_finite()).collect();
+        (o.len() >= 3).then_some(o)
+    };
+    let mut moved: Vec<Relabel> = Vec::new();
+    for (h, (old, old_full)) in changed.iter().take(MAX_ELEMENTS) {
+        let Some(e) = d.model.get(*h) else { continue };
+        let Some((new, new_full)) = super::bspec::room_element_labels(e) else { continue };
+        let labels = [(old.trim().to_string(), new), (old_full.trim().to_string(), new_full)];
+        if labels.iter().all(|(o, n)| o.is_empty() || n.eq_ignore_ascii_case(o)) {
+            continue;
+        }
+        let Some(outline) = outline_of(e) else { continue };
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        moved.push(Relabel { level, bounds: Bounds2::from_points(outline.iter().copied()), outline, labels });
+    }
+    if moved.is_empty() {
+        return 0;
+    }
+    let upf = super::elemprops::units_per_foot(d);
+    let reach = ROOM_FOLLOW_FT * upf;
+    // Every room's outline by level: an element just outside the changed room but in another
+    // room is that one's.
+    let others: Vec<(String, Bounds2, Vec<Vec2>)> = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+        .take(MAX_ELEMENTS)
+        .filter_map(|e| {
+            let o = outline_of(e)?;
+            Some((super::bspec::made_level(e).unwrap_or_default(), Bounds2::from_points(o.iter().copied()), o))
+        })
+        .collect();
+    let inside = |b: &Bounds2, o: &[Vec2], p: Vec2| b.contains(p) && cadaddy_geom::point_in_polygon(o, p);
+    // The changed room an element with `label` at `p` stands in, and that label's (old, new); a
+    // trade piece's in the pieces' style first (an unnumbered room's two old labels are one).
+    let room_for = |level: &str, label: &str, p: Vec2, piece: bool| -> Option<&(String, String)> {
+        let mut near: Option<&(String, String)> = None;
+        for m in moved.iter().filter(|m| m.level.eq_ignore_ascii_case(level)) {
+            let [short, full] = &m.labels;
+            let styles = if piece { [full, short] } else { [short, full] };
+            let Some(pair) = styles.into_iter().find(|(o, n)| !o.is_empty() && o.eq_ignore_ascii_case(label) && !n.eq_ignore_ascii_case(o)) else {
+                continue;
+            };
+            if inside(&m.bounds, &m.outline, p) {
+                return Some(pair);
+            }
+            if near.is_none() && m.bounds.expand(reach).contains(p) {
+                near = Some(pair);
+            }
+        }
+        near.filter(|_| !others.iter().any(|(l, b, o)| l.eq_ignore_ascii_case(level) && inside(b, o, p)))
+    };
+    let mut edits: Vec<(Handle, String, String, Option<String>)> = Vec::new();
+    // The built elements (a print set's drawing holds far more objects than these).
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some_and(|p| p != "room")).take(MAX_ELEMENTS) {
+        // Near a changed room first (cheap), then its properties.
+        let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
+        let c = Vec2::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        if !moved.iter().any(|m| m.level.eq_ignore_ascii_case(&level) && m.bounds.expand(reach).contains(c)) {
+            continue;
+        }
+        let store = props::read(&e.common.xdata);
+        let Some(cur) = store.get("room").filter(|p| p.has_value() && p.source.kind != SourceKind::User).map(Prop::text) else { continue };
+        if let Some((old, new)) = room_for(&level, cur.trim(), c, super::mepatoms::is_atom(e)) {
+            edits.push((e.handle, old.clone(), new.clone(), made(e, DEVID)));
+        }
+    }
+    let mut followed = 0;
+    let mut ids: HashMap<String, (String, String)> = HashMap::new();
+    for (h, old, new, id) in edits {
+        let Some(e) = d.model.get(h) else { continue };
+        let mut store = props::read(&e.common.xdata);
+        let note = "its room's number or name as set on the room";
+        if !store.set("room", Prop::new(new.clone(), Source::computed()).with_note(note)) {
+            continue;
+        }
+        let x = props::write(&e.common.xdata, &store);
+        if d.modify_entity(h, |e| e.common.xdata = x.into()).is_ok() {
+            followed += 1;
+            if let Some(id) = id {
+                ids.insert(id, (old, new));
+            }
+        }
+    }
+    // The read devices in the spec whose element followed: the room each was read in, where it
+    // is the old label.
+    if !ids.is_empty()
+        && let Some(mut sp) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+    {
+        let mut changed_tags = 0;
+        for t in sp.tags.iter_mut().take(MAX_ELEMENTS) {
+            let Some((old, new)) = ids.get(t.id.as_str()) else { continue };
+            if t.fields.get("room").is_some_and(|f| f.value.trim().eq_ignore_ascii_case(old)) {
+                t.set("room", new.clone(), "computed");
+                changed_tags += 1;
+            }
+        }
+        if changed_tags > 0 {
+            d.building_spec = Some(sp.to_json()).into();
+        }
+    }
+    followed
 }
 
 fn room_label(number: Option<&str>, name: &str) -> String {

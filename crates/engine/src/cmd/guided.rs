@@ -8925,6 +8925,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         );
         result["rooms_not_built"] = json!(not_built);
     }
+    // The rooms numbered since the build are no longer asked about; one of a numbered name still
+    // with none is (Q6593).
+    let unnumbered = super::bspec::ask_unnumbered_rooms(s.doc_mut()?);
+    if !unnumbered.is_empty() {
+        progress_line(&format!("  rooms of a numbered name with no number (asked which): {}", unnumbered.len()));
+        result["rooms_unnumbered"] = json!(unnumbered.len());
+    }
     let t = web_time::Instant::now();
     if let Some(v) = placed {
         result["devices"] = v;

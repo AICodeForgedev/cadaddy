@@ -88,6 +88,7 @@ mod readerwire;
 mod relevel;
 mod riser_storeys;
 mod roofframing;
+mod room_number_prop;
 mod rooms3d;
 mod roomsmodel;
 mod routeunbuilt;
