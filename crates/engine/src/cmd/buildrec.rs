@@ -453,13 +453,16 @@ pub(crate) fn keep_unaffected(d: &mut Drawing, old: &Drawing, affected: &BTreeSe
 
 /// The names a built element answers to (lower case): its build part (`casework`, `ceiling`,
 /// `mep`), its element kind (`light_fixture`, `equipment`) and its own kind as read
-/// (`receptacle`).
+/// (`receptacle`); an elevator's hoistway (its shaft walls, pit and overrun) to `hoistway` too.
 fn part_names(e: &Entity) -> Vec<String> {
     let Some(part) = wallgen::made_as(e) else { return Vec::new() };
     let mut out = vec![part.to_ascii_lowercase()];
     if let Some(kind) = super::elemprops::element_kind(e) {
         out.push(kind.to_ascii_lowercase());
         out.push(super::elemprops::reported_kind(e, kind).to_ascii_lowercase());
+    }
+    if part == super::hoistway::PIT || part == super::hoistway::OVERRUN || super::bimlook::made_tag(e, "hoistway").is_some() {
+        out.push("hoistway".into());
     }
     out
 }
@@ -631,6 +634,30 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6620: `model.build {parts: [hoistway]}` takes the shaft's walls, pit and overrun.
+    #[test]
+    fn a_hoistways_parts_answer_to_hoistway() {
+        let el = |tags: &[&str]| {
+            let mut e = Entity::new(
+                cadaddy_doc::Handle(0x10),
+                cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p: cadaddy_geom::Vec3::default(), angle: 0.0 }),
+            );
+            let mut x = vec![cadaddy_doc::RawTag { code: 1001, value: wallgen::APP.into() }];
+            x.extend(tags.iter().map(|t| cadaddy_doc::RawTag { code: 1000, value: (*t).to_string() }));
+            e.common.xdata = x.into();
+            e
+        };
+        for tags in [
+            &[super::super::hoistway::PIT, "Level 1", "0"][..],
+            &[super::super::hoistway::OVERRUN, "Roof", "0"],
+            &["wall", "Level 2", "0", "hoistway:ELEV 1"],
+        ] {
+            assert!(part_names(&el(tags)).contains(&"hoistway".to_string()), "{tags:?}");
+        }
+        assert!(!part_names(&el(&["wall", "Level 2", "0"])).contains(&"hoistway".to_string()));
+        assert!(part_names(&el(&["wall", "Level 2", "0"])).contains(&"wall".to_string()));
+    }
 
     #[test]
     fn a_step_records_what_it_changed() {
