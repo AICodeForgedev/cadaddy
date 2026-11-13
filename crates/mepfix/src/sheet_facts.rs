@@ -606,6 +606,190 @@ pub fn view_regions(d: &Drawing) -> Vec<([f64; 4], usize)> {
     out
 }
 
+/// A text this many words or fewer is a heading (`ELECTRICAL SYMBOL LEGEND`), more a sentence.
+const HEADING_WORDS: usize = 6;
+/// A text this many words or more is a line of notes or specification text.
+const SENTENCE_WORDS: usize = 6;
+/// A text with this many words of two letters or more is a line of words (`DUPLEX RECEPTACLE,
+/// 20A, AFF`), not a tag or a mark.
+const WORD_LINE_WORDS: usize = 3;
+/// Shortest straight line weighed as a wall's face, in the page's size (about 1/2" on a 36"
+/// sheet).
+const WALL_FACE_MIN: f64 = 0.015;
+/// The faces of a wall stand this far apart at least and at most, in the page's size (about
+/// 0.03" to 0.43" on a 36" sheet: a 4" partition at 1/8" scale to a 12" wall at 1/2").
+const WALL_GAP_MIN: f64 = 0.0008;
+const WALL_GAP_MAX: f64 = 0.012;
+/// A wall's faces have no parallel line this many of their gaps beyond them (a room on either
+/// side); a table's rules and a hatch's lines are spaced evenly, each with one beside it.
+const WALL_CLEAR_GAPS: f64 = 2.5;
+/// Most pairs of lines compared per page (hostile files).
+const MAX_FACE_PAIRS: usize = 4_000_000;
+
+/// What a page's drawing area holds: the walls its linework draws (pairs of parallel lines a
+/// wall's thickness apart, clear on both sides), its lines of notes and specification text, the
+/// view titles naming a plan and the headings of legends, notes and specifications. A plan's
+/// linework is walls; a sheet of legends, notes and specifications has none, only table rules
+/// (spaced evenly), sample symbols and lettering (Q6361).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PageContent {
+    /// Pairs of lines read as a wall's two faces.
+    pub wall_faces: usize,
+    /// Their length together, in the page's size (its longer side is 1).
+    pub wall_length: f64,
+    /// Lines of lettering of [`SENTENCE_WORDS`] words or more.
+    pub sentences: usize,
+    /// Lines of lettering in all.
+    pub texts: usize,
+    /// Lines of lettering of [`WORD_LINE_WORDS`] words or more (a word two letters or more): a
+    /// legend's descriptions and the notes, where a plan's lettering is mostly tags, marks and
+    /// numbers (`S3`, `A-1`, `12x8`, `200 CFM`).
+    pub word_lines: usize,
+    /// View titles naming a plan of some kind ([`names_a_plan`]), key plans left out.
+    pub plan_views: usize,
+    /// Headings of legends, notes, abbreviations and specifications (`sheets.legend_notes_heading_words`).
+    pub headings: usize,
+}
+
+/// [`PageContent`] of a page: its straight linework (lines and polyline sides, screened ones too:
+/// a trade's plan prints the walls grey; borders and title-block rules left out), its lettering,
+/// its view titles and headings.
+pub fn page_content(d: &Drawing, texts: &[TextItem], views: &[ViewTitle]) -> PageContent {
+    let heading_words = crate::wordrules::words("sheets.legend_notes_heading_words");
+    let words_of = |t: &TextItem| -> Vec<String> {
+        t.value.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let mut out = PageContent { texts: texts.len(), ..PageContent::default() };
+    for t in texts {
+        let w = words_of(t);
+        if !w.is_empty() && w.len() <= HEADING_WORDS && w.iter().any(|x| heading_words.contains(&x.as_str())) {
+            out.headings += 1;
+        }
+        if w.len() >= SENTENCE_WORDS {
+            out.sentences += 1;
+        }
+        if t.value.split(|c: char| !c.is_ascii_alphabetic()).filter(|x| x.len() >= 2).count() >= WORD_LINE_WORDS {
+            out.word_lines += 1;
+        }
+    }
+    out.plan_views = views.iter().filter(|v| names_a_plan(&v.title) && !names_key_plan(&v.title)).count();
+    let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        match &e.kind {
+            EntityKind::Line(l) => segs.push((l.a.xy(), l.b.xy())),
+            EntityKind::LwPolyline(p) => {
+                let n = p.vertices.len();
+                let sides = if p.closed { n } else { n.saturating_sub(1) };
+                for i in 0..sides {
+                    if let (Some(a), Some(b)) = (p.vertices.get(i), p.vertices.get((i + 1) % n.max(1)))
+                        && a.bulge.abs() < 1e-9
+                    {
+                        segs.push((a.p, b.p));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    segs.retain(|(a, b)| a.is_finite() && b.is_finite());
+    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in segs.iter().flat_map(|(a, b)| [*a, *b]).chain(texts.iter().map(|t| t.at)) {
+        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+    let size = w.max(h);
+    if !(size.is_finite() && size > 0.0) {
+        return out;
+    }
+    // Each straight line across or up the page: (where it stands, from, to).
+    let (mut across, mut up): (Vec<(f64, f64, f64)>, Vec<(f64, f64, f64)>) = (Vec::new(), Vec::new());
+    for (a, b) in &segs {
+        let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+        let len = dx.max(dy);
+        if len < WALL_FACE_MIN * size || dx > SPAN_LIMIT * w || dy > SPAN_LIMIT * h {
+            continue;
+        }
+        if dy <= 0.02 * dx {
+            across.push(((a.y + b.y) / 2.0, a.x.min(b.x), a.x.max(b.x)));
+        } else if dx <= 0.02 * dy {
+            up.push(((a.x + b.x) / 2.0, a.y.min(b.y), a.y.max(b.y)));
+        }
+    }
+    let mut budget = MAX_FACE_PAIRS;
+    for lines in [&mut across, &mut up] {
+        let (n, len) = wall_faces(lines, size, &mut budget);
+        out.wall_faces += n;
+        out.wall_length += len / size;
+    }
+    out
+}
+
+/// The wall faces among parallel lines `lines` (where each stands, from, to): each pair a wall's
+/// thickness apart that overlap along half the shorter, nearest to each other, with no other
+/// overlapping line [`WALL_CLEAR_GAPS`] of their gap beyond either. The pairs and their overlap
+/// length together.
+fn wall_faces(lines: &mut [(f64, f64, f64)], size: f64, budget: &mut usize) -> (usize, f64) {
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let reach = WALL_GAP_MAX * WALL_CLEAR_GAPS * size;
+    let overlap = |a: &(f64, f64, f64), b: &(f64, f64, f64)| {
+        let o = a.2.min(b.2) - a.1.max(b.1);
+        (o >= 0.5 * (a.2 - a.1).min(b.2 - b.1)).then_some(o)
+    };
+    // Each line's nearest overlapping line beyond it each way: (gap, index).
+    let n = lines.len();
+    let mut below: Vec<Option<(f64, usize)>> = vec![None; n];
+    let mut above: Vec<Option<(f64, usize)>> = vec![None; n];
+    for i in 0..n {
+        let Some(a) = lines.get(i) else { continue };
+        for j in i + 1..n {
+            let Some(b) = lines.get(j) else { break };
+            let gap = b.0 - a.0;
+            if gap > reach || *budget == 0 {
+                break;
+            }
+            *budget -= 1;
+            // the same line drawn twice
+            if gap < WALL_GAP_MIN * size * 0.25 || overlap(a, b).is_none() {
+                continue;
+            }
+            if above.get(i).is_some_and(|x| x.is_none_or(|(g, _)| gap < g))
+                && let Some(x) = above.get_mut(i)
+            {
+                *x = Some((gap, j));
+            }
+            if below.get(j).is_some_and(|x| x.is_none_or(|(g, _)| gap < g))
+                && let Some(x) = below.get_mut(j)
+            {
+                *x = Some((gap, i));
+            }
+        }
+    }
+    let (mut count, mut length) = (0usize, 0.0);
+    for i in 0..n {
+        let Some(Some((gap, j))) = above.get(i).copied() else { continue };
+        if gap < WALL_GAP_MIN * size || gap > WALL_GAP_MAX * size || below.get(j).copied().flatten().map(|(_, k)| k) != Some(i) {
+            continue;
+        }
+        let clear = |x: Option<Option<(f64, usize)>>| x.flatten().is_none_or(|(g, _)| g > WALL_CLEAR_GAPS * gap);
+        if clear(below.get(i).copied())
+            && clear(above.get(j).copied())
+            && let (Some(a), Some(b)) = (lines.get(i), lines.get(j))
+            && let Some(o) = overlap(a, b)
+        {
+            count += 1;
+            length += o;
+        }
+    }
+    (count, length)
+}
+
+/// A key plan's title (the small plan marking where a view is): no plan of the sheet's own.
+fn names_key_plan(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    up.contains("KEY PLAN") || up.contains("KEYPLAN") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "KEY")
+}
+
 /// A circuit label: panel letters, a dash, the circuit number(s), maybe a switch leg
 /// (`A-1`, `B-14`, `C-23,25`, `A-1,f`, `RP-3`). A zero-padded number (`S-01`) is a room's tag:
 /// circuits are never padded.
@@ -1424,5 +1608,54 @@ mod tests {
         let f = read_sheet_facts(&d);
         let _ = tag_census(&texts(&d), [f64::NEG_INFINITY, f64::NAN, 0.0, 1.0]);
         assert!(f.views.len() <= 2);
+    }
+
+    /// Q6361: a plan's walls are pairs of parallel faces a wall's thickness apart with rooms on
+    /// both sides; a legend table's rules are spaced evenly (none is a wall), its lettering is
+    /// notes and headings.
+    #[test]
+    fn page_content_tells_walls_from_table_rules() {
+        // A 36" x 24" sheet in sheet inches: rooms 4" wide, walls 0.06" thick.
+        let mut plan = Drawing::default();
+        line(&mut plan, (0.0, 0.0), (36.0, 24.0));
+        for k in 0..6 {
+            let x = 4.0 + 4.0 * f64::from(k);
+            line(&mut plan, (x, 4.0), (x, 12.0));
+            line(&mut plan, (x + 0.06, 4.0), (x + 0.06, 12.0));
+        }
+        text(&mut plan, "FIRST FLOOR PLAN", 4.0, 2.0, 0.2);
+        let c = page_content(&plan, &texts(&plan), &[view("FIRST FLOOR PLAN", Some("1/8\" = 1'-0\""), 0.0)]);
+        assert_eq!(c.wall_faces, 6, "{c:?}");
+        assert!((c.wall_length - 6.0 * 8.0 / 36.0).abs() < 0.05, "{c:?}");
+        assert_eq!(c.plan_views, 1);
+        // A legend: 20 rows ruled every 0.3", a symbol column, headings and notes.
+        let mut legend = Drawing::default();
+        line(&mut legend, (0.0, 0.0), (36.0, 24.0));
+        for k in 0..=20 {
+            let y = 20.0 - 0.3 * f64::from(k);
+            line(&mut legend, (1.0, y), (6.0, y));
+        }
+        for x in [1.0, 1.8, 6.0] {
+            line(&mut legend, (x, 14.0), (x, 20.0));
+        }
+        text(&mut legend, "ELECTRICAL SYMBOL LEGEND", 1.0, 20.4, 0.2);
+        text(&mut legend, "GENERAL NOTES", 8.0, 20.4, 0.2);
+        for k in 0..8 {
+            text(&mut legend, "1. COORDINATE THE DEVICE LOCATIONS WITH THE FURNITURE LAYOUT.", 8.0, 20.0 - 0.3 * f64::from(k), 0.1);
+        }
+        let c = page_content(&legend, &texts(&legend), &[]);
+        assert_eq!(c.wall_faces, 0, "evenly spaced rules are no walls: {c:?}");
+        assert_eq!((c.headings, c.sentences, c.plan_views), (2, 8, 0), "{c:?}");
+        // Its headings and notes are lines of words; a plan's tags and marks are not.
+        assert_eq!(c.word_lines, 9, "{c:?}");
+        let mut tags = Drawing::default();
+        for (k, t) in ["S3", "A-1,3", "12x8", "200 CFM", "SD-1", "EF-2 ABOVE", "12'-0\""].iter().enumerate() {
+            text(&mut tags, t, 1.0, f64::from(u8::try_from(k).unwrap_or(0)), 0.1);
+        }
+        text(&mut tags, "SUPPLY AIR DIFFUSER", 1.0, 9.0, 0.1);
+        let c = page_content(&tags, &texts(&tags), &[]);
+        assert_eq!((c.texts, c.word_lines), (8, 1), "{c:?}");
+        // A key plan's title is no plan view.
+        assert_eq!(page_content(&legend, &texts(&legend), &[view("KEY PLAN", None, 0.0)]).plan_views, 0);
     }
 }

@@ -156,6 +156,7 @@ pub mod geo;
 pub mod gridtable;
 pub mod grounding;
 pub mod guided;
+pub(crate) mod hoistway;
 pub mod ifcmodel;
 pub mod ifcref;
 pub mod imagetrace;
@@ -937,6 +938,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rfi::specs());
         v.extend(exterior::specs());
         v.extend(stairs::specs());
+        v.extend(hoistway::specs());
         v.extend(autospec::specs());
         v.extend(verify::specs());
         v.extend(imagetrace::specs());

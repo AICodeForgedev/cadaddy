@@ -9,6 +9,7 @@ mod model;
 mod save;
 mod sheets;
 mod tokens;
+mod tokstream;
 
 use cadaddy_doc::{Drawing, Space};
 

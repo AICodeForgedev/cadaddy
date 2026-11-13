@@ -472,7 +472,7 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     let mut budget_exceeded = false;
     // The spaces open to the storey under them, on each level above the lowest (Q6322).
     let lowest = g.rules.levels.iter().filter(|l| l.sheet.is_none()).map(|l| l.elevation_ft).fold(f64::INFINITY, f64::min);
-    let mut open_below: HashMap<usize, Vec<Vec2>> = HashMap::new();
+    let mut open_below: HashMap<usize, (Vec<Vec2>, Vec<(Vec2, Vec2)>)> = HashMap::new();
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
@@ -528,7 +528,8 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             if level.elevation_ft > lowest + 1e-6 {
                 let open = open_below_labels(s.doc()?, level);
                 if !open.is_empty() {
-                    open_below.insert(si, open);
+                    let edges = open_below_edges(s.doc()?, level, &pl, upf);
+                    open_below.insert(si, (open, edges));
                 }
             }
             if level_ms > 100 {
@@ -552,14 +553,27 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     for (si, pl) in &planned {
         let Some((lo, hi)) = pl.footprint() else { continue };
         let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
-        let open = open_below.get(si).map_or(&[][..], Vec::as_slice);
-        let (plate, carved) = outline::building_open(&walls, lo, hi, upf, open);
+        let open = open_below.get(si).map_or_else(outline::OpenBelow::default, |(at, edges)| outline::OpenBelow { at, edges });
+        let (plate, tally) = outline::building_open(&walls, lo, hi, upf, &open);
+        if tally.missed > 0
+            && let Some(level) = scene.levels.get(*si)
+        {
+            notes.push(format!(
+                "{}: {} space(s) labelled open to below could not be traced to an edge (no wall, guardrail or slab edge drawn round the label closes a room-sized space); the slab is kept there.",
+                level.name, tally.missed
+            ));
+        }
         match plate {
             Some(o) => {
-                if carved > 0
-                    && let Some(level) = scene.levels.get(*si)
-                {
-                    notes.push(format!("{}: the floor slab leaves out {carved} space(s) labelled open to below.", level.name));
+                if let Some(level) = scene.levels.get(*si) {
+                    if tally.on_extents {
+                        notes.push(format!(
+                            "{}: the walls do not close round the building; its floor slab is their extents less {} space(s) labelled open to below.",
+                            level.name, tally.carved
+                        ));
+                    } else if tally.carved > 0 {
+                        notes.push(format!("{}: the floor slab leaves out {} space(s) labelled open to below.", level.name, tally.carved));
+                    }
                 }
                 plates.insert(*si, o);
             }
@@ -988,7 +1002,8 @@ fn fit_mezzanines(
         }
         // The storey's walls under the mezzanine's slab stop at its underside.
         let Some(plate) = planned.get(m).and_then(|(si, _)| plates.get(si)) else { continue };
-        let under = |p: Vec2| plate.rects.iter().any(|[a, b]| p.x > a.x && p.x < b.x && p.y > a.y && p.y < b.y);
+        // On a side two of its rectangles share is under it too (a plate of several).
+        let under = |p: Vec2| plate.rects.iter().any(|[a, b]| p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y);
         let mut capped = 0;
         if let Some((_, pl)) = planned.get_mut(st) {
             for w in &mut pl.walls {
@@ -1057,6 +1072,113 @@ fn open_below_labels(d: &Drawing, level: &cadaddy_walk3d::Level) -> Vec<Vec2> {
         }
     }
     out
+}
+
+/// Most lines read off a level's plan as the edges of its spaces open to below.
+const MAX_OPEN_BELOW_EDGES: usize = 200_000;
+/// The shortest line taken for the edge of a space open to below, feet (a tick, an arrowhead, a
+/// symbol's side is no slab edge; a gap this wide or a door's is closed tracing the space).
+const OPEN_EDGE_MIN_FT: f64 = 2.0;
+/// How near a wall's direction an edge line of a space open to below runs, radians' sine: a
+/// guardrail or a slab edge runs along the building's walls; the cross a plan marks an opening
+/// with runs corner to corner, across them.
+const OPEN_EDGE_PARALLEL: f64 = 0.035;
+/// How far from a line a dimension's figure is lettered over it, inches.
+const DIMENSION_FIGURE_OFF_IN: f64 = 18.0;
+
+/// The lines of a level's plan (inside its region, in its walls' extents) that may edge a space
+/// labelled open to below (Q6397): a guardrail, a slab edge, a wall drawn as a single line, on
+/// any layer, running along a wall's direction and [`OPEN_EDGE_MIN_FT`] or longer. A dimension
+/// string (a line with a dimension's figure lettered along it) and its extension lines (crossing
+/// it) are no edge.
+fn open_below_edges(d: &Drawing, level: &cadaddy_walk3d::Level, pl: &PlanLevel, upf: f64) -> Vec<(Vec2, Vec2)> {
+    let Some((lo, hi)) = pl.footprint() else { return Vec::new() };
+    let k = upf / 12.0;
+    // The walls' directions (half a degree apart at most).
+    let mut dirs: Vec<Vec2> = Vec::new();
+    for w in &pl.walls {
+        let len = w.a.dist(w.b);
+        if !(len.is_finite() && len > 1e-9) {
+            continue;
+        }
+        let u = (w.b - w.a) * (1.0 / len);
+        if !dirs.iter().any(|v| v.cross(u).abs() < 0.008) && dirs.len() < 64 {
+            dirs.push(u);
+        }
+    }
+    let ents: Vec<&Arc<Entity>> = d
+        .model
+        .iter()
+        .filter(|e| made_as(e).is_none())
+        .filter(|e| match level.region {
+            None => true,
+            Some([x0, y0, x1, y1]) => {
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                let c = b.center();
+                !b.is_empty() && c.x >= x0.min(x1) && c.x <= x0.max(x1) && c.y >= y0.min(y1) && c.y <= y0.max(y1)
+            }
+        })
+        .take(MAX_OBJECTS)
+        .collect();
+    let figures: Vec<Vec2> = ents
+        .iter()
+        .filter(|e| is_dimension_figure(e))
+        .map(|e| cadaddy_doc::entity_bounds(d, e, 0))
+        .filter(|b| !b.is_empty())
+        .map(|b| b.center())
+        .take(MAX_OPEN_BELOW_EDGES)
+        .collect();
+    let pad = OPEN_EDGE_MIN_FT * upf;
+    let lines: Vec<(Vec2, Vec2)> = super::perceive::geometry::segments(&ents)
+        .into_iter()
+        .map(|sg| (sg.a, sg.b))
+        .filter(|(a, b)| {
+            let len = a.dist(*b);
+            let u = (*b - *a) * (1.0 / len);
+            len >= OPEN_EDGE_MIN_FT * upf
+                && a.x.max(b.x) >= lo.x - pad
+                && a.x.min(b.x) <= hi.x + pad
+                && a.y.max(b.y) >= lo.y - pad
+                && a.y.min(b.y) <= hi.y + pad
+                && dirs.iter().any(|v| v.cross(u).abs() <= OPEN_EDGE_PARALLEL)
+        })
+        .take(MAX_OPEN_BELOW_EDGES)
+        .collect();
+    // A dimension string: a figure lettered over the line, within its span.
+    let off = DIMENSION_FIGURE_OFF_IN * k;
+    let lettered = |(a, b): &(Vec2, Vec2)| {
+        let len = a.dist(*b);
+        let u = (*b - *a) * (1.0 / len);
+        figures.iter().any(|f| {
+            let along = (*f - *a).dot(u);
+            along >= 0.0 && along <= len && u.cross(*f - *a).abs() <= off
+        })
+    };
+    let (dims, rest): (Vec<(Vec2, Vec2)>, Vec<(Vec2, Vec2)>) = lines.into_iter().partition(|l| lettered(l));
+    if dims.is_empty() {
+        return rest;
+    }
+    // Its extension lines: across a dimension string near one of its ends, ending just past it.
+    let reach = OPEN_EDGE_MIN_FT * upf;
+    let crosses = |(a, b): &(Vec2, Vec2)| {
+        dims.iter().any(|(c, e)| {
+            let (u, v) = (*b - *a, *e - *c);
+            let den = u.cross(v);
+            if den.abs() <= 1e-9 * u.len() * v.len() {
+                return false;
+            }
+            let t = (*c - *a).cross(v) / den;
+            let s = (*c - *a).cross(u) / den;
+            let at = *c + v * s;
+            // An extension line runs a little past the string; a rail or a wall the string
+            // measures to runs on.
+            (0.0..=1.0).contains(&t)
+                && (0.0..=1.0).contains(&s)
+                && (at.dist(*c) <= reach || at.dist(*e) <= reach)
+                && (at.dist(*a) <= reach || at.dist(*b) <= reach)
+        })
+    };
+    rest.into_iter().filter(|l| !crosses(l)).collect()
 }
 
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW

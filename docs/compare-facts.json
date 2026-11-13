@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1284,
-    "count": 1284,
+    "callableAsJson": 1285,
+    "count": 1285,
     "ids": [
       "-attedit",
       "-block",
@@ -439,6 +439,7 @@
       "dynmode",
       "eattext",
       "elev.read",
+      "elevator.read",
       "ellipse",
       "ellipse.arc",
       "ellipse.axis",

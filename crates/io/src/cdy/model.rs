@@ -156,9 +156,10 @@ pub struct OpenProfile {
     pub parallel: Duration,
     /// Checking and inflating the chunks (summed over the cores).
     pub inflate: Duration,
-    /// Model space chunks' bytes decoded into value trees (summed over the cores).
+    /// Model space chunks' binary mesh buffers split off their tokens (summed over the cores).
     pub decode: Duration,
-    /// Model space objects built from their value trees (summed over the cores).
+    /// Model space objects built as their tokens are read (summed over the cores). Before Q6399
+    /// the tokens were first decoded into a value tree, counted in `decode`.
     pub construct: Duration,
     /// The rest, in file order on one core: header, tables, blocks, layouts, the other parts, and
     /// the objects put into the drawing's store and its handle index.
@@ -647,28 +648,24 @@ fn tag_name(tag: &[u8; 4]) -> String {
 /// the chunk doesn't decode to a list.
 pub(super) fn entity_list(data: &[u8], version: u16, m: &Meter) -> Option<(Vec<Entity>, Vec<String>)> {
     // Version 2 keeps mesh geometry in binary buffers after the objects (`meshbuf`).
-    let (list, mut meshes) = Meter::time(&m.decode, || {
-        if version == 2 {
-            let (v, meshes) = super::meshbuf::decode(data)?;
-            Some((v, meshes))
-        } else {
-            Some((tokens::decode(data)?, Default::default()))
-        }
-    })?;
-    let Value::Array(list) = list else { return None };
-    Some(Meter::time(&m.construct, || {
+    let (toks, mut meshes) = Meter::time(&m.decode, || if version == 2 { super::meshbuf::split(data) } else { Some((data, Default::default())) })?;
+    // The objects are built as their tokens are read: no token list or value tree of the chunk
+    // in between (they held ~12 times the chunk's bytes, and were most of the time; Q6399).
+    Meter::time(&m.construct, || {
         let mut notes = Vec::new();
-        let mut items = Vec::with_capacity(list.len());
-        for (i, item) in list.into_iter().enumerate() {
-            if let Some(mut e) = take::<Entity>(item, "an object", &mut notes) {
+        let mut items = Vec::with_capacity(ENTITY_CHUNK);
+        super::tokstream::each_in_list::<Entity>(toks, |i, r| match r {
+            Ok(mut e) => {
                 if let Some(m) = meshes.remove(&i) {
                     super::meshbuf::fill(&mut e, m);
                 }
                 items.push(e);
             }
-        }
-        (items, notes)
-    }))
+            Err(why) => notes.push(format!("an object couldn't be read ({why})")),
+        })?;
+        items.shrink_to_fit();
+        Some((items, notes))
+    })
 }
 
 /// The draw-order place (a chunk id, [`cadaddy_doc::ChunkRef::order`]) of the model space chunk at

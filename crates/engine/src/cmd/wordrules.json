@@ -3907,6 +3907,20 @@
     "SPECIFICATION"
    ]
   },
+  "sheets.legend_notes_heading_words": {
+   "source": "A heading word of a legend, a notes list, an abbreviation list or a specification printed on a sheet (`ELECTRICAL SYMBOL LEGEND`, `GENERAL NOTES`): a sheet of these with no plan view is a legend/notes sheet whatever its title or number says (Q6361). (drafting convention: general, no job's title)",
+   "words": [
+    "LEGEND",
+    "LEGENDS",
+    "SYMBOL",
+    "SYMBOLS",
+    "ABBREVIATION",
+    "ABBREVIATIONS",
+    "NOTES",
+    "SPECIFICATION",
+    "SPECIFICATIONS"
+   ]
+  },
   "sheets.floor_plan_title_words": {
    "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
    "words": [
