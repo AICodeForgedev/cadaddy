@@ -12,7 +12,7 @@
 
 use std::borrow::Cow;
 
-use cadaddy_walk3d::{BuildingSpec, MepRun};
+use cadaddy_walk3d::{BuildingSpec, Level, MepRun};
 
 /// The most levels a riser is cut at (a bound on hostile input).
 const MAX_LEVELS: usize = 500;
@@ -55,6 +55,36 @@ pub(crate) fn carry(sp: &BuildingSpec, p: [f64; 2], from: &str, to: &str) -> [f6
     }
 }
 
+/// How far past a level's plan region a riser still meets its floor, feet (a riser stands
+/// beside the gear or in the chase at the plan's edge).
+const REACH_FT: f64 = 1.5;
+
+/// The levels whose floor a riser standing at `p` on `level`'s plan meets (Q6453): `level`
+/// itself and every other storey this drawing builds (a level on a sheet of its own drawing is
+/// none) whose plan region holds the point carried onto it (`carry(p, from, to)`: the way the
+/// caller placed the riser's pieces, [`carry`] for a run's; within [`REACH_FT`] of its edge; a
+/// level with no region is the whole drawing). A mezzanine or partial level elsewhere in the
+/// building is no floor the riser passes: it is neither cut there nor given a piece of it. In
+/// the spec's order, at most [`MAX_LEVELS`].
+pub(crate) fn riser_levels<'a>(sp: &'a BuildingSpec, level: &str, p: [f64; 2], carry: &dyn Fn([f64; 2], &str, &str) -> [f64; 2]) -> Vec<&'a Level> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let reach = REACH_FT * upf;
+    let own = sp.level(level).map(|l| l.name.as_str());
+    let holds = |l: &Level| {
+        let Some(own) = own else { return l.region.is_none() };
+        let q = carry(p, own, &l.name);
+        l.region.filter(|r| r.iter().all(|v| v.is_finite())).is_none_or(|[x0, y0, x1, y1]| {
+            q[0] >= x0.min(x1) - reach && q[0] <= x0.max(x1) + reach && q[1] >= y0.min(y1) - reach && q[1] <= y0.max(y1) + reach
+        })
+    };
+    sp.levels
+        .iter()
+        .filter(|l| l.elevation_ft.is_finite())
+        .filter(|l| l.name.eq_ignore_ascii_case(level) || (l.sheet.is_none() && holds(l)))
+        .take(MAX_LEVELS)
+        .collect()
+}
+
 /// `r` as the storeys' runs it stands in: itself (uncut) unless it is a riser that passes a
 /// floor or stands in another level's storey than the one it is given on.
 pub(crate) fn storey_runs<'a>(sp: &BuildingSpec, r: &'a MepRun) -> Vec<StoreyRun<'a>> {
@@ -68,11 +98,37 @@ pub(crate) fn storey_runs<'a>(sp: &BuildingSpec, r: &'a MepRun) -> Vec<StoreyRun
     if !base.is_finite() {
         return one();
     }
-    // The floors, over the riser's own level's floor, lowest first. A level on a sheet of its
-    // own drawing (an enlarged plan) is no storey of this building.
-    let mut floors: Vec<(&str, f64)> =
-        sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).take(MAX_LEVELS).map(|l| (l.name.as_str(), l.elevation_ft - base)).collect();
-    floors.sort_by(|a, b| a.1.total_cmp(&b.1));
+    // The floors, over the riser's own level's floor, lowest first: the storeys whose plan holds
+    // it (Q6453: a level on a sheet of its own drawing, an enlarged plan, is no storey of this
+    // building; a mezzanine or partial level elsewhere is no floor it passes), and a storey
+    // whose own plan places it ([`MepRun::storey_points`]). Levels at one height share that
+    // floor: its own level keeps it, else the first in the spec.
+    let mut held = riser_levels(sp, &own.name, *p, &|q, from, to| carry(sp, q, from, to));
+    for l in sp.levels.iter().filter(|l| l.elevation_ft.is_finite() && r.storey_points.iter().any(|(n, _)| n.eq_ignore_ascii_case(&l.name))) {
+        if !held.iter().any(|h| h.name == l.name) && held.len() < MAX_LEVELS {
+            held.push(l);
+        }
+    }
+    let mut floors: Vec<(&str, f64, bool, usize)> = held
+        .iter()
+        .map(|l| {
+            (
+                l.name.as_str(),
+                l.elevation_ft - base,
+                l.name.eq_ignore_ascii_case(&own.name),
+                sp.levels.iter().position(|x| x.name == l.name).unwrap_or(0),
+            )
+        })
+        .collect();
+    floors.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.cmp(&b.2)).then(b.3.cmp(&a.3)));
+    let mut shared: Vec<(&str, f64)> = Vec::with_capacity(floors.len());
+    for f in floors {
+        match shared.last_mut() {
+            Some(last) if (last.1 - f.1).abs() <= EPS_FT => *last = (f.0, f.1),
+            _ => shared.push((f.0, f.1)),
+        }
+    }
+    let floors = shared;
     let Some(&lowest) = floors.first() else { return one() };
     // The storey a height stands in: the highest floor at or under it, else the lowest level.
     let owner = |z: f64| floors.iter().rev().find(|f| f.1 <= z + EPS_FT).copied().unwrap_or(lowest);
@@ -245,6 +301,61 @@ mod tests {
         let floors: Vec<Vec<String>> = ps.iter().filter_map(|s| s.cut.as_ref()).map(|c| c.floors.clone()).collect();
         assert_eq!(floors, vec![Vec::<String>::new(), vec!["L2".to_string()], vec!["L3".to_string()]]);
         assert!(ps.iter().all(|s| s.run.storey_points.is_empty()));
+    }
+
+    /// Q6453: a stack is cut only at the floors of the storeys whose plan holds it: a mezzanine
+    /// over another part of the building (a partial level) takes no piece of it, one over the
+    /// stack does, a level on another drawing's sheet never; on a tie of heights the stack's own
+    /// level keeps its pieces and the shared floor is passed once.
+    #[test]
+    fn a_stack_is_cut_only_at_the_floors_whose_plan_holds_it() {
+        let mut sp = spec(&[("L1", 0.0), ("Mezz", 9.0), ("L2", 14.0)]);
+        sp.units_per_foot = 1.0;
+        sp.levels[0].region = Some([0.0, 0.0, 100.0, 100.0]);
+        sp.levels[1].region = Some([200.0, 60.0, 240.0, 100.0]);
+        sp.levels[2].region = Some([400.0, 0.0, 500.0, 100.0]);
+        let stack = |level: &str| {
+            let mut r = riser(level, -1.0, 20.0);
+            r.points = vec![[80.0, 80.0]];
+            r
+        };
+        let pieces = |sp: &BuildingSpec| {
+            storey_runs(sp, &stack("L1"))
+                .iter()
+                .map(|s| (s.run.level.clone(), s.run.bottoms_ft[0], s.run.top_ft, s.cut.as_ref().map(|c| c.floors.clone()).unwrap_or_default()))
+                .collect::<Vec<_>>()
+        };
+        // The mezzanine's plan is 40 ft square from the building's corner: the stack at (80, 80) never meets its floor.
+        assert_eq!(
+            pieces(&sp),
+            vec![("L1".to_string(), -1.0, Some(14.0), vec!["L1".to_string()]), ("L2".to_string(), 0.0, Some(6.0), vec!["L2".to_string()])]
+        );
+        // Over the stack (its corner carried to the same building origin): cut at its floor.
+        sp.levels[1].region = Some([200.0, 0.0, 290.0, 90.0]);
+        let got = pieces(&sp);
+        assert_eq!(
+            got.iter().map(|p| (p.0.as_str(), p.1, p.2)).collect::<Vec<_>>(),
+            vec![("L1", -1.0, Some(9.0)), ("Mezz", 0.0, Some(5.0)), ("L2", 0.0, Some(6.0))]
+        );
+        assert_eq!(storey_runs(&sp, &stack("L1"))[1].run.points, vec![[280.0, 80.0]]);
+        // The same mezzanine on a sheet of another drawing: no storey of this building.
+        sp.levels[1].sheet = Some("other.dxf".into());
+        assert_eq!(pieces(&sp).iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), vec!["L1", "L2"]);
+        // A second level at the first's height: the first keeps its piece, one floor passed.
+        let mut sp = spec(&[("L1", 0.0), ("Annex", 0.0), ("L2", 14.0)]);
+        sp.units_per_foot = 1.0;
+        for (i, l) in sp.levels.iter_mut().enumerate() {
+            let x = 200.0 * i as f64;
+            l.region = Some([x, 0.0, x + 100.0, 100.0]);
+        }
+        let got = pieces(&sp);
+        assert_eq!(got.iter().map(|p| (p.0.as_str(), p.1)).collect::<Vec<_>>(), vec![("L1", -1.0), ("L2", 0.0)]);
+        assert_eq!(got[0].3, vec!["L1".to_string()]);
+        // Given on the other level at that height, it keeps that one.
+        let mut annex = stack("Annex");
+        annex.points = vec![[280.0, 80.0]];
+        let ps = storey_runs(&sp, &annex);
+        assert_eq!(ps.iter().map(|s| s.run.level.as_str()).collect::<Vec<_>>(), vec!["Annex", "L2"]);
     }
 
     /// Hostile heights and points are not cut (and do not panic).

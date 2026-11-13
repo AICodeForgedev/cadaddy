@@ -3806,7 +3806,8 @@ enum Cut {
 
 /// Whether end `end` of a feeder's chain `pts` (on `level`; `buried`: the buried raceway's) is
 /// where the model cut its riser (Q6347): a vertical end at a floor it passes (its foot at its
-/// level's floor over a level below, its head at a higher level's floor) or at the slab level's
+/// level's floor over a level below, its head at a higher level's floor; Q6453: the levels whose
+/// plan holds it, [`super::super::risercut::riser_levels`]) or at the slab level's
 /// stub-up top (the underground rules' stub height over the floor). Such an end lands in no gear
 /// or box: it runs on in the next piece.
 fn feeder_cut(sp: &BuildingSpec, level: &str, buried: bool, pts: &[Vec3], end: usize, tol: f64, upf: f64) -> Option<Cut> {
@@ -3820,15 +3821,20 @@ fn feeder_cut(sp: &BuildingSpec, level: &str, buried: bool, pts: &[Vec3], end: u
         return None;
     }
     let up = p.z > q.z;
-    let mut floors = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite());
     if on_slab && stub.is_finite() && near(p.z, (here + stub) * upf) && up == buried {
         return Some(Cut::Stub(buried));
     }
-    if up && floors.any(|f| f > here + 1e-6 && near(p.z, f * upf)) {
+    // Only the floors the riser passes where it stands (Q6453): a mezzanine or partial level
+    // elsewhere at the same height is no floor it was cut at.
+    let floors: Vec<f64> =
+        super::super::risercut::riser_levels(sp, level, [p.x, p.y], &|q, from, to| super::super::gearbuild::feeder_carry(sp, q, from, to))
+            .into_iter()
+            .map(|l| l.elevation_ft)
+            .collect();
+    if up && floors.iter().any(|f| *f > here + 1e-6 && near(p.z, f * upf)) {
         return Some(Cut::Floor(true));
     }
-    (!up && !on_slab && sp.levels.iter().any(|l| l.elevation_ft.is_finite() && l.elevation_ft < here - 1e-6) && near(p.z, here * upf))
-        .then_some(Cut::Floor(false))
+    (!up && !on_slab && floors.iter().any(|f| *f < here - 1e-6) && near(p.z, here * upf)).then_some(Cut::Floor(false))
 }
 
 /// The joints of a feeder chain's cut ends (`cut`, from [`feeder_cut`]; the buried piece's
