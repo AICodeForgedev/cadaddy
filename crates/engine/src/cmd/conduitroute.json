@@ -153,6 +153,8 @@
     "truss_chord_in": 3.5,
     "bored_item": "Bored hole through I-joist web",
     "truss_item": "Raceway through truss web (no bore)",
+    "rim_bored_item": "Bored hole through rim board",
+    "sawn_bored_item": "Bored hole through sawn joist",
     "source": "company default from the I-joist makers' published web-hole rules (holes in the web only, flanges never cut or drilled, 1/8 in of web kept above and below a hole, the bigger the hole the farther from the bearing, holes apart by twice the larger one); a hole is the trade size plus 3/8 in; the joist submittal's own hole chart overrides (project rule); truss chords are never bored, raceway passes between them"
   },
   "entry": {

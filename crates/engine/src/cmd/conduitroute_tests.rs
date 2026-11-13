@@ -293,7 +293,7 @@ fn joisted(truss: bool) -> Field {
                     system: "11 7/8\" I-joist".into(),
                     trade: "framing",
                 },
-                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 2.5, truss },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 2.5, kind: if truss { FrameKind::Truss } else { FrameKind::IJoist } },
             )
         })
         .collect();
@@ -362,6 +362,88 @@ fn a_truss_is_passed_between_its_chords_never_bored() {
     assert!(pass.iter().all(|h| h.dia_in == 0.0));
 }
 
+/// Q6622: [`joisted`] with a rim board along x at the joists' end (y = 240), 1 1/4" thick, the
+/// joists' depth (112" to 124"), and (`sawn`) the joists 2x sawn lumber 9 1/4" deep.
+fn rimmed(sawn: bool) -> Field {
+    let (top, kind) = if sawn { (121.25, FrameKind::SawnJoist) } else { (124.0, FrameKind::IJoist) };
+    let mut members: Vec<(Obs, Frame)> = (0..=10)
+        .map(|k| {
+            let x = 24.0 * f64::from(k);
+            (
+                Obs {
+                    handle: Handle(0x55),
+                    lo: Vec3::new(x - 0.75, -240.0, 112.0),
+                    hi: Vec3::new(x + 0.75, 240.0, top),
+                    category: FRAMING.into(),
+                    system: "joist".into(),
+                    trade: "framing",
+                },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, kind },
+            )
+        })
+        .collect();
+    members.push((
+        Obs {
+            handle: Handle(0x56),
+            lo: Vec3::new(-12.0, 239.375, 112.0),
+            hi: Vec3::new(252.0, 240.625, top),
+            category: FRAMING.into(),
+            system: "rim board".into(),
+            trade: "framing",
+        },
+        Frame { a: Vec2::new(-12.0, 240.0), b: Vec2::new(252.0, 240.0), t: 1.25, kind: FrameKind::Rim },
+    ));
+    Field::with_framing(Vec::new(), members, UPF)
+}
+
+#[test]
+fn a_rim_board_is_bored_only_by_its_rule_and_never_run_along() {
+    let field = rimmed(false);
+    // Out across the rim in the bay at x = 12: a 1-1/8" hole in its middle is within a third of
+    // its 12" depth and 1" off its edges.
+    let (a, b) = (Vec2::new(12.0, 200.0), Vec2::new(12.0, 280.0));
+    let holes = field.framing(a, b, 118.0, 0.375, UPF, rules()).expect("through the rim's middle");
+    assert_eq!(holes.len(), 1, "{holes:?}");
+    assert_eq!(holes[0].kind, FrameKind::Rim);
+    assert_eq!(rules().framing.item(holes[0].kind, holes[0].dia_in), "Bored hole through rim board");
+    // Too near its bottom edge (the hole's bottom at 112.94", 1" asks 113"); a 4" raceway's
+    // 4-3/8" hole is over a third of its depth.
+    assert!(matches!(field.framing(a, b, 113.5, 0.375, UPF, rules()), Err((_, EDGE))));
+    assert!(matches!(field.framing(a, b, 118.0, 2.0, UPF, rules()), Err((_, TOO_BIG))));
+    // Along the rim, inside it: stopped; the router keeps the run in the bays, off the rim.
+    let along = field.framing(Vec2::new(26.0, 240.0), Vec2::new(46.0, 240.0), 118.0, 0.375, UPF, rules());
+    assert!(matches!(along, Err((_, IN_JOIST))), "{along:?}");
+    // The bays beside a point by the rim are the joists' (the rim is no bay's side).
+    let (n, bays) = field.bays_near(Vec2::new(30.0, 236.0), UPF).expect("bays");
+    assert!(n.y.abs() < 1e-9 && bays.iter().all(|c| ((c - 12.0) % 24.0).abs() < 1e-6), "{n:?} {bays:?}");
+    // A run between two points beside the rim is routed clear of it.
+    let leg = route_leg(Vec2::new(30.0, 236.0), Vec2::new(200.0, 236.0), &[118.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    for (w, z) in leg.pts.windows(2).zip(&leg.z) {
+        let [p, q] = w else { continue };
+        assert!(field.framing(*p, *q, *z, 0.375, UPF, rules()).is_ok(), "{leg:?}");
+    }
+}
+
+#[test]
+fn a_sawn_joist_is_bored_by_its_own_rule_not_the_i_joists() {
+    // 2x10 (9 1/4"): a third is 3.08"; 2" off its edges (114" to 119.25").
+    let field = rimmed(true);
+    let (a, b) = (Vec2::new(12.0, 0.0), Vec2::new(60.0, 0.0));
+    let holes = field.framing(a, b, 116.625, 0.375, UPF, rules()).expect("its middle");
+    assert_eq!(holes.len(), 2);
+    assert!(holes.iter().all(|h| h.kind == FrameKind::SawnJoist));
+    assert_eq!(rules().framing.item(FrameKind::SawnJoist, 1.125), "Bored hole through sawn joist");
+    // 1-5/8" in from its bottom: an I-joist's web takes it, a sawn joist's 2" edge rule does not.
+    assert!(matches!(field.framing(a, b, 114.2, 0.375, UPF, rules()), Err((_, EDGE))));
+    assert!(matches!(field.framing(a, b, 116.625, 1.5, UPF, rules()), Err((_, TOO_BIG))));
+    // The kinds are read by the words bim.clash reads them by.
+    assert_eq!(FrameKind::of("joist", "2x10 joist"), FrameKind::SawnJoist);
+    assert_eq!(FrameKind::of("joist", "11 7/8\" I-joist"), FrameKind::IJoist);
+    assert_eq!(FrameKind::of("joist", "floor truss"), FrameKind::Truss);
+    assert_eq!(FrameKind::of("rim", "11 7/8\" rim board"), FrameKind::Rim);
+}
+
 /// Q6314: a top floor's run across the roof trusses, a few feet in from their ends, goes up
 /// between the chords and straight across: a pass through an open web bores nothing, so it is
 /// no labor, and the run never goes round the trusses' ends (past the walls they bear on).
@@ -380,7 +462,7 @@ fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
                     system: "roof truss".into(),
                     trade: "framing",
                 },
-                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, truss: true },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, kind: FrameKind::Truss },
             )
         })
         .collect();
@@ -397,9 +479,9 @@ fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
 #[test]
 fn hostile_framing_never_panics() {
     let bad = vec![
-        (duct(f64::NAN, 0.0, 1.0, 1.0, 0.0, 1.0), Frame { a: Vec2::new(f64::NAN, 0.0), b: Vec2::new(1.0, 1.0), t: 1.0, truss: false }),
-        (duct(-1e18, -1e18, 1e18, 1e18, 0.0, 1.0), Frame { a: Vec2::new(-1e18, 0.0), b: Vec2::new(1e18, 0.0), t: 1e9, truss: false }),
-        (duct(0.0, 0.0, 0.0, 0.0, 0.0, 1.0), Frame { a: Vec2::new(0.0, 0.0), b: Vec2::new(0.0, 0.0), t: 2.5, truss: true }),
+        (duct(f64::NAN, 0.0, 1.0, 1.0, 0.0, 1.0), Frame { a: Vec2::new(f64::NAN, 0.0), b: Vec2::new(1.0, 1.0), t: 1.0, kind: FrameKind::IJoist }),
+        (duct(-1e18, -1e18, 1e18, 1e18, 0.0, 1.0), Frame { a: Vec2::new(-1e18, 0.0), b: Vec2::new(1e18, 0.0), t: 1e9, kind: FrameKind::IJoist }),
+        (duct(0.0, 0.0, 0.0, 0.0, 0.0, 1.0), Frame { a: Vec2::new(0.0, 0.0), b: Vec2::new(0.0, 0.0), t: 2.5, kind: FrameKind::Truss }),
     ];
     let field = Field::with_framing(Vec::new(), bad, UPF);
     let _ = field.framing(Vec2::new(0.0, 0.0), Vec2::new(1e300, 0.0), 0.5, 0.375, UPF, rules());
@@ -823,6 +905,7 @@ fn hole(member: usize, along_in: f64, raceway_in: f64, end_ft: f64) -> Bored {
         raceway_in,
         end_ft,
         design: String::new(),
+        kind: FrameKind::IJoist,
     }
 }
 

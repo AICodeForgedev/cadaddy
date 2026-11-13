@@ -393,10 +393,23 @@ pub(crate) struct FramingRules {
     pub truss_chord_in: f64,
     pub bored_item: String,
     pub truss_item: String,
+    /// The bored hole through a rim board and through a sawn joist (Q6622).
+    pub rim_bored_item: String,
+    pub sawn_bored_item: String,
     pub source: String,
 }
 
 impl FramingRules {
+    /// The takeoff item of a hole of `dia_in` through a member of `kind` (0: a pass through a
+    /// truss's web).
+    pub(crate) fn item(&self, kind: FrameKind, dia_in: f64) -> String {
+        match kind {
+            _ if dia_in <= 0.0 => self.truss_item.clone(),
+            FrameKind::Rim if !self.rim_bored_item.is_empty() => self.rim_bored_item.clone(),
+            FrameKind::SawnJoist if !self.sawn_bored_item.is_empty() => self.sawn_bored_item.clone(),
+            _ => self.bored_item.clone(),
+        }
+    }
     /// The least distance from a joist's end a hole of `dia_in` is bored at (ft); none: too big.
     pub(crate) fn min_end(&self, dia_in: f64) -> Option<f64> {
         self.min_end_ft.iter().find(|r| dia_in <= r[0] + 1e-9).map(|r| r[1].max(0.0))
@@ -599,13 +612,41 @@ pub(crate) struct Obs {
 /// The category the framing's members (joists, trusses) are among a level's obstacles as.
 pub(crate) const FRAMING: &str = "framing";
 
-/// A framing member over a level: its centreline, width and whether it is a truss (never bored).
+/// A framing member over a level: its centreline, width and what it is for its hole rules.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Frame {
     pub a: Vec2,
     pub b: Vec2,
     pub t: f64,
-    pub truss: bool,
+    pub kind: FrameKind,
+}
+
+/// What a framing member is for the router's hole rules (as `bim.clash` judges it, Q6622).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameKind {
+    /// An engineered I-joist: a hole in its web's hole zone, far enough from the bearing.
+    IJoist,
+    /// A sawn lumber joist: a hole up to a part of its depth, kept off its edges.
+    SawnJoist,
+    /// A truss: through its open web between the chords, never bored.
+    Truss,
+    /// A rim board round the floor's edge: a hole up to a part of its depth, kept off its edges;
+    /// a run along it is inside it.
+    Rim,
+}
+
+impl FrameKind {
+    /// The kind of the trades' framing piece `piece` (`joist`, `truss`, `rim`) of item `item`,
+    /// by the words `bim.clash` reads it by.
+    pub(crate) fn of(piece: &str, item: &str) -> FrameKind {
+        use super::bimwork::framing::Kind;
+        match super::bimwork::framing::kind_of(piece, item) {
+            Kind::Truss => FrameKind::Truss,
+            Kind::SawnJoist => FrameKind::SawnJoist,
+            Kind::Rim => FrameKind::Rim,
+            _ => FrameKind::IJoist,
+        }
+    }
 }
 
 /// A raceway's way through a framing member: a hole bored in a joist's web, or a pass between a
@@ -621,6 +662,7 @@ pub(crate) struct Hole {
     /// Along the member from its start (sheet units), and to its nearer end (ft).
     pub along: f64,
     pub end_ft: f64,
+    pub kind: FrameKind,
 }
 
 /// Why the framing stops a piece.
@@ -629,6 +671,7 @@ pub(crate) const FLANGE: &str = "the hole would cut a flange (outside the web's 
 pub(crate) const NEAR_END: &str = "the hole is too near the member's bearing";
 pub(crate) const TOO_BIG: &str = "the hole is bigger than the web takes";
 pub(crate) const CHORD: &str = "it would bore a truss chord";
+pub(crate) const EDGE: &str = "the hole would be too near the member's top or bottom edge";
 
 /// The distance from `p` to the segment `a`–`b`.
 fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
@@ -858,12 +901,31 @@ impl Field {
                         continue;
                     }
                     let end_ft = along.min(mlen - along) / upf;
-                    if f.truss {
+                    let kind = f.kind;
+                    if kind == FrameKind::Truss {
                         let chord = fr.truss_chord_in.max(0.0) / 12.0 * upf;
                         if z - r < o.lo.z + chord || z + r > o.hi.z - chord {
                             halt(t, i, CHORD);
                         } else {
-                            holes.push((t, Hole { obstacle: i, at: p, z, dia_in: 0.0, along, end_ft }));
+                            holes.push((t, Hole { obstacle: i, at: p, z, dia_in: 0.0, along, end_ft, kind }));
+                        }
+                        continue;
+                    }
+                    // A rim board or a sawn joist: a hole up to its part of the depth, kept off
+                    // its edges (the rules `bim.clash` judges it by, framing.json).
+                    if matches!(kind, FrameKind::Rim | FrameKind::SawnJoist) {
+                        let hr = super::bimwork::framing::rules();
+                        let b = if kind == FrameKind::Rim { &hr.rim } else { &hr.sawn_joist };
+                        let dia_in = size_in + b.hole_over_in.max(0.0);
+                        let half = dia_in / 24.0 * upf;
+                        let edge = b.edge_in.max(0.0) / 12.0 * upf;
+                        let depth_in = (o.hi.z - o.lo.z).max(0.0) / upf * 12.0;
+                        if dia_in > depth_in * b.max_frac.max(0.0) + 1e-6 {
+                            halt(t, i, TOO_BIG);
+                        } else if z - half < o.lo.z + edge - 1e-9 || z + half > o.hi.z - edge + 1e-9 {
+                            halt(t, i, EDGE);
+                        } else {
+                            holes.push((t, Hole { obstacle: i, at: p, z, dia_in, along, end_ft, kind }));
                         }
                         continue;
                     }
@@ -874,7 +936,7 @@ impl Field {
                         None => halt(t, i, TOO_BIG),
                         Some(_) if z - half < o.lo.z + keep || z + half > o.hi.z - keep => halt(t, i, FLANGE),
                         Some(need) if end_ft < need => halt(t, i, NEAR_END),
-                        Some(_) => holes.push((t, Hole { obstacle: i, at: p, z, dia_in, along, end_ft })),
+                        Some(_) => holes.push((t, Hole { obstacle: i, at: p, z, dia_in, along, end_ft, kind })),
                     }
                 }
             }
@@ -901,7 +963,9 @@ impl Field {
         for x in x0..=x1 {
             for y in y0..=y1 {
                 for &i in self.grid.get(&(x, y)).into_iter().flatten() {
+                    // The bays are between the joists or trusses (a rim board edges the floor).
                     if let Some(f) = self.frames.get(&i)
+                        && f.kind != FrameKind::Rim
                         && seen.insert(i)
                         && seg_dist(p, f.a, f.b) <= reach
                     {
@@ -2739,7 +2803,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 let hi = Vec3::new(pa.x.max(pb.x).max(pc.x).max(pd.x), pa.y.max(pb.y).max(pc.y).max(pd.y), m.z1);
                 list.push((
                     Obs { handle: m.host, lo, hi, category: FRAMING.into(), system: m.item.clone(), trade: "framing" },
-                    Frame { a, b, t: m.t, truss: m.kind == "truss" },
+                    Frame { a, b, t: m.t, kind: FrameKind::of(m.kind, &m.item) },
                 ));
             }
         }
@@ -5082,6 +5146,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let framing_report = json!({
         "levels_framed": framed_levels,
         "members": members.len(),
+        "members_by_kind": members.iter().fold(BTreeMap::<&str, usize>::new(), |mut m, x| {
+            *m.entry(x.kind).or_default() += 1;
+            m
+        }),
         "members_source": member_source,
         "bored_holes": bored.iter().filter(|h| h.dia_in > 0.0).count(),
         "truss_passes": bored.iter().filter(|h| h.dia_in <= 0.0).count(),
@@ -5101,7 +5169,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 "level": h.level, "circuit": h.circuit, "member": h.member, "floor": h.host.hex(),
                 "hole_in": r3(h.dia_in), "raceway_in": h.raceway_in, "end_ft": r2(h.end_ft),
                 "at": [r2(h.at.x), r2(h.at.y), r2((h.z - floor) / upf)],
-                "item": if h.dia_in > 0.0 { rl.framing.bored_item.clone() } else { rl.framing.truss_item.clone() },
+                "item": rl.framing.item(h.kind, h.dia_in),
                 "design": if h.design.is_empty() { Value::Null } else { json!(h.design) },
             })
         })
@@ -5456,6 +5524,7 @@ struct Bored {
     end_ft: f64,
     /// A hole bored for two raceways (Q6216): the design's two holes it stands for.
     design: String,
+    kind: FrameKind,
 }
 
 /// Two holes of one member closer than the hole rule allows (edge to edge, in the web's plane).
@@ -5557,6 +5626,7 @@ fn bore(out: &mut Vec<Bored>, field: &Field, leg: &Leg, circuit: &str, level: &s
                         raceway_in: size_in,
                         design: String::new(),
                         end_ft: h.end_ft,
+                        kind: h.kind,
                     });
                 }
             }

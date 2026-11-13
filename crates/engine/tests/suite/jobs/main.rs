@@ -93,6 +93,7 @@ mod roofframing;
 mod room_number_prop;
 mod rooms3d;
 mod roomsmodel;
+mod routerframing;
 mod routeunbuilt;
 mod rulemodel;
 mod schedule_doors;

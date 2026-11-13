@@ -388,17 +388,29 @@ impl FramingCtx {
         }
     }
 
-    /// The verdict on `r` (moved by `shift`) through member `m`.
+    /// The verdict on `r` (moved by `shift`) through member `m`: by each straight part of `r`
+    /// that goes into the member (a bent stick's leg, a wire's segment; Q6622), the first that
+    /// breaks the member's rules; none goes in: by the whole of `r`.
     fn judge(&self, d: &Drawing, m: &El, r: &El, shift: Vec3) -> (framing::Member, framing::Verdict) {
         let mem = framing::member(d, m, &self.bearing);
-        let v = framing::judge(
-            &mem,
-            &framing::axes(d, m),
-            &r.category,
-            &framing::axes(d, r).shifted(shift),
-            self.inch,
-            &crate::cmd::conduitroute::rules().framing,
-        );
+        let ma = framing::axes(d, m);
+        let fr = &crate::cmd::conduitroute::rules().framing;
+        let into = |lo: Vec3, hi: Vec3| {
+            let eps = self.inch / 64.0;
+            lo.x < m.hi.x - eps && m.lo.x < hi.x - eps && lo.y < m.hi.y - eps && m.lo.y < hi.y - eps && lo.z < m.hi.z - eps && m.lo.z < hi.z - eps
+        };
+        let mut allowed: Option<framing::Verdict> = None;
+        for (ax, lo, hi) in framing::parts(d, r) {
+            if !into(lo + shift, hi + shift) {
+                continue;
+            }
+            let v = framing::judge(&mem, &ma, &r.category, &ax.shifted(shift), self.inch, fr);
+            if !v.allowed {
+                return (mem, v);
+            }
+            allowed.get_or_insert(v);
+        }
+        let v = allowed.unwrap_or_else(|| framing::judge(&mem, &ma, &r.category, &framing::axes(d, r).shifted(shift), self.inch, fr));
         (mem, v)
     }
 }
