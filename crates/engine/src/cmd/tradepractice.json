@@ -392,6 +392,25 @@
       "reach_ft": 15.0,
       "tolerance_in": 12.0,
       "clear_in": 1.0
+    },
+    {
+      "id": "A-DOOR-AT-SCHEDULE-TAG",
+      "trade": "architectural",
+      "fills": "a door the door schedule lists and a plan tags where the plan draws no opening (a counter shutter over a counter top, an overhead coiling or sliding door drawn as a dashed line, a door left out of a wall drawn through): the door built at its tag, cut into the wall that holds it there (else set on the nearest line drawn there, a counter's edge or the shutter's line), at the schedule's size, its sill and head and how it opens from the schedule's words, else from its size (numbers: reach_ft, how far from its tag a door's wall or line may be; connect_reach_ft, a door built this close to a tag is that tag's; passage_min_height_in, the lowest a door people walk through is (IBC 1010.1.1: door openings 80 in clear high): a scheduled door lower than that is an opening over a counter or sill; counter_sill_in, the counter top such an opening closes onto when the schedule gives no sill; max_leaf_in, the widest one swinging leaf is (IBC 1010.1.1: 48 in), a wider door is a pair, or a coiling shutter over a counter; default_width_in, a door row with no width; operation_words, the words of a door's type or frame that say how it opens; counter_words, the words that put it over a counter)",
+      "basis": "trade practice: every opening the door schedule lists is installed whether or not the plan breaks the wall for it; the installer hangs it at its tag, at the scheduled size; a counter shutter coils above the opening and closes onto the counter top (a standing-height transaction counter, 42 in; an accessible 36 in counter is the alternative, ADA 904.4), and a door wider than one leaf is a pair",
+      "reach_ft": 4.0,
+      "connect_reach_ft": 6.0,
+      "passage_min_height_in": 80.0,
+      "counter_sill_in": 42.0,
+      "max_leaf_in": 48.0,
+      "default_width_in": 36.0,
+      "operation_words": {
+        "rolling": ["ROLLING", "COILING", "ROLL UP", "ROLLUP", "OVERHEAD", "SHUTTER", "GRILLE"],
+        "sliding": ["SLIDING", "SLIDER", "POCKET", "BYPASS", "BARN"],
+        "folding": ["FOLDING", "BIFOLD", "BI FOLD", "ACCORDION"],
+        "pair": ["PAIR", "PR", "DOUBLE", "2 LEAVES"]
+      },
+      "counter_words": ["COUNTER", "TRANSACTION", "PASS THROUGH", "SERVICE WINDOW"]
     }
   ]
 }

@@ -806,6 +806,11 @@ fn rows_the_stored_schedule_lacks_are_read_again_off_the_drawn_schedule() {
 /// A gridded wire-length table drawn on the drawing, far from the building: 20 A / 120 V
 /// circuits take #12 to 50 ft, #10 to 100 ft, #8 to 150 ft, #6 to 250 ft.
 fn drawn_length_table(s: &mut Session) {
+    drawn_length_table_of(s, &[("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")]);
+}
+
+/// A gridded wire-length table of six columns (header, first row each), far from the building.
+fn drawn_length_table_of(s: &mut Session, cols: &[(&str, &str); 6]) {
     let (x0, y0) = (3000.0, -200.0);
     text_at(s, [x0 + 10.0, y0 + 10.0], "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE", 2.0);
     let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
@@ -817,9 +822,7 @@ fn drawn_length_table(s: &mut Session) {
     for xx in [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0] {
         line(s, [x0 + xx, y0 + 7.0], [x0 + xx, y0 - 3.0]);
     }
-    for (i, (hd, row)) in
-        [("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")].iter().enumerate()
-    {
+    for (i, (hd, row)) in cols.iter().enumerate() {
         let x = x0 + 2.0 + 20.0 * i as f64;
         text_at(s, [x, y0 + 4.0], hd, 1.5);
         text_at(s, [x, y0 - 1.0], row, 1.5);
@@ -864,6 +867,22 @@ fn the_drawings_wire_length_table_decides_the_conductor_before_the_three_percent
 }
 
 #[test]
+fn a_length_tables_column_past_two_ought_is_chosen_not_read_as_past_the_tables_reach() {
+    // Q6456: the table's sizes run past 2/0 (the voltage-drop calculation's largest). LP1-5,
+    // over 150 ft, is covered only by the #3/0 column: the table asks #3/0, it is not "longer
+    // than the table reaches".
+    let mut s = building(Some(20), |_| {});
+    drawn_length_table_of(&mut s, &[("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#1/0", "100'"), ("#2/0", "150'"), ("#3/0", "260'"), ("#4/0", "300'")]);
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = of(&fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == "LP1-5").cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 150.0 && l <= 260.0), "{far}");
+    assert_eq!(far["measured"]["needed"], "#3/0", "{far}");
+    assert!(!far["issue"].as_str().unwrap_or_default().contains("reaches"), "{far}");
+    let conductor = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+    assert_eq!(far["verdict"], if conductor == "#3/0" || conductor == "#4/0" { "pass" } else { "fail" }, "{far}");
+}
+
+#[test]
 fn a_typical_panels_copies_each_judge_only_their_own_circuit() {
     // Q6338: a panel there is one of per unit (LP1, typical of 2: copies LP1-A and LP1-B), each
     // copy's circuit 1 in its own end of the building. Each copy's voltage drop is its own
@@ -902,4 +921,112 @@ fn a_typical_panels_copies_each_judge_only_their_own_circuit() {
         let near_a = f["measured"]["panel"] == "LP1-A";
         assert!(if near_a { at < 70.0 } else { at > 70.0 }, "{f}");
     }
+}
+
+/// A gridded wire-length table drawn far from the building: `headers` across the top, one
+/// row per conductor size (`#12 | 100' | 230'`), a column per voltage.
+fn drawn_volts_table(s: &mut Session, headers: &[&str], rows: &[Vec<String>]) {
+    let (x0, y0) = (3000.0, -400.0);
+    let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
+        s.execute("line", &json!({"points": [a, b]})).expect("line");
+    };
+    let w = 20.0 * headers.len() as f64;
+    let bottom = 2.0 - 5.0 * rows.len() as f64;
+    text_at(s, [x0 + 10.0, y0 + 10.0], "WIRE LENGTH TABLE", 2.0);
+    for i in 0..=rows.len() + 1 {
+        let yy = 7.0 - 5.0 * i as f64;
+        line(s, [x0, y0 + yy], [x0 + w, y0 + yy]);
+    }
+    for i in 0..=headers.len() {
+        let xx = 20.0 * i as f64;
+        line(s, [x0 + xx, y0 + 7.0], [x0 + xx, y0 + bottom]);
+    }
+    for (i, h) in headers.iter().enumerate() {
+        text_at(s, [x0 + 2.0 + 20.0 * i as f64, y0 + 4.0], h, 1.5);
+    }
+    for (r, row) in rows.iter().enumerate() {
+        for (i, c) in row.iter().enumerate() {
+            text_at(s, [x0 + 2.0 + 20.0 * i as f64, y0 - 1.0 - 5.0 * r as f64], c, 1.5);
+        }
+    }
+}
+
+fn vdrop_of(fs: &[Value], circuit: &str) -> Value {
+    of(fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == circuit).cloned().unwrap_or_default()
+}
+
+const SIZE_STEPS: [&str; 9] = ["#14", "#12", "#10", "#8", "#6", "#4", "#3", "#2", "#1"];
+
+fn feet(v: f64) -> String {
+    format!("{:.0}'", v.max(1.0))
+}
+
+#[test]
+fn a_length_tables_row_is_never_picked_at_an_assumed_voltage() {
+    // Q6460: a table by voltage only (120 V and 277 V columns) and a panel with no schedule:
+    // the circuits' breakers, poles and voltage aren't read. The 120 V column asks the next
+    // size up for the far circuit and the 277 V column keeps its own: which one applies isn't
+    // known, so no row may be chosen (unsure), never a pass or fail off the 120 V column.
+    let mut s = building(None, |_| {});
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = vdrop_of(&fs, "LP1-5");
+    let l = far["measured"]["length_ft"].as_f64().unwrap_or_default();
+    let have = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+    let k = SIZE_STEPS.iter().position(|x| *x == have).unwrap_or(1);
+    let up = SIZE_STEPS.get(k + 1).copied().unwrap_or("#1");
+    assert!(l > 20.0, "{far}");
+    drawn_volts_table(
+        &mut s,
+        &["CONDUCTOR", "120V", "277V"],
+        &[vec![have.clone(), feet(l - 15.0), feet(l + 80.0)], vec![up.to_string(), feet(l + 40.0), feet(l + 200.0)]],
+    );
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = vdrop_of(&fs, "LP1-5");
+    assert_eq!(far["verdict"], "unsure", "a row picked at an assumed voltage: {far}");
+    assert!(far["measured"].get("needed").is_none(), "{far}");
+    let why = far["measured"]["table_not_used"].as_str().unwrap_or_default();
+    assert!(why.contains("WIRE LENGTH") && why.contains("voltage isn't known"), "the table is read, and why it isn't used: {far}");
+    for f in of(&fs, "E-VDROP") {
+        assert_eq!(f["verdict"], "unsure", "no schedule: no breaker, no voltage: {f}");
+        assert!(f["measured"].get("needed").is_none(), "{f}");
+    }
+}
+
+#[test]
+fn a_circuit_whose_breaker_isnt_read_takes_a_table_row_only_where_both_its_panels_voltages_agree() {
+    // Q6460: LP1 is 120/208 V, but circuit 5's schedule row isn't read: one pole (120 V) or two
+    // (208 V) isn't known. Where the table's 120 V and 208 V columns ask the same size the
+    // answer stands; where they differ it is unsure.
+    let run = |table: &dyn Fn(f64, &str, &str) -> Vec<Vec<String>>| -> (Value, String, String) {
+        let mut s = building(Some(20), |_| {});
+        with_spec(&mut s, |sp| {
+            if let Some(c) = sp["mep"]["panel_schedules"][0]["circuits"].as_array_mut() {
+                c.truncate(2);
+            }
+        });
+        let (_, fs) = screen(&mut s, &["E-VDROP"]);
+        let far = vdrop_of(&fs, "LP1-5");
+        let l = far["measured"]["length_ft"].as_f64().unwrap_or_default();
+        assert!(l > 20.0, "{far}");
+        let have = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+        let k = SIZE_STEPS.iter().position(|x| *x == have).unwrap_or(1);
+        let up = SIZE_STEPS.get(k + 1).copied().unwrap_or("#1").to_string();
+        drawn_volts_table(&mut s, &["CONDUCTOR", "120V", "208V"], &table(l, &have, &up));
+        let (_, fs) = screen(&mut s, &["E-VDROP"]);
+        (vdrop_of(&fs, "LP1-5"), have, up)
+    };
+    // Both columns keep its conductor: a pass, at either voltage.
+    let (agree, have, _) =
+        run(&|l, have, up| vec![vec![have.into(), feet(l + 50.0), feet(l + 100.0)], vec![up.into(), feet(l + 150.0), feet(l + 250.0)]]);
+    assert_eq!(agree["verdict"], "pass", "{agree}");
+    assert_eq!(agree["measured"]["needed"].as_str(), Some(have.as_str()), "{agree}");
+    assert_eq!(agree["measured"]["volts_either"], json!([120.0, 208.0]), "{agree}");
+    assert!(agree["measured"].get("volts").is_none(), "no one voltage was read: {agree}");
+    // 120 V asks the next size up, 208 V keeps it: unsure, never a fail off the 120 V column.
+    let (differ, _, _) =
+        run(&|l, have, up| vec![vec![have.into(), feet(l - 15.0), feet(l + 100.0)], vec![up.into(), feet(l + 150.0), feet(l + 250.0)]]);
+    assert_eq!(differ["verdict"], "unsure", "{differ}");
+    assert!(differ["measured"].get("needed").is_none(), "{differ}");
+    let why = differ["measured"]["table_not_used"].as_str().unwrap_or_default();
+    assert!(why.contains("120") && why.contains("208"), "{differ}");
 }
