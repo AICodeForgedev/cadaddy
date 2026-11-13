@@ -75,7 +75,14 @@ fn light(d: &mut Drawing, level: &str, room: &str, x: f64, y: f64) -> Handle {
         level,
         "E-LITE",
         [x, y, z],
-        &[p("room", room), p("circuit", "LP1-1"), p("type_mark", "A"), sched("schedule_row", "A DOWNLIGHT"), p("controlled_by", "S1"), p("sheet", "E-101")],
+        &[
+            p("room", room),
+            p("circuit", "LP1-1"),
+            p("type_mark", "A"),
+            sched("schedule_row", "A DOWNLIGHT"),
+            p("controlled_by", "S1"),
+            p("sheet", "E-101"),
+        ],
     )
 }
 
@@ -131,18 +138,29 @@ fn model(plant: bool) -> (Session, Option<Planted>) {
         heat_pump: el(&mut d, "equipment", "L2", "M-EQPM", [60.0, 20.0, 10.0], &[p("type_mark", "HP-8")]),
         unfed_panel: el(&mut d, "equipment", "L2", "E-EQPM", [50.0, 0.0, 10.0], &[p("tag", "LP3"), sched("bus_amps", "100"), sched("main", "MLO")]),
         // A fan whose circuit only a rule gave.
-        assumed_fan: el(&mut d, "equipment", "L2", "M-EQPM", [24.0, 20.0, 10.0], &[p("type_mark", "EF-8"), p("room", "201"), rule("circuit", "LP2-9")]),
+        assumed_fan: el(
+            &mut d,
+            "equipment",
+            "L2",
+            "M-EQPM",
+            [24.0, 20.0, 10.0],
+            &[p("type_mark", "EF-8"), p("room", "201"), rule("circuit", "LP2-9")],
+        ),
     });
-    let mut sp = BuildingSpec::default();
-    sp.levels = vec![
-        serde_json::from_value(json!({"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0})).unwrap(),
-        serde_json::from_value(json!({"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0})).unwrap(),
-    ];
+    let mut sp = BuildingSpec {
+        levels: vec![
+            serde_json::from_value(json!({"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0})).unwrap(),
+            serde_json::from_value(json!({"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0})).unwrap(),
+        ],
+        ..BuildingSpec::default()
+    };
     // The schedules: what the fans and heat pumps are; the feeder schedule reaches LP2.
     for (tag, kind) in [("EF-9", "exhaust_fan"), ("EF-8", "exhaust_fan"), ("HP-9", "heat_pump"), ("HP-8", "heat_pump")] {
         sp.mep.equipment.push(
-            serde_json::from_value(json!({"tag": tag, "kind": kind, "level": "L2", "min": [0.0, 0.0], "max": [12.0, 12.0], "bottom_ft": 0.0, "height_ft": 3.0}))
-                .unwrap(),
+            serde_json::from_value(
+                json!({"tag": tag, "kind": kind, "level": "L2", "min": [0.0, 0.0], "max": [12.0, 12.0], "bottom_ft": 0.0, "height_ft": 3.0}),
+            )
+            .unwrap(),
         );
     }
     sp.mep.feeders.push(serde_json::from_value(json!({"tag": "F2", "from": "LP1", "to": "LP2", "sets": 1, "phases": 3})).unwrap());

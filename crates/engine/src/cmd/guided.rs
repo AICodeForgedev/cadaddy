@@ -32686,7 +32686,9 @@ fn inconsistencies(s: &Session, job: &GuidedJob) -> Value {
         .and_then(|st| st.result.as_ref())
         .and_then(|r| r.get("requirements"))
         .cloned()
-        .or_else(|| job.stage(StageName::Devices).is_some_and(|st| st.status == StageStatus::Done).then(|| super::requirements::documents_pass(&job.devices)))
+        .or_else(|| {
+            job.stage(StageName::Devices).is_some_and(|st| st.status == StageStatus::Done).then(|| super::requirements::documents_pass(&job.devices))
+        })
         .unwrap_or(Value::Null);
     let built = super::bspec::current(s, "job").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
     let mut v = match &built {
@@ -32695,7 +32697,8 @@ fn inconsistencies(s: &Session, job: &GuidedJob) -> Value {
     };
     let model_built = job.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
     if model_built && job.requirements.is_none() {
-        v["requirements_note"] = json!("the model was built before its objects were checked against their requirements: rfi.read {apply: true} checks them now");
+        v["requirements_note"] =
+            json!("the model was built before its objects were checked against their requirements: rfi.read {apply: true} checks them now");
     }
     v["levels"] = json!(built.as_ref().map_or(0, |sp| sp.levels.len()));
     v["documents"] = documents;

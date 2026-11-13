@@ -371,8 +371,12 @@ fn propose(rules: &Rules, r: &Requirement, m: &Model, idx: &[usize], i: usize, e
                 .min_by(|a, b| b.2.cmp(&a.2).then(a.3.total_cmp(&b.3)));
             match best {
                 Some((o, (k, v), in_room, d)) => {
-                    let whose = if in_room { format!("its room's {}", r.object) } else { format!("the nearest {} ({:.0} ft)", r.object, d / upf.max(1e-9)) };
-                    (format!("{} {v}, as {whose} {} has from the documents (trade practice: the neighbour's)", k.replace('_', " "), o.label()), Some((k, v)))
+                    let whose =
+                        if in_room { format!("its room's {}", r.object) } else { format!("the nearest {} ({:.0} ft)", r.object, d / upf.max(1e-9)) };
+                    (
+                        format!("{} {v}, as {whose} {} has from the documents (trade practice: the neighbour's)", k.replace('_', " "), o.label()),
+                        Some((k, v)),
+                    )
                 }
                 None => ("none: no object of its kind near it has one from the documents".to_string(), None),
             }
@@ -458,7 +462,8 @@ fn rfi_for(rules: &Rules, r: &Requirement, level: &str, room: &str, open: &[&Ope
         }
     }
     let extent = lo.iter().chain(hi.iter()).all(|v| v.is_finite()).then_some([lo, hi]);
-    let mut rfi = Rfi::new(RfiKind::Requirement, level, open.first().map_or([0.0, 0.0], |o| o.at), format!("{n} {} {place}", r.object), issue, assumed);
+    let mut rfi =
+        Rfi::new(RfiKind::Requirement, level, open.first().map_or([0.0, 0.0], |o| o.at), format!("{n} {} {place}", r.object), issue, assumed);
     rfi.id = stable_id(&r.id, level, room);
     rfi.severity = r.severity();
     rfi.extent = extent;
@@ -501,7 +506,14 @@ pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
                 Met::ByRule(k, v) => {
                     out.by_rule += 1;
                     let note = el.get(k).and_then(|p| p.note.clone()).unwrap_or_default();
-                    (format!("{} {v} as the build assumed it{}", k.replace('_', " "), if note.is_empty() { String::new() } else { format!(" ({note})") }), None)
+                    (
+                        format!(
+                            "{} {v} as the build assumed it{}",
+                            k.replace('_', " "),
+                            if note.is_empty() { String::new() } else { format!(" ({note})") }
+                        ),
+                        None,
+                    )
                 }
                 Met::Missing => {
                     out.missing += 1;
@@ -651,7 +663,11 @@ pub(crate) fn documents_pass(devices: &[super::readers::ReadDevice]) -> Value {
         let mut sample: Vec<String> = Vec::new();
         for d in devices.iter().take(MAX_OBJECTS) {
             let kind = if d.kind.trim().is_empty() { super::readers::device_kind(&d.tag).to_string() } else { d.kind.to_ascii_lowercase() };
-            let fits = if luminaire(&kind) { kinds.iter().any(|k| k == "light_fixture") } else { kinds.iter().any(|k| k == "device") && dks.contains(&kind) };
+            let fits = if luminaire(&kind) {
+                kinds.iter().any(|k| k == "light_fixture")
+            } else {
+                kinds.iter().any(|k| k == "device") && dks.contains(&kind)
+            };
             if !fits {
                 continue;
             }
@@ -664,7 +680,9 @@ pub(crate) fn documents_pass(devices: &[super::readers::ReadDevice]) -> Value {
             }
         }
         let status = if objects == 0 { format!("did not run: no {} read", r.object) } else { "ran".to_string() };
-        checks.push(json!({"id": r.id, "object": r.object, "ran": objects > 0, "status": status, "objects": objects, "missing": missing, "sample": sample}));
+        checks.push(
+            json!({"id": r.id, "object": r.object, "ran": objects > 0, "status": status, "objects": objects, "missing": missing, "sample": sample}),
+        );
     }
     let ran = checks.iter().filter(|c| c["ran"].as_bool() == Some(true)).count();
     let missing: u64 = checks.iter().filter_map(|c| c["missing"].as_u64()).sum();
@@ -724,7 +742,11 @@ pub(crate) fn item_json(r: &Rfi) -> Value {
 pub(crate) fn sort_by_step(list: &mut [Rfi]) {
     let rules = rules();
     list.sort_by(|a, b| {
-        rules.step_order(rules.step_of(a)).cmp(&rules.step_order(rules.step_of(b))).then_with(|| a.severity.cmp(&b.severity)).then_with(|| a.id.cmp(&b.id))
+        rules
+            .step_order(rules.step_of(a))
+            .cmp(&rules.step_order(rules.step_of(b)))
+            .then_with(|| a.severity.cmp(&b.severity))
+            .then_with(|| a.id.cmp(&b.id))
     });
 }
 

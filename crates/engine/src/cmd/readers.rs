@@ -967,11 +967,22 @@ fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     let built = super::bspec::current(s, "rfi.read").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
     let Some(sp) = built else {
         let msg = "no model built from the set yet: the RFIs are what the build raises on each object it cannot complete from the documents; run the guided job (job.start {pdfs}) or build the model (bim.build), then rfi.read lists them";
-        let mut out = json!({"built": false, "counts": {"by_kind": {}, "by_severity": {}, "by_step": {}}, "items": [], "total": 0, "message": msg, "warnings": [msg]});
-        if let Ok(project) = project(s) {
-            out["sheets_read"] = json!(project.sheets.len());
-        }
-        return Ok(out);
+        let out = json!({"built": false, "counts": {"by_kind": {}, "by_severity": {}, "by_step": {}}, "items": [], "total": 0});
+        return Ok(match project(s) {
+            Ok(project) => {
+                let mut out = out;
+                out["sheets_read"] = json!(project.sheets.len());
+                out["message"] = json!(msg);
+                out["warnings"] = json!([msg]);
+                out
+            }
+            // No print set either: how to open one first.
+            Err(_) => {
+                let mut out = no_project("RFIs", out);
+                out["message"] = json!(format!("{msg}; {}", out["message"].as_str().unwrap_or("")));
+                out
+            }
+        });
     };
     let ev = super::requirements::evaluate(s.doc()?, Some(&sp));
     let measured = super::requirements::summary(&ev);
