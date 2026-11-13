@@ -17,7 +17,11 @@
 //! the test has no GPU, so its software canvas paints the visible linework on every frame, where
 //! the GPU canvas keeps its last frame while nothing changes (the GUI benchmark measures that).
 //!
-//! It asserts wall-clock times, so it is a program of its own.
+//! The Plans to Model palette is measured the same way on its own (Q6542): open on a building spec
+//! of tens of thousands of parts, its part of the frame (`panel:plansToModel`) costs about what it
+//! does on a spec of one part, because only the rows on screen are laid out.
+//!
+//! It asserts wall-clock times, so it is a program of its own; its tests take turns.
 
 use cadaddy_engine::Session;
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Line, Mesh, MeshFace, RawTag};
@@ -115,6 +119,9 @@ fn model(n: usize) -> Drawing {
     d
 }
 
+/// The tests take turns: each measures wall-clock times.
+static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn frame(app: &mut CadApp, ctx: &egui::Context) {
     let mut raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
     app.raw_input_hook(&mut raw);
@@ -174,6 +181,7 @@ fn table(name: &str, median: f64, paint: f64, sections: &Value) {
 
 #[test]
 fn a_frame_at_rest_costs_the_same_with_a_large_model_open() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
     let n = std::env::var("FRAMECOST_N").ok().and_then(|v| v.parse().ok()).unwrap_or(120_000);
     let big = model(n);
     assert!(big.model.len() >= n.min(LEVELS * KINDS.len() * SYSTEMS.len() * SIZES * PER_TYPE));
@@ -202,4 +210,56 @@ fn a_frame_at_rest_costs_the_same_with_a_large_model_open() {
         "a frame at rest: {big_ms:.2} ms with the model open, {empty_ms:.2} ms with an empty drawing (limit {limit:.2}); the parts: {}",
         big_sections["costliest"]
     );
+}
+
+/// The Plans to Model palette docked, on a drawing whose building spec has `rooms` rooms (and six
+/// levels): the median of `frames` frames of its own part (`panel:plansToModel`), in ms.
+fn palette_at_rest(rooms: usize, frames: usize) -> f64 {
+    let mut d = Drawing::default();
+    let levels: Vec<Value> =
+        (0..LEVELS).map(|l| json!({"name": format!("Level {}", l + 1), "elevation_ft": l as f64 * 12.0, "height_ft": 12.0})).collect();
+    let rooms: Vec<Value> = (0..rooms)
+        .map(|r| {
+            let l = r % LEVELS;
+            let (x, y) = (((r / LEVELS) % 40) as f64 * 14.0, ((r / LEVELS) / 40) as f64 * 12.0);
+            json!({"name": format!("ROOM {}", r + 1), "number": format!("{}", r + 1), "level": format!("Level {}", l + 1),
+                   "outline": [[x, y], [x + 13.0, y], [x + 13.0, y + 11.0], [x, y + 11.0]], "ceiling_ft": 9.0})
+        })
+        .collect();
+    d.building_spec = Some(json!({"levels": levels, "rooms": rooms}).to_string()).into();
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Job", None);
+    let mut app = CadApp::new(s, Services::default());
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx);
+    for p in [json!({"operation": "pin", "panel": "plansToModel", "pinned": true}), json!({"operation": "open", "panel": "plansToModel"})] {
+        app.run("ui.dock", p.clone()).unwrap_or_else(|e| panic!("ui.dock {p}: {e}"));
+        frame(&mut app, &ctx);
+    }
+    assert!(app.ui.docking.showing(cadaddy_ui_egui::docking::Panel::PlansToModel), "the Plans to Model palette is open");
+    // Settled: the palette has read the spec.
+    for _ in 0..10 {
+        frame(&mut app, &ctx);
+    }
+    framecost::reset();
+    let mut ms: Vec<f64> = (0..frames)
+        .map(|_| {
+            frame(&mut app, &ctx);
+            framecost::report()["lastMs"]["panel:plansToModel"].as_f64().unwrap_or(0.0)
+        })
+        .collect();
+    ms.sort_by(f64::total_cmp);
+    ms.get(ms.len() / 2).copied().unwrap_or(0.0)
+}
+
+#[test]
+fn the_plans_to_model_palette_costs_what_is_on_screen() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let parts = std::env::var("FRAMECOST_PARTS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000);
+    let one = palette_at_rest(1, 30);
+    let many = palette_at_rest(parts, 30);
+    println!("\nPlans to Model palette at rest (median panel:plansToModel): one room {one:.3} ms, {parts} rooms {many:.3} ms");
+    // A few times the one-part spec's at most; below half a millisecond the clock's noise rules.
+    let limit = 4.0 * one.max(0.5);
+    assert!(many <= limit, "the palette's frame: {many:.2} ms on {parts} rooms, {one:.2} ms on one (limit {limit:.2})");
 }

@@ -332,3 +332,38 @@ fn one_ceiling_or_soffit_type_removed_or_edited_leaves_the_others() {
         assert_eq!(status(&h), None, "a real change isn't reported as none");
     }
 }
+
+/// A spec of thousands of parts lays out only the rows on screen (Q6542): the palette holds a few
+/// dozen Edit buttons, not one per part; scrolled to the end it shows the last part, whose Edit
+/// opens that part's own JSON.
+#[test]
+fn a_large_spec_lays_out_only_the_parts_on_screen() {
+    const ROOMS: usize = 3000;
+    let mut h = harness();
+    let rooms: Vec<Value> = (1..=ROOMS).map(|i| json!({"name": format!("Room {i:04}"), "number": format!("{i:04}")})).collect();
+    set(&mut h, json!({ "rooms": rooms }));
+    let s = spec(&mut h);
+    assert_eq!(s["rooms"].as_array().map(Vec::len), Some(ROOMS));
+    let edits = h.get_all_by_label("Edit").count();
+    assert!(edits > 0 && edits < 100, "{edits} Edit buttons laid out for {ROOMS} rooms");
+    // Scroll to the end over the palette's rows.
+    let first = h.get_by_label_contains("Room 0001: ").rect().center();
+    for _ in 0..30 {
+        h.event(egui::Event::PointerMoved(first));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -20_000.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(2);
+    }
+    h.run_steps(12);
+    assert!(h.query_by_label_contains("Room 0001: ").is_none(), "the first room scrolled out of view");
+    let last = format!("Room {ROOMS:04}: ");
+    let edits = h.get_all_by_label("Edit").count();
+    assert!(edits > 0 && edits < 100, "{edits} Edit buttons laid out at the end");
+    let numbered =
+        s["rooms"].as_array().and_then(|r| r.iter().position(|r| r["number"] == format!("{ROOMS:04}"))).unwrap_or_else(|| panic!("no last room"));
+    edit_unchanged(&mut h, &last, &at(&s, &format!("/rooms/{numbered}")));
+}
