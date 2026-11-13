@@ -2634,7 +2634,16 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
     // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
     let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
     // (Where the plans draw them, as the spec's positions are: a rebuild comes after the stacking.)
-    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
+    // A through-wall unit (a PTAC) goes through the outside wall it is drawn against, in its
+    // sleeve (Q6546, M-THROUGH-WALL): the walls, and the floors that say which are outside.
+    let tw = super::throughwall::Rule::load();
+    let through = |e: &cadaddy_walk3d::MepEquipment| !e.round && tw.names(&e.kind);
+    let any_through = sp.mep.equipment.iter().any(|e| through(e) && only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase())));
+    let walls =
+        if sp.mep.equipment.iter().any(|e| panel(&e.kind)) || any_through { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
+    let fps = any_through.then(|| super::propfill::Footprints::of(d, sp));
+    // Each seated unit's sleeve opening, cut in its wall once every unit is built.
+    let mut sleeves: Vec<(super::throughwall::Seat, f64, f64)> = Vec::new();
     for (k, e) in sp.mep.equipment.iter().enumerate().take(MAX_RUNS).filter(|(_, e)| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
@@ -2647,7 +2656,22 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
         let z0 = (level.elevation_ft + on_pad(e)) * upf;
         let z1 = z0 + e.height_ft * upf;
         let mut m = super::wallgen::empty_mesh();
-        let at = equipment_plan(e, &level.name, &walls, upf, z0, z1);
+        let (mut seated, mut review) = (None, None);
+        let at = if through(e) {
+            match super::throughwall::seat(&tw, e, &level.name, &walls, fps.as_ref(), upf, (z0 + z1) * 0.5) {
+                super::throughwall::Seated::In(st) => {
+                    let p = EquipmentPlan { a: st.unit.a, b: st.unit.b, depth: st.unit.depth, face: None };
+                    seated = Some(*st);
+                    p
+                }
+                super::throughwall::Seated::Review(why) => {
+                    review = Some(why);
+                    equipment_plan(e, &level.name, &walls, upf, z0, z1)
+                }
+            }
+        } else {
+            equipment_plan(e, &level.name, &walls, upf, z0, z1)
+        };
         let face = at.face;
         if face.is_none() && e.round {
             add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
@@ -2689,19 +2713,45 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
             None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
             None => {}
         }
-        // An item an edit added: what it is by the documents and why (Q6502).
-        if let Some(made) = e.sources.get("made").and_then(|m| cadaddy_walk3d::Made::parse(m)).filter(|m| !m.is_drawn()) {
-            xdata.extend(super::provenance::tags(made, e.sources.get("basis").map_or("", String::as_str)));
+        // Through its outside wall: its host wall and face, its sleeve, where its place and depth
+        // came from (derived: the plan's place along the wall and the rule).
+        if let Some(st) = &seated {
+            for (k, v) in super::throughwall::seat_props(st, upf) {
+                xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
+            }
         }
-        // What an edit changed on it, the documents' value beside it, and its type mark (Q6502).
-        let mut xdata = super::provenance::with_corrections(xdata, &e.corrections);
+        if let Some(why) = &review {
+            xdata.push(t(1000, cap(format!("prop:PLACEMENT={why}"))));
+        }
+        // An item an edit added: what it is by the documents and why (Q6502).
+        let edited = e.sources.get("made").and_then(|m| cadaddy_walk3d::Made::parse(m)).filter(|m| !m.is_drawn());
+        if let Some(made) = edited {
+            xdata.extend(super::provenance::tags(made, e.sources.get("basis").map_or("", String::as_str)));
+        } else if seated.is_some() {
+            // Drawn, its place derived: along the wall from the plan, through it by the rule.
+            xdata.extend(super::provenance::tags(
+                cadaddy_walk3d::Made::Derived,
+                &super::provenance::rule(super::throughwall::RULE).basis_for("its place along the wall from the plan"),
+            ));
+        }
+        // What an edit changed on it, the documents' value beside it, and its type mark (Q6502);
+        // a through-wall unit's drawn place beside its seated one.
+        let mut corrections = e.corrections.clone();
+        corrections.extend(seated.as_ref().and_then(|st| super::throughwall::location_correction(st, upf)));
+        let mut xdata = super::provenance::with_corrections(xdata, &corrections);
         if !e.type_mark.trim().is_empty() {
             xdata.extend(cadaddy_doc::bimspec::type_mark_xdata(&cap(e.type_mark.trim().to_string())));
         }
-        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
+        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
             built.push((k, h));
+            if let Some(st) = seated {
+                super::throughwall::build_parts(d, &layer, &level.name, e, &st, z0, z1, upf);
+                sleeves.push((st, z0, z1));
+            }
         }
     }
+    // Each seated unit's sleeve opening in its wall.
+    let _ = super::throughwall::cut_sleeves(d, &sleeves);
     built
 }
 

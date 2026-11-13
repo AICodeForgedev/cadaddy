@@ -1294,6 +1294,98 @@ fn a_recessed_room_panel_is_built_in_its_wall() {
     assert!(panel.common.xdata.iter().any(|t| t.value.starts_with("prop:HOST_WALL=")), "{:?}", panel.common.xdata);
 }
 
+/// The built element tagged `tag`.
+fn tagged<'a>(d: &'a Drawing, tag: &str) -> &'a Entity {
+    let want = format!("tag:{tag}");
+    d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == want)).map(|e| e.as_ref()).expect("built")
+}
+
+fn prop_of(e: &Entity, key: &str) -> Option<String> {
+    let head = format!("prop:{key}=");
+    e.common.xdata.iter().find_map(|t| t.value.strip_prefix(&head).map(str::to_string))
+}
+
+/// A through-wall unit (a PTAC) whose plan symbol stands 8" in front of an outside wall is built
+/// through that wall (Q6546, M-THROUGH-WALL): hosted in it, its sleeve flush with the outside face
+/// and its cabinet projecting into the room, a sleeve and an outside grille built for the
+/// takeoff, the wall cut for the sleeve, its drawn place kept beside the seated one, and G-HOST
+/// judges it in its wall. One drawn where no outside wall is near is a review item, not a box
+/// floating in the room silently.
+#[test]
+fn a_ptac_drawn_in_front_of_an_outside_wall_is_built_through_it() {
+    let _g = serial();
+    let mut s = plan();
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(eq) = spec["mep"]["equipment"].as_array_mut() {
+        // Office 101's south wall is 0..6" (outside face y 0); the symbol 42" x 12", 8" in front of it.
+        eq.push(
+            json!({"tag": "U-1", "kind": "ptac", "level": "L1", "min": [60.0, 14.0], "max": [102.0, 26.0], "bottom_ft": 0.3333, "height_ft": 1.3333}),
+        );
+        // In the middle of office 102: no wall within reach.
+        eq.push(json!({"tag": "U-2", "kind": "ptac", "level": "L1", "min": [460.0, 50.0], "max": [502.0, 62.0], "bottom_ft": 0.3333, "height_ft": 1.3333}));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let d = s.doc().expect("doc");
+    let unit = tagged(d, "U-1");
+    let b = cadaddy_engine::doc::entity_bounds(d, unit, 0);
+    // From the outside face (y 0) 21" into the room (the rule's depth, no product data): through
+    // the 6" wall, its cabinet 15" past the room face; along the wall as drawn.
+    assert!(b.min.y.abs() < 0.01 && (b.max.y - 21.0).abs() < 0.01, "through the wall: {b:?}");
+    assert!((b.min.x - 60.0).abs() < 0.01 && (b.max.x - 102.0).abs() < 0.01, "along the wall as drawn: {b:?}");
+    let host = prop_of(unit, "HOST_WALL").expect("hosted");
+    let wall = d.model.iter().find(|e| e.handle.hex() == host).expect("its host wall is built");
+    assert_eq!(made_as(wall).as_deref(), Some("wall"));
+    assert!(prop_of(unit, "PLACEMENT").is_some_and(|p| p.starts_with("derived:") && p.contains("M-THROUGH-WALL")), "{:?}", unit.common.xdata);
+    assert!(unit.common.xdata.iter().any(|t| t.value == "status:derived"), "its place is derived: {:?}", unit.common.xdata);
+    // Its drawn place beside the seated one.
+    let ps = cadaddy_engine::doc::props::read(&unit.common.xdata);
+    assert_eq!(ps.get("design:location").map(|p| p.text()), Some("6.75, 1.67".to_string()), "{ps:?}");
+    assert_eq!(ps.get("location").map(|p| p.text()), Some("6.75, 0.88".to_string()), "{ps:?}");
+    // Its sleeve and grille: their own elements, in the wall.
+    for part in ["U-1 SLEEVE", "U-1 GRILLE"] {
+        let p = tagged(d, part);
+        let pb = cadaddy_engine::doc::entity_bounds(d, p, 0);
+        assert!(pb.min.y.abs() < 0.01 && pb.max.y <= 13.76, "{part} in the wall: {pb:?}");
+        assert_eq!(prop_of(p, "HOST_WALL").as_deref(), Some(host.as_str()), "{part}");
+        assert!(p.common.xdata.iter().any(|t| t.value == "status:derived"), "{part}: {:?}", p.common.xdata);
+    }
+    // The wall cut for the sleeve: no wall at the sleeve's middle at the unit's height, wall beside it.
+    let EntityKind::Mesh(m) = &wall.kind else { panic!("a wall mesh") };
+    // Inside the wall's solid: an odd number of its flat faces over the point (a vertical ray).
+    let solid_at = |x: f64, y: f64, z: f64| {
+        let over = m
+            .faces
+            .iter()
+            .filter(|f| {
+                let vs: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+                let flat = vs.len() >= 3 && vs.iter().all(|v| (v.z - vs[0].z).abs() < 1e-9);
+                let (x0, x1) = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.x), b.max(v.x)));
+                let (y0, y1) = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.y), b.max(v.y)));
+                flat && vs[0].z > z && x > x0 && x < x1 && y > y0 && y < y1
+            })
+            .count();
+        over % 2 == 1
+    };
+    assert!(!solid_at(81.0, 3.0, 12.0), "the sleeve's opening is cut");
+    assert!(solid_at(30.0, 3.0, 12.0) && solid_at(81.0, 3.0, 2.0) && solid_at(81.0, 3.0, 60.0), "the wall beside, under and over it stays");
+    // No outside wall near: built as drawn, a review item.
+    let u2 = tagged(d, "U-2");
+    assert!(prop_of(u2, "PLACEMENT").is_some_and(|p| p.starts_with("review:") && p.contains("no outside wall")), "{:?}", u2.common.xdata);
+    assert!(prop_of(u2, "HOST_WALL").is_none());
+    // G-HOST: the unit through its wall passes.
+    let r = s.execute("validate.prescreen", &json!({"rules": ["G-HOST"], "all": true, "limit": 50})).expect("prescreen");
+    let host_hex = unit_handle(&mut s, "U-1");
+    let f = r["findings"].as_array().into_iter().flatten().find(|f| f["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&host_hex)));
+    let f = f.unwrap_or_else(|| panic!("a G-HOST finding for the unit: {r:#}"));
+    assert_eq!(f["verdict"], "pass", "{f:#}");
+    assert!(f["issue"].as_str().is_some_and(|i| i.contains("goes through")), "{f:#}");
+}
+
+fn unit_handle(s: &mut Session, tag: &str) -> String {
+    tagged(s.doc().expect("doc"), tag).handle.hex()
+}
+
 #[test]
 fn a_product_no_section_speaks_for_cites_the_submittal_its_maker_comes_from() {
     use cadaddy_engine::doc::props::{self, Prop, Source, SourceKind};
@@ -1679,7 +1771,10 @@ fn a_unit_through_an_exterior_wall_takes_the_room_on_its_service_face_and_its_ci
         for (h, room) in units.iter().zip(["101", "102"]) {
             let p = get(&mut s, h);
             assert_eq!(p["room"]["value"], room, "{p:#}");
-            assert!(p["room"]["note"].as_str().is_some_and(|n| n.contains("service face")), "{p:#}");
+            // Its room on its service face: the note says so while its middle is in the wall; a
+            // unit seated through the wall (Q6546) has its cabinet, and its middle, in that room.
+            let seated = p["location"]["note"].as_str().is_some_and(|v| v.starts_with("M-THROUGH-WALL"));
+            assert!(seated || p["room"]["note"].as_str().is_some_and(|n| n.contains("service face")), "{p:#}");
             assert_eq!(p["circuit"]["value"], "U-13,15", "drawn {drawn}: {p:#}");
             assert_eq!(p["panel"]["value"], "U", "{p:#}");
             let feed = p["fed_from_handle"]["value"].as_str().unwrap_or_default().to_string();
