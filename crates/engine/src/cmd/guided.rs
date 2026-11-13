@@ -24513,13 +24513,8 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
             let (Some(r), Some(sh)) = (job.sheet_regions.get(*i), refs.get(*i)) else { continue };
             let page = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
             let area = r.area.unwrap_or(r.rect);
-            let sheet_real = job
-                .sheet_scales
-                .iter()
-                .find(|x| x.sheet.split('/').next().unwrap_or(&x.sheet).trim().eq_ignore_ascii_case(&r.number))
-                .is_some_and(|x| x.scale > 1.0);
-            let read = sitework::read(&r.number, &page, area, &lum_types, upf);
-            let fit = sitework::register(&read, &sp, &slab, sheet_real);
+            let imported = job.sheet_scales.iter().find(|x| x.sheet.split('/').next().unwrap_or(&x.sheet).trim().eq_ignore_ascii_case(&r.number));
+            let (read, fit) = sitework::read_laid(&r.number, &page, area, &lum_types, &sp, &slab, imported);
             let built = sitework::plan(&sp, &read, &fit, &slab, &mut seq);
             if !fit.fitted() {
                 unfitted.push(format!("{}: {}", r.number, fit.why));
@@ -24540,7 +24535,7 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
                 .sum::<f64>()
                 / upf;
             lines.push(format!(
-                "{} ({}): {} luminaire(s) ({} luminaire(s) and {} equipment on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}",
+                "{} ({}): {} luminaire(s) ({} luminaire(s) and {} equipment on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}; sizes on the sheet {}",
                 r.number,
                 fit.method,
                 built.tags.len(),
@@ -24553,7 +24548,8 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
                 built.called_runs,
                 built.inferred_runs,
                 ug_ft,
-                built.circuits
+                built.circuits,
+                read.feet
             ));
             all.tags.extend(built.tags);
             all.equipment.extend(built.equipment);
