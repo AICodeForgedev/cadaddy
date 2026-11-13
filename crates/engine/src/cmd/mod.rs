@@ -215,6 +215,7 @@ pub mod printset;
 pub mod projrules;
 mod props;
 pub(crate) mod provenance;
+pub(crate) mod requirements;
 pub mod pulllist;
 pub mod readers;
 pub mod redline;

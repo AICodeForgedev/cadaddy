@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20}")
+            .params("{apply?: bool (complete the objects the documents leave open with the build's proposals, marked unsure, and keep the RFIs in the spec)} → {built, counts: {by_kind: {}, by_severity: {}, by_step: {}}, items: first 20 (by the build step they block, then severity), total, headline (N things to ask before you build: X high), requirements: {requirements, ran, did_not_run, objects_checked, open_objects, findings, checks: [{id, object, ran, status, objects, met_by_documents, completed_by_rule, missing, findings, basis}]}, applied?, message?}: the inconsistencies of the model built from the set: the RFIs the build and the readers raised, and each object kind's requirements (a luminaire's circuit, type and control, a receptacle's circuit, a switch's load, equipment's circuit, a panel's feeder) measured over the model; with no model built yet it says so (the RFIs are what the build raises)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -960,24 +960,54 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── rfi.read ────────────────────────────────────────────────────────────────
 
-fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
-
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Ok(no_project("RFIs", json!({"counts": {"by_kind": {}, "by_severity": {}}, "items": []})));
+    // The RFIs are what the build raises on the objects it cannot complete (Q6619): with no model
+    // built there is nothing to read them from yet, and the answer says so instead of an empty list.
+    let built = super::bspec::current(s, "rfi.read").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+    let Some(sp) = built else {
+        let msg = "no model built from the set yet: the RFIs are what the build raises on each object it cannot complete from the documents; run the guided job (job.start {pdfs}) or build the model (bim.build), then rfi.read lists them";
+        let mut out = json!({"built": false, "counts": {"by_kind": {}, "by_severity": {}, "by_step": {}}, "items": [], "total": 0, "message": msg, "warnings": [msg]});
+        if let Ok(project) = project(s) {
+            out["sheets_read"] = json!(project.sheets.len());
         }
+        return Ok(out);
     };
-
-    Ok(json!({
-        "counts": {"by_kind": {}, "by_severity": {}},
-        "items": [],
-        "total": 0,
-        "sheets_read": project.sheets.len(),
-        "apply": apply,
-        "message": "RFI reader wired; requires wall legend and classified sheets",
-    }))
+    let ev = super::requirements::evaluate(s.doc()?, Some(&sp));
+    let measured = super::requirements::summary(&ev);
+    let mut out = json!({"built": true, "apply": apply});
+    let sp = if apply {
+        out["applied"] = json!(super::requirements::apply(s, &ev)?);
+        super::bspec::current(s, "rfi.read")?.0
+    } else {
+        sp
+    };
+    // The spec's items, and (read only) the requirement items the build would raise now.
+    let mut list = cadaddy_walk3d::rfi::list(&sp);
+    for r in &ev.rfis {
+        if !list.iter().any(|x| x.id == r.id) {
+            list.push(r.clone());
+        }
+    }
+    super::requirements::sort_by_step(&mut list);
+    let rules = super::requirements::rules();
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_severity: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_step: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &list {
+        *by_kind.entry(r.kind_name().to_string()).or_default() += 1;
+        *by_severity.entry(r.severity.name().to_string()).or_default() += 1;
+        *by_step.entry(rules.step_of(r).to_string()).or_default() += 1;
+    }
+    let open: Vec<&cadaddy_walk3d::Rfi> = list.iter().filter(|r| r.status == cadaddy_walk3d::RfiStatus::Open).collect();
+    let high = open.iter().filter(|r| r.severity == cadaddy_walk3d::Severity::High).count();
+    out["counts"] = json!({"by_kind": by_kind, "by_severity": by_severity, "by_step": by_step});
+    out["items"] = json!(list.iter().take(20).map(super::requirements::item_json).collect::<Vec<_>>());
+    out["total"] = json!(list.len());
+    out["open"] = json!(open.len());
+    out["headline"] = json!(format!("{} things to ask before you build: {high} high", open.len()));
+    out["requirements"] = measured;
+    Ok(out)
 }
 
 // ─── mep.equipment.read ──────────────────────────────────────────────────────

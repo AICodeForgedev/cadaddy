@@ -184,9 +184,15 @@ fn bounds3(d: &Drawing, e: &Entity) -> ([f64; 3], [f64; 3]) {
 
 impl<'a> Model<'a> {
     pub fn new(d: &'a Drawing) -> Model<'a> {
+        Model::of(d, |_| true)
+    }
+
+    /// The model's elements of the kinds `keep` takes only (a check that looks at a few kinds
+    /// needn't read the properties of every trade piece).
+    pub fn of(d: &'a Drawing, keep: impl Fn(&str) -> bool) -> Model<'a> {
         let upf = super::elemprops::units_per_foot(d);
         let mut els = Vec::new();
-        for (e, kind) in super::elemprops::elements(d) {
+        for (e, kind) in super::elemprops::elements(d).filter(|(_, k)| keep(k)) {
             let props = super::elemprops::effective(e, &kind, upf);
             let (lo, hi) = bounds3(d, e);
             els.push(El { e, kind, props, lo, hi });
