@@ -118,6 +118,9 @@ fn routed_runs_keep_to_the_floor_framings_hole_rules() {
     eprintln!("framing {clash}\nconflicts {by:#?}\nbores {bores:?}");
     let floor: BTreeMap<&String, &usize> = by.iter().filter(|(k, _)| !k.starts_with("stud:")).collect();
     assert!(floor.is_empty(), "the router's own runs break no joist, rim or truss rule: {floor:#?}");
+    // The receptacles' leg along the east wall bores its studs in their middle (allowed), not at
+    // the boxes' line by the studs' face.
+    assert!(bores.get("stud").copied().unwrap_or(0) > 0, "{bores:?}");
     // Every hole the router bores, bim.clash allows.
     assert!(bores.get("joist").copied().unwrap_or(0) as u64 >= fr["bored_holes"].as_u64().unwrap_or(0), "{bores:?} {fr}");
 }

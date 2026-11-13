@@ -1711,6 +1711,104 @@ pub(crate) fn stud_path(
     Some((pts, bot))
 }
 
+/// The middle of the built wall a wall box at `p` (its face's outward direction `f`) is set in,
+/// at height `z`, on the line through the box square to the wall: where a run along the wall
+/// bores the studs, the hole rules' edge distance kept on both sides (framing.json `wood_stud`;
+/// Q6622: runs along the wall at the box's line bored the studs at their face). None: no built
+/// wall of `level` there, or one thicker than a few feet.
+pub(crate) fn wall_middle(walls: &[super::propfill::WallPiece], level: &str, p: Vec2, f: Vec2, z: f64, upf: f64) -> Option<Vec2> {
+    let fl = f.len();
+    if !(p.is_finite() && fl.is_finite() && fl > 1e-9 && z.is_finite()) {
+        return None;
+    }
+    let f = f * (1.0 / fl);
+    let reach = 3.0 * upf;
+    for (lv, _, hull, zr) in walls {
+        if !lv.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(level)) || z < zr[0] - 1e-6 || z > zr[1] + 1e-6 || hull.len() < 3 {
+            continue;
+        }
+        let (lo, hi) = hull.iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), q| {
+            (Vec2::new(lo.x.min(q.x), lo.y.min(q.y)), Vec2::new(hi.x.max(q.x), hi.y.max(q.y)))
+        });
+        if p.x < lo.x - 1e-6 || p.x > hi.x + 1e-6 || p.y < lo.y - 1e-6 || p.y > hi.y + 1e-6 || !cadaddy_geom::point_in_polygon(hull, p) {
+            continue;
+        }
+        // Where the line through the box square to the wall leaves it, each side.
+        let (mut ahead, mut behind) = (f64::INFINITY, f64::NEG_INFINITY);
+        for (k, q0) in hull.iter().enumerate() {
+            let Some(q1) = hull.get((k + 1) % hull.len()) else { continue };
+            let e = *q1 - *q0;
+            let den = f.x * e.y - f.y * e.x;
+            if den.abs() < 1e-12 {
+                continue;
+            }
+            let w = *q0 - p;
+            let s = (w.x * e.y - w.y * e.x) / den;
+            let t = (w.x * f.y - w.y * f.x) / den;
+            if (-1e-9..=1.0 + 1e-9).contains(&t) && s.is_finite() {
+                if s >= 0.0 {
+                    ahead = ahead.min(s);
+                } else {
+                    behind = behind.max(s);
+                }
+            }
+        }
+        if ahead.is_finite() && behind.is_finite() && ahead - behind <= reach {
+            return Some(p + f * ((ahead + behind) / 2.0));
+        }
+    }
+    None
+}
+
+/// An in-wall leg (`pts` from box `a` to box `b`: its first and last points the boxes', each
+/// twice, its pieces between them along the walls at their heights `bot`) moved to its walls'
+/// middle (`ma`, `mb`: the boxes' points there, square to their faces `fa`, `fb`): out of each
+/// box straight up, across into the middle at the run's height, along the middle and back across
+/// into the other box. Unchanged where either box has no wall middle, or the leg is no in-wall
+/// leg of that shape.
+pub(crate) fn through_wall_middle(
+    pts: &[[f64; 2]],
+    bot: &[f64],
+    (ma, fa): (Option<Vec2>, Option<Vec2>),
+    (mb, fb): (Option<Vec2>, Option<Vec2>),
+    upf: f64,
+) -> Option<(Vec<[f64; 2]>, Vec<f64>)> {
+    let (ma, mb, fa, fb) = (ma?, mb?, fa?, fb?);
+    let n = pts.len();
+    if n < 4 || bot.len() + 1 != n {
+        return None;
+    }
+    let pt = |i: usize| pts.get(i).map(|p| Vec2::new(p[0], p[1]));
+    let (a, a2, b2, b) = (pt(0)?, pt(1)?, pt(n - 2)?, pt(n - 1)?);
+    let tol = upf / 96.0;
+    if a.dist(a2) > tol || b.dist(b2) > tol {
+        return None;
+    }
+    let (ta, z, tb) = (*bot.first()?, *bot.get(1)?, *bot.last()?);
+    if ma.dist(a) <= tol && mb.dist(b) <= tol {
+        return None;
+    }
+    // Along each wall's middle; where they meet (two walls), or the jog across between two
+    // parallel middles a little apart.
+    let (ua, ub) = (Vec2::new(-fa.y, fa.x), Vec2::new(-fb.y, fb.x));
+    let cross = ua.x * ub.y - ua.y * ub.x;
+    let corner = if cross.abs() > 0.1 {
+        let w = mb - ma;
+        let s = (w.x * ub.y - w.y * ub.x) / cross;
+        Some(ma + ua * s)
+    } else {
+        let c = ma + ua * (mb - ma).dot(ua);
+        (c.dist(mb) > tol).then_some(c)
+    };
+    let mut out = vec![a, a, ma];
+    out.extend(corner.filter(|c| c.is_finite() && c.dist(ma) > tol && c.dist(mb) > tol));
+    out.extend([mb, b, b]);
+    let mut zs = vec![ta];
+    zs.extend(std::iter::repeat_n(z, out.len() - 3));
+    zs.push(tb);
+    Some((out.iter().map(|p| [p.x, p.y]).collect(), zs))
+}
+
 /// A cable's leg between two boxes of a circuit fed from below (its panel on a lower storey,
 /// Q6206): down from the box through the bottom plate into the floor framing (the rules' depth
 /// under the floor), square across, and up into the other box; plan points and each segment's
@@ -2651,6 +2749,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut devs: Vec<Dev> = Vec::new();
     let mut gear: Vec<GearEl> = Vec::new();
     let rated = rated_walls(d, sp, MAX_DEVICES);
+    // The built walls on their plans: an in-wall leg runs in its wall's middle (Q6622).
+    let wall_pieces = super::propfill::wall_footprints_on_plans(d);
     for e in d.model.iter() {
         if super::wallgen::made_as(e).as_deref() == Some("device") && devs.len() < MAX_DEVICES {
             let ps = props::read(&e.common.xdata);
@@ -3848,6 +3948,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             // Through the studs where both boxes are in the room's walls; else, fed from below,
             // through the floor framing (Q6206).
             let in_studs = stud_path((a.at, a.top, a.face, &a.room), (b.at, b.top, b.face, &b.room), floor, upf, rl);
+            // The studs are bored in their middle: the leg along the wall runs in the wall's
+            // middle, not at the boxes' line (Q6622).
+            let middle = |dv: &Dev, z: f64| dv.face.and_then(|f| wall_middle(&wall_pieces, &dv.level, dv.at, f, z, upf));
+            let to_middle = |pts: Vec<[f64; 2]>, bot: Vec<f64>| -> (Vec<[f64; 2]>, Vec<f64>) {
+                let z = bot.get(1).map_or(floor, |z| floor + z * upf);
+                through_wall_middle(&pts, &bot, (middle(a, z), a.face), (middle(b, z), b.face), upf).unwrap_or((pts, bot))
+            };
+            let in_studs = in_studs.map(|(p, b)| to_middle(p, b));
             let by_floor = in_studs.is_none() && fed_below;
             floor_legs += usize::from(by_floor);
             let stud = in_studs.or_else(|| by_floor.then(|| floor_path((a.at, a.top), (b.at, b.top), floor, upf, rl)));
@@ -3874,6 +3982,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 }
                 plan.extend([[b.at.x, b.at.y], [b.at.x, b.at.y]]);
                 bot.push((b.top - floor) / upf);
+                let (plan, bot) = to_middle(plan, bot);
                 r.points = plan;
                 r.source_sheet = IN_WALL.into();
                 r.bottoms_ft = bot;

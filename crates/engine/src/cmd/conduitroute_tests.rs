@@ -444,6 +444,62 @@ fn a_sawn_joist_is_bored_by_its_own_rule_not_the_i_joists() {
     assert_eq!(FrameKind::of("rim", "11 7/8\" rim board"), FrameKind::Rim);
 }
 
+#[test]
+fn an_in_wall_leg_runs_in_its_walls_middle_where_the_studs_are_bored() {
+    // A wall 7 1/4" thick along x from 0 to 120 (y 0 to 7.25), 10' high; a box set in it at
+    // y = 1 (its face to -y) and one round the corner in a wall along y (x 120 to 127.25).
+    let walls: Vec<crate::cmd::propfill::WallPiece> = vec![
+        (
+            Some("L1".into()),
+            Handle(0x60),
+            vec![Vec2::new(0.0, 0.0), Vec2::new(127.25, 0.0), Vec2::new(127.25, 7.25), Vec2::new(0.0, 7.25)],
+            [0.0, 120.0],
+        ),
+        (
+            Some("L1".into()),
+            Handle(0x61),
+            vec![Vec2::new(120.0, 0.0), Vec2::new(127.25, 0.0), Vec2::new(127.25, 120.0), Vec2::new(120.0, 120.0)],
+            [0.0, 120.0],
+        ),
+    ];
+    let (fy, fx) = (Vec2::new(0.0, -1.0), Vec2::new(-1.0, 0.0));
+    let m = wall_middle(&walls, "L1", Vec2::new(30.0, 1.0), fy, 24.0, UPF).expect("in the wall");
+    assert!((m.x - 30.0).abs() < 1e-9 && (m.y - 3.625).abs() < 1e-9, "{m:?}");
+    assert!(wall_middle(&walls, "L2", Vec2::new(30.0, 1.0), fy, 24.0, UPF).is_none());
+    assert!(wall_middle(&walls, "L1", Vec2::new(30.0, 20.0), fy, 24.0, UPF).is_none(), "no wall there");
+    assert!(wall_middle(&walls, "L1", Vec2::new(30.0, 1.0), fy, 200.0, UPF).is_none(), "over the wall's top");
+    // Two boxes in the one wall: up out of each, across into the middle, along it, back across.
+    let (pts, bot) = through_wall_middle(
+        &[[30.0, 1.0], [30.0, 1.0], [90.0, 1.0], [90.0, 1.0]],
+        &[1.5, 2.5, 1.5],
+        (Some(m), Some(fy)),
+        (wall_middle(&walls, "L1", Vec2::new(90.0, 1.0), fy, 30.0, UPF), Some(fy)),
+        UPF,
+    )
+    .expect("moved");
+    assert_eq!(pts, vec![[30.0, 1.0], [30.0, 1.0], [30.0, 3.625], [90.0, 3.625], [90.0, 1.0], [90.0, 1.0]]);
+    assert_eq!(bot, vec![1.5, 2.5, 2.5, 2.5, 1.5]);
+    // Round the corner: along each wall's middle to where they meet.
+    let mb = wall_middle(&walls, "L1", Vec2::new(121.0, 60.0), fx, 30.0, UPF).expect("the other wall");
+    assert!((mb.x - 123.625).abs() < 1e-9, "{mb:?}");
+    let (pts, _) = through_wall_middle(
+        &[[30.0, 1.0], [30.0, 1.0], [121.0, 1.0], [121.0, 60.0], [121.0, 60.0]],
+        &[1.5, 2.5, 2.5, 1.5],
+        (Some(m), Some(fy)),
+        (Some(mb), Some(fx)),
+        UPF,
+    )
+    .expect("moved");
+    assert_eq!(pts.get(3), Some(&[123.625, 3.625]), "{pts:?}");
+    // No wall middle, or no in-wall shape: unchanged.
+    assert!(
+        through_wall_middle(&[[0.0, 0.0], [0.0, 0.0], [9.0, 0.0], [9.0, 0.0]], &[1.0, 2.0, 1.0], (None, Some(fy)), (Some(m), Some(fy)), UPF)
+            .is_none()
+    );
+    assert!(through_wall_middle(&[[0.0, 0.0], [9.0, 0.0]], &[1.0], (Some(m), Some(fy)), (Some(m), Some(fy)), UPF).is_none());
+    let _ = wall_middle(&walls, "L1", Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0), f64::NAN, UPF);
+}
+
 /// Q6314: a top floor's run across the roof trusses, a few feet in from their ends, goes up
 /// between the chords and straight across: a pass through an open web bores nothing, so it is
 /// no labor, and the run never goes round the trusses' ends (past the walls they bear on).
