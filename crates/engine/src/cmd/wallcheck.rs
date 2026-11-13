@@ -11,7 +11,9 @@
 //!    perimeter, plus its floor cut into the smallest rooms the rules allow,
 //!    [`overbuilt_levels`]) is a high finding and an always-asked question before the takeoff;
 //! 3. a level's wall board over its walls' area times their faces ([`board_over`]) is a suspect
-//!    line of the takeoff.
+//!    line of the takeoff;
+//! 4. a storey whose rooms cover far less than its floor ([`under_roomed_levels`]: rooms built to
+//!    their casework, or rooms left out) is a finding (Q6487).
 //!
 //! The numbers are rule data: `wallcheck.json`.
 
@@ -48,6 +50,9 @@ pub struct Rules {
     pub board_over_ratio: f64,
     /// A storey with fewer feet of walls is not weighed (a penthouse, a canopy: too little to say).
     pub min_level_walls_ft: f64,
+    /// A storey whose built rooms cover less than this share of its floor is reported (a
+    /// building's rooms are most of its floor; walls, shafts and chases the rest).
+    pub min_room_share: f64,
 }
 
 impl Default for Rules {
@@ -59,6 +64,7 @@ impl Default for Rules {
             wall_faces: 2.0,
             board_over_ratio: 1.25,
             min_level_walls_ft: 40.0,
+            min_room_share: 0.5,
         }
     }
 }
@@ -144,6 +150,52 @@ pub fn overbuilt_levels(walls: &[(String, f64, PlanBox)], floors: &[(String, Pla
         let can_hold = perimeter + 2.0 * area / side;
         if walls_ft > can_hold * (1.0 + r.max_over_ratio.max(0.0)) {
             out.push(Overbuilt { level, walls_ft, can_hold_ft: can_hold, perimeter_ft: perimeter, area_sq_ft: area });
+        }
+    }
+    out
+}
+
+/// A storey whose rooms cover far less than its floor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnderRoomed {
+    pub level: String,
+    /// Its rooms' floor area and its floor's, square feet.
+    pub rooms_sq_ft: f64,
+    pub floor_sq_ft: f64,
+}
+
+/// The storeys with rooms whose rooms cover less than [`Rules::min_room_share`] of their floor:
+/// `rooms` each built room's level and floor area (square feet), `floors` each built floor's level
+/// and plan box (laid over each other they count once: no more than their extents). A storey with
+/// no floor, or none of its rooms built, isn't weighed here. `upf` drawing units a foot.
+pub fn under_roomed_levels(rooms: &[(String, f64)], floors: &[(String, PlanBox)], upf: f64) -> Vec<UnderRoomed> {
+    let upf = if finite_pos(upf) { upf } else { 12.0 };
+    let share = rules().min_room_share;
+    if !finite_pos(share) {
+        return Vec::new();
+    }
+    let mut by: BTreeMap<String, f64> = BTreeMap::new();
+    for (level, a) in rooms {
+        if !level.is_empty() && finite_pos(*a) {
+            *by.entry(level.clone()).or_default() += a;
+        }
+    }
+    let mut fl: BTreeMap<String, (f64, PlanBox)> = BTreeMap::new();
+    for (level, b) in floors {
+        if !b.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let e = fl.entry(level.clone()).or_insert((0.0, EMPTY));
+        e.0 += (b[2] - b[0]).abs() * (b[3] - b[1]).abs() / (upf * upf);
+        grow(&mut e.1, b);
+    }
+    let mut out = Vec::new();
+    for (level, rooms_sq_ft) in by {
+        let Some((a, b)) = fl.get(&level) else { continue };
+        let whole = (b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0) / (upf * upf);
+        let floor_sq_ft = a.min(whole);
+        if finite_pos(floor_sq_ft) && rooms_sq_ft < share * floor_sq_ft {
+            out.push(UnderRoomed { level, rooms_sq_ft, floor_sq_ft });
         }
     }
     out
@@ -235,6 +287,21 @@ mod tests {
             (String::new(), 100.0, [0.0, 0.0, 1.0, 1.0]),
         ];
         assert!(overbuilt_levels(&walls, &[("L1".into(), [f64::NAN; 4])], f64::NAN).is_empty());
+    }
+
+    #[test]
+    fn rooms_far_short_of_their_floor_are_reported() {
+        // A 45' x 19' floor (855 sq ft): rooms of 211 sq ft are rooms built to their counters;
+        // 586 sq ft is the building's rooms.
+        let floors = vec![("Level 1".to_string(), [0.0, 0.0, 45.0 * 12.0, 19.0 * 12.0])];
+        let under = under_roomed_levels(&[("Level 1".into(), 166.0), ("Level 1".into(), 45.0)], &floors, 12.0);
+        assert_eq!(under.len(), 1, "{under:?}");
+        assert!((under[0].rooms_sq_ft - 211.0).abs() < 1e-9 && (under[0].floor_sq_ft - 855.0).abs() < 1e-6, "{under:?}");
+        assert!(under_roomed_levels(&[("Level 1".into(), 524.0), ("Level 1".into(), 62.0)], &floors, 12.0).is_empty());
+        // No floor, or no room: not weighed. Hostile numbers are skipped.
+        assert!(under_roomed_levels(&[("Level 2".into(), 10.0)], &floors, 12.0).is_empty());
+        assert!(under_roomed_levels(&[], &floors, 12.0).is_empty());
+        assert!(under_roomed_levels(&[("Level 1".into(), f64::NAN)], &[("Level 1".into(), [f64::NAN; 4])], f64::NAN).is_empty());
     }
 
     #[test]

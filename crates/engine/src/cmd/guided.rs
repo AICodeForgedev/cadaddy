@@ -9670,8 +9670,47 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // A storey with more walls than it can hold is reading casework, equipment or repeated
     // linework as walls (Q6583): a high finding, always asked before the takeoff prices them.
     overbuilt_walls_check(s, job, &mut result)?;
+    // A storey whose rooms cover far less than its floor: rooms built to their casework, or left
+    // out (Q6487).
+    under_roomed_check(s, job, &mut result)?;
     bim_step(s, job, "wall plausibility", t);
     Ok(result)
+}
+
+/// The storeys whose built rooms cover far less than their floor
+/// ([`super::wallcheck::under_roomed_levels`]): each a finding, with the numbers.
+fn under_roomed_check(s: &Session, job: &mut GuidedJob, result: &mut Value) -> Result<()> {
+    use super::wallcheck as wc;
+    let d = s.doc()?;
+    let upf = super::elemprops::units_per_foot(d);
+    let rooms: Vec<(String, f64)> = super::bspec::room_elements(d).into_iter().map(|r| (r.level, r.area_sf)).collect();
+    let floors: Vec<(String, wc::PlanBox)> =
+        super::bimwork::elements(d).iter().filter(|e| e.category == "floor").map(|e| (e.level.clone(), [e.lo.x, e.lo.y, e.hi.x, e.hi.y])).collect();
+    let mut said = Vec::new();
+    for u in wc::under_roomed_levels(&rooms, &floors, upf).iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let what = format!(
+            "{}: its rooms cover {:.0} sq ft of its {:.0} sq ft floor ({:.0}%)",
+            u.level,
+            u.rooms_sq_ft,
+            u.floor_sq_ft,
+            100.0 * u.rooms_sq_ft / u.floor_sq_ft
+        );
+        progress_line(&format!("  rooms far short of their floor: {what}"));
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Rooms far short of the floor: {what}"),
+            "A building's rooms are most of its floor (rules data wallcheck.json min_room_share): rooms this much smaller were traced to casework or equipment read as walls, or rooms on the plan were not built",
+            3,
+            vec!["Check the level's walls (wallgen.plan) and room tags (rooms.list)".into()],
+            None,
+            false,
+        );
+        said.push(json!({"level": u.level, "rooms_sq_ft": u.rooms_sq_ft.round(), "floor_sq_ft": u.floor_sq_ft.round()}));
+    }
+    if !said.is_empty() {
+        result["levels_under_roomed"] = json!(said);
+    }
+    Ok(())
 }
 
 /// The storeys whose built walls total more than they can hold ([`super::wallcheck::overbuilt_levels`]):

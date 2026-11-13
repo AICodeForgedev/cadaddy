@@ -16,6 +16,7 @@ mod arexport;
 mod arexport_set;
 mod asbuilt;
 mod autospec;
+mod autospec_sorted;
 mod bimux_rw1;
 mod bimwork;
 mod bimwork_levels;

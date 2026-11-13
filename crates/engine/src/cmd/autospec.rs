@@ -27,6 +27,12 @@ use crate::{Result, Session};
 const MAX_LAYERS: usize = 2_000;
 /// Rooms traced, at most.
 const MAX_ROOMS: usize = 1_000;
+/// Of an imported PDF's leftover layer ([`cadaddy_io::pdf_read::is_content_leftover_layer`]), the
+/// share of its wall face pairs (by length) inside its sorted walls' extents (grown by
+/// [`SORTED_WALLS_MARGIN_IN`]) at which they are that building's casework and finishes, no walls
+/// (Q6487).
+const LEFTOVER_INSIDE_SHARE: f64 = 0.9;
+const SORTED_WALLS_MARGIN_IN: f64 = 24.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("bspec.draft", "Draft Building Spec", run_draft).params(
@@ -298,24 +304,54 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
     let all_texts = texts(&ents);
     let mut roles: Vec<LayerRole> = Vec::new();
     let mut wall_types: Vec<WallType> = Vec::new();
-    for layer in &layers {
+    // Each layer's line pairs (wall faces, by spacing and overlap).
+    let layer_pairs: Vec<_> = layers
+        .iter()
+        .map(|layer| {
+            let mine = on(layer);
+            let segs = segments(&mine);
+            let mut found = pairs(d, &segs, &lim);
+            // A stair's tread lines pair up like wall faces: a layer of treads is no wall layer (Q6429).
+            super::wallgen::drop_stair_treads(&segs, &mut found, k);
+            (mine, segs, found)
+        })
+        .collect();
+    // A PDF sheet the import sorted by what it draws: its heavy cut lines (the walls) are on the
+    // wall class layer. The lines it left on its other layers pair up too: counters, equipment, a
+    // wall's finish and insulation lines, dimension ticks. Taken as walls they box a room in at
+    // its casework (Q6487). Where nearly all of such a layer's pairs lie within the building its
+    // sorted walls already draw, they are that building's casework and finishes, no walls; where
+    // a good part lies beyond (walls drawn with a lighter pen: a storefront wing), it keeps its
+    // walls.
+    let sorted_extents = layers
+        .iter()
+        .zip(&layer_pairs)
+        .find(|(layer, (_, _, found))| layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()) && found.len() >= 2)
+        .map(|(_, (_, _, found))| {
+            let b = cadaddy_geom::Bounds2::from_points(found.iter().flat_map(|p| [p.c0, p.c1]));
+            let g = SORTED_WALLS_MARGIN_IN * k;
+            cadaddy_geom::Bounds2 { min: b.min - Vec2::new(g, g), max: b.max + Vec2::new(g, g) }
+        });
+    let within_sorted = |found: &[super::perceive::geometry::Pair]| {
+        let Some(b) = sorted_extents.as_ref() else { return false };
+        let total: f64 = found.iter().map(|p| p.length).filter(|l| l.is_finite()).sum();
+        let inside: f64 = found.iter().filter(|p| b.contains((p.c0 + p.c1) * 0.5)).map(|p| p.length).filter(|l| l.is_finite()).sum();
+        total > 0.0 && inside >= LEFTOVER_INSIDE_SHARE * total
+    };
+    for (layer, (mine, segs, found)) in layers.iter().zip(layer_pairs) {
         // The OCR review layer keeps readings for a person to check: never what a layer of the
         // building is (Q6332).
         if review_layer(layer) {
             continue;
         }
-        let mine = on(layer);
-        let segs = segments(&mine);
-        let mut found = pairs(d, &segs, &lim);
-        // A stair's tread lines pair up like wall faces: a layer of treads is no wall layer (Q6429).
-        super::wallgen::drop_stair_treads(&segs, &mut found, k);
+        let leftover = cadaddy_io::pdf_read::is_content_leftover_layer(layer) && within_sorted(&found);
         let by_name = role_by_name(layer);
         // Else what it holds: wall face pairs, door swings, room names. Not on a layer that is
         // off or frozen: what it holds isn't on the sheet (an imported PDF's lettering strokes,
         // kept off under the text the OCR read from them, hold plenty of "face pairs").
         let shown = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(layer)).is_none_or(|l| l.on && !l.frozen);
         let by_content = || -> Option<(Role, String)> {
-            if !by_content || !shown {
+            if !by_content || !shown || leftover {
                 return None;
             }
             if found.len() >= 2 {

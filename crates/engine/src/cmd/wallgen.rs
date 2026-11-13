@@ -4605,8 +4605,8 @@ struct Swing {
 }
 
 /// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive,
-/// alone or joined to its leaf and the wall's lines) on one circle through 60–100°, a door's
-/// radius (16"–54" at `k` units per inch).
+/// alone or joined to its leaf and the wall's lines, or printed dash by dash) on one circle
+/// through 60–100°, a door's radius (16"–54" at `k` units per inch).
 fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     let mut out = Vec::new();
@@ -4635,6 +4635,14 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
                 break;
             }
             out.push(Swing { c, r, ends, handle: e.handle });
+        }
+    }
+    // A swing printed dashed, dash by dash (Q6487).
+    for (handle, _, pts) in super::perceive::geometry::dash_runs(ents, k) {
+        for (c, r, _, ends) in super::perceive::geometry::flat_swings(&pts) {
+            if c.is_finite() && (rmin..=rmax).contains(&r) && out.len() < MAX_OBJECTS {
+                out.push(Swing { c, r, ends, handle });
+            }
         }
     }
     out

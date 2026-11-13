@@ -1564,7 +1564,163 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
             _ => {}
         }
     }
+    // A swing printed dashed, dash by dash.
+    for (handle, layer, pts) in dash_runs(ents, k) {
+        for (c, r, deg, ends) in flat_swings(&pts) {
+            if !(rmin..=rmax).contains(&r) {
+                continue;
+            }
+            let (leaf, open_end) = leaf_end(segs, c, ends, r * 0.05);
+            let on_door_layer = layer.to_ascii_uppercase().contains("DOOR");
+            let confidence = (0.45 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
+            items.push(Opening {
+                kind: "door",
+                at: c,
+                width: r,
+                layer: layer.clone(),
+                handle,
+                swing: Some((deg, ends)),
+                block: None,
+                confidence,
+                leaf,
+                open_end,
+            });
+        }
+    }
     items
+}
+
+/// A dash of a dashed curve is at most this long, and the gap to the next one at most this wide
+/// (inches; at `k` units per inch).
+const SWING_DASH_MAX_IN: f64 = 8.0;
+const SWING_DASH_GAP_IN: f64 = 6.0;
+/// The most a dashed curve turns from one dash to the next (degrees): a door's swing drawn in
+/// ten dashes turns 9° a dash.
+const DASH_TURN_DEG: f64 = 35.0;
+/// Most short pieces looked at for dashed curves, and most dashes chained into one (hostile
+/// drawings).
+const MAX_DASHES: usize = 200_000;
+const MAX_DASH_RUN: usize = 200;
+
+/// The dashed curves among `ents` printed dash by dash (a PDF print strokes a dashed door swing as
+/// its dashes: each a short line or open polyline of its own): short pieces of one layer and
+/// colour, each end of one followed within a dash gap by the next running on the same way (a
+/// gentle turn), chained in order, their points one run. Runs of three dashes or more, each with
+/// its first dash's handle and layer (Q6487).
+pub(crate) fn dash_runs(ents: &[&std::sync::Arc<Entity>], k: f64) -> Vec<(cadaddy_doc::Handle, String, Vec<Vec2>)> {
+    let (dash_max, gap) = (SWING_DASH_MAX_IN * k, SWING_DASH_GAP_IN * k);
+    if !(dash_max.is_finite() && dash_max > 0.0 && gap > 0.0) {
+        return Vec::new();
+    }
+    // The short pieces: their entity and points.
+    let mut pieces: Vec<(usize, Vec<Vec2>)> = Vec::new();
+    for (i, e) in ents.iter().enumerate() {
+        if pieces.len() >= MAX_DASHES {
+            break;
+        }
+        let pts: Vec<Vec2> = match &e.kind {
+            EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
+            EntityKind::LwPolyline(p) if !p.closed && (2..=8).contains(&p.vertices.len()) => {
+                Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3)
+            }
+            _ => continue,
+        };
+        let len: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
+        if pts.len() >= 2 && pts.iter().all(|p| p.is_finite()) && len > 1e-9 && len <= dash_max {
+            pieces.push((i, pts));
+        }
+    }
+    // Each piece's ends filed by cell: (piece, which end).
+    let key = |p: Vec2| ((p.x / gap).floor() as i64, (p.y / gap).floor() as i64);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, usize)>> = std::collections::HashMap::new();
+    for (n, (_, pts)) in pieces.iter().enumerate() {
+        for (end, p) in [(0, pts.first()), (1, pts.last())] {
+            if let Some(p) = p {
+                grid.entry(key(*p)).or_default().push((n, end));
+            }
+        }
+    }
+    // An end's point and the way out of the piece there.
+    let end_of = |n: usize, end: usize| -> Option<(Vec2, Vec2)> {
+        let pts = &pieces.get(n)?.1;
+        let (p, q) = if end == 0 { (*pts.first()?, *pts.get(1)?) } else { (*pts.last()?, *pts.get(pts.len().checked_sub(2)?)?) };
+        let d = p - q;
+        let l = d.len();
+        (l > 1e-12).then(|| (p, d * (1.0 / l)))
+    };
+    let same_pen = |a: usize, b: usize| {
+        let (Some(x), Some(y)) = (pieces.get(a).and_then(|p| ents.get(p.0)), pieces.get(b).and_then(|p| ents.get(p.0))) else { return false };
+        x.common.layer.eq_ignore_ascii_case(&y.common.layer) && x.common.color == y.common.color
+    };
+    let cos_turn = DASH_TURN_DEG.to_radians().cos();
+    // The dash each end runs on to: the nearest whose end lies ahead within a gap and runs on the
+    // same way.
+    let next = |n: usize, end: usize| -> Option<(usize, usize)> {
+        let (p, out) = end_of(n, end)?;
+        let (cx, cy) = key(p);
+        let mut best: Option<(f64, usize, usize)> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &(m, me) in grid.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if m == n || !same_pen(n, m) {
+                        continue;
+                    }
+                    let Some((q, back)) = end_of(m, me) else { continue };
+                    let g = q - p;
+                    let dist = g.len();
+                    // Into the next dash: the opposite of its way out at that end.
+                    let ahead = dist <= 1e-9 || g.dot(out) >= cos_turn * dist;
+                    if dist <= gap && ahead && (-back).dot(out) >= cos_turn && best.is_none_or(|b| dist < b.0) {
+                        best = Some((dist, m, me));
+                    }
+                }
+            }
+        }
+        best.map(|(_, m, me)| (m, me))
+    };
+    let links: Vec<[Option<(usize, usize)>; 2]> = (0..pieces.len()).map(|n| [next(n, 0), next(n, 1)]).collect();
+    // Only links both dashes make.
+    let link = |n: usize, end: usize| -> Option<(usize, usize)> {
+        let (m, me) = links.get(n)?.get(end).copied().flatten()?;
+        (links.get(m)?.get(me).copied().flatten() == Some((n, end))).then_some((m, me))
+    };
+    let mut used = vec![false; pieces.len()];
+    let mut out = Vec::new();
+    for n in 0..pieces.len() {
+        // Start at an end of a run: a dash with one end running on to the next (a closed ring of
+        // dashes is no swing).
+        let (l0, l1) = (link(n, 0).is_some(), link(n, 1).is_some());
+        if used.get(n).copied().unwrap_or(true) || l0 == l1 {
+            continue;
+        }
+        let mut run: Vec<Vec2> = Vec::new();
+        // Into it at its free end.
+        let (mut cur, mut from) = (n, usize::from(l0));
+        let mut count = 0usize;
+        loop {
+            if used.get(cur).copied().unwrap_or(true) || count >= MAX_DASH_RUN {
+                break;
+            }
+            if let Some(u) = used.get_mut(cur) {
+                *u = true;
+            }
+            count += 1;
+            let Some((_, pts)) = pieces.get(cur) else { break };
+            if from == 0 {
+                run.extend(pts.iter().copied());
+            } else {
+                run.extend(pts.iter().rev().copied());
+            }
+            let Some((m, me)) = link(cur, 1 - from) else { break };
+            (cur, from) = (m, me);
+        }
+        if count >= 3
+            && let Some(e) = pieces.get(n).and_then(|p| ents.get(p.0))
+        {
+            out.push((e.handle, e.common.layer.to_string(), run));
+        }
+    }
+    out
 }
 
 /// Most door leaves added to a plan traced for rooms.
@@ -1610,6 +1766,29 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
         let k = (tol / cell).ceil() as i64;
         (-k..=k).any(|dx| (-k..=k).any(|dy| ends.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
     };
+    // Each swing's leaf (or both) shut, from its hinge.
+    let leaves_of = |common: &Common, swings: Vec<(Vec2, f64, [Vec2; 2])>, out: &mut Vec<(Common, cadaddy_doc::Line)>| {
+        for (hinge, deg, arc_ends) in swings {
+            let tol = 0.05 * hinge.dist(arc_ends[0]);
+            let wide = deg > SWING_MAX_DEG;
+            if wide && !jamb(hinge, 2.0 * tol) {
+                continue;
+            }
+            let at_jamb = arc_ends.map(|p| jamb(p, tol));
+            let leaves: Vec<Vec2> = match at_jamb {
+                _ if wide => arc_ends.to_vec(),
+                [true, false] => vec![arc_ends[0]],
+                [false, true] => vec![arc_ends[1]],
+                _ => arc_ends.to_vec(),
+            };
+            for end in leaves {
+                if hinge.is_finite() && end.is_finite() {
+                    let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
+                    out.push((common.clone(), line));
+                }
+            }
+        }
+    };
     let mut out = Vec::new();
     for e in d.model.iter() {
         if out.len() >= MAX_LEAVES {
@@ -1639,26 +1818,22 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
             }
             _ => Vec::new(),
         };
-        for (hinge, deg, arc_ends) in swings {
-            let tol = 0.05 * hinge.dist(arc_ends[0]);
-            let wide = deg > SWING_MAX_DEG;
-            if wide && !jamb(hinge, 2.0 * tol) {
-                continue;
-            }
-            let at_jamb = arc_ends.map(|p| jamb(p, tol));
-            let leaves: Vec<Vec2> = match at_jamb {
-                _ if wide => arc_ends.to_vec(),
-                [true, false] => vec![arc_ends[0]],
-                [false, true] => vec![arc_ends[1]],
-                _ => arc_ends.to_vec(),
-            };
-            for end in leaves {
-                if hinge.is_finite() && end.is_finite() {
-                    let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
-                    out.push((e.common.clone(), line));
-                }
-            }
+        leaves_of(&e.common, swings, &mut out);
+    }
+    // Swings printed dashed, dash by dash, with their first dash's properties (Q6487).
+    let all: Vec<&std::sync::Arc<Entity>> = d.model.iter().take(MAX_LEAF_SCAN).collect();
+    let by_handle: std::collections::HashMap<cadaddy_doc::Handle, &std::sync::Arc<Entity>> = all.iter().map(|e| (e.handle, *e)).collect();
+    for (h, _, pts) in dash_runs(&all, k) {
+        if out.len() >= MAX_LEAVES {
+            break;
         }
+        let Some(e) = by_handle.get(&h) else { continue };
+        let swings: Vec<(Vec2, f64, [Vec2; 2])> = arc_runs(&pts)
+            .into_iter()
+            .filter(|(_, r, deg, _)| (rmin..=rmax).contains(r) && (60.0..=WIDE_SWING_MAX_DEG).contains(deg))
+            .map(|(c, _, deg, ends)| (c, deg, ends))
+            .collect();
+        leaves_of(&e.common, swings, &mut out);
     }
     out
 }
@@ -3345,6 +3520,48 @@ mod tests {
         tangent.insert(0, Vec2::new(36.0, -40.0));
         let runs = flat_swings(&tangent);
         assert_eq!(runs.len(), 1, "{runs:?}");
+    }
+
+    /// Q6487: a door swing printed dashed arrives dash by dash (each a short line): the dashes
+    /// chain into one run and the swing is read, its door found; hatching (short lines side by
+    /// side), a dashed straight line and hostile numbers make no swing.
+    #[test]
+    fn a_dashed_swing_printed_dash_by_dash_is_read() {
+        use cadaddy_doc::{Line, Space};
+        use cadaddy_geom::Vec3;
+        let mut d = Drawing::default();
+        let add = |d: &mut Drawing, a: Vec2, b: Vec2, layer: &str| {
+            let common = Common { layer: layer.into(), ..Common::default() };
+            assert!(d.add(&Space::Model, common, EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) })).is_ok());
+        };
+        // A 36" swing about the hinge at the origin in ten dashes of 5°, 4° gaps, the last one
+        // ending on its leaf.
+        for i in 0..10 {
+            let (a0, a1) = (4.0 + f64::from(i) * 9.0, 9.0 + f64::from(i) * 9.0);
+            let p = |deg: f64| Vec2::new(36.0 * deg.to_radians().cos(), 36.0 * deg.to_radians().sin());
+            add(&mut d, p(a0), p(a1), "GEOM");
+        }
+        add(&mut d, Vec2::new(0.0, 0.0), Vec2::new(0.0, 36.0), "GEOM");
+        // Hatching: short lines side by side; a dashed straight line.
+        for i in 0..12 {
+            let x = 100.0 + f64::from(i) * 3.0;
+            add(&mut d, Vec2::new(x, 0.0), Vec2::new(x + 2.0, 2.0), "GEOM");
+            add(&mut d, Vec2::new(200.0 + f64::from(i) * 6.0, 50.0), Vec2::new(204.0 + f64::from(i) * 6.0, 50.0), "GEOM");
+        }
+        // Hostile numbers among them.
+        add(&mut d, Vec2::new(f64::NAN, 0.0), Vec2::new(1.0, f64::INFINITY), "GEOM");
+        let ents: Vec<&std::sync::Arc<Entity>> = d.model.iter().collect();
+        let runs = dash_runs(&ents, 1.0);
+        let arcs: Vec<_> = runs.iter().flat_map(|(_, _, pts)| flat_swings(pts)).collect();
+        assert_eq!(arcs.len(), 1, "{runs:?}");
+        let (c, r, deg, _) = arcs[0];
+        assert!(c.dist(Vec2::new(0.0, 0.0)) < 1.0 && (r - 36.0).abs() < 1.0 && (80.0..=90.0).contains(&deg), "{arcs:?}");
+        let segs = segments(&ents);
+        let doors: Vec<_> = openings(&d, &ents, &segs, 1.0).into_iter().filter(|o| o.kind == "door").collect();
+        assert_eq!(doors.len(), 1);
+        assert!(doors[0].leaf && (doors[0].width - 36.0).abs() < 1.0);
+        // A hostile scale reads nothing.
+        assert!(dash_runs(&ents, f64::NAN).is_empty());
     }
 
     #[test]
