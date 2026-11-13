@@ -23126,6 +23126,8 @@ fn doc_objects_step(
     let mut connected: BTreeMap<String, (String, String, Option<(String, String)>)> = BTreeMap::new();
     // class → the notes speaking of every one there is (a rule, no new object).
     let mut rules_over_all: BTreeMap<String, String> = BTreeMap::new();
+    // class → the notes naming it that call for none (how to wire the ones there are).
+    let mut not_calls: BTreeMap<String, String> = BTreeMap::new();
     // The notes calling for a class in every room of a type: (class, count each, via, sheet,
     // the note, the type's words, the rooms).
     let mut room_calls: Vec<(String, u32, String, String, String, String, Vec<usize>)> = Vec::new();
@@ -23139,6 +23141,12 @@ fn doc_objects_step(
             }
             if nm.all {
                 rules_over_all.entry(class.kind.clone()).or_insert(cite);
+                continue;
+            }
+            // A note saying how to wire or build the ones there are (`CIRCUIT EXIT SIGNS TO …`)
+            // calls for none (Q6361): its connection is kept above for the ones the plans draw.
+            if !nm.calls {
+                not_calls.entry(class.kind.clone()).or_insert(cite);
                 continue;
             }
             // `IN EACH GUEST SUITE`: one (or the note's count) in every room of that type.
@@ -23803,7 +23811,7 @@ fn doc_objects_step(
     ));
     result["doc_objects"] = json!({
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
-        "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
+        "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "notes_calling_for_none": not_calls, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
         "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
         "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite, given))| json!({"kind": k, "count": n, "count_given": given, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
         "note_counts_differ": note_counts_differ,

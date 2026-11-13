@@ -361,8 +361,16 @@ fn elements_by_type(d: &Drawing, built: &HashMap<u64, Vec<Made>>) -> HashMap<Str
 
 /// A kind named by a legend or schedule row that no known kind fits: `legend:` and the row's
 /// description, lower case, its words only (`legend:night light 120v`). `None`: a row that says
-/// nothing in words.
+/// nothing in words: no word of two letters or more that is more letters than digits (room or
+/// detail numbers read off a legend's title, `101 D 101 3`, are no meaning, Q6361).
 pub(crate) fn legend_kind(description: &str) -> Option<String> {
+    let says = description.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        let letters = w.chars().filter(|c| c.is_alphabetic()).count();
+        letters >= 2 && letters > w.chars().filter(char::is_ascii_digit).count()
+    });
+    if !says {
+        return None;
+    }
     let clean: String = description.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '/' { c.to_ascii_lowercase() } else { ' ' }).collect();
     let mut out = String::new();
     for w in clean.split_whitespace().map(|w| w.trim_matches(|c| c == '-' || c == '/')).filter(|w| !w.is_empty()) {
@@ -1292,6 +1300,10 @@ mod tests {
         assert_eq!(legend_kind("NIGHT LIGHT - 120V").as_deref(), Some("legend:night light 120v"));
         assert_eq!(legend_kind("  Recessed  'Glow' marker, (typ.)").as_deref(), Some("legend:recessed glow marker typ"));
         assert_eq!(legend_kind("-- 12 / 4 --"), None);
+        // Q6361: room and detail numbers off a legend's title are no meaning.
+        assert_eq!(legend_kind("101 d 101 3"), None);
+        assert_eq!(legend_kind("2A 14 B"), None);
+        assert_eq!(legend_kind("EF-1 EXHAUST FAN").as_deref(), Some("legend:ef-1 exhaust fan"));
         assert_eq!(legend_kind(""), None);
         let long = legend_kind(&"WORD ".repeat(40)).unwrap_or_default();
         assert!(long.len() <= "legend:".len() + MAX_LEGEND_KIND && long.ends_with("word"), "{long}");
