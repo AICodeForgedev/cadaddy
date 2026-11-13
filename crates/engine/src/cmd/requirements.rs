@@ -530,7 +530,9 @@ fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::R
         rfi.assumed =
             "Built as the plans show it meanwhile (the schedule's row, or the plans' circuit, kept as printed beside the other)".to_string();
         rfi.proposed = Some(r.ask.clone());
-        rfi.sheets = (!m.sheet.is_empty()).then(|| vec![m.sheet.clone()]).unwrap_or_default();
+        if !m.sheet.is_empty() {
+            rfi.sheets = vec![m.sheet.clone()];
+        }
         rfi.sides = vec![
             RfiSide { document: if m.sheet.is_empty() { "the panel schedules".to_string() } else { m.sheet.clone() }, says: m.title() },
             RfiSide { document: r.basis.split(':').next().unwrap_or("").trim().to_string(), says: r.basis.clone() },
