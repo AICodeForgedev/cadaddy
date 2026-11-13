@@ -1749,8 +1749,9 @@ mod tests {
         assert!(off.inside_sbox(Vec3::new(100.0, 100.0, 100.0)));
     }
 
-    /// A built room with a duct out through its wall (a clash with the wall), and the model's
-    /// room leaks and level render.
+    /// A built room with a duct out through its wall (a penetration; a clash with the wall when
+    /// `bim.clash` reports normal construction too, `hosted: true`), and the model's room leaks
+    /// and level render.
     fn clash_building() -> (Session, String) {
         let mut s = Session::new();
         s.execute("layer.new", &json!({ "name": "A-WALL", "current": true })).unwrap();
@@ -1776,7 +1777,7 @@ mod tests {
         )
         .unwrap();
         s.execute("model.build", &json!({})).unwrap();
-        let r = s.execute("bim.clash", &json!({})).unwrap();
+        let r = s.execute("bim.clash", &json!({ "hosted": true })).unwrap();
         let id = r["clashes"][0]["id"].as_str().map(str::to_string);
         (s, id.unwrap_or_else(|| panic!("the duct through the wall is a clash: {r}")))
     }
