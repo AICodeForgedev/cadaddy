@@ -133,6 +133,10 @@ fn spec(walls: bool, columns: Value) -> Value {
 /// The job: with `walls` the model's shell gives the slab's edges (its exterior walls);
 /// `columns` are the structural grid's.
 fn job(walls: bool, columns: Value) -> Session {
+    job_of(spec(walls, columns))
+}
+
+fn job_of(spec: Value) -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
     rect(&mut s, [0.0, 0.0], [40.0, 24.0]);
@@ -140,7 +144,7 @@ fn job(walls: bool, columns: Value) -> Session {
     layer(&mut s, "A-ROOM-TAG");
     text(&mut s, at([20.0, 12.0]), "100", 6.0);
     notes(&mut s);
-    let r = s.execute("bspec.set", &json!({"spec": spec(walls, columns), "replace": true})).unwrap();
+    let r = s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
     assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{r}");
     s.execute("model.build", &json!({})).unwrap();
     let built = s.execute("ugsheets.build", &json!({"number": "E-UG1"})).unwrap();
@@ -230,6 +234,27 @@ fn a_proposed_feeder_is_reported_with_its_rfi_never_passed_and_an_unaccounted_ru
     assert_eq!(x["handle"], "X1", "{x}");
     // Keynote runs, the proposal and the overhead feeder are no extras.
     assert_eq!(fs.iter().filter(|f| f["verdict"] == "extra").count(), 1, "{r}");
+}
+
+#[test]
+fn a_run_the_site_work_read_off_a_sheet_of_the_set_is_no_extra() {
+    // A water service the site plan ES-1 draws, carried under the slab to the wall, as the site
+    // work builds it (its source `site work <sheet>`, its depth by rule); and one whose sheet
+    // isn't in the set.
+    let mut sp = spec(true, json!([]));
+    sp["mep"]["systems"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "P-UG-CW", "layer": "P-UG", "kind": "pipe", "size_in": [3, 0], "bottom_ft": -3.5}));
+    let runs = sp["mep"]["runs"].as_array_mut().unwrap();
+    runs.push(json!({"system": "P-UG-CW", "level": "L1", "points": [at([38.0, 12.0]), at([39.75, 12.0])], "size_in": [3, 0], "bottoms_ft": [-3.75],
+                     "height_source": "rule: 36 in cover below grade", "source_sheet": "site work ES-1", "made": "derived", "id": "CS1"}));
+    runs.push(json!({"system": "P-UG-CW", "level": "L1", "points": [at([20.0, 21.0]), at([26.0, 21.0])], "size_in": [3, 0], "bottoms_ft": [-3.75],
+                     "height_source": "rule: 36 in cover below grade", "source_sheet": "site work ES-9", "made": "derived", "id": "CS9"}));
+    let mut s = job_of(sp);
+    let (r, fs) = findings(&mut s);
+    let extra: Vec<&str> = fs.iter().filter(|f| f["verdict"] == "extra").filter_map(|f| f["handle"].as_str()).collect();
+    assert_eq!(extra, ["X1", "CS9"], "{r}");
 }
 
 #[test]

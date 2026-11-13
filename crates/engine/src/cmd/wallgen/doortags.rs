@@ -385,6 +385,7 @@ pub(crate) fn build(
             mark: Some(t.mark.chars().take(40).collect()),
             basis: None,
             at_tag: Some(AtTag { placed, operation: make.operation, counter: make.counter, basis }),
+            lift: 0.0,
         });
         report.built.push((t.mark.clone(), t.at, placed));
     }
@@ -445,7 +446,7 @@ fn cut_wall(pl: &mut PlanLevel, at: Vec2, width: f64, reach: f64, slot: f64, k: 
     let Some(host) = host_wall(&pl.walls, at, width, reach, k, slot, &|_, _, _| true) else { return };
     for (j, s0, s1) in &host.spans {
         if let Some(o) = pl.walls.get_mut(*j) {
-            o.cuts.push(Cut { s0: *s0, s1: *s1, window: false, head: Some(head), sill });
+            o.cuts.push(Cut { s0: *s0, s1: *s1, window: false, head: Some(head), sill, lift: 0.0 });
         }
     }
     let half = width / 2.0;
