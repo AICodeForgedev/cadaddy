@@ -70,8 +70,9 @@ pub(crate) struct Rules {
 #[serde(default)]
 pub(crate) struct KindRule {
     pub kind: String,
-    /// In plain words, plural (`lights`).
+    /// In plain words, plural (`lights`) and one (`light`).
     pub name: String,
+    pub one: String,
     pub legend_any: Vec<String>,
     pub legend_none: Vec<String>,
     pub engineer_disciplines: Vec<String>,
@@ -136,6 +137,11 @@ impl KindRule {
     /// Whether a sheet of `discipline` is one of this kind's engineers'.
     pub(crate) fn engineers_sheet(&self, discipline: &str) -> bool {
         self.engineer_disciplines.iter().any(|d| d.eq_ignore_ascii_case(discipline.trim()))
+    }
+
+    /// Its name for `n` of them.
+    pub(crate) fn name_for(&self, n: usize) -> &str {
+        if n == 1 && !self.one.trim().is_empty() { self.one.trim() } else { self.name.as_str() }
     }
 
     fn cluster(&self) -> f64 {
@@ -558,6 +564,8 @@ pub(crate) struct Obj {
     /// The engineer's circuit and switch leg, when given.
     pub circuit: String,
     pub leg: String,
+    /// Mounted on a wall (a wall luminaire), not in the ceiling.
+    pub wall: bool,
 }
 
 /// A room on its level's plan.
@@ -861,11 +869,21 @@ pub(crate) fn proposal(o: &Open, objs: &[Obj], rule: &KindRule, upf: f64) -> Opt
     let build = rule.build.as_ref()?;
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let key = level_key(&o.level);
-    let mine: Vec<[f64; 2]> = o.architect.iter().filter_map(|&i| objs.get(i)).map(|x| x.at).collect();
-    let dist = |x: &Obj| mine.iter().map(|p| (p[0] - x.at[0]).hypot(p[1] - x.at[1])).fold(f64::INFINITY, f64::min) / upf;
-    let theirs = || objs.iter().filter(|x| !x.architect && x.kind == o.kind && level_key(&x.level) == key);
-    let type_mark = theirs().filter(|x| !x.what.trim().is_empty()).map(|x| (x, dist(x))).min_by(|a, b| a.1.total_cmp(&b.1));
-    let circuited = theirs().filter(|x| !x.circuit.trim().is_empty()).map(|x| (x, dist(x))).min_by(|a, b| a.1.total_cmp(&b.1));
+    let group: Vec<&Obj> = o.architect.iter().filter_map(|&i| objs.get(i)).collect();
+    let wall = group.iter().any(|x| x.wall);
+    let dist = |x: &Obj| group.iter().map(|p| (p.at[0] - x.at[0]).hypot(p.at[1] - x.at[1])).fold(f64::INFINITY, f64::min) / upf;
+    // The neighbour it is completed from: the nearest of the engineer's objects of its kind on its
+    // level mounted as it is (a ceiling light's type is a ceiling light's), else the nearest.
+    let nearest = |pick: &dyn Fn(&Obj) -> bool| {
+        let theirs = || objs.iter().filter(|x| !x.architect && x.kind == o.kind && level_key(&x.level) == key && pick(x));
+        theirs()
+            .filter(|x| x.wall == wall)
+            .map(|x| (x, dist(x)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .or_else(|| theirs().map(|x| (x, dist(x))).min_by(|a, b| a.1.total_cmp(&b.1)))
+    };
+    let type_mark = nearest(&|x: &Obj| !x.what.trim().is_empty());
+    let circuited = nearest(&|x: &Obj| !x.circuit.trim().is_empty());
     let control = match circuited {
         Some((x, _)) if !x.leg.trim().is_empty() => {
             format!("switch leg {} of circuit {} (the nearest light's control)", x.leg.trim(), x.circuit.trim())
@@ -888,7 +906,7 @@ pub(crate) fn to_rfi(o: &Open, objs: &[Obj], rooms: &[Room], rules: &Rules, engi
     let a_sheets = sheets_of(objs, &o.architect);
     let a_doc = if a_sheets.is_empty() { "the architectural sheets".to_string() } else { a_sheets.join(", ") };
     let e_doc = if engineer_sheets.is_empty() { "the electrical sheets".to_string() } else { engineer_sheets.join(", ") };
-    let name = &rule.name;
+    let name = rule.name_for(n);
     let needs = if rule.requires.is_empty() { "type, circuit or control".to_string() } else { rule.requires.join(", ") };
     let traced = match o.room_counts {
         Some((ra, re)) if re > 0 => {
@@ -922,12 +940,12 @@ pub(crate) fn to_rfi(o: &Open, objs: &[Obj], rooms: &[Room], rules: &Rules, engi
     });
     let rooms_named: Vec<String> = o.rooms.iter().filter_map(|&i| rooms.get(i)).map(Room::label).take(MAX_ROOMS_NAMED).collect();
     let about = if rooms_named.is_empty() {
-        format!("{name} in {place}")
+        format!("{} in {place}", rule.name)
     } else {
         let more = o.rooms.len().saturating_sub(rooms_named.len());
-        format!("{name} on {place}: {}{}", rooms_named.join(", "), if more > 0 { format!(" and {more} more rooms") } else { String::new() })
+        format!("{} on {place}: {}{}", rule.name, rooms_named.join(", "), if more > 0 { format!(" and {more} more rooms") } else { String::new() })
     };
-    let topic = format!("{COMPLETE_TOPIC} {name}");
+    let topic = format!("{COMPLETE_TOPIC} {}", rule.name);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in format!("{topic}|{about}|{}", level_key(&o.level)).bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
@@ -950,7 +968,7 @@ pub(crate) fn to_rfi(o: &Open, objs: &[Obj], rooms: &[Room], rules: &Rules, engi
         topic,
         sides: vec![
             RfiSide { document: format!("architectural: {a_doc}"), says: format!("{n} {name} ({})", drawn_as(objs, &o.architect)) },
-            RfiSide { document: format!("electrical: {e_doc}"), says: format!("no {name} there: no {needs}") },
+            RfiSide { document: format!("electrical: {e_doc}"), says: format!("no {} there: no {needs}", rule.name) },
         ],
         ..Rfi::default()
     })
@@ -1137,6 +1155,7 @@ mod tests {
             what: if architect { "DOWN LIGHT".into() } else { "A".into() },
             circuit: if architect { String::new() } else { "L1-7".into() },
             leg: if architect { String::new() } else { "b".into() },
+            wall: false,
         }
     }
 
@@ -1175,9 +1194,16 @@ mod tests {
         assert_eq!(rfi.sheets, ["A-601", "E-101"]);
         assert_eq!(rfi.severity, Severity::High);
         assert!(rfi.topic.starts_with(COMPLETE_TOPIC), "{rfi:?}");
-        // Completed meanwhile by its neighbours: their type, circuit and switch leg.
+        // Completed meanwhile by its neighbours: their type, circuit and switch leg; a wall light
+        // nearer it lends a ceiling light nothing.
         let p = rfi.proposed.unwrap_or_default();
         assert!(p.contains("type A") && p.contains("circuit L1-7") && p.contains("switch leg b"), "{p}");
+        let mut with_wall = objs.clone();
+        with_wall.push(Obj { what: "W".into(), circuit: "L1-9".into(), leg: String::new(), wall: true, ..obj(false, 90.0, 0.0) });
+        let c2 = complete(&with_wall, &rooms, r, 12.0);
+        let o2 = c2.open.first().unwrap_or_else(|| panic!("{c2:?}"));
+        let p2 = proposal(o2, &with_wall, r.kinds.get(light()).unwrap_or_else(|| panic!("no rule")), 12.0).unwrap_or_default();
+        assert_eq!(p2.type_mark.as_ref().map(|t| t.0.as_str()), Some("A"), "{p2:?}");
         assert!(line(o, &objs, &rooms, r, &es).contains("SNACK ALCOVE 12 (level LEVEL 1): lights A: 2 on A-601, E: 0 on E-101"));
     }
 

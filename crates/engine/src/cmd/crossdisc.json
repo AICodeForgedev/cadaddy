@@ -93,7 +93,8 @@
         "control"
       ],
       "_requires": "the luminaire schedule (type); NEC 210.11 (every outlet on a branch circuit); NEC 210.70 and the energy code's lighting controls (control)",
-      "open_severity": "high"
+      "open_severity": "high",
+      "one": "light"
     },
     {
       "kind": "exit_sign",
@@ -120,7 +121,8 @@
         "circuit"
       ],
       "_requires": "IBC 1013 / NFPA 101 7.10 (an illuminated exit sign on its emergency source); NEC 700",
-      "open_severity": "high"
+      "open_severity": "high",
+      "one": "exit sign"
     },
     {
       "kind": "receptacle",
@@ -154,7 +156,8 @@
         "circuit"
       ],
       "_requires": "NEC 210.11 (every outlet on a branch circuit)",
-      "open_severity": "medium"
+      "open_severity": "medium",
+      "one": "receptacle"
     },
     {
       "kind": "data_outlet",
@@ -189,7 +192,8 @@
         "cable path"
       ],
       "_requires": "the telecommunications drawings (a cable and pathway to its room)",
-      "open_severity": "medium"
+      "open_severity": "medium",
+      "one": "data or telephone outlet"
     },
     {
       "kind": "switch",
@@ -225,7 +229,8 @@
         "circuit"
       ],
       "_requires": "NEC 404 and 210.70",
-      "open_severity": "medium"
+      "open_severity": "medium",
+      "one": "switch"
     },
     {
       "kind": "fan",
@@ -259,7 +264,8 @@
         "control"
       ],
       "_requires": "NEC 422 / 430 (a fan's branch circuit and disconnect)",
-      "open_severity": "medium"
+      "open_severity": "medium",
+      "one": "exhaust or ceiling fan"
     },
     {
       "kind": "door_power",
@@ -303,7 +309,8 @@
         "connection"
       ],
       "_requires": "NEC 210.11; the door hardware schedule",
-      "open_severity": "medium"
+      "open_severity": "medium",
+      "one": "piece of powered door hardware"
     },
     {
       "kind": "sign",
@@ -334,7 +341,8 @@
         "circuit"
       ],
       "_requires": "NEC 600.5 (a sign outlet on its own branch circuit)",
-      "open_severity": "medium"
+      "open_severity": "medium",
+      "one": "illuminated sign"
     }
   ],
   "rooms": {

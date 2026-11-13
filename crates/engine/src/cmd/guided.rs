@@ -12940,6 +12940,7 @@ fn architect_objects_step(
             what: dv.tag.clone(),
             circuit: dv.circuit.clone(),
             leg: dv.leg.clone(),
+            wall: kind.contains("wall"),
         });
         origin.push(None);
     }
