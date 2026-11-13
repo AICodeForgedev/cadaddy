@@ -1239,6 +1239,9 @@ pub(crate) fn device_kind(tag: &str) -> &'static str {
 
 /// Properties a check gives one device, written at most.
 const MAX_DEVICE_NOTES: usize = 16;
+/// The properties a check gives a device it made (Q6612) that its built element carries too: how
+/// sure it is, why no engineer's sheet has it, what is proposed for it, the RFI asking about it.
+pub(crate) const CHECK_FIELDS: [&str; 5] = ["confidence", "not_on_electrical", "proposed_circuit", "proposed_control", "rfi"];
 
 /// Devices listed at most per call, and read at most.
 const DEVICES_LISTED: usize = 500;

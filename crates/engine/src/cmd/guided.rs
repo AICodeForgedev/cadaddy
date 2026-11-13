@@ -37599,6 +37599,21 @@ mod tests {
             assert_eq!(f("device_kind"), "luminaire");
             assert!(f("circuit").is_empty() && f("proposed_circuit").starts_with("L1-7"), "{t:?}");
         }
+        // Built: the luminaires carry the mark and the proposal themselves.
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let built: Vec<_> = s
+            .doc()
+            .map(|d| {
+                d.model
+                    .iter()
+                    .map(|e| cadaddy_doc::props::read(&e.common.xdata))
+                    .filter(|p| p.get("confidence").is_some_and(|v| v.text() == "unsure"))
+                    .map(|p| (p.get("status").map(|v| v.text()).unwrap_or_default(), p.get("proposed_circuit").map(|v| v.text()).unwrap_or_default()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(built.len(), 2, "{built:?}");
+        assert!(built.iter().all(|(st, c)| st == "inferred" && c.starts_with("L1-7")), "{built:?}");
         let read = s.execute("rfi.read", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         let items = read["items"].as_array().cloned().unwrap_or_default();
         let item = items.iter().find(|i| i["about"].as_str().is_some_and(|a| a.contains("SNACK ALCOVE 112"))).unwrap_or_else(|| panic!("{read:#}"));

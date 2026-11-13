@@ -13,6 +13,8 @@
   "_legend_rows_h": "A legend's rows reach at most this many row heights under its heading.",
   "legend_gap_h": 12.0,
   "_legend_gap_h": "A gap of more than this many row heights between two rows ends the legend (rows are spaced by their drawings: a ceiling tile's square, a fixture's bar); so does a heading taller than its rows under it.",
+  "legend_row_max_words": 10,
+  "_legend_row_max_words": "A legend row names its symbol in a few words; a longer line under a legend's heading is a note, no row.",
   "legend_drawing_h": 16.0,
   "_legend_drawing_h": "A row's drawing lies at most this many row heights left of its words.",
   "kinds": [

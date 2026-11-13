@@ -55,6 +55,7 @@ pub(crate) struct Rules {
     pub legend_rows_h: f64,
     pub legend_gap_h: f64,
     pub legend_drawing_h: f64,
+    pub legend_row_max_words: usize,
     pub kinds: Vec<KindRule>,
     pub rooms: RoomRules,
     pub max_findings: usize,
@@ -378,12 +379,17 @@ pub(crate) fn legends(texts: &[TextItem], drawn: &[Piece], rules: &Rules) -> Leg
                 },
             }
         }
-        out.unread.extend(loose.into_iter().filter_map(|(_, text)| Some((rules.kind_of_row(&text)?, text))));
+        let short = |text: &str| text.split_whitespace().count() <= rules.legend_row_max_words.max(1);
+        out.unread.extend(loose.into_iter().filter(|(_, text)| short(text)).filter_map(|(_, text)| Some((rules.kind_of_row(&text)?, text))));
         for ((_, _, pieces), lines) in cells.into_iter().zip(words) {
             if lines.is_empty() {
                 continue;
             }
             let text = lines.iter().map(|u| u.value.trim()).collect::<Vec<_>>().join(" ");
+            // (A paragraph of notes under a legend's heading is no row of it.)
+            if !short(&text) {
+                continue;
+            }
             let Some(kind) = rules.kind_of_row(&text) else { continue };
             if pieces.len() > MAX_ROW_PIECES {
                 out.unread.push((kind, text));
@@ -833,13 +839,13 @@ pub(crate) fn compare(objs: &[Obj], rooms: &[Room], rules: &Rules, upf: f64, par
             let architect_level = a_levels.contains(key);
             let (arch, eng): (Vec<usize>, Vec<usize>) = on_level.iter().partition(|&&i| objs.get(i).is_some_and(|o| o.architect));
             // By position first: the architect's objects with no engineer's object of the kind near
-            // (in the same room: a light across a wall lights another room).
+            // in the same room (a light across a wall lights another room; one outside every traced
+            // room is near only another outside them).
             let room_at = |i: usize| room_of.get(i).copied().flatten();
             let near_engineer = |i: usize, o: &Obj| {
-                eng.iter().filter_map(|&j| Some((j, objs.get(j)?))).any(|(j, x)| {
-                    (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach
-                        && (room_at(i).is_none() || room_at(j).is_none() || room_at(i) == room_at(j))
-                })
+                eng.iter()
+                    .filter_map(|&j| Some((j, objs.get(j)?)))
+                    .any(|(j, x)| (x.at[0] - o.at[0]).hypot(x.at[1] - o.at[1]) <= reach && room_at(i) == room_at(j))
             };
             let bare: Vec<usize> = arch.iter().copied().filter(|&i| objs.get(i).is_some_and(|o| !near_engineer(i, o))).collect();
             let bare_set: BTreeSet<usize> = bare.iter().copied().collect();
@@ -1457,6 +1463,13 @@ mod tests {
     fn a_legend_row_the_job_cant_read_makes_the_architects_count_partial() {
         let (mut texts, drawn) = legend_sheet();
         texts.push(t("LINEAR LIGHT", 130.0, 395.0, 3.0));
+        // A paragraph of notes under it naming lights among much else is no row.
+        texts.push(t(
+            "COORDINATE THE LOCATION OF WALL MOUNTED DEVICES INCLUDING RECEPTACLES SWITCHES LIGHT FIXTURES AND DATA BOXES",
+            130.0,
+            380.0,
+            3.0,
+        ));
         let l = legends(&texts, &drawn, rules());
         let light = rules().kinds.iter().position(|k| k.kind == "light").unwrap_or(0);
         assert_eq!(l.unread, [(light, "LINEAR LIGHT".to_string())], "{l:?}");
