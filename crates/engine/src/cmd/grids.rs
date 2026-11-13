@@ -1762,11 +1762,12 @@ pub(crate) fn overlay_share(pts: &[Vec2], on: &[Vec2], k: f64) -> f64 {
 /// with its score (F1 of the view's lines on the plan and the plan's lines under the view that the
 /// view has) and its margin over the best fit 10' or more away; `None` without one.
 /// Votes on a 4' grid over scales 0.4-2.5, then refines on a 1' grid.
+#[cfg(test)]
 pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, Vec2, f64, f64)> {
     linework_fit_within(src, tgt, k, 0.4, 2.5)
 }
 
-/// [`linework_fit`] over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
+/// A whole view's linework fit over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
 pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
     fit_linework(src, tgt, k, lo, hi, true, &mut FitStats::default())
 }
@@ -1911,7 +1912,187 @@ fn vote_cells(scells: Vec<(i64, i64)>, tcells: &[(i64, i64)]) -> (Vec<(i64, i64)
     (s, t, true, dense)
 }
 
+/// A linework fit in full: the placement, its score, its margin, and the placement that margin is
+/// over (the best one 10' or more away), so a near tie can be weighed by other evidence or
+/// reported rather than decided by the order the candidates were scored in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LineworkFit {
+    pub scale: f64,
+    pub offset: Vec2,
+    pub score: f64,
+    pub margin: f64,
+    /// The best placement 10' or more away: scale, offset and score.
+    pub runner: Option<(f64, Vec2, f64)>,
+}
+
+impl LineworkFit {
+    fn tuple(self) -> (f64, Vec2, f64, f64) {
+        (self.scale, self.offset, self.score, self.margin)
+    }
+}
+
+/// A whole view's linework laid over a floor plan at any scale 0.4-2.5, in full ([`LineworkFit`]).
+pub(crate) fn linework_fit_detail(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<LineworkFit> {
+    fit_linework_detail(src, tgt, k, 0.4, 2.5, true, &mut FitStats::default())
+}
+
+/// [`linework_fit_part`] in full ([`LineworkFit`]).
+pub(crate) fn linework_fit_part_detail(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<LineworkFit> {
+    fit_linework_detail(src, tgt, k, lo, hi, false, &mut FitStats::default())
+}
+
+/// A whole view's fit whose margin over every scale is under this is a near tie: which placement
+/// wins is up to a few lines (Q6606: a floor's background beat a 73% copy of itself, the floor's
+/// key plan, by two points; restoring one window's lines on the plan flipped it out).
+pub(crate) const NEAR_TIE: f64 = 0.10;
+/// A placement this share off the ratio of the printed scales is drawn at them (a percent or two
+/// is the fit's sampling, as the level views' one-to-one snap allows).
+pub(crate) const PRINTED_SCALE_BAND: f64 = 0.03;
+/// A fit re-weighed at the printed scale lands within this many inches of where the fit put the
+/// view's middle, or the printed scale is not the fit's (another drawing).
+const PRINTED_SCALE_AGREE_IN: f64 = 36.0;
+/// Scores this close are a tie (a percent of scale apart is under the fit's foot at a floor's walls).
+const SCALE_PLATEAU: f64 = 0.02;
+
+/// How a whole view's linework (a sheet's screened background) was laid on its level's plan.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ViewFit {
+    /// Decisive over every scale tried: [`NEAR_TIE`] or more over the best placement 10' away.
+    Decisive(LineworkFit),
+    /// A near tie over every scale (`tie`), settled by the scale the sheet prints: the fit at it
+    /// holds over every other placement at that scale (a copy at another scale, a key plan or a
+    /// detail, is another drawing).
+    PrintedScale { fit: LineworkFit, tie: Option<LineworkFit> },
+    /// Neither: a near tie the printed scale doesn't settle (a run of identical bays at the
+    /// printed scale), or no fit; reported, never decided by the order the placements were scored.
+    Uncertain { tie: Option<LineworkFit>, at_scale: Option<LineworkFit> },
+}
+
+impl ViewFit {
+    /// The placement to use, if any.
+    pub(crate) fn fit(&self) -> Option<LineworkFit> {
+        match self {
+            ViewFit::Decisive(f) | ViewFit::PrintedScale { fit: f, .. } => Some(*f),
+            ViewFit::Uncertain { .. } => None,
+        }
+    }
+}
+
+/// The fit of a whole view's linework `src` on a floor plan's `tgt` (`k` units per inch), the
+/// sheets' printed scales giving the ratio `ratio` (1 when unknown): [`linework_fit_detail`] over every
+/// scale, and when that is a near tie ([`NEAR_TIE`]) or too weak, the fit at the printed scale
+/// ([`PRINTED_SCALE_BAND`] about `ratio`, each scale proposing several placements so a bay over is
+/// weighed), used when it holds `min_f1` and `min_margin` over every placement at that scale.
+pub(crate) fn whole_view_fit(src: &[Vec2], tgt: &[Vec2], k: f64, ratio: f64, min_f1: f64, min_margin: f64) -> ViewFit {
+    let whole = linework_fit_detail(src, tgt, k);
+    if let Some(f) = whole.filter(|f| f.score >= min_f1 && f.margin >= NEAR_TIE) {
+        return ViewFit::Decisive(f);
+    }
+    let r = if ratio.is_finite() && ratio > 0.0 { ratio } else { 1.0 };
+    let at_scale = linework_fit_part_detail(src, tgt, k, r * (1.0 - PRINTED_SCALE_BAND), r * (1.0 + PRINTED_SCALE_BAND));
+    // Its scale within the band is the sampling's: at the ratio itself where that holds (its
+    // margin the smaller of the two, a placement 10' away as close at either counts).
+    let at_scale = at_scale.map(|f| {
+        at_printed_scale(src, tgt, k, r, f.scale, f.offset, f.score).map_or(f, |e| LineworkFit {
+            margin: e.margin.min(f.margin),
+            runner: e.runner.or(f.runner),
+            ..e
+        })
+    });
+    match at_scale.filter(|f| f.score >= min_f1 && f.margin >= min_margin) {
+        Some(fit) => ViewFit::PrintedScale { fit, tie: whole },
+        None => ViewFit::Uncertain { tie: whole, at_scale },
+    }
+}
+
+/// Steps of 3" each way a placement's best run is looked for in.
+const PLATEAU_STEPS: i32 = 4;
+/// Times the best run is looked for again about its last middle, at most.
+const PLATEAU_LOOKS: usize = 4;
+
+/// The middle of the placements of `src` at scale `s` within [`PLATEAU_STEPS`] steps of 3" of
+/// `t` that score best on `tgt` (F1 as the fit weighs it). Lines are compared on 1' cells grown
+/// by one, so a right placement scores alike over a foot or two; the fit keeps the first best it
+/// tried (the lowest offsets), the middle of the run is where the lines lie on each other.
+fn plateau_middle(src: &[Vec2], tgt: &[Vec2], k: f64, s: f64, t: Vec2) -> Vec2 {
+    if src.is_empty() || tgt.is_empty() || !(s.is_finite() && s > 0.0 && k.is_finite() && k > 0.0) {
+        return t;
+    }
+    let few: Vec<Vec2> = src.iter().step_by((src.len() / 2000).max(1)).copied().collect();
+    let dense: Vec<Vec2> = src.iter().step_by((src.len() / 12_000).max(1)).copied().collect();
+    let fine = Occupancy::new(tgt, 12.0 * k, 1);
+    let mine = Occupancy::new(&dense, 12.0 * k / s, 1);
+    let stride = (tgt.len() / 20_000).max(1);
+    let pad = 12.0 * k * f64::from(PLATEAU_STEPS);
+    let placed0 = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
+    let near: Vec<Vec2> = tgt
+        .iter()
+        .copied()
+        .filter(|p| p.x >= placed0.min.x - pad && p.x <= placed0.max.x + pad && p.y >= placed0.min.y - pad && p.y <= placed0.max.y + pad)
+        .collect();
+    let f1 = |t: Vec2| {
+        let r = fine.score(&few, s, t);
+        let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
+        let under: Vec<Vec2> = near.iter().copied().filter(|p| placed.contains(*p)).step_by(stride).collect();
+        let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit((**q - t) * (1.0 / s))).count() as f64 / under.len() as f64 };
+        if r + p > 0.0 { 2.0 * r * p / (r + p) } else { 0.0 }
+    };
+    let tries: Vec<Vec2> = (-PLATEAU_STEPS..=PLATEAU_STEPS)
+        .flat_map(|dx| (-PLATEAU_STEPS..=PLATEAU_STEPS).map(move |dy| t + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k)))
+        .collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let scored: Vec<(f64, Vec2)> = {
+        use rayon::prelude::*;
+        tries.par_iter().map(|t| (f1(*t), *t)).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let scored: Vec<(f64, Vec2)> = tries.iter().map(|t| (f1(*t), *t)).collect();
+    let best = scored.iter().map(|x| x.0).fold(0.0f64, f64::max);
+    let on: Vec<Vec2> = scored.iter().filter(|x| x.0 >= best - 1e-9).map(|x| x.1).collect();
+    if best <= 0.0 || on.is_empty() {
+        return t;
+    }
+    let m = on.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / on.len() as f64);
+    if m.x.is_finite() && m.y.is_finite() { m } else { t }
+}
+
+/// A fit (`s`, `t`, `score`) within [`PRINTED_SCALE_BAND`] of the printed scales' ratio `r`,
+/// re-weighed at `r` exactly: the scales a percent apart around it score alike (the fit's foot is
+/// wider than a percent of a floor), so which of them won is noise, and with it where the view
+/// lands. The placement at `r`, when it scores among the best and lands the view's middle where
+/// the fit did; `None` otherwise (the fit stands).
+pub(crate) fn at_printed_scale(src: &[Vec2], tgt: &[Vec2], k: f64, r: f64, s: f64, t: Vec2, score: f64) -> Option<LineworkFit> {
+    if !(r.is_finite() && r > 0.0 && (s / r - 1.0).abs() <= PRINTED_SCALE_BAND) || src.is_empty() {
+        return None;
+    }
+    let mid = src.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len() as f64);
+    let exact = linework_fit_part_detail(src, tgt, k, r, r)?;
+    // Its refinement moves the scale a few tenths of a percent: at `r` itself, about the middle,
+    // then the middle of the placements that score best there (the fit keeps the first of them).
+    let mut offset = exact.offset + mid * (exact.scale - r);
+    // Looked for about where the last look put it, until it stays (a run wider than the steps
+    // looked at is cut off on one side).
+    for _ in 0..PLATEAU_LOOKS {
+        let next = plateau_middle(src, tgt, k, r, offset);
+        let moved = next.dist(offset);
+        offset = next;
+        if moved < 0.5 * k {
+            break;
+        }
+    }
+    let agree = (mid * r + offset).dist(mid * s + t) <= PRINTED_SCALE_AGREE_IN * k;
+    (agree && exact.score >= score - SCALE_PLATEAU && offset.x.is_finite() && offset.y.is_finite()).then_some(LineworkFit {
+        scale: r,
+        offset,
+        ..exact
+    })
+}
+
 fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool, stats: &mut FitStats) -> Option<(f64, Vec2, f64, f64)> {
+    fit_linework_detail(src, tgt, k, lo, hi, whole, stats).map(LineworkFit::tuple)
+}
+
+fn fit_linework_detail(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool, stats: &mut FitStats) -> Option<LineworkFit> {
     if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
         return None;
     }
@@ -2065,8 +2246,10 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
     // The best placement well away from it (one bay over, another view).
     let probe = few.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / few.len() as f64);
     let at = probe * s + t;
-    let second = refined.iter().skip(1).filter(|(_, s2, t2)| (probe * *s2 + *t2).dist(at) >= 120.0 * k).map(|r| r.0).fold(0.0, f64::max);
-    Some((s, t, score, score - second))
+    // The first best kept on a tie (sorted best first, stably).
+    let runner = refined.iter().skip(1).find(|(_, s2, t2)| (probe * *s2 + *t2).dist(at) >= 120.0 * k).map(|&(f, s2, t2)| (s2, t2, f));
+    let second = runner.map_or(0.0, |r| r.2.max(0.0));
+    Some(LineworkFit { scale: s, offset: t, score, margin: score - second, runner })
 }
 
 #[cfg(test)]
@@ -2442,6 +2625,87 @@ mod tests {
         }
         let typical: Vec<Vec2> = sampled(&room(Vec2::new(0.0, 360.0), 240.0, 360.0, 48.0)).into_iter().map(|p| p + off).collect();
         assert!(linework_fit_part(&typical, &sampled(&rep), 1.0, 0.97, 1.03).is_none_or(|f| f.3 < 0.03), "a typical room has no one place");
+    }
+
+    /// A 200' x 60' floor of rooms of different sizes and door places along a corridor wall, its
+    /// corner at `at`, drawn at `k`.
+    fn varied_floor(at: Vec2, k: f64) -> Vec<(Vec2, Vec2)> {
+        let mut segs = vec![(Vec2::new(0.0, 0.0), Vec2::new(2400.0, 0.0)), (Vec2::new(0.0, 720.0), Vec2::new(2400.0, 720.0))];
+        let mut x = 0.0;
+        for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 276.0, 192.0, 228.0, 216.0].iter().enumerate() {
+            segs.extend(room(Vec2::new(x, 360.0), *w, 360.0, 24.0 + 12.0 * i as f64));
+            segs.extend(room(Vec2::new(x, 0.0), *w, 300.0, 30.0 + 9.0 * i as f64));
+            x += w;
+        }
+        segs.into_iter().map(|(a, b)| (at + a * k, at + b * k)).collect()
+    }
+
+    #[test]
+    fn a_near_tie_with_a_copy_at_another_scale_is_settled_by_the_printed_scale() {
+        // Q6606: the floor plan sheet also draws the floor at 73% below it (a key plan). A screened
+        // background of the whole floor, drawn at the plan's printed scale on another sheet, lies
+        // on both: over every scale the fit is a coin flip between the floor and its key plan.
+        let mut plan_segs = varied_floor(Vec2::new(0.0, 0.0), 1.0);
+        plan_segs.extend(varied_floor(Vec2::new(200.0, -900.0), 0.73));
+        let plan = sampled(&plan_segs);
+        let off = Vec2::new(60_000.0, -300.0);
+        let view: Vec<Vec2> = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0)).into_iter().map(|p| p + off).collect();
+        let every = linework_fit_detail(&view, &plan, 1.0).expect("a fit");
+        assert!(every.margin < NEAR_TIE, "over every scale a near tie: {every:?}");
+        // At the sheet's printed scale (ratio 1) the key plan is another drawing: the floor wins,
+        // every other placement at that scale far behind.
+        let got = whole_view_fit(&view, &plan, 1.0, 1.0, 0.9, 0.03);
+        let ViewFit::PrintedScale { fit, .. } = got else { panic!("not settled by the printed scale: {got:?}") };
+        let corner = off * fit.scale + fit.offset;
+        assert!(fit.scale == 1.0 && corner.dist(Vec2::new(0.0, 0.0)) < 18.0, "{fit:?}, corner at {corner:?}");
+        assert!(fit.score >= 0.9 && fit.margin >= 0.03, "{fit:?}");
+        // Drawn at half the plan's printed scale (ratio 2), its fit is at that ratio.
+        let half: Vec<Vec2> = view.iter().map(|p| *p * 0.5).collect();
+        let at_two = whole_view_fit(&half, &plan, 1.0, 2.0, 0.9, 0.03).fit().expect("a fit at ratio 2");
+        assert!(at_two.scale == 2.0 && (off * 0.5 * at_two.scale + at_two.offset).dist(Vec2::new(0.0, 0.0)) < 18.0, "{at_two:?}");
+    }
+
+    #[test]
+    fn a_near_tie_among_identical_bays_at_the_printed_scale_is_uncertain() {
+        // A corridor of identical rooms longer than the view of it: every bay over fits as well at
+        // the printed scale too. Never decided by which placement was scored first.
+        let bays = |n: i32| -> Vec<(Vec2, Vec2)> {
+            let mut segs = vec![(Vec2::new(0.0, 0.0), Vec2::new(240.0 * f64::from(n), 0.0))];
+            for i in 0..n {
+                segs.extend(room(Vec2::new(f64::from(i) * 240.0, 360.0), 240.0, 360.0, 48.0));
+            }
+            segs
+        };
+        let plan = sampled(&bays(16));
+        let view: Vec<Vec2> = sampled(&bays(10)).into_iter().map(|p| p + Vec2::new(60_000.0, 0.0)).collect();
+        let got = whole_view_fit(&view, &plan, 1.0, 1.0, 0.9, 0.03);
+        assert!(matches!(got, ViewFit::Uncertain { .. }), "{got:?}");
+        assert_eq!(got.fit(), None);
+    }
+
+    #[test]
+    fn a_view_fitted_a_percent_either_side_of_its_printed_scale_lands_in_one_place() {
+        // Q6606: a two-level sheet's views fitted at 0.999 and 0.989 with equal scores, and
+        // restoring one window's lines on the plan swapped them. Weighed at the printed scale,
+        // the placement is the same whichever scale a percent away won.
+        let plan = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0));
+        let off = Vec2::new(60_000.0, -300.0);
+        let view: Vec<Vec2> = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0)).into_iter().map(|p| p + off).collect();
+        let mid = view.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / view.len() as f64);
+        // Two fits a percent either side of one to one, each with the view's middle in place.
+        let near = |s: f64| (s, mid * (1.0 - s) - off);
+        let (s1, t1) = near(0.989);
+        let (s2, t2) = near(1.009);
+        let a = at_printed_scale(&view, &plan, 1.0, 1.0, s1, t1, 0.97).expect("a fit at one to one");
+        let b = at_printed_scale(&view, &plan, 1.0, 1.0, s2, t2, 0.97).expect("a fit at one to one");
+        assert_eq!((a.scale.to_bits(), a.offset.x.to_bits(), a.offset.y.to_bits()), (b.scale.to_bits(), b.offset.x.to_bits(), b.offset.y.to_bits()));
+        // The middle of the placements that score alike (lines are compared a foot or two apart),
+        // not the first of them: within a few inches.
+        assert!(a.scale == 1.0 && (off + a.offset).dist(Vec2::new(0.0, 0.0)) < 6.0, "{a:?}");
+        // A fit far from where one to one puts the view (another drawing) is left as it was.
+        assert_eq!(at_printed_scale(&view, &plan, 1.0, 1.0, 1.0, -off + Vec2::new(600.0, 0.0), 0.97), None);
+        // Off the printed scale by more than the band: not this rule's.
+        assert_eq!(at_printed_scale(&view, &plan, 1.0, 1.0, 0.9, t1, 0.97), None);
     }
 
     #[test]
