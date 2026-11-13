@@ -28530,7 +28530,7 @@ fn arch_placer(
     let ratio_bg = {
         let (plan_upf, plan_sheet) = (plan_upf.clone(), plan_sheet.clone());
         move |i: usize, key: &str| {
-            super::sheetreg::scale_ratio(plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()), plan_upf.get(i).copied().flatten())
+            super::sheetreg::scale_ratio(plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()), plan_upf.get(i).copied().flatten(), upf)
         }
     };
     // A sheet's own linework laid on its level's plan (Q6284: a trade plan whose tags are few or
