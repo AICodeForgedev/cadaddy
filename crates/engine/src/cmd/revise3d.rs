@@ -557,6 +557,8 @@ pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
 /// made from no plan object (devices and equipment from the spec's tags): with the bare tag they
 /// all shared one key, and one deleted by hand took all of them away at the next rebuild.
 fn twin_key(e: &Entity) -> Option<TagKey> {
+    #[cfg(test)]
+    tests::TWIN_KEYS.with(|n| n.set(n.get() + 1));
     let (part, level, mut source) = tag_key(e)?;
     if !source.contains('#') {
         let id = super::bimlook::made_tag(e, "devid").or_else(|| super::bimlook::made_name(e)).filter(|i| !i.is_empty());
@@ -651,6 +653,11 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
         _ => as_built,
     };
     let mut kept = Kept { kept: Vec::new(), conflicts: Vec::new(), deleted: 0 };
+    // The rebuilt objects by twin key, worked out once: every edit and deletion looks its twins
+    // up here, and the map follows what is taken away and put back. (A scan of the model per edit,
+    // and the deletions are carried into every later rebuild: 4,000 deleted and 4,000 edited of
+    // 56,000 objects took 55 s a rebuild.)
+    let mut twins = if edited.is_empty() && deleted.is_empty() { HashMap::new() } else { twins_by_key(s.doc()?) };
     for e in edited {
         let src = source_of(&e);
         let part = wallgen::made_as(&e).unwrap_or_default();
@@ -661,12 +668,14 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
         // The rebuilt counterparts give way to the edited object.
         let key = twin_key(&e);
         let d = s.doc_mut()?;
-        let twins: Vec<Handle> = d.model.iter().filter(|x| key.is_some() && twin_key(x) == key).map(|x| x.handle).collect();
-        for h in twins {
+        for h in key.as_ref().and_then(|k| twins.remove(k)).unwrap_or_default() {
             d.remove_entity(h);
         }
         let h = if d.entity(e.handle).is_none() { e.handle } else { d.new_handle() };
         d.model.push(Entity { handle: h, ..e });
+        if let Some(k) = key {
+            twins.entry(k).or_default().push(h);
+        }
         kept.kept.push(h);
     }
     // Deleted by hand: stays deleted unless its plan object changed (then it conflicts).
@@ -678,8 +687,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
             continue;
         }
         let d = s.doc_mut()?;
-        let twins: Vec<Handle> = d.model.iter().filter(|x| twin_key(x).as_ref() == Some(&key)).map(|x| x.handle).collect();
-        for h in twins {
+        for h in twins.remove(&key).unwrap_or_default() {
             if d.remove_entity(h).is_some() {
                 kept.deleted += 1;
             }
@@ -700,6 +708,17 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     // Built from these rules: the model's own from now on.
     s.state_mut()?.wallgen = Some(g.clone());
     Ok((built, kept))
+}
+
+/// The objects of `d` with a twin key (the generated ones), by it, in drawing order.
+fn twins_by_key(d: &Drawing) -> HashMap<TagKey, Vec<Handle>> {
+    let mut out: HashMap<TagKey, Vec<Handle>> = HashMap::new();
+    for e in d.model.iter() {
+        if let Some(k) = twin_key(e) {
+            out.entry(k).or_default().push(e.handle);
+        }
+    }
+    out
 }
 
 /// Give rebuilt objects back the handles their counterparts had before the build (`handles_of`,
@@ -905,4 +924,119 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out["last"] = json!({ "totals": short["totals"], "auto": last["auto"], "rebuilt": last["rebuilt"] });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_doc::Line;
+    use cadaddy_geom::Vec3;
+
+    thread_local! {
+        /// Twin keys worked out on this thread (each test runs on its own).
+        pub(super) static TWIN_KEYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// `n` free-standing 6" walls 10' long, 3' apart, each two lines on a wall layer; built (not
+    /// associative). The plan lines of each wall, west to east.
+    fn walls(n: usize) -> (Session, Vec<[Handle; 2]>) {
+        let mut d = Drawing::new_imperial();
+        let line = |d: &mut Drawing, x: f64| {
+            let h = Handle(d.handseed.max(0x100));
+            d.handseed = h.0 + 1;
+            let p = |y: f64| Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
+            let mut e = Entity::new(h, EntityKind::Line(Line { a: p(0.0), b: p(10.0) }));
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+            h
+        };
+        let plan: Vec<[Handle; 2]> = (0..n)
+            .map(|i| {
+                let x = i as f64 * 3.0;
+                [line(&mut d, x), line(&mut d, x + 0.5)]
+            })
+            .collect();
+        let mut s = Session::empty();
+        s.open_drawing(d, "Plan", None);
+        let rules = json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        });
+        s.execute("wallgen", &json!({"rules": rules, "auto": false})).unwrap();
+        (s, plan)
+    }
+
+    /// The generated walls, west to east (by the plan line they come from).
+    fn built_walls(s: &Session) -> Vec<Handle> {
+        let mut w: Vec<(Option<Handle>, Handle)> =
+            s.doc().unwrap().model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")).map(|e| (source_of(e), e.handle)).collect();
+        w.sort_unstable();
+        w.into_iter().map(|(_, h)| h).collect()
+    }
+
+    /// Move the last wall's plan lines 1' north: the plan changed, so model.revise rebuilds.
+    /// Returns the twin keys the revise worked out.
+    fn revise_after_a_plan_edit(s: &mut Session, plan: &[[Handle; 2]]) -> usize {
+        let last = plan.last().unwrap();
+        s.execute("move", &json!({"handles": [last[0].hex(), last[1].hex()], "from": [0, 0], "to": [0, 12]})).unwrap();
+        TWIN_KEYS.with(|n| n.set(0));
+        let r = s.execute("model.revise", &json!({})).unwrap();
+        assert_eq!(r["rebuilt"], true, "{r}");
+        TWIN_KEYS.with(std::cell::Cell::get)
+    }
+
+    /// Q6463: each object edited or deleted by hand scanned the whole model for its rebuilt twins,
+    /// and the deletions are carried into every later rebuild: on a big model every rebuild
+    /// worked out the twin key of every object once per edit. Now one map per rebuild.
+    #[test]
+    fn a_rebuild_looks_hand_edits_up_once_not_a_model_scan_each() {
+        let (mut s, plan) = walls(60);
+        let all = built_walls(&s);
+        assert_eq!(all.len(), 60, "one wall per pair of plan lines");
+        // 20 walls deleted by hand, 20 recoloured; the last wall's plan lines will move.
+        let (deleted, edited) = (&all[..20], &all[20..40]);
+        for h in deleted {
+            s.doc_mut().unwrap().remove_entity(*h);
+        }
+        for h in edited {
+            s.doc_mut().unwrap().modify_entity(*h, |e| e.common.color = cadaddy_doc::color::Color::Index(1)).unwrap();
+        }
+        let objects = s.doc().unwrap().model.len();
+        for pass in 0..3 {
+            let keys = revise_after_a_plan_edit(&mut s, &plan);
+            // A few passes over the model (record, carried deletions, the twins map, handles
+            // kept), not one per edit: 40 edits made it 40 passes and more.
+            assert!(keys <= 8 * objects, "rebuild {pass}: {keys} twin keys for {objects} objects");
+            // And the edits are kept: the deleted walls stay deleted, the recoloured stay red.
+            let now = built_walls(&s);
+            assert_eq!(now.len(), 40, "rebuild {pass}: the deleted walls aren't rebuilt");
+            let red =
+                now.iter().filter(|h| s.doc().unwrap().entity(**h).is_some_and(|e| e.common.color == cadaddy_doc::color::Color::Index(1))).count();
+            assert_eq!(red, 20, "rebuild {pass}: the recoloured walls stay recoloured");
+        }
+    }
+
+    /// The timings for Q6463 (not run by default): `N` walls, `K` deleted and `K` recoloured by
+    /// hand, then two rebuilds.
+    #[test]
+    #[ignore]
+    fn time_rebuilds_after_many_hand_edits() {
+        let var = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let (n, k) = (var("REVISE_N", 5000), var("REVISE_K", 1000));
+        let (mut s, plan) = walls(n);
+        let all = built_walls(&s);
+        for h in all.iter().take(k) {
+            s.doc_mut().unwrap().remove_entity(*h);
+        }
+        for h in all.iter().skip(k).take(k) {
+            s.doc_mut().unwrap().modify_entity(*h, |e| e.common.color = cadaddy_doc::color::Color::Index(1)).unwrap();
+        }
+        let objects = s.doc().unwrap().model.len();
+        for pass in 0..2 {
+            let t = std::time::Instant::now();
+            let keys = revise_after_a_plan_edit(&mut s, &plan);
+            eprintln!("N={n} K={k} objects={objects} rebuild {pass}: {:.2} s, {keys} twin keys", t.elapsed().as_secs_f64());
+        }
+    }
 }
