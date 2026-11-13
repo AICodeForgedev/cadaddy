@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20}")
+            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20 (most severe first: id, kind, severity, level, sheets, about, issue, topic, proposed), total}: the building model's RFI list (the print readers' items, the job's cross-discipline coordination, the spec's own gaps; rfi.list has every item)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -205,6 +205,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 equipment: f("equipment"),
                 near: String::new(),
                 derived: String::new(),
+                made: String::new(),
+                notes: Vec::new(),
                 keynote: f("keynote"),
                 located: String::new(),
                 keynotes: Vec::new(),
@@ -962,6 +964,33 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
+    // A drawing with a building model: its RFI list as the readers and the job's checks left it
+    // (the print readers' items, the cross-discipline coordination, the spec's own gaps).
+    if let Ok((sp, true)) = super::bspec::current(_s, "rfi.read") {
+        let list = cadaddy_walk3d::rfi::list(&sp);
+        let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+        let mut by_severity: BTreeMap<String, usize> = BTreeMap::new();
+        for r in &list {
+            *by_kind.entry(r.kind_name().to_string()).or_default() += 1;
+            *by_severity.entry(r.severity.name().to_string()).or_default() += 1;
+        }
+        let mut sorted: Vec<&cadaddy_walk3d::Rfi> = list.iter().collect();
+        sorted.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.id.cmp(&b.id)));
+        let items: Vec<Value> = sorted
+            .iter()
+            .take(RFI_ITEMS_READ)
+            .map(|r| {
+                json!({"id": r.id, "kind": r.kind_name(), "severity": r.severity.name(), "level": r.level, "sheets": r.sheets,
+                    "about": r.about, "issue": r.issue, "topic": r.topic, "proposed": r.proposed})
+            })
+            .collect();
+        return Ok(json!({
+            "counts": {"by_kind": by_kind, "by_severity": by_severity},
+            "items": items,
+            "total": list.len(),
+            "apply": apply,
+        }));
+    }
 
     let project = match project(_s) {
         Ok(p) => p,
@@ -979,6 +1008,9 @@ fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
         "message": "RFI reader wired; requires wall legend and classified sheets",
     }))
 }
+
+/// RFIs `rfi.read` lists, at most (the most severe first; `rfi.list` has them all).
+const RFI_ITEMS_READ: usize = 20;
 
 // ─── mep.equipment.read ──────────────────────────────────────────────────────
 
@@ -1204,6 +1236,9 @@ pub(crate) fn receptacle_item(tag: &str) -> String {
 pub(crate) fn device_kind(tag: &str) -> &'static str {
     cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", tag.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
+
+/// Properties a check gives one device, written at most.
+const MAX_DEVICE_NOTES: usize = 16;
 
 /// Devices listed at most per call, and read at most.
 const DEVICES_LISTED: usize = 500;
@@ -1494,6 +1529,15 @@ pub struct ReadDevice {
     /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// What it is by the documents when a check made it rather than a plan (`inferred`: only
+    /// another trade's sheet draws it, Q6612), its basis in `derived`. Empty: drawn, or derived
+    /// when `derived` is given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
+    /// Properties a check gives it (`confidence` unsure, `proposed_circuit`, `proposed_control`),
+    /// each with its value: written onto its element as rule values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<(String, String)>,
     /// The keynote its sheet tags it with (`E-9 keynote 4: <the note>`), when one is by its
     /// symbol and asks something of it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1840,8 +1884,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // Copied from the room it stacks with on another floor: said so, with the basis, so it
         // never passes for one its own floor's plans show.
         if !dv.derived.is_empty() {
-            e.set("status", super::waterfill::DERIVED, "rule");
+            e.set("status", if dv.made.trim().is_empty() { super::waterfill::DERIVED } else { dv.made.trim() }, "rule");
             e.set("basis", dv.derived.clone(), "rule");
+        }
+        for (k, v) in dv.notes.iter().take(MAX_DEVICE_NOTES) {
+            if !k.trim().is_empty() && !v.trim().is_empty() {
+                e.set(k.trim(), v.clone(), "rule");
+            }
         }
         // The keynote its sheet tags it with; a piece of equipment's receptacle takes what the
         // note asks of it (its rating, poles, orientation and place), the note its source.

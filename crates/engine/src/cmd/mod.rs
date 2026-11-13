@@ -135,6 +135,7 @@ pub mod clashreport;
 pub mod cobie;
 pub mod concrete;
 pub mod conduitroute;
+pub(crate) mod crossdisc;
 pub mod dgn;
 pub mod dimmodes;
 pub mod drywall;
