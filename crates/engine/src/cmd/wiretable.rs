@@ -153,14 +153,20 @@ impl LengthTable {
             return Need::NotCovered(format!("the table has no row for a {} circuit", w.join(" / ")));
         }
         let rank = |s: &str| sizes.iter().position(|x| x == s);
-        let pick = rows.iter().filter(|b| ft <= b.max_ft + 1e-9).filter_map(|b| rank(&b.size).map(|k| (k, *b))).min_by_key(|x| x.0);
-        match pick {
-            Some((_, b)) => Need::Size(b.size.clone(), b.words()),
-            None => {
-                let reach = rows.iter().map(|b| b.max_ft).fold(0.0, f64::max);
-                Need::Beyond(format!("the table reaches {reach} ft"))
-            }
+        let covering: Vec<&Band> = rows.iter().copied().filter(|b| ft <= b.max_ft + 1e-9).collect();
+        if let Some((_, b)) = covering.iter().filter_map(|b| rank(&b.size).map(|k| (k, *b))).min_by_key(|x| x.0) {
+            return Need::Size(b.size.clone(), b.words());
         }
+        // Only bands of a size no ranking knows reach this far: the table can't be read for the
+        // circuit (Q6456), which is not the same as the circuit being past its reach.
+        if !covering.is_empty() {
+            let mut odd: Vec<String> = covering.iter().map(|b| format!("#{}", b.size)).collect();
+            odd.sort();
+            odd.dedup();
+            return Need::NotCovered(format!("the table's {} isn't a conductor size the rules rank", odd.join(", ")));
+        }
+        let reach = rows.iter().map(|b| b.max_ft).fold(0.0, f64::max);
+        Need::Beyond(format!("the table reaches {reach} ft"))
     }
 
     /// The rows of the table for a circuit on a breaker of `amps` at `volts` (all of them where
@@ -828,6 +834,59 @@ mod tests {
                 Band { amps: Some(20.0), volts: None, size: "6".into(), max_ft: 150.0 }
             ]
         );
+    }
+
+    /// Q6456: a column for a size past 2/0 (3/0, 4/0, 250 kcmil) is ranked by the rules' full
+    /// conductor order and can be picked; a band no order ranks is "not covered", never "beyond".
+    #[test]
+    fn sizes_past_two_ought_are_ranked_and_unranked_bands_are_not_covered() {
+        let order = super::super::conduitroute::rules().vdrop.order();
+        let t = table(&["BREAKER", "#1/0", "#2/0", "#3/0"], &[&["100A", "150'", "200'", "260'"]]);
+        let lt = LengthTable { sheet: String::new(), title: String::new(), bands: bands_of(&t) };
+        assert_eq!(lt.bands.len(), 3, "{:#?}", lt.bands);
+        assert!(matches!(lt.need(240.0, Some(100.0), None, order), Need::Size(s, _) if s == "3/0"), "{:?}", lt.need(240.0, Some(100.0), None, order));
+        assert!(matches!(lt.need(180.0, Some(100.0), None, order), Need::Size(s, _) if s == "2/0"));
+        assert!(matches!(lt.need(300.0, Some(100.0), None, order), Need::Beyond(_)));
+        assert_eq!(lt.largest(Some(100.0), None, order).as_deref(), Some("3/0"));
+        assert_eq!(lt.reach("4/0", Some(100.0), None, order), Some(260.0));
+        // kcmil columns too, in their order.
+        let t = table(&["BREAKER", "#4/0", "250 KCMIL", "350 KCMIL"], &[&["200A", "180'", "210'", "290'"]]);
+        let lt = LengthTable { sheet: String::new(), title: String::new(), bands: bands_of(&t) };
+        assert!(matches!(lt.need(200.0, Some(200.0), None, order), Need::Size(s, _) if s == "250"));
+        assert!(matches!(lt.need(280.0, Some(200.0), None, order), Need::Size(s, _) if s == "350"));
+        // A ranking that lacks the column's size: the circuit is not covered, never beyond.
+        let short = sizes();
+        let t = table(&["BREAKER", "#6", "#4", "#3/0"], &[&["100A", "150'", "200'", "260'"]]);
+        let lt = LengthTable { sheet: String::new(), title: String::new(), bands: bands_of(&t) };
+        assert!(
+            matches!(lt.need(240.0, Some(100.0), None, &short), Need::NotCovered(w) if w.contains("3/0")),
+            "{:?}",
+            lt.need(240.0, Some(100.0), None, &short)
+        );
+        assert!(matches!(lt.need(180.0, Some(100.0), None, &short), Need::Size(s, _) if s == "4"));
+        assert!(matches!(lt.need(300.0, Some(100.0), None, &short), Need::Beyond(_)));
+    }
+
+    /// Every size the table reader accepts as a standard conductor is in the rules' one order,
+    /// and the voltage-drop sizes keep that order.
+    #[test]
+    fn the_rules_rank_every_standard_conductor_size() {
+        let v = &super::super::conduitroute::rules().vdrop;
+        let order = v.order();
+        for s in [
+            "18", "16", "14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0", "3/0", "4/0", "250", "300", "350", "400", "500", "600", "750",
+            "1000",
+        ] {
+            let read = size_in(&format!("#{s}"), false);
+            assert_eq!(read.as_deref(), Some(s));
+            assert!(order.iter().any(|x| x == s), "{s} not ranked");
+            assert!(v.cmil.get(s).is_some_and(|c| *c > 0.0), "{s} has no circular mils");
+        }
+        let pos: Vec<Option<usize>> = v.sizes.iter().map(|s| order.iter().position(|x| x == s)).collect();
+        assert!(pos.iter().all(Option::is_some) && pos.windows(2).all(|w| w[0] < w[1]), "{pos:?}");
+        let cm: Vec<f64> = order.iter().filter_map(|s| v.cmil.get(s).copied()).collect();
+        assert_eq!(cm.len(), order.len());
+        assert!(cm.windows(2).all(|w| w[0] < w[1]), "{cm:?}");
     }
 
     #[test]

@@ -16,7 +16,9 @@
 //!   fixture. Round them: the mounting height note nearest a callout, a spacing note
 //!   (`casework.spacing_words`), an end distance note (`casework.end_words`), and the dimension
 //!   chain whose inner witness lines stand at the fixtures (its first and last at the casework's
-//!   ends): each fixture's distance from the end, and the run's length.
+//!   ends): each fixture's distance from the end, and the run's length. Every inner witness is
+//!   taken as a fixture only when two or more equal stretches show an even row; otherwise only
+//!   the witnesses at a callout's fixture count. A spacing note outranks the chain's spacing.
 //! - **Laying out** ([`lay_out`]): the casework luminaires of one type that stand together on a
 //!   level (one run of casework) take the detail's height, and are set along the line their boxes
 //!   run on, centred on the boxes, at the detail's distances (else its spacing). Each keeps its box's
@@ -57,6 +59,8 @@ const MAX_LUMINAIRES: usize = 20_000;
 const RUN_REACH_FT: f64 = 10.0;
 /// A mounting height note is believed up to this (inches).
 const MAX_HEIGHT_IN: f64 = 240.0;
+/// A dimension chain shows an evenly spaced row only with at least this many equal inner stretches.
+const MIN_ROW_GAPS: usize = 2;
 /// A spacing or end distance is believed up to this (inches: 50 ft).
 const MAX_LENGTH_IN: f64 = 600.0;
 
@@ -202,9 +206,11 @@ pub(crate) fn read_detail(
             continue;
         }
         // A chain whose inner stretches are all alike spaces a row of fixtures: every inner
-        // witness is one (a type mark tags one of them, `TYP.`).
+        // witness is one (a type mark tags one of them, `TYP.`). It takes two or more equal
+        // stretches (three or more inner witnesses) to show a row: a single stretch has nothing
+        // to compare, and its far witness may be anything (a cabinet division).
         let gaps: Vec<f64> = inner.windows(2).filter_map(|w| Some(w.get(1)?.1 - w.first()?.1)).collect();
-        let regular = gaps.first().is_some_and(|g0| gaps.iter().all(|g| (g - g0).abs() <= EQUAL_IN));
+        let regular = gaps.len() >= MIN_ROW_GAPS && gaps.first().is_some_and(|g0| gaps.iter().all(|g| (g - g0).abs() <= EQUAL_IN));
         let offsets: Vec<f64> = if regular { inner.iter().map(|(_, t)| *t).collect() } else { matched.clone() };
         let near = ds.iter().map(|d| dist_to(d.text_at)).fold(f64::INFINITY, f64::min);
         let values: Vec<String> = ds.iter().map(|d| d.text.trim().to_string()).collect();
@@ -218,8 +224,12 @@ pub(crate) fn read_detail(
         if let Some(first) = offsets.first() {
             out.end = Some((*first, basis.clone()));
         }
+        // A spacing note is the document's word on the spacing; the chain only fills it in when
+        // no note gives it.
         let gaps: Vec<f64> = offsets.windows(2).filter_map(|w| Some(w.get(1)? - w.first()?)).collect();
-        if let Some(g) = median(gaps) {
+        if out.spacing.is_none()
+            && let Some(g) = median(gaps)
+        {
             out.spacing = Some((g, basis));
         }
         out.offsets_in = offsets;
@@ -541,11 +551,10 @@ mod tests {
         assert_eq!(devices[1].at, [50.0, 0.0]);
     }
 
-    /// A casework elevation drawn on a sheet: the counter from x 0 to 60 (1 unit = 1 inch), three
-    /// fixtures under it at 6, 30 and 54, one tagged `X3` with a leader, the others not; a chain
-    /// below dimensioning end, fixtures, end; a height note by the tag.
-    #[test]
-    fn a_dimension_chain_through_the_fixtures_gives_their_distances_from_the_end() {
+    /// A casework elevation drawn on a sheet (1 unit = 1 inch): a dimension chain below the counter
+    /// with witnesses at `witnesses` (its values `labels`, each at its x), one `X3` tag at x `tag_x`
+    /// with a leader down to `leader_to`, and `notes` (text, x, y) by the tag.
+    fn elevation(witnesses: &[f64], labels: &[(&str, f64)], tag_x: f64, leader_to: f64, notes: &[(&str, f64, f64)]) -> cadaddy_doc::Drawing {
         let mut d = cadaddy_doc::Drawing::default();
         let common = || cadaddy_doc::Common { layer: "PDF".into(), ..cadaddy_doc::Common::default() };
         let mut line = |a: (f64, f64), b: (f64, f64)| {
@@ -560,13 +569,15 @@ mod tests {
             .ok();
         };
         let y = -10.0;
-        line((-1.0, y), (61.0, y));
-        for x in [0.0, 6.0, 30.0, 54.0, 60.0] {
+        let lo = witnesses.first().copied().unwrap_or(0.0);
+        let hi = witnesses.last().copied().unwrap_or(0.0);
+        line((lo - 1.0, y), (hi + 1.0, y));
+        for x in witnesses {
             line((x - 0.5, y - 0.5), (x + 0.5, y + 0.5));
-            line((x, y + 1.0), (x, 18.0));
+            line((*x, y + 1.0), (*x, 18.0));
         }
-        // The tag's leader, from by the tag down to the middle fixture.
-        line((30.5, 37.0), (30.0, 21.0));
+        // The tag's leader, from by the tag down to a fixture.
+        line((tag_x + 0.5, 37.0), (leader_to, 21.0));
         let mut text = |v: &str, x: f64, yy: f64| {
             d.add(
                 &cadaddy_doc::Space::Model,
@@ -586,11 +597,27 @@ mod tests {
             )
             .ok();
         };
-        for (v, x) in [("6\"", 2.0), ("2'-0\"", 16.0), ("2'-0\"", 40.0), ("6\"", 55.5)] {
-            text(v, x, y + 0.4);
+        for (v, x) in labels {
+            text(v, *x, y + 0.4);
         }
-        text("X3", 30.0, 38.0);
-        text("42\" AFF", 33.0, 30.0);
+        text("X3", tag_x, 38.0);
+        for (v, x, yy) in notes {
+            text(v, *x, *yy);
+        }
+        d
+    }
+
+    /// The counter from x 0 to 60, three fixtures under it at 6, 30 and 54, one tagged `X3` with a
+    /// leader, the others not; a chain below dimensioning end, fixtures, end; a height note by the tag.
+    #[test]
+    fn a_dimension_chain_through_the_fixtures_gives_their_distances_from_the_end() {
+        let d = elevation(
+            &[0.0, 6.0, 30.0, 54.0, 60.0],
+            &[("6\"", 2.0), ("2'-0\"", 16.0), ("2'-0\"", 40.0), ("6\"", 55.5)],
+            30.0,
+            30.0,
+            &[("42\" AFF", 33.0, 30.0)],
+        );
         let hi = d.handseed;
         let reads = read_details(&d, &[("A-50".to_string(), 0, hi.max(1) + 1)], &["X3".to_string()]);
         let r = reads.get("X3").unwrap_or_else(|| panic!("no read: {reads:?}"));
@@ -601,5 +628,39 @@ mod tests {
         assert_eq!(r.height.as_ref().map(|s| s.0), Some(42.0));
         // No other sheet, no read.
         assert!(read_details(&d, &[("A-50".to_string(), 0, 1)], &["X3".to_string()]).is_empty());
+    }
+
+    /// A chain with only one inner gap (two inner witnesses) has nothing to compare: it is no
+    /// evidence of an even row. Here one witness is the fixture (x 6, the leader's end), the other a
+    /// cabinet division (x 30); a note gives the spacing. Only the fixture's witness is kept, and the
+    /// note's spacing stands.
+    #[test]
+    fn one_inner_gap_is_no_row_and_never_overrides_the_spacing_note() {
+        let d = elevation(&[0.0, 6.0, 30.0, 60.0], &[("6\"", 2.0), ("2'-0\"", 16.0), ("2'-6\"", 44.0)], 18.0, 6.0, &[("1'-0\" O.C.", 21.0, 30.0)]);
+        let hi = d.handseed;
+        let reads = read_details(&d, &[("A-50".to_string(), 0, hi.max(1) + 1)], &["X3".to_string()]);
+        let r = reads.get("X3").unwrap_or_else(|| panic!("no read: {reads:?}"));
+        assert_eq!(r.offsets_in, vec![6.0], "{r:?}");
+        assert_eq!(r.spacing.as_ref().map(|s| s.0), Some(12.0), "{r:?}");
+        assert!(r.spacing.as_ref().is_some_and(|s| s.1.contains("note")), "{r:?}");
+        assert_eq!(r.end.as_ref().map(|s| s.0), Some(6.0), "{r:?}");
+    }
+
+    /// Two or more equal inner gaps are a row, but even then a spacing note is the document's word:
+    /// the chain gives the fixtures' places, the note keeps the spacing.
+    #[test]
+    fn an_even_row_keeps_a_spacing_note() {
+        let d = elevation(
+            &[0.0, 6.0, 30.0, 54.0, 60.0],
+            &[("6\"", 2.0), ("2'-0\"", 16.0), ("2'-0\"", 40.0), ("6\"", 55.5)],
+            30.0,
+            30.0,
+            &[("2'-0\" O.C.", 33.0, 30.0)],
+        );
+        let hi = d.handseed;
+        let reads = read_details(&d, &[("A-50".to_string(), 0, hi.max(1) + 1)], &["X3".to_string()]);
+        let r = reads.get("X3").unwrap_or_else(|| panic!("no read: {reads:?}"));
+        assert_eq!(r.offsets_in, vec![6.0, 30.0, 54.0], "{r:?}");
+        assert!(r.spacing.as_ref().is_some_and(|s| s.0 == 24.0 && s.1.contains("note")), "{r:?}");
     }
 }

@@ -3103,6 +3103,29 @@ impl TextGrid {
         TextGrid { cell, cells, texts }
     }
 
+    /// The texts within `r` of `p` by their index in `texts`, with how far each is.
+    fn near_ids(&self, p: Vec2, r: f64) -> Vec<(usize, f64)> {
+        if !(p.is_finite() && r.is_finite() && r > 0.0) {
+            return Vec::new();
+        }
+        let n = (r / self.cell).ceil() as i64;
+        let (cx, cy) = ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64);
+        let mut out = Vec::new();
+        for gx in cx - n..=cx + n {
+            for gy in cy - n..=cy + n {
+                for i in self.cells.get(&(gx, gy)).into_iter().flatten() {
+                    if let Some((_, q, _)) = self.texts.get(*i) {
+                        let dd = q.dist(p);
+                        if dd <= r {
+                            out.push((*i, dd));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The texts within `r` of `p`, nearest first.
     fn near(&self, p: Vec2, r: f64) -> Vec<(&str, Vec2, f64)> {
         if !(p.is_finite() && r.is_finite() && r > 0.0) {
@@ -3626,6 +3649,9 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     // schedule row was found for it.
     let mut doors: Vec<DoorSeen> = Vec::new();
     let door_rows = sp.schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door).count();
+    // The number printed at each door and its door schedule row, each tag given to one door
+    // (Q6454: a tag names one opening).
+    let door_tags = DoorTags::assign(d, &work, &grid, &sp.schedule, upf);
     let unit_rooms: BTreeSet<String> = sp
         .unit_instances
         .as_array()
@@ -3874,16 +3900,15 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
             }
             "door" => {
                 let Some((b, z0, z1)) = ext else { continue };
-                // The number printed at the opening (on the plan: the build moved stacked levels).
-                let at_plan = b.center() - shift;
+                // The number printed at the opening (on the plan: the build moved stacked levels)
+                // and its door schedule row (the printed number's, else the tag's), as assigned.
                 // A door built at its door schedule tag where the plan draws no opening (Q6609)
                 // is that tag's: its mark is its number, whatever else is printed near it.
                 let at_tag = made(e, "mark").filter(|_| made(e, "found").is_some_and(|f| f.starts_with("schedule_tag")));
-                let printed = match &at_tag {
-                    Some(_) => None,
-                    None => grid.near(at_plan, DOOR_TAG_FT * upf).into_iter().find(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t)),
-                };
-                if let Some((t, q, _)) = &printed {
+                let assigned = door_tags.get(h);
+                let printed = assigned.and_then(|a| a.printed.clone());
+                let row = assigned.and_then(|a| a.row);
+                if let Some((t, q)) = &printed {
                     put(
                         &mut store,
                         "number",
@@ -3892,21 +3917,6 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         tally,
                     );
                 }
-                // Its door schedule row: the printed number's, else the nearest schedule tag's.
-                let is_door_row = |m: &str| sp.schedule.row(m).filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door);
-                let by_number = printed.as_ref().and_then(|(t, _, _)| is_door_row(t));
-                let by_number = by_number.or_else(|| at_tag.as_deref().and_then(is_door_row));
-                let by_tag = || {
-                    sp.schedule
-                        .tags
-                        .iter()
-                        .filter(|t| is_door_row(&t.mark).is_some())
-                        .map(|t| (t, Vec2::new(t.at[0], t.at[1]).dist(at_plan)))
-                        .filter(|(_, dd)| dd.is_finite() && *dd <= SCHEDULE_TAG_FT * upf)
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                        .and_then(|(t, _)| is_door_row(&t.mark).map(|r| (r, Vec2::new(t.at[0], t.at[1]))))
-                };
-                let row = by_number.map(|r| (r, printed.as_ref().map_or(at_plan, |(_, q, _)| *q))).or_else(by_tag);
                 let numbered = printed.is_some() || row.is_some();
                 if let Some((r, q)) = row {
                     let src = || Source::from_doc(SourceKind::Schedule, "door schedule");
@@ -4523,6 +4533,145 @@ impl LuminaireRows {
             "review_items_added": rfis,
         })
     }
+}
+
+/// The number printed at each door and its door schedule row (with where its tag is), found
+/// once for all doors: each printed number and each schedule tag names one door, the nearest
+/// (Q6454). A tag of another level names none of this level's doors.
+struct DoorTags<'a> {
+    by_door: HashMap<Handle, DoorTag<'a>>,
+}
+
+#[derive(Default)]
+struct DoorTag<'a> {
+    printed: Option<(String, Vec2)>,
+    row: Option<(&'a cadaddy_walk3d::ScheduleRow, Vec2)>,
+}
+
+impl<'a> DoorTags<'a> {
+    /// The doors of `work` (by their plan middles: the build moved stacked levels), the plan's
+    /// texts (`grid`) and the door schedule (`schedule`; `upf` units per foot).
+    fn assign(d: &Drawing, work: &[(Handle, String)], grid: &TextGrid, schedule: &'a cadaddy_walk3d::Schedule, upf: f64) -> Self {
+        // The door rows by mark (the first of a mark), so a tag's row is one look-up.
+        let mut rows: HashMap<String, &'a cadaddy_walk3d::ScheduleRow> = HashMap::new();
+        for r in schedule.rows.iter().filter(|r| r.kind == cadaddy_walk3d::FamilyKind::Door) {
+            rows.entry(r.mark.trim().to_ascii_uppercase()).or_insert(r);
+        }
+        let row_of = |m: &str| rows.get(&m.trim().to_ascii_uppercase()).copied();
+        // A door built at its door schedule tag (Q6609) carries that tag's mark: its number,
+        // whatever else is printed near it.
+        let doors: Vec<(Handle, Vec2, Option<String>, Option<String>)> = work
+            .iter()
+            .filter(|(_, k)| k == "door")
+            .filter_map(|(h, _)| {
+                let e = d.model.get(*h)?;
+                let (b, _, _) = extent(d, e)?;
+                let at = b.center() - super::bspec::stacked_by(e);
+                let at_tag = made(e, "mark").filter(|_| made(e, "found").is_some_and(|f| f.starts_with("schedule_tag")));
+                at.is_finite().then(|| (*h, at, super::bspec::made_level(e), at_tag))
+            })
+            .collect();
+        // The printed numbers: each to its nearest door within reach (not a door built at its tag).
+        let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+        for (i, (_, at, _, at_tag)) in doors.iter().enumerate() {
+            if at_tag.is_some() {
+                continue;
+            }
+            for (j, dd) in grid.near_ids(*at, DOOR_TAG_FT * upf) {
+                if grid.texts.get(j).is_some_and(|(t, _, _)| door_number(t) && !super::guided::is_circuit_tag(t)) {
+                    pairs.push((i, j, dd));
+                }
+            }
+        }
+        let mut by_door: HashMap<Handle, DoorTag<'a>> = HashMap::new();
+        for (i, j) in nearest_pairs(pairs) {
+            if let (Some((h, _, _, _)), Some((t, q, _))) = (doors.get(i), grid.texts.get(j)) {
+                by_door.entry(*h).or_default().printed = Some((t.clone(), *q));
+            }
+        }
+        // The schedule's tags with a door row, in cells of the tag reach.
+        let reach = SCHEDULE_TAG_FT * upf;
+        let tags: Vec<(&cadaddy_walk3d::OpeningTag, &'a cadaddy_walk3d::ScheduleRow, Vec2)> =
+            schedule.tags.iter().filter_map(|t| Some((t, row_of(&t.mark)?, Vec2::new(t.at[0], t.at[1])))).filter(|(_, _, p)| p.is_finite()).collect();
+        let cell = |p: Vec2| ((p.x / reach).floor() as i64, (p.y / reach).floor() as i64);
+        let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (k, (_, _, p)) in tags.iter().enumerate() {
+            cells.entry(cell(*p)).or_default().push(k);
+        }
+        let near_tags = |at: Vec2| {
+            let (cx, cy) = cell(at);
+            (cx - 1..=cx + 1)
+                .flat_map(move |x| (cy - 1..=cy + 1).map(move |y| (x, y)))
+                .flat_map(|c| cells.get(&c).into_iter().flatten().copied())
+                .filter_map(|k| Some((k, tags.get(k)?)))
+                .map(move |(k, (t, r, p))| (k, *t, *r, p.dist(at)))
+                .filter(|(_, _, _, dd)| dd.is_finite() && *dd <= reach)
+                .collect::<Vec<_>>()
+        };
+        let same_level =
+            |t: &cadaddy_walk3d::OpeningTag, l: Option<&str>| t.level.as_deref().zip(l).is_none_or(|(a, b)| a.trim().eq_ignore_ascii_case(b.trim()));
+        // A printed number with a door row is that row (a door built at its tag: its mark's); it
+        // takes its own tag (the nearest of its mark), so no other door takes the tag again.
+        let mut used: BTreeSet<usize> = BTreeSet::new();
+        let mut open: Vec<usize> = Vec::new();
+        for (i, (h, at, level, at_tag)) in doors.iter().enumerate() {
+            let by_number = match at_tag {
+                Some(m) => row_of(m).map(|r| (r, *at)),
+                None => by_door.get(h).and_then(|x| x.printed.as_ref()).and_then(|(t, q)| Some((row_of(t)?, *q))),
+            };
+            let Some((r, q)) = by_number else {
+                open.push(i);
+                continue;
+            };
+            let own = near_tags(*at)
+                .into_iter()
+                .filter(|(k, tag, _, _)| {
+                    !used.contains(k) && same_level(tag, level.as_deref()) && tag.mark.trim().eq_ignore_ascii_case(r.mark.trim())
+                })
+                .min_by(|a, b| a.3.total_cmp(&b.3));
+            if let Some((k, _, _, _)) = own {
+                used.insert(k);
+            }
+            by_door.entry(*h).or_default().row = Some((r, q));
+        }
+        // The other doors: each tag left to its nearest one of them on its level.
+        let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+        for i in open {
+            let Some((_, at, level, _)) = doors.get(i) else { continue };
+            for (k, tag, _, dd) in near_tags(*at) {
+                if !used.contains(&k) && same_level(tag, level.as_deref()) {
+                    pairs.push((i, k, dd));
+                }
+            }
+        }
+        for (i, k) in nearest_pairs(pairs) {
+            if let (Some((h, _, _, _)), Some((_, r, p))) = (doors.get(i), tags.get(k)) {
+                by_door.entry(*h).or_default().row = Some((*r, *p));
+            }
+        }
+        DoorTags { by_door }
+    }
+
+    fn get(&self, h: &Handle) -> Option<&DoorTag<'a>> {
+        self.by_door.get(h)
+    }
+}
+
+/// One-to-one by distance: of the pairs `(a, b, distance)`, the nearest first, each `a` and each
+/// `b` in one pair at most (ties by `a`, then `b`).
+fn nearest_pairs(mut pairs: Vec<(usize, usize, f64)>) -> Vec<(usize, usize)> {
+    pairs.retain(|p| p.2.is_finite());
+    pairs.sort_by(|x, y| x.2.total_cmp(&y.2).then(x.0.cmp(&y.0)).then(x.1.cmp(&y.1)));
+    let (mut a_used, mut b_used) = (BTreeSet::new(), BTreeSet::new());
+    let mut out = Vec::new();
+    for (a, b, _) in pairs {
+        if !a_used.contains(&a) && !b_used.contains(&b) {
+            a_used.insert(a);
+            b_used.insert(b);
+            out.push((a, b));
+        }
+    }
+    out
 }
 
 /// A built door as the fill saw it.

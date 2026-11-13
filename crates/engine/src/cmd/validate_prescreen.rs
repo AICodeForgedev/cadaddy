@@ -1654,7 +1654,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         let tol_ft = tol(r, "plan_in", 6.0) / 12.0;
         let symbols = vp::Symbols::of(sc.d, sc.sp, sc.frame, &kinds, sc.rules);
         // The unit types' views, each measured on its room's walls for its turn (Q6339).
-        let unit_views = super::validate_packet::UnitViews::of(sc.d, &units.view_rects(), sc.frame.upf());
+        let unit_views = super::validate_packet::UnitViews::of(sc.d, &units.view_rects(), sc.frame.upf(), symbols.marks());
         let measure = |level: &str, view: [f64; 4], room: [f64; 4]| unit_views.turn(view, sc.model, level, room);
         // The prints' marks of each kind (G-COVERAGE's reading): an element no symbol the job
         // read stands for, with a mark of its own kind by it, is one the prints show.
