@@ -621,11 +621,13 @@ pub struct SheetScale {
 impl SheetScale {
     /// How the scale was read: `given`, `note`, `lettering` (a note drawn as shapes),
     /// `dimensions`, `same floor` (another plan of its floor that prints its scale, Q6360),
-    /// `do not scale` or `none`.
+    /// `peers` (the plans of its trade and paper size, Q6518), `do not scale` or `none`.
     pub fn how(&self) -> &'static str {
         let src = self.source.as_str();
         if src.starts_with(super::planscale::SAME_FLOOR_SOURCE) {
             "same floor"
+        } else if src.starts_with(super::planscale::PEERS_SOURCE) {
+            "peers"
         } else if src == "option" {
             "given"
         } else if src.contains("DO NOT SCALE") {
@@ -643,9 +645,12 @@ impl SheetScale {
             "none"
         }
     }
-    /// A floor plan imported at paper size with no scale read: nothing on it can be measured.
+    /// A floor, ceiling or enlarged plan imported at paper size with no scale read: nothing on it
+    /// can be measured. A DO NOT SCALE plan left at sheet size (no note detected on it, or only a
+    /// detail's) is one too: it is scaled from a plan of its floor or its peers, or asked for its
+    /// scale, never left at 1x with a log line (Q6518).
     pub fn plan_at_paper_size(&self) -> bool {
-        matches!(self.kind.as_str(), "plan" | "enlarged_plan") && self.how() == "none" && self.scale <= 1.0
+        matches!(self.kind.as_str(), "plan" | "enlarged_plan" | "rcp") && matches!(self.how(), "none" | "do not scale") && self.scale <= 1.0
     }
 }
 
@@ -727,8 +732,19 @@ fn sheet_scales_report(job: &GuidedJob) -> Value {
         .iter()
         .map(|o| json!({"sheet": o.sheet, "scale": o.scale, "how": o.how, "set_scale": o.set_scale, "set_sheets": o.set_sheets}))
         .collect();
-    json!({"sheets": job.sheet_scales.len(), "at_real_scale": at_scale, "by": by, "plans_at_paper_size": paper, "plans_off_set_scale": off})
+    // Each plan's scale and where it came from (Q6518): a note, a fit, its peers, paper size.
+    let plans: Vec<Value> = job
+        .sheet_scales
+        .iter()
+        .filter(|sc| matches!(sc.kind.as_str(), "plan" | "enlarged_plan" | "rcp"))
+        .take(MAX_REPORTED_PLAN_SCALES)
+        .map(|sc| json!({"sheet": sc.sheet, "scale": (sc.scale * 1000.0).round() / 1000.0, "how": sc.how(), "source": sc.source.chars().take(160).collect::<String>()}))
+        .collect();
+    json!({"sheets": job.sheet_scales.len(), "at_real_scale": at_scale, "by": by, "plans_at_paper_size": paper, "plans_off_set_scale": off, "plans": plans})
 }
+
+/// Plans whose scale and source the report lists, at most.
+const MAX_REPORTED_PLAN_SCALES: usize = 400;
 
 /// An imported sheet's rectangle in the job's drawing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2668,7 +2684,9 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             if let Some(k) = sh.get("scale_given").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0) {
                 params["scale"] = json!(k);
             }
-            super::exchange::PdfPage { path, params, at: None }
+            // A plan's scale is its own views' note, never a detail's beside it (Q6518).
+            let plan = matches!(sheet_kind(sh), "plan" | "enlarged_plan" | "rcp") || rcp_title(sh);
+            super::exchange::PdfPage { path, params, at: None, plan }
         })
         .collect();
     let names: Vec<String> = all
@@ -2823,10 +2841,21 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     clock.done("sheet borders and title blocks");
     // A plan whose scale isn't printed takes it from a plan of its floor that prints its own,
     // when their outlines agree at one ratio (Q6360); before its dimension strings' too.
+    // A plan read at a note its set's other plans of its paper size disagree with (a detail's
+    // note, a misread one) is weighed against its floor's plan too: its fit is its scale (Q6518).
+    let doubted: Vec<String> =
+        plans_off_set_scale(&job.sheet_scales).into_iter().filter(|o| matches!(o.how, "note" | "lettering")).map(|o| o.sheet).collect();
     let mut why_not = Vec::new();
     let mut fits = super::grids::FitStats::default();
-    let rescaled =
-        super::planscale::scale_from_same_floor(s.doc_mut()?, &mut regions, &mut job.sheet_scales, &job.sheet_spans, &mut why_not, &mut fits);
+    let rescaled = super::planscale::scale_from_same_floor(
+        s.doc_mut()?,
+        &mut regions,
+        &mut job.sheet_scales,
+        &job.sheet_spans,
+        &doubted,
+        &mut why_not,
+        &mut fits,
+    );
     clock.done(&format!("plan scales from the plans of the same floor ({} linework fits)", fits.fits));
     for w in why_not.iter().take(MAX_QUESTIONS_PER_STAGE) {
         progress_line(&format!("  sheet {w}"));
@@ -2886,6 +2915,75 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             .collect();
         job.audit("plan_scale_same_floor", "pipeline", None, Some(stage), Some(json!(said)));
     }
+    let k_in = super::perceive::units_per_inch(s.doc()?);
+    // A note, or dimension strings, its floor's plan overruled: asked, the candidates listed
+    // (Q6518); the default keeps the scale the fit gave.
+    for r in rescaled.iter().filter(|r| r.was != "none").take(MAX_QUESTIONS_PER_STAGE) {
+        let (took, read) = (super::planscale::scale_name(r.scale, k_in), super::planscale::scale_name(r.from_scale, k_in));
+        super::planscale::ask(
+            job,
+            stage,
+            super::planscale::doubted_scale_question(
+                &r.sheet,
+                &format!("its {} read {read}, its linework fits {}'s plan of its floor at {took} (taken)", r.was, r.onto),
+            ),
+            "A plan at the wrong scale is built the wrong size; the scale its linework fits on its floor's plan is taken over the one read".into(),
+            &r.sheet,
+            super::planscale::scale_candidates(&[took.clone(), read.clone()], &job.sheet_scales),
+            json!({"scale": r.scale, "was": r.from_scale, "was_how": r.was, "from": r.onto, "candidates": {"fit": took, "read": read}}),
+            Some(super::planscale::KEEP_SCALE.into()),
+        );
+    }
+    // A plan none of those scaled takes the scale the plans of its trade on paper of its size
+    // print (Q6518): derived, said, and asked about with the alternatives.
+    let by_peers = super::planscale::scale_from_peers(s.doc_mut()?, &mut regions, &mut job.sheet_scales, &job.sheet_spans);
+    clock.done(&format!("plan scales from their peers ({} sheet(s))", by_peers.len()));
+    for p in by_peers.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let took = super::planscale::scale_name(p.scale, k_in);
+        progress_line(&format!(
+            "  sheet {}: scale {took} ({:.2}x, was paper size) from its peers, the plans of its trade and paper size that print it: {}",
+            p.sheet,
+            p.scale,
+            p.peers.join(", ")
+        ));
+        let mut first = vec![took.clone()];
+        first.extend(p.others.iter().map(|(k, _)| super::planscale::scale_name(*k, k_in)));
+        super::planscale::ask(
+            job,
+            stage,
+            super::planscale::doubted_scale_question(
+                &p.sheet,
+                &format!(
+                    "no note, dimension strings or plan of its floor gave it a scale; {} plan(s) of its trade and paper size print {took} (taken)",
+                    p.peers.len()
+                ),
+            ),
+            "A set draws a trade's plans at one scale, so the plan takes theirs; give its scale as printed if it is drawn at another".into(),
+            &p.sheet,
+            super::planscale::scale_candidates(&first, &job.sheet_scales),
+            json!({"scale": p.scale, "was": "paper size", "peers": p.peers, "others": p.others}),
+            Some(super::planscale::KEEP_SCALE.into()),
+        );
+    }
+    if !by_peers.is_empty() {
+        let list: Vec<String> = by_peers
+            .iter()
+            .take(MAX_QUESTIONS_PER_STAGE)
+            .map(|p| format!("{} at {} from {}", p.sheet, super::planscale::scale_name(p.scale, k_in), p.peers.join(", ")))
+            .collect();
+        job.add_finding(
+            stage,
+            &format!("{} plan sheet(s) scaled from the plans of their trade and paper size (derived, not printed): {}", by_peers.len(), list.join("; ")),
+            "No scale note, dimension strings or plan of their floor gave them a scale; the plans of their trade on paper of their size agree on one, so they take it",
+            2,
+            vec![super::planscale::KEEP_SCALE.into(), "Give the sheet's scale (its scale note as printed)".into()],
+            None,
+            false,
+        );
+        let said: Vec<Value> =
+            by_peers.iter().map(|p| json!({"sheet": p.sheet, "scale": p.scale, "note": p.note, "peers": p.peers, "others": p.others})).collect();
+        job.audit("plan_scale_peers", "pipeline", None, Some(stage), Some(json!(said)));
+    }
     // A plan left at paper size (no scale note, none in its lettering, no dimension strings that
     // agree, no plan of its floor to take it from) can't be measured: a finding, never silent.
     let paper: Vec<String> = job.sheet_scales.iter().filter(|sc| sc.plan_at_paper_size()).map(|sc| sc.sheet.clone()).collect();
@@ -2907,6 +3005,23 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             None,
             false,
         );
+        // Each one asked, its candidates listed (Q6518): never only a line in the log.
+        for o in off.iter().take(MAX_QUESTIONS_PER_STAGE) {
+            let (read, set) = (super::planscale::scale_name(o.scale, k_in), super::planscale::scale_name(o.set_scale, k_in));
+            super::planscale::ask(
+                job,
+                stage,
+                super::planscale::doubted_scale_question(
+                    &o.sheet,
+                    &format!("read at {read} ({}), {} other plan(s) of its paper size print {set}", o.how, o.set_sheets),
+                ),
+                "A plan at the wrong scale is built the wrong size; no plan of its floor confirmed either scale. Give its scale as printed, or keep the one read if the sheet really is drawn at another".into(),
+                &o.sheet,
+                super::planscale::scale_candidates(&[set.clone(), read.clone()], &job.sheet_scales),
+                json!({"scale": o.scale, "how": o.how, "set_scale": o.set_scale, "set_sheets": o.set_sheets, "candidates": {"set": set, "read": read}}),
+                Some(super::planscale::KEEP_SCALE.into()),
+            );
+        }
     }
     if !paper.is_empty() {
         let list = paper.iter().take(MAX_QUESTIONS_PER_STAGE).cloned().collect::<Vec<_>>().join(", ");
@@ -9094,6 +9209,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             result["load_summaries"] = json!(summaries.len());
         }
         sp.mep.load_summaries = summaries;
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    }
+    // The wire-length tables these pages print that the drawing doesn't hold (Q6545), kept in
+    // the spec: the router sizes the circuits by them as Validate checks them.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+        let kept = super::wiretable::keep_job_tables(s.doc()?, &mut sp, &sched_pages);
+        if kept > 0 {
+            progress_line(&format!("  wire-length tables off the job's pages: {kept} ({})", sp.mep.wire_length_read));
+        }
+        result["wire_length_tables"] = json!({"kept": kept, "read": sp.mep.wire_length_read});
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     bim_step(s, job, "panel schedules", t);
@@ -24676,13 +24801,8 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
             let (Some(r), Some(sh)) = (job.sheet_regions.get(*i), refs.get(*i)) else { continue };
             let page = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
             let area = r.area.unwrap_or(r.rect);
-            let sheet_real = job
-                .sheet_scales
-                .iter()
-                .find(|x| x.sheet.split('/').next().unwrap_or(&x.sheet).trim().eq_ignore_ascii_case(&r.number))
-                .is_some_and(|x| x.scale > 1.0);
-            let read = sitework::read(&r.number, &page, area, &lum_types, upf);
-            let fit = sitework::register(&read, &sp, &slab, sheet_real);
+            let imported = job.sheet_scales.iter().find(|x| x.sheet.split('/').next().unwrap_or(&x.sheet).trim().eq_ignore_ascii_case(&r.number));
+            let (read, fit) = sitework::read_laid(&r.number, &page, area, &lum_types, &sp, &slab, imported);
             let built = sitework::plan(&sp, &read, &fit, &slab, &mut seq);
             if !fit.fitted() {
                 unfitted.push(format!("{}: {}", r.number, fit.why));
@@ -24703,7 +24823,7 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
                 .sum::<f64>()
                 / upf;
             lines.push(format!(
-                "{} ({}): {} luminaire(s) ({} luminaire(s) and {} equipment on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}",
+                "{} ({}): {} luminaire(s) ({} luminaire(s) and {} equipment on the building left to its plans), {} pole(s) and base(s), {} site equipment ({} moved to where it is drawn), {} drawn run(s), {} called, {} inferred, {:.0} ft of buried conduit; circuits {:?}; sizes on the sheet {}",
                 r.number,
                 fit.method,
                 built.tags.len(),
@@ -24716,7 +24836,8 @@ pub(crate) fn site_work_step(s: &mut Session, job: &mut GuidedJob, result: &mut 
                 built.called_runs,
                 built.inferred_runs,
                 ug_ft,
-                built.circuits
+                built.circuits,
+                read.feet
             ));
             all.tags.extend(built.tags);
             all.equipment.extend(built.equipment);
@@ -42749,13 +42870,14 @@ mod tests {
         let warnings = job_warnings(&job, None);
         let w = warnings.iter().find(|w| w["warning"] == "plans at paper size").expect("a plan at paper size is a warning");
         let detail = w["detail"].as_str().unwrap_or("");
-        assert!(detail.contains("P-4") && !detail.contains("X-1") && !detail.contains("Q-1"), "{detail}");
+        // Q6518: a DO NOT SCALE plan left at sheet size is a plan at paper size too
+        assert!(detail.contains("P-4") && !detail.contains("X-1") && detail.contains("Q-1"), "{detail}");
         let r = sheet_scales_report(&job);
         assert_eq!(r["at_real_scale"], json!(3));
-        assert_eq!(r["plans_at_paper_size"], json!(["P-4"]));
+        assert_eq!(r["plans_at_paper_size"], json!(["P-4", "Q-1"]));
         assert_eq!(r["by"]["lettering"], json!(1));
         // every plan read at a scale: no warning
-        job.sheet_scales.retain(|sc| sc.sheet != "P-4");
+        job.sheet_scales.retain(|sc| sc.sheet != "P-4" && sc.sheet != "Q-1");
         assert!(job_warnings(&job, None).iter().all(|w| w["warning"] != "plans at paper size"));
     }
 

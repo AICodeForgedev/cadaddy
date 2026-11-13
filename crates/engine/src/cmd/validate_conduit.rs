@@ -60,6 +60,56 @@ pub const BOX_FILL: &str = "E-BOX-FILL";
 pub const DERATE: &str = "E-DERATE";
 pub const VDROP: &str = "E-VDROP";
 pub const METHOD: &str = "E-METHOD";
+/// E-METHOD's area for work under the slab or in the earth (Q6544).
+const BELOW_GRADE: &str = "below grade";
+
+/// Where the ground is for E-METHOD (Q6544): the lowest storey's floor (the slab on grade).
+struct Grade {
+    /// The lowest storey's floor, drawing units (none: the model gives no storeys).
+    floor: Option<f64>,
+    /// A stub's most rise above that floor (drawing units).
+    stub: f64,
+    /// A drawing unit's slack.
+    slack: f64,
+}
+
+impl Grade {
+    fn of(sp: &BuildingSpec, upf: f64, stub_in: f64) -> Self {
+        let floor = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite()).reduce(f64::min).map(|e| e * upf);
+        let stub = if stub_in.is_finite() && stub_in > 0.0 { stub_in.min(48.0) / 12.0 * upf } else { 0.0 };
+        Self { floor, stub, slack: upf / 12.0 }
+    }
+
+    /// Whether a piece (its run id, its room, its lowest and highest points) is work below grade:
+    /// a buried circuit's piece in no room (site work in the earth, ugcircuit's tag), a piece
+    /// wholly under the slab (a homerun below the slab, a buried feeder leg), or the stub that
+    /// rises out of the slab into the gear it feeds (no more than the stub height above the
+    /// floor). A riser climbing on into a wall, and every piece of an upper storey, is the
+    /// building's.
+    fn below(&self, run: &str, room: &str, z: Option<(f64, f64)>) -> bool {
+        if super::ugcircuit::is_buried(run) && room.trim().is_empty() {
+            return true;
+        }
+        match (self.floor, z) {
+            (Some(f), Some((lo, hi))) if lo.is_finite() && hi.is_finite() => {
+                hi < f - self.slack || (lo < f - self.slack && hi <= f + self.stub + self.slack)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Whether a piece's method (`PVC Sch 40`, `EMT`, `MC 12/2`) is the method a table or rule names
+/// (`PVC`, a project rule's `EMT or MC`): the whole name, or one of its words.
+fn method_is(method: &str, name: &str) -> bool {
+    let (m, n) = (method.trim(), name.trim());
+    if m.is_empty() || n.is_empty() {
+        return false;
+    }
+    m.eq_ignore_ascii_case(n)
+        || m.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).any(|w| w.eq_ignore_ascii_case(n))
+        || n.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w.eq_ignore_ascii_case(m))
+}
 pub const CLASH: &str = "G-CLASH";
 pub const TAKEOFF: &str = "E-TAKEOFF";
 /// Every rule of this module.
@@ -1032,33 +1082,17 @@ impl ScheduleDocs {
     /// else the drawing's own texts.
     pub(crate) fn read(s: &crate::Session, d: &Drawing, sp: &BuildingSpec) -> ScheduleDocs {
         let mut out = ScheduleDocs::default();
-        let sheet_of = |p: Vec2| -> String {
-            sp.sheets
-                .iter()
-                .filter_map(|l| {
-                    let r = l.rect?;
-                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-                    (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, n)| n)
-                .unwrap_or_default()
-        };
-        out.lengths = super::wiretable::read_drawing(d, &sheet_of);
         let job = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some());
+        let pages = match &job {
+            Some(job) => super::guided::panel_pages(d, job),
+            None => Vec::new(),
+        };
+        // The wire-length tables by the router's rule (Q6545): the drawing's, the job's kept in
+        // the spec, the job's pages.
+        out.lengths = super::wiretable::documents(d, sp, &pages).into_iter().map(|(t, _)| t).collect();
         match job {
-            Some(job) => {
-                let pages = super::guided::panel_pages(d, &job);
+            Some(_) => {
                 out.reread = super::guided::panel_schedules(&pages);
-                for (number, page) in &pages {
-                    let have = out.lengths.iter().any(|t| t.sheet.eq_ignore_ascii_case(number));
-                    if !have && out.lengths.len() < 32 {
-                        let texts = cadaddy_mepfix::sheet_facts::texts(page);
-                        if texts.iter().any(|t| super::wiretable::is_title(&t.value) || (t.value.contains('#') && t.value.contains('\''))) {
-                            out.lengths.extend(super::wiretable::read_page(&texts, &super::gridtable::segments(page), number));
-                        }
-                    }
-                }
                 out.sheets = pages.into_iter().map(|(n, _)| n).collect();
             }
             None => {
@@ -1074,14 +1108,6 @@ impl ScheduleDocs {
                 }
             }
         }
-        // A table read twice (the drawing's sheet and its page) counts once.
-        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
-        for t in std::mem::take(&mut out.lengths) {
-            if !seen.iter().any(|o| o.bands == t.bands) {
-                seen.push(t);
-            }
-        }
-        out.lengths = seen;
         out
     }
 
@@ -1704,18 +1730,20 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 .map(|r| r.active.value.trim().to_string())
                 .filter(|v| !v.is_empty());
         let approved = super::valueeng::approved_circuits(cx.d);
+        // Below grade the project's own key for it, never its general rule (Q6544).
+        let below_rule = Some(mr.below.rule_key.trim())
+            .filter(|k| !k.is_empty())
+            .and_then(|k| cx.d.project_rules.get(cadaddy_doc::projrules::RuleDomain::WiringMethod, k))
+            .map(|r| (r.active.value.trim().to_string(), mr.below.rule_key.clone()))
+            .filter(|(v, _)| !v.is_empty());
         let has = |text: &str, words: &[String]| words.iter().any(|w| text.contains(w.as_str()));
-        let name_of = |key: &str| -> Option<String> {
-            let v = match key {
-                "raceway" => &mr.raceway,
-                "mc" => &mr.mc,
-                "ac" => &mr.ac,
-                "nm" => &mr.nm,
-                "se" => &mr.se,
-                "uf" => &mr.uf,
-                _ => return None,
-            };
-            Some(v.clone()).filter(|v| !v.is_empty())
+        // A table's method key's names in an area: below grade a row's bare `in raceway` is a
+        // raceway the code permits there, not the building's EMT.
+        let names_in = |area: &str, key: &str| -> Vec<String> {
+            if area == BELOW_GRADE && key == "raceway" {
+                return mr.below.raceways.clone();
+            }
+            mr.name_of(key).map(str::to_string).into_iter().collect()
         };
         let branch: Vec<&super::conduitroute::MethodApp> = methods
             .applications
@@ -1728,6 +1756,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
         let app_for = |area: &str| -> Option<&super::conduitroute::MethodApp> {
             let pick = |pred: &dyn Fn(&str) -> bool| branch.iter().copied().find(|a| pred(&a.application.to_ascii_uppercase()));
             match area {
+                // A branch row below grade, else any (a feeders-and-branches underground row).
+                BELOW_GRADE => pick(&|u| has(u, &mr.below_words))
+                    .or_else(|| methods.applications.iter().find(|a| has(&a.application.to_ascii_uppercase(), &mr.below_words))),
                 "unit" => pick(&|u| has(u, &mr.unit_words))
                     .or_else(|| pick(&|u| has(u, &mr.concealed_words) && !has(u, &mr.exposed_words) && !has(u, &mr.below_words))),
                 "exposed" => pick(&|u| has(u, &mr.exposed_words) && !has(u, &mr.unit_words)),
@@ -1744,6 +1775,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 "concealed"
             }
         };
+        let grade = Grade::of(cx.sp, upf, mr.below.stub_in);
+        let piece_area =
+            |run: &str, room: &str, z: Option<(f64, f64)>| -> &'static str { if grade.below(run, room, z) { BELOW_GRADE } else { area_of(room) } };
         // Each run: its method, the rooms its pieces are in, a place.
         struct RunM<'b> {
             method: String,
@@ -1754,6 +1788,8 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             rooms: BTreeSet<&'b str>,
             // The storeys its pieces are on (more than one: it runs in a riser).
             levels: BTreeSet<&'b str>,
+            // The areas its pieces are in.
+            areas: BTreeSet<&'static str>,
             // Its first piece is a raceway stick (else a cable).
             raceway: bool,
         }
@@ -1767,9 +1803,16 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 at: (s.a + s.b) * 0.5,
                 rooms: BTreeSet::new(),
                 levels: BTreeSet::new(),
+                areas: BTreeSet::new(),
                 raceway: true,
             });
-            e.rooms.insert(s.room.as_str());
+            let top = s.path.iter().map(|p| p.z).fold(s.a.z.max(s.b.z), f64::max);
+            let bottom = s.path.iter().map(|p| p.z).fold(s.a.z.min(s.b.z), f64::min);
+            let area = piece_area(&s.run, &s.room, Some((bottom, top)));
+            e.areas.insert(area);
+            if area != BELOW_GRADE {
+                e.rooms.insert(s.room.as_str());
+            }
             e.levels.insert(s.level.as_str());
         }
         for c in net.cables.iter().filter(|c| !c.run.is_empty() && !c.circuit.is_empty()) {
@@ -1782,9 +1825,14 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 at,
                 rooms: BTreeSet::new(),
                 levels: BTreeSet::new(),
+                areas: BTreeSet::new(),
                 raceway: false,
             });
-            e.rooms.insert(c.room.as_str());
+            let area = piece_area(&c.run, &c.room, c.at.map(|p| (p.z, p.z)));
+            e.areas.insert(area);
+            if area != BELOW_GRADE {
+                e.rooms.insert(c.room.as_str());
+            }
             e.levels.insert(c.level.as_str());
         }
         // Limited-energy circuits (fire alarm, Class 2/3, communications) are wired by their own
@@ -1803,7 +1851,8 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             }
             let Some(place) = in_scope(&m.level, m.at) else { continue };
             let method_up = m.method.to_ascii_uppercase();
-            let areas: BTreeSet<&str> = m.rooms.iter().map(|r| area_of(r)).collect();
+            let areas = &m.areas;
+            let below = areas.contains(BELOW_GRADE);
             let measured = json!({"check": "method", "run": run, "circuit": m.circuit, "method": m.method, "areas": areas, "rooms": m.rooms.iter().filter(|r| !r.is_empty()).take(12).collect::<Vec<_>>()});
             let listed = lim.types.iter().find(|(t, _)| t.eq_ignore_ascii_case(&m.method)).map(|(_, spaces)| spaces);
             if listed.is_some() || run.starts_with(super::conduitroute::fa::TAG_PREFIX) {
@@ -1882,7 +1931,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 );
                 continue;
             }
-            if let Some(v) = &rule_method {
+            if let Some(v) = rule_method.as_ref().filter(|_| !below) {
                 let ok = v.to_ascii_uppercase().contains(&method_up) && !method_up.is_empty();
                 push(
                     METHOD,
@@ -1907,11 +1956,22 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             }
             let mut allowed_all: Vec<(String, Vec<String>, String)> = Vec::new();
             let mut missing = Vec::new();
-            for a in &areas {
+            for a in areas {
+                // A run partly below grade: its part in the building by the project's rule.
+                let rule = if *a == BELOW_GRADE { below_rule.clone() } else { rule_method.clone().map(|v| (v, "general".to_string())) };
+                if let Some((v, key)) = rule {
+                    allowed_all.push((a.to_string(), vec![v], format!("project rule wiring_method/{key}")));
+                    continue;
+                }
                 match app_for(a) {
                     Some(app) => {
-                        let names: Vec<String> = app.methods.iter().filter_map(|k| name_of(k)).collect();
+                        let names: Vec<String> = app.methods.iter().flat_map(|k| names_in(a, k)).collect();
                         allowed_all.push((a.to_string(), names, format!("spec {} {}: {}", app.section, app.item, app.application)));
+                    }
+                    // No row for work below grade: the code's own uses permitted, as rules data.
+                    None if *a == BELOW_GRADE && !(mr.below.raceways.is_empty() && mr.below.cables.is_empty()) => {
+                        let names = mr.below.raceways.iter().chain(&mr.below.cables).cloned().collect();
+                        allowed_all.push((a.to_string(), names, format!("code: {}", mr.below.source)));
                     }
                     None => missing.push(a.to_string()),
                 }
@@ -1935,7 +1995,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 continue;
             }
             let bad: Vec<&(String, Vec<String>, String)> =
-                allowed_all.iter().filter(|(_, names, _)| !names.iter().any(|n| n.eq_ignore_ascii_case(&m.method))).collect();
+                allowed_all.iter().filter(|(_, names, _)| !names.iter().any(|n| method_is(&m.method, n))).collect();
             let expected = allowed_all.iter().map(|(a, n, src)| format!("{a}: {} ({src})", n.join(", "))).collect::<Vec<_>>().join("; ");
             push(
                 METHOD,
@@ -3256,6 +3316,38 @@ mod tests {
         assert_eq!(c.conductors(), Some((2, "12".into(), true)));
         let c = Cable { ty: "MC 10/3".into(), ..c };
         assert_eq!(c.conductors(), Some((3, "10".into(), false)));
+    }
+
+    /// Q6544: below grade is under the lowest storey's floor; a stub out of the slab into the gear
+    /// is the underground run's end; an upper storey's riser and a riser on into a wall are the
+    /// building's.
+    #[test]
+    fn work_below_grade_is_under_the_lowest_floor_or_its_stub_up() {
+        let sp: BuildingSpec = serde_json::from_value(json!({"version": 1, "units_per_foot": 12, "levels": [
+            {"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0},
+            {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0}
+        ]}))
+        .unwrap_or_default();
+        let g = Grade::of(&sp, 12.0, 12.0);
+        let run = "circuit:L1:E-101:LP1-1#1";
+        // Under the slab, whatever room it passes under.
+        assert!(g.below(run, "101", Some((-30.0, -24.0))));
+        // The stub up from under the slab, 6 in above the floor into the gear.
+        assert!(g.below(run, "101", Some((-24.0, 6.0))));
+        // A riser on up into the wall: the room's.
+        assert!(!g.below(run, "101", Some((-24.0, 48.0))));
+        // An upper storey's homerun down its riser to a panel below: in the building.
+        assert!(!g.below("circuit:L2:E-201:LP2-1#1", "201", Some((40.0, 118.0))));
+        // Overhead.
+        assert!(!g.below(run, "101", Some((100.0, 108.0))));
+        // A buried circuit's piece in no room is in the earth; in a room, by its height.
+        let buried = "circuit:L1:buried:LP1-1#E-1.1";
+        assert!(g.below(buried, "", None));
+        assert!(!g.below(buried, "101", Some((-24.0, 48.0))));
+        // No storeys: by the tag only.
+        let none = Grade { floor: None, ..Grade::of(&sp, 12.0, 12.0) };
+        assert!(!none.below(run, "101", Some((-30.0, -24.0))));
+        assert!(!g.below(run, "101", Some((f64::NAN, -24.0))));
     }
 
     #[test]

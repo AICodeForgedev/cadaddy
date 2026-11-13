@@ -6,9 +6,10 @@
     "mc": ["TYPE MC", "METAL-CLAD CABLE"],
     "nm": ["TYPE NM", "NONMETALLIC-SHEATHED CABLE", "NON-METALLIC SHEATHED CABLE"],
     "se": ["TYPE SE", "TYPE SER", "SERVICE-ENTRANCE CABLE", "SERVICE ENTRANCE CABLE"],
-    "uf": ["TYPE UF"]
+    "uf": ["TYPE UF"],
+    "pvc": ["PVC", "RIGID NONMETALLIC CONDUIT", "RIGID POLYVINYL CHLORIDE"]
   },
-  "method_names": {"raceway": "conductors in raceway", "ac": "armored cable (AC)", "mc": "metal-clad cable (MC)", "nm": "nonmetallic-sheathed cable (NM)", "se": "service-entrance cable (SER)", "uf": "underground feeder cable (UF)"},
+  "method_names": {"raceway": "conductors in raceway", "ac": "armored cable (AC)", "mc": "metal-clad cable (MC)", "nm": "nonmetallic-sheathed cable (NM)", "se": "service-entrance cable (SER)", "uf": "underground feeder cable (UF)", "pvc": "rigid PVC conduit (PVC)"},
   "code_sheet": {
     "construction": ["CONSTRUCTION TYPE", "TYPE OF CONSTRUCTION"],
     "sprinklered_yes": ["FULLY SPRINKLERED", "SPRINKLER SYSTEM PROVIDED", "SPRINKLER SYSTEM: PROVIDED", "SPRINKLERED: YES", "SPRINKLERED THROUGHOUT", "NFPA 13 SYSTEM", "(NFPA 13)"],

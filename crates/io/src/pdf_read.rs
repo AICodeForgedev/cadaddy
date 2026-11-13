@@ -101,6 +101,11 @@ pub struct PdfOptions {
     /// painted as fills) become one solid hatch per layer and colour, not one hatch each: the
     /// sheet looks the same with far fewer objects (off by default; on for print-set jobs).
     pub merge_small_fills: bool,
+    /// Read the sheet's scale from its scale notes (its text, or lettering read from its shapes;
+    /// on by default). Off: a sheet given no `scale` is scaled from its dimension strings, else
+    /// left at paper size, as one whose notes don't read is: for a plan whose only notes are its
+    /// details' (Q6518).
+    pub scale_notes: bool,
 }
 
 /// The largest side (sheet inches) of a fill [`PdfOptions::merge_small_fills`] merges: smaller
@@ -158,6 +163,7 @@ impl Default for PdfOptions {
             recover_text: true,
             e_sheet_at_note_scale: false,
             merge_small_fills: false,
+            scale_notes: true,
         }
     }
 }
@@ -5952,7 +5958,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Initial scale detection — may be overridden after SHX text recovery if a DO NOT SCALE
     // note only exists in stroked (hidden) text.
     let do_not_scale_visible = if opts.recover_text { has_do_not_scale_note(&out.texts) } else { false };
-    let mut best_note = if opts.scale.is_some() {
+    let mut best_note = if opts.scale.is_some() || !opts.scale_notes {
         None
     } else if opts.recover_text {
         detect_scale_note(&out.texts, sheet)
@@ -6377,7 +6383,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         // A scale note drawn as lettering (strokes or outlines) is the sheet's scale when its
         // text gave none: the lettering is read from the same shapes the sheet prints.
-        if opts.scale.is_none() && best_note.is_none() {
+        if opts.scale.is_none() && opts.scale_notes && best_note.is_none() {
             let readings: Vec<NoteText> = recovered_texts.iter().map(NoteText::of_reading).collect();
             let page: Vec<NoteText> = texts.iter().map(NoteText::of_text).collect();
             if let Some((k, note)) = detect_scale_note_in(&readings, &page, sheet) {
@@ -7696,8 +7702,8 @@ fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadaddy_render
 
 /// PDFIMPORT's JSON options → the converted page and a report: `{page?, scale?: number | "auto",
 /// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?, markups?, images?,
-/// imageFolder?, imagePrefix?, fills?: "each" | "merge"}` (`merge`: small fills as one hatch per
-/// layer and colour, [`PdfOptions::merge_small_fills`]). Images are written as PNG files in `imageFolder` (created
+/// imageFolder?, imagePrefix?, fills?: "each" | "merge", scaleNotes?}` (`merge`: small fills as one hatch per
+/// layer and colour, [`PdfOptions::merge_small_fills`]; `scaleNotes: false`, [`PdfOptions::scale_notes`]). Images are written as PNG files in `imageFolder` (created
 /// when missing) and their pixels handed to the image cache, so they show at once.
 pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Drawing, serde_json::Value), String> {
     use serde_json::{Value, json};
@@ -7735,6 +7741,7 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     // (still reported do_not_scale + needs_registration) so it reads at building size.
     o.e_sheet_at_note_scale = true;
     o.merge_small_fills = p.get("fills").and_then(Value::as_str).is_some_and(|f| f.eq_ignore_ascii_case("merge"));
+    o.scale_notes = flag("scaleNotes", true);
     o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
     if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
         let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
@@ -8818,6 +8825,39 @@ mod tests {
         let r =
             read_page(&[dimension((100.0, 100.0), 180.0, "20'-0\"", false), "BT /F1 8 Tf 600 60 Td (SCALE: 1/4\" = 1'-0\") Tj ET".into()].concat());
         assert_eq!(r.scale, 48.0, "{}", r.scale_source);
+    }
+
+    /// Q6518: a page read without its scale notes (a plan whose only notes are its details') is
+    /// scaled from its dimension strings, else left at paper size, whatever its notes say.
+    #[test]
+    fn a_page_read_without_its_scale_notes_is_scaled_from_its_dimension_strings() {
+        let note = "BT /F1 8 Tf 600 60 Td (SCALE: 3\" = 1'-0\") Tj ET";
+        // the dimension strings of the sheet scaled from them above (96x)
+        let dims = [
+            dimension((100.0, 100.0), 180.0, "20'-0\"", false),
+            dimension((100.0, 200.0), 112.5, "12'-6\"", false),
+            dimension((400.0, 100.0), 72.0, "8'-0\"", true),
+            dimension((400.0, 300.0), 100.0, "40'-0\"", false),
+        ]
+        .concat();
+        let without = PdfOptions { scale_notes: false, ..PdfOptions::default() };
+        let read_with = |content: &str, o: &PdfOptions| match read(&pdf_with(content.as_bytes()), o) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        };
+        // with its notes: the note's 4x
+        assert_eq!(read_page(&[dims.as_str(), note].concat()).scale, 4.0);
+        // without: its dimension strings' 96x
+        let r = read_with(&[dims.as_str(), note].concat(), &without);
+        assert_eq!(r.scale, 96.0, "{}", r.scale_source);
+        assert!(r.scale_source.starts_with("dimension strings"), "{}", r.scale_source);
+        // without, and no dimension strings: paper size
+        let r = read_with(note, &without);
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+        assert!(r.scale_source.starts_with("none"), "{}", r.scale_source);
+        // a scale given still stands
+        let r = read_with(note, &PdfOptions { scale: Some(48.0), ..without });
+        assert_eq!(r.scale, 48.0);
     }
 
     #[test]

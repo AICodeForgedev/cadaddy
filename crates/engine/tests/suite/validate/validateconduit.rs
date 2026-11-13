@@ -867,6 +867,44 @@ fn the_drawings_wire_length_table_decides_the_conductor_before_the_three_percent
 }
 
 #[test]
+fn a_length_table_the_job_kept_off_its_pages_is_validates_and_the_routers() {
+    // Q6545: a PDF job's wire-length table is on a legend page its drawing doesn't hold; the job
+    // keeps the table it read there in the spec. The router sizes the circuits by it and Validate
+    // judges them by it: one table, one rule. 20 A / 120 V: #12 to 55 ft, #10 to 120 ft, #8 to
+    // 300 ft; LP1-5 runs well over 120 ft both ways it is measured, so both ask #8 of it.
+    let mut s = building(Some(20), |_| {});
+    with_spec(&mut s, |sp| {
+        let band = |size: &str, max_ft: f64| json!({"amps": 20.0, "volts": 120.0, "size": size, "max_ft": max_ft});
+        sp["mep"]["wire_length_tables"] = json!([{"sheet": "X-701", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
+            "bands": [band("12", 55.0), band("10", 120.0), band("8", 300.0)]}]);
+        sp["mep"]["wire_length_read"] = json!("1 job pages looked at (X-701): 1 tables");
+    });
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert!(r["wire_size_table"]["read"].as_str().is_some_and(|t| t.ends_with("on X-701")), "{}", r["wire_size_table"]);
+    let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
+    assert!(up.iter().any(|u| u["circuit"] == "LP1-5" && u["to"] == "2#8 + 1#8G"), "{up:#?}");
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let vd = of(&fs, "E-VDROP");
+    assert!(vd.len() >= 3, "{vd:#?}");
+    // Every circuit judged by the kept table (never the 3% calculation), a pass exactly when
+    // its conductor is the size the table asks for its length, or larger.
+    let rank = |s: &str| ["#14", "#12", "#10", "#8", "#6", "#4"].iter().position(|x| *x == s);
+    for f in &vd {
+        assert_eq!(f["measured"]["table_from"], "X-701", "{f}");
+        assert!(f["measured"].get("drop_pct").is_none(), "the table, not the calculation: {f}");
+        let (have, need) =
+            (rank(f["measured"]["conductor"].as_str().unwrap_or_default()), rank(f["measured"]["needed"].as_str().unwrap_or_default()));
+        assert!(have.is_some() && need.is_some(), "{f}");
+        assert_eq!(f["verdict"], if have >= need { "pass" } else { "fail" }, "{f}");
+    }
+    let far = vd.iter().find(|f| f["measured"]["circuit"] == "LP1-5").copied().cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 120.0 && l <= 300.0), "{far}");
+    assert_eq!((&far["measured"]["needed"], &far["measured"]["conductor"], &far["verdict"]), (&json!("#8"), &json!("#8"), &json!("pass")), "{far}");
+}
+
+#[test]
 fn a_length_tables_column_past_two_ought_is_chosen_not_read_as_past_the_tables_reach() {
     // Q6456: the table's sizes run past 2/0 (the voltage-drop calculation's largest). LP1-5,
     // over 150 ft, is covered only by the #3/0 column: the table asks #3/0, it is not "longer
@@ -921,6 +959,116 @@ fn a_typical_panels_copies_each_judge_only_their_own_circuit() {
         let near_a = f["measured"]["panel"] == "LP1-A";
         assert!(if near_a { at < 70.0 } else { at > 70.0 }, "{f}");
     }
+}
+
+/// Q6544: work below grade is its own area. A buried site circuit's PVC run (in no room) and a
+/// PVC homerun laid wholly under the floor are judged by the table's underground row, else by the
+/// code's uses permitted below grade (rules data), never by the concealed row; the same PVC in the
+/// building's walls and ceilings still fails the concealed row.
+#[test]
+fn a_buried_pvc_run_is_judged_below_grade_and_pvc_in_a_wall_is_not() {
+    let table = |s: &mut Session, underground: bool| {
+        let mut apps = vec![
+            json!({"section": "26 05 19", "item": "C", "application": "Branch Circuits Concealed in Ceilings, Walls, and Partitions", "methods": ["raceway", "mc"]}),
+        ];
+        if underground {
+            apps.push(json!({"section": "26 05 19", "item": "F", "application": "Branch Circuits Underground and Below Slab", "methods": ["pvc"]}));
+        }
+        let methods = json!({"applications": apps});
+        if let Ok(d) = s.doc_mut() {
+            d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&methods).unwrap_or_default()));
+        }
+    };
+    let mut s = building(Some(20), |s| table(s, true));
+    // The router lays raceway (EMT) by the concealed row: three of its runs.
+    let mut runs: std::collections::BTreeMap<String, Vec<cadaddy_engine::doc::Handle>> = std::collections::BTreeMap::new();
+    for (h, ps) in pieces(&s, "conduit") {
+        let run = ps.get("run").map(|x| x.text()).unwrap_or_default();
+        if !run.is_empty() && ps.get("circuit").is_some_and(|c| !c.text().is_empty()) {
+            runs.entry(run).or_default().push(h);
+        }
+    }
+    let picked: Vec<(String, Vec<cadaddy_engine::doc::Handle>)> = runs.into_iter().take(3).collect();
+    assert_eq!(picked.len(), 3, "the router lays at least three conduit runs");
+    let buried = "circuit:L1:buried:LP1-1#1".to_string();
+    let (in_wall, under) = (picked[1].0.clone(), picked[2].0.clone());
+    {
+        let d = s.doc_mut().expect("doc");
+        for (i, (_, handles)) in picked.iter().enumerate() {
+            // Its highest end, so the whole run (drops too) goes under the floor.
+            let top = handles
+                .iter()
+                .filter_map(|h| d.model.iter().find(|e| e.handle == *h))
+                .flat_map(|e| {
+                    let ps = props::read(&e.common.xdata);
+                    ["start", "end"].map(|k| ps.get(k).map_or(0.0, |x| xyz(&x.text())[2]))
+                })
+                .fold(0.0, f64::max);
+            for h in handles {
+                let Some(e) = d.model.iter().find(|e| e.handle == *h) else { continue };
+                let mut ps = props::read(&e.common.xdata);
+                ps.set("type", props::Prop::new("PVC Sch 40", props::Source::computed()));
+                // A buried site circuit's run, as site work tags it: in the earth, in no room.
+                if i == 0 {
+                    ps.set("run", props::Prop::new(buried.clone(), props::Source::computed()));
+                    ps.set("room", props::Prop::new("", props::Source::computed()));
+                }
+                // A run laid 2 ft under the floor (its rooms kept: it runs under them).
+                let drop = if i == 2 { top + 24.0 } else { 0.0 };
+                for k in ["start", "end"] {
+                    if let Some(p) = ps.get(k).map(|x| xyz(&x.text())) {
+                        ps.set(k, props::Prop::new(format!("{},{},{}", p[0], p[1], p[2] - drop), props::Source::computed()));
+                    }
+                }
+                let _ = d.modify_entity(*h, |e| {
+                    e.common.xdata = props::write(&e.common.xdata, &ps).into();
+                    if let cadaddy_engine::doc::EntityKind::Mesh(m) = &mut e.kind {
+                        for v in &mut m.vertices {
+                            v.z -= drop;
+                        }
+                    }
+                });
+            }
+        }
+    }
+    let by_run =
+        |fs: &[Value], run: &str| -> Vec<Value> { of(fs, "E-METHOD").into_iter().filter(|f| f["measured"]["run"] == run).cloned().collect() };
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    for run in [&buried, &under] {
+        let f = by_run(&fs, run);
+        assert!(!f.is_empty(), "{run}: {:?}", of(&fs, "E-METHOD"));
+        assert!(
+            f.iter().all(|f| f["verdict"] == "pass"
+                && f["measured"]["areas"] == json!(["below grade"])
+                && f["expected"].as_str().is_some_and(|e| e.contains("Underground"))),
+            "{run}: {f:?}"
+        );
+    }
+    let f = by_run(&fs, &in_wall);
+    assert!(!f.is_empty() && f.iter().all(|f| f["verdict"] == "fail" && !f["measured"]["areas"].to_string().contains("below")), "{f:?}");
+    // No underground row: the code's uses permitted below grade (rules data) judge it, not the
+    // concealed row; the PVC in the wall still fails.
+    table(&mut s, false);
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    for run in [&buried, &under] {
+        let f = by_run(&fs, run);
+        assert!(
+            !f.is_empty()
+                && f.iter().all(|f| f["verdict"] == "pass" && f["expected"].as_str().is_some_and(|e| e.contains("300.5") && e.contains("352.10"))),
+            "{run}: {f:?}"
+        );
+    }
+    assert!(by_run(&fs, &in_wall).iter().all(|f| f["verdict"] == "fail"), "{:?}", by_run(&fs, &in_wall));
+    // The project's general rule is the building's, not the earth's: EMT everywhere still lets
+    // the buried PVC pass by the code, and fails the PVC in the wall.
+    s.execute(
+        "project.rules.set",
+        &json!({"domain": "wiring_method", "key": "general", "value": "EMT", "tier": "spec", "source": "Spec 26 05 33", "reason": "test setup"}),
+    )
+    .expect("rule");
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    assert!(by_run(&fs, &buried).iter().all(|f| f["verdict"] == "pass"), "{:?}", by_run(&fs, &buried));
+    assert!(by_run(&fs, &in_wall).iter().all(|f| f["verdict"] == "fail"), "{:?}", by_run(&fs, &in_wall));
 }
 
 /// A gridded wire-length table drawn far from the building: `headers` across the top, one
