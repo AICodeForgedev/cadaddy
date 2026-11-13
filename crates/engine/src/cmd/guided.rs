@@ -4227,6 +4227,8 @@ fn device_census(
                         template: String::new(),
                         circuit_basis: String::new(),
                         circuit_review: String::new(),
+                        hoistway: String::new(),
+                        hoistway_view: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -4834,12 +4836,19 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
     // and the overall plan's copies left out (with their enlarged plan): one object each.
     let mut moved_off: Vec<(&str, String, [f64; 2], String)> = Vec::new();
     let mut left_out: Vec<(super::readers::ReadDevice, &str)> = Vec::new();
+    let parts = super::hoistway::rules().parts;
     for mut dv in std::mem::take(&mut census.placed) {
         if let Some(e) = moves.get(dv.handle.as_str()).copied().or_else(|| by_place(&dv))
             && let Some(at) = e.place(dv.at)
         {
             dv.at = at;
             dv.level = job.level_at(at).map_or_else(|| e.level.clone(), |r| r.level.clone());
+            // An elevator pit or hoistway (shaft) plan's device belongs in the pit or at the top
+            // of the hoistway, whatever storey the view registered onto (Q6615).
+            if let Some(part) = super::hoistway::part_of(&e.title, &parts) {
+                dv.hoistway = part.name().into();
+                dv.hoistway_view = format!("{} view {} \"{}\"", e.sheet, e.detail, e.title.trim());
+            }
             moved += 1;
             moved_off.push((e.sheet.as_str(), dv.tag.clone(), at, dv.handle.clone()));
         } else if let Some(e) = ignored.get(dv.handle.as_str()) {
@@ -35991,6 +36000,46 @@ mod tests {
         assert_eq!(moved, 1);
         let at = |h: &str| census.placed.iter().find(|d| d.handle == h).map(|d| d.at);
         assert_eq!((at("A1"), at("B2")), (Some([10.0, 10.0]), Some([1010.0, 10.0])));
+    }
+
+    /// Q6615: an elevator pit plan's and a hoistway (shaft) plan's devices are marked for the
+    /// pit and the top of the hoistway as they move onto the plan they registered on (placed there
+    /// when they go into the model); another enlarged view's are not.
+    #[test]
+    fn an_elevator_pit_or_shaft_views_devices_are_marked_for_the_pit_or_the_top() {
+        let job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let view = |detail: &str, title: &str, h: &str| cadaddy_mepfix::printlinks::Enlarged {
+            sheet: "Q-9".into(),
+            detail: detail.into(),
+            title: title.into(),
+            registered: true,
+            devices: 1,
+            device_handles: vec![h.into()],
+            fit: Some(cadaddy_mepfix::tagid::Sim { tx: 1000.0, ..cadaddy_mepfix::tagid::Sim::IDENTITY }),
+            ..Default::default()
+        };
+        let links = cadaddy_mepfix::printlinks::SheetLinks {
+            enlarged: vec![
+                view("4", "PIT PLAN - ELEVATOR 2", "A1"),
+                view("3", "ELEV SHAFT - POWER AND SIGNAL", "B2"),
+                view("1", "POWER PLAN - WEST WING", "C3"),
+            ],
+            ..Default::default()
+        };
+        let dev = |h: &str| super::super::readers::ReadDevice {
+            tag: "D".into(),
+            at: [10.0, 10.0],
+            sheet: "Q-9".into(),
+            handle: h.into(),
+            ..Default::default()
+        };
+        let mut census = DeviceCensus { placed: vec![dev("A1"), dev("B2"), dev("C3")], ..Default::default() };
+        let (moved, _) = enlarged_authority(&job, &links, &mut census);
+        assert_eq!(moved, 3);
+        let of = |h: &str| census.placed.iter().find(|d| d.handle == h).map(|d| (d.hoistway.clone(), d.hoistway_view.clone())).unwrap_or_default();
+        assert_eq!(of("A1"), ("pit".to_string(), "Q-9 view 4 \"PIT PLAN - ELEVATOR 2\"".to_string()));
+        assert_eq!(of("B2").0, "top");
+        assert_eq!(of("C3"), (String::new(), String::new()));
     }
 
     /// An enlarged view of a part of a floor that registers onto no plan is named in a finding with
