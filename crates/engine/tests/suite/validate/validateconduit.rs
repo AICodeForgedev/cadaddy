@@ -875,14 +875,14 @@ fn a_length_table_the_job_kept_off_its_pages_is_validates_and_the_routers() {
     let mut s = building(Some(20), |_| {});
     with_spec(&mut s, |sp| {
         let band = |size: &str, max_ft: f64| json!({"amps": 20.0, "volts": 120.0, "size": size, "max_ft": max_ft});
-        sp["mep"]["wire_length_tables"] = json!([{"sheet": "E-001", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
+        sp["mep"]["wire_length_tables"] = json!([{"sheet": "X-701", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
             "bands": [band("12", 55.0), band("10", 120.0), band("8", 300.0)]}]);
-        sp["mep"]["wire_length_read"] = json!("1 job pages looked at (E-001): 1 tables");
+        sp["mep"]["wire_length_read"] = json!("1 job pages looked at (X-701): 1 tables");
     });
     s.execute("model.build", &json!({})).expect("build");
     s.execute("conduit.reroute", &json!({})).expect("reroute");
     let r = s.execute("conduit.route", &json!({})).expect("report");
-    assert!(r["wire_size_table"]["read"].as_str().is_some_and(|t| t.ends_with("on E-001")), "{}", r["wire_size_table"]);
+    assert!(r["wire_size_table"]["read"].as_str().is_some_and(|t| t.ends_with("on X-701")), "{}", r["wire_size_table"]);
     let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
     assert!(up.iter().any(|u| u["circuit"] == "LP1-5" && u["to"] == "2#8 + 1#8G"), "{up:#?}");
     let (_, fs) = screen(&mut s, &["E-VDROP"]);
@@ -892,7 +892,7 @@ fn a_length_table_the_job_kept_off_its_pages_is_validates_and_the_routers() {
     // its conductor is the size the table asks for its length, or larger.
     let rank = |s: &str| ["#14", "#12", "#10", "#8", "#6", "#4"].iter().position(|x| *x == s);
     for f in &vd {
-        assert_eq!(f["measured"]["table_from"], "E-001", "{f}");
+        assert_eq!(f["measured"]["table_from"], "X-701", "{f}");
         assert!(f["measured"].get("drop_pct").is_none(), "the table, not the calculation: {f}");
         let (have, need) =
             (rank(f["measured"]["conductor"].as_str().unwrap_or_default()), rank(f["measured"]["needed"].as_str().unwrap_or_default()));

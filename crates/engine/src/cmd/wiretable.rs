@@ -775,21 +775,21 @@ mod tests {
         let d = Drawing::new_imperial();
         let mut sp = cadaddy_walk3d::BuildingSpec::default();
         let notes = page("", &[], &[], &["GENERAL NOTES", "1. ALL WORK PER THE CODE IN FORCE."]);
-        let pages = vec![("E-001".to_string(), by_breaker()), ("E-002".to_string(), notes)];
+        let pages = vec![("X-701".to_string(), by_breaker()), ("X-702".to_string(), notes)];
         // Before the job keeps it: the router (no pages, no session) has no table.
         assert!(documents(&d, &sp, &[]).is_empty());
         assert_eq!(keep_job_tables(&d, &mut sp, &pages), 1);
         assert_eq!(sp.mep.wire_length_tables.len(), 1, "{:?}", sp.mep.wire_length_tables);
-        assert_eq!(sp.mep.wire_length_tables[0].sheet, "E-001");
+        assert_eq!(sp.mep.wire_length_tables[0].sheet, "X-701");
         assert_eq!(sp.mep.wire_length_tables[0].bands.len(), 4, "{:?}", sp.mep.wire_length_tables[0].bands);
-        assert!(sp.mep.wire_length_read.starts_with("2 job pages looked at (E-001, E-002): 1 tables"), "{}", sp.mep.wire_length_read);
+        assert!(sp.mep.wire_length_read.starts_with("2 job pages looked at (X-701, X-702): 1 tables"), "{}", sp.mep.wire_length_read);
         // Saved and read back (the spec in the drawing), the router reads it with no session: a
         // 90 ft 20 A / 120 V circuit takes #10.
         let back = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_json()).unwrap_or_else(|e| panic!("{e}"));
         let docs = documents(&d, &back, &[]);
         assert_eq!(docs.len(), 1, "{docs:?}");
         assert_eq!(docs[0].1, ReadFrom::Stored);
-        assert!(docs[0].0.cite().contains("on E-001"), "{}", docs[0].0.cite());
+        assert!(docs[0].0.cite().contains("on X-701"), "{}", docs[0].0.cite());
         assert_eq!(docs[0].0.need(90.0, Some(20.0), Some(120.0), &sizes()), Need::Size("10".into(), "20 A / 120 V: #10 to 140 ft".into()));
         // Validate, which reads the pages now too, gets the same table, once.
         let both = documents(&d, &back, &pages);
@@ -807,7 +807,7 @@ mod tests {
         // The single-line form on a page reads the same way.
         let lines = page("", &[], &[], &["BRANCH CIRCUIT WIRE SIZES:", "0-55' = #12", "56-140' = #10", "141-230' = #8"]);
         let mut sp3 = cadaddy_walk3d::BuildingSpec::default();
-        assert_eq!(keep_job_tables(&d, &mut sp3, &[("E-003".into(), lines)]), 1, "{}", sp3.mep.wire_length_read);
+        assert_eq!(keep_job_tables(&d, &mut sp3, &[("X-703".into(), lines)]), 1, "{}", sp3.mep.wire_length_read);
         let t = LengthTable::from_stored(&sp3.mep.wire_length_tables[0]);
         assert!(matches!(t.need(90.0, None, None, &sizes()), Need::Size(s, _) if s == "10"), "{t:?}");
     }

@@ -197,14 +197,14 @@ fn a_pdf_jobs_length_table_on_a_page_the_drawing_lacks_sizes_the_routed_circuit(
     let rows = json!([{"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 300.0, "source": "E-101"}]);
     let band = |size: &str, max_ft: f64| json!({"amps": 20.0, "volts": 120.0, "size": size, "max_ft": max_ft});
     let kept = json!({
-        "wire_length_tables": [{"sheet": "E-001", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
+        "wire_length_tables": [{"sheet": "X-701", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
             "bands": [band("12", 55.0), band("10", 140.0), band("8", 230.0)]}],
-        "wire_length_read": "1 job pages looked at (E-001): 1 tables"
+        "wire_length_read": "1 job pages looked at (X-701): 1 tables"
     });
     let mut s = job_with(tags, rows, kept, |_| {});
     let r = s.execute("conduit.route", &json!({})).expect("report");
     let table = &r["wire_size_table"];
-    assert!(table["read"].as_str().is_some_and(|t| t.contains("VOLTAGE DROP WIRING SCHEDULE on E-001")), "{table}");
+    assert!(table["read"].as_str().is_some_and(|t| t.contains("VOLTAGE DROP WIRING SCHEDULE on X-701")), "{table}");
     assert!(table["from"].as_str().is_some_and(|f| f.contains("job's pages")), "{table}");
     let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
     let five = up.iter().find(|u| u["circuit"] == json!("LP1-5") && u["reason"] == json!("the drawing's length table")).cloned();
