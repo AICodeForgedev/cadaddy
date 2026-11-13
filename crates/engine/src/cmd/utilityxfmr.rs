@@ -272,12 +272,48 @@ fn amps(v: &str) -> Option<f64> {
     digits.parse::<f64>().ok().filter(|a| a.is_finite() && *a > 0.0 && *a < 100_000.0)
 }
 
-/// The line voltage and phases of a `VOLTS/PHASE` value (`208Y/120V, 3PH, 4W` → 208, 3).
+/// The line voltage and phases of a `VOLTS/PHASE` value (`208Y/120V, 3PH, 4W` → 208, 3;
+/// `120/208V, 3PH` → 208, 3; `120/240V` → 240, 1). In a printed pair the line-to-line voltage is
+/// the larger number, whatever the print order; a pair with no phase said is single-phase when its
+/// line-to-line is twice its line-to-neutral (split-phase), else three-phase (a wye's is √3 times).
 fn volts_phases(v: &str) -> Option<(f64, u32)> {
     let u = v.to_ascii_uppercase();
-    let line: f64 = u.split(|c: char| !c.is_ascii_digit()).filter_map(|n| n.parse::<f64>().ok()).find(|n| *n >= 100.0 && *n <= 50_000.0)?;
-    let phases = if u.contains("1PH") || u.contains("1 PH") || u.contains("1Ø") || u.contains("1-PHASE") { 1 } else { 3 };
+    let (ln, ll) = super::conduitroute::size::system_volts(&u);
+    // One number over the low-voltage range (medium-voltage service gear): it is line to line.
+    let line =
+        ll.or(ln).or_else(|| u.split(|c: char| !c.is_ascii_digit()).filter_map(|n| n.parse::<f64>().ok()).find(|n| *n >= 100.0 && *n <= 50_000.0))?;
+    let split = matches!((ln, ll), (Some(n), Some(l)) if n > 0.0 && (l / n - 2.0).abs() < 0.05);
+    let phases = phases_said(&u).unwrap_or(if split { 1 } else { 3 });
     Some((line, phases))
+}
+
+/// The phases a `VOLTS/PHASE` text says (`3PH`, `1 PH`, `1Ø`, `3-PHASE`, `SINGLE PHASE`), if any:
+/// the count or word just before a `PH` or `Ø` (spaces and hyphens between them skipped).
+fn phases_said(u: &str) -> Option<u32> {
+    let c: Vec<char> = u.chars().take(400).collect();
+    for i in 0..c.len() {
+        let mark = c.get(i) == Some(&'\u{d8}') || (c.get(i) == Some(&'P') && c.get(i + 1) == Some(&'H'));
+        if !mark {
+            continue;
+        }
+        let mut j = i;
+        while j > 0 && c.get(j - 1).is_some_and(|ch| *ch == ' ' || *ch == '-') {
+            j -= 1;
+        }
+        // The digits just before it (`208Y/120V3PH`), else the word.
+        let before = c.get(..j).unwrap_or_default();
+        let digit = before.last().is_some_and(char::is_ascii_digit);
+        let mut word: Vec<char> =
+            before.iter().rev().take_while(|ch| if digit { ch.is_ascii_digit() } else { ch.is_ascii_alphabetic() }).copied().collect();
+        word.reverse();
+        let word: String = word.into_iter().collect();
+        match word.as_str() {
+            "1" | "SINGLE" => return Some(1),
+            "3" | "THREE" => return Some(3),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A property of the gear by any of the names a schedule gives it.
@@ -617,6 +653,44 @@ mod tests {
         assert!(p.equipment.properties.get(COVER_PROPERTY).is_some_and(|v| v.contains("24")), "the rules' cover");
         sp.mep.equipment.clear();
         assert!(propose(&sp, &c, &[se1()], None, &[]).is_err_and(|e| e.contains("no service gear")));
+    }
+
+    #[test]
+    fn the_line_voltage_is_the_larger_of_a_printed_pair_in_either_order() {
+        assert_eq!(volts_phases("208Y/120V, 3PH, 4W"), Some((208.0, 3)));
+        assert_eq!(volts_phases("120/208V, 3PH, 4W"), Some((208.0, 3)));
+        assert_eq!(volts_phases("277/480V 3 PH"), Some((480.0, 3)));
+        assert_eq!(volts_phases("480Y/277V"), Some((480.0, 3)), "a wye pair, no phase said");
+        assert_eq!(volts_phases("120/240V, 1PH, 3W"), Some((240.0, 1)));
+        assert_eq!(volts_phases("240/120V"), Some((240.0, 1)), "a split-phase pair, no phase said");
+        assert_eq!(volts_phases("240/120V, 3-PHASE, 4W"), Some((240.0, 3)), "a high-leg delta says so");
+        assert_eq!(volts_phases("120/240 SINGLE PHASE"), Some((240.0, 1)));
+        assert_eq!(volts_phases("480V, 3\u{d8}, 3W"), Some((480.0, 3)));
+        assert_eq!(volts_phases("12470V, 3PH"), Some((12470.0, 3)), "medium-voltage gear");
+        assert_eq!(volts_phases("120V3PH"), Some((120.0, 3)));
+        assert_eq!(volts_phases("3PH 4W"), None);
+    }
+
+    #[test]
+    fn a_service_printed_low_voltage_first_is_sized_at_its_line_voltage() {
+        let r = rules();
+        let c = Called { sheet: "E-001".into(), label: "UTILITY TRANSFORMER".into(), ..Called::default() };
+        let gear = |volts: &str| {
+            let mut properties = std::collections::BTreeMap::new();
+            properties.insert("MAIN".to_string(), "1200A MCB".to_string());
+            properties.insert("VOLTS/PHASE".to_string(), volts.to_string());
+            MepEquipment { tag: "MDP".into(), kind: "switchboard".into(), properties, ..MepEquipment::default() }
+        };
+        // 1200 A x 208 V x 1.732 = 432 kVA: the next standard size, in either print order.
+        for v in ["120/208V, 3PH, 4W", "208Y/120V, 3PH, 4W"] {
+            let (kva, src) = kva_of(&c, &gear(v), r);
+            assert_eq!(kva, 500.0, "{v}: {src}");
+            assert!(src.contains("at 208 V 3-phase") && src.contains("= 432 kVA"), "{v}: {src}");
+        }
+        // Single-phase 120/240: 1200 x 240 = 288 kVA, no 1.732.
+        let (kva, src) = kva_of(&c, &gear("120/240V, 1PH, 3W"), r);
+        assert!(src.contains("at 240 V 1-phase") && src.contains("= 288 kVA"), "{src}");
+        assert_eq!(kva, 300.0, "{src}");
     }
 
     #[test]
