@@ -98,6 +98,7 @@ mod rulemodel;
 mod schedule_doors;
 mod scopesplit;
 mod shapes;
+mod short_jamb_walls;
 mod site_services;
 mod sitework;
 mod slabarea;
