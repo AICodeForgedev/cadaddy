@@ -1989,6 +1989,57 @@ pub(crate) fn add_box(m: &mut Mesh, a: Vec2, b: Vec2, t: f64, z0: f64, z1: f64) 
     m.faces.extend([f([3, 2, 1, 0]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])]);
 }
 
+/// What a build makes (part name, mesh) of one wall `a`–`b`, `t` thick and `top` high off a floor
+/// at 0, with one window cut in it: `cut` = (from, to) along it, then its sill and head.
+#[cfg(test)]
+pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f64, f64, f64)) -> Vec<(&'static str, Mesh)> {
+    let (s0, s1, sill, head) = cut;
+    let len = a.dist(b).max(1e-12);
+    let at = |s: f64| a + (b - a) * (s / len);
+    let wall = PlanWall {
+        a,
+        b,
+        thickness: t,
+        top,
+        source: Handle(1),
+        cuts: vec![Cut { s0, s1, window: true, head: Some(head), sill: Some(sill) }],
+        extra: Vec::new(),
+        wall_type: None,
+        fixed_top: false,
+        head: None,
+        basis: None,
+    };
+    let leaf = Leaf {
+        a: at(s0),
+        b: at(s1),
+        window: true,
+        thickness: t,
+        source: Handle(2),
+        head: Some(head),
+        sill: Some(sill),
+        along: None,
+        pair: None,
+        frame: Some((at(s0), at(s1))),
+        mark: None,
+        basis: None,
+        at_tag: None,
+    };
+    let pl = PlanLevel {
+        walls: vec![wall],
+        leaves: vec![leaf],
+        skipped: Vec::new(),
+        z0: 0.0,
+        top,
+        door_head: 80.0,
+        sill: 36.0,
+        head: 84.0,
+        k: 1.0,
+        window_tally: WindowTally::default(),
+        door_tags: doortags::DoorTagReport::default(),
+    };
+    pl.meshes().into_iter().map(|(p, m, ..)| (part_name(p), m)).collect()
+}
+
 pub(crate) fn empty_mesh() -> Mesh {
     Mesh { vertices: Vec::new(), faces: Vec::new(), kind: MeshKind::Polyface }
 }
