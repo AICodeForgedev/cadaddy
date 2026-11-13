@@ -106,6 +106,13 @@ pub(crate) struct Rules {
     /// `ALL`, `EACH`: a note naming a class after one speaks of every one there is (a rule), not
     /// of new ones.
     pub all_words: Vec<String>,
+    /// Words of a note that call for objects (`PROVIDE`, `INSTALL`): a note naming a class with
+    /// none of them, no count and no `AT EACH …` tells how to wire or build the ones there are
+    /// (`CIRCUIT EXIT SIGNS TO …`, `EXIT SIGNS SHALL BE LED`), it calls for none (Q6361).
+    pub call_words: Vec<String>,
+    /// Words after a class's words that call for one at every place of a kind (`EXIT SIGN AT EACH
+    /// STAIR DOOR`); `ANY` is none (`… AHEAD OF ANY SWITCH`).
+    pub each_words: Vec<String>,
     /// Words that end a note's room type (`EACH GUEST ROOM SHALL …`: the type is `GUEST`).
     pub room_stop_words: Vec<String>,
     /// Words of a room type that name no type of their own (`ROOM`, `TYPE`): left out when the
@@ -467,6 +474,20 @@ pub(crate) struct Named {
     /// The room type it is called for in every room of (`… IN EACH GUEST SUITE`: `GUEST SUITE`),
     /// upper case; empty when the note names none.
     pub rooms: Vec<String>,
+    /// The note calls for objects of the class ([`calls_for`]); false: it only says how to wire
+    /// or build the ones there are, and proposes none.
+    pub calls: bool,
+}
+
+/// Whether a note's sentence `w` calls for objects of the class whose words start at `class_at`
+/// (Q6361): a call word of the rules (`PROVIDE ONE EXIT SIGN`), a count it gives (`(2) EV
+/// CHARGERS`) or an `EACH` / `EVERY` word after the class (`EXIT SIGN AT EACH STAIR DOOR`). A note
+/// that only says how to circuit or build the ones there are (`CIRCUIT EXIT SIGNS TO THE NEAREST
+/// LIGHTING CIRCUIT`, `EXIT SIGNS SHALL BE LED`) calls for none.
+fn calls_for(w: &[String], class_at: usize, given: Option<u32>) -> bool {
+    let r = rules();
+    let is = |list: &[String], x: &str| list.iter().any(|a| a.eq_ignore_ascii_case(x));
+    given.is_some() || w.iter().any(|x| is(&r.call_words, x)) || w.iter().skip(class_at + 1).any(|x| is(&r.each_words, x))
 }
 
 /// The objects a note names (each sentence's first) with their count and what it connects them
@@ -489,7 +510,8 @@ pub(crate) fn note_objects(text: &str) -> Vec<Named> {
         let all = w.get(first.saturating_sub(2)..first).unwrap_or(&[]).iter().any(|x| r.all_words.iter().any(|a| a.eq_ignore_ascii_case(x)));
         let rooms = if all { Vec::new() } else { room_type_after(&w, first) };
         let given = note_count_given(part, c);
-        out.push(Named { class: c, count: given.unwrap_or(1), given, via: connection_via(part).unwrap_or(via), all, rooms });
+        let calls = calls_for(&w, first, given);
+        out.push(Named { class: c, count: given.unwrap_or(1), given, via: connection_via(part).unwrap_or(via), all, rooms, calls });
     }
     out
 }
@@ -900,6 +922,17 @@ mod tests {
         assert_eq!(one("SUMP PUMP (QTY 3): 120V CONNECTION").map(|n| n.1), Some(3));
         // One here and one there: two.
         assert_eq!(one("PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR").map(|n| n.1), Some(2));
+        // Q6361: a note calls for objects with a call word, a count or an `EACH` after them; one
+        // saying how to circuit or build the ones there are calls for none.
+        let calls = |t: &str| note_objects(t).into_iter().next().map(|n| (n.class.kind.clone(), n.calls));
+        for t in ["CIRCUIT EXIT SIGNS TO THE LOCAL LIGHTING CIRCUIT AHEAD OF ANY SWITCH.", "EXIT SIGNS SHALL BE LED WITH BATTERY BACKUP."] {
+            assert_eq!(calls(t), Some(("exit_sign".into(), false)), "{t}");
+        }
+        for t in ["PROVIDE EXIT SIGN ABOVE THE DOOR.", "EXIT SIGN AT EACH STAIR DOOR.", "TWO EXIT SIGNS IN THE CORRIDOR.", "INSTALL A NEW EXIT SIGN."]
+        {
+            assert_eq!(calls(t), Some(("exit_sign".into(), true)), "{t}");
+        }
+        assert_eq!(calls("SUMP PUMP (QTY 3): 120V CONNECTION"), Some(("sump_pump".into(), true)));
         // A bare number far from the words is no count.
         assert_eq!(note_count("CIRCUIT 12 TO PANEL; PROVIDE SUMP PUMP CONNECTION", class_by_kind("sump_pump").unwrap()), 1);
         // A count said in words or figures is given; none said is none given (counted as 1, the

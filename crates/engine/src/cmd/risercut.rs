@@ -107,7 +107,10 @@ pub(crate) fn storey_runs<'a>(sp: &BuildingSpec, r: &'a MepRun) -> Vec<StoreyRun
                 floors.iter().filter(|f| f.1 > bot + EPS_FT && f.1 >= a - EPS_FT && f.1 < b - EPS_FT).map(|f| f.0.to_string()).collect();
             let mut piece = r.clone();
             piece.level = (*name).to_string();
-            piece.points = vec![carry(sp, *p, &own.name, name)];
+            // Where that storey's own plan puts it (its chase there, Q6550), else carried.
+            let mine = r.storey_points.iter().find(|(l, q)| l.eq_ignore_ascii_case(name) && q.iter().all(|v| v.is_finite())).map(|(_, q)| *q);
+            piece.points = vec![if name.eq_ignore_ascii_case(&own.name) { *p } else { mine.unwrap_or_else(|| carry(sp, *p, &own.name, name)) }];
+            piece.storey_points.clear();
             piece.bottoms_ft = vec![a - floor];
             piece.top_ft = Some(b - floor);
             StoreyRun {
@@ -221,6 +224,27 @@ mod tests {
         let ps = storey_runs(&sp, &r);
         let at: Vec<[f64; 2]> = ps.iter().map(|s| s.run.points[0]).collect();
         assert_eq!(at, vec![[5.0, 5.0], [205.0, 5.0]]);
+    }
+
+    /// A stack whose storeys' plans don't line up by their base points (Q6550): each piece
+    /// stands where its own storey's plan puts it, still one riser cut at its floors.
+    #[test]
+    fn a_piece_stands_where_its_own_storeys_plan_puts_it() {
+        let mut sp = spec(&[("L1", 0.0), ("L2", 10.0), ("L3", 20.0)]);
+        for (i, l) in sp.levels.iter_mut().enumerate() {
+            let x = 200.0 * i as f64;
+            l.region = Some([x, 0.0, x + 100.0, 100.0]);
+        }
+        let mut r = riser("L1", 0.0, 25.0);
+        // Its own level's point is never moved; a name in another case, a point that is no number.
+        r.storey_points = [("l2".to_string(), [260.0, 7.0]), ("L1".to_string(), [50.0, 50.0]), ("L3".to_string(), [f64::NAN, 1.0])].into();
+        let ps = storey_runs(&sp, &r);
+        let at: Vec<(&str, [f64; 2])> = ps.iter().map(|s| (s.run.level.as_str(), s.run.points[0])).collect();
+        assert_eq!(at, vec![("L1", [5.0, 5.0]), ("L2", [260.0, 7.0]), ("L3", [405.0, 5.0])]);
+        // Still one riser through its floors.
+        let floors: Vec<Vec<String>> = ps.iter().filter_map(|s| s.cut.as_ref()).map(|c| c.floors.clone()).collect();
+        assert_eq!(floors, vec![Vec::<String>::new(), vec!["L2".to_string()], vec!["L3".to_string()]]);
+        assert!(ps.iter().all(|s| s.run.storey_points.is_empty()));
     }
 
     /// Hostile heights and points are not cut (and do not panic).

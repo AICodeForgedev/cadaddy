@@ -781,6 +781,64 @@ fn walkthrough_parts_save_incrementally() {
     assert_eq!((back.building_spec.into_inner(), back.embedded.len()), (None, 3));
 }
 
+/// The model space objects as the reader before Q6399 built them: the whole chunk decoded into a
+/// value tree, then each object from its part of it.
+fn via_value_tree(data: &[u8], version: u16) -> Option<(Vec<Entity>, Vec<String>)> {
+    let (list, mut meshes) = if version == 2 { super::meshbuf::decode(data)? } else { (super::tokens::decode(data)?, Default::default()) };
+    let serde_json::Value::Array(list) = list else { return None };
+    let mut notes = Vec::new();
+    let mut items = Vec::new();
+    for (i, item) in list.into_iter().enumerate() {
+        match serde_json::from_value::<Entity>(item) {
+            Ok(mut e) => {
+                if let Some(m) = meshes.remove(&i) {
+                    super::meshbuf::fill(&mut e, m);
+                }
+                items.push(e);
+            }
+            Err(e) => notes.push(format!("an object couldn't be read ({e})")),
+        }
+    }
+    Some((items, notes))
+}
+
+/// Objects are built straight from their tokens (Q6399): every kind, with binary meshes or
+/// without, reads exactly as it did through a value tree; an object that doesn't read is noted
+/// and the ones after it still read; a damaged part is refused whole, as before.
+#[test]
+fn objects_built_from_tokens_match_the_value_tree_reader() {
+    let m = model::Meter::default();
+    for d in [every_kind(), walkthrough()] {
+        let bytes = model::write(&d, None).unwrap();
+        let ents = container::find(&bytes, b"ENTS").unwrap();
+        let streamed = model::entity_list(&ents.data, ents.version, &m).unwrap();
+        let before = via_value_tree(&ents.data, ents.version).unwrap();
+        assert!(streamed.1.is_empty(), "{:?}", streamed.1);
+        assert_eq!(streamed, before);
+        assert_eq!(streamed.0.len(), d.model.len());
+    }
+    // A chunk whose second object is of a kind this version doesn't know, and whose fourth has a
+    // field of the wrong type.
+    let good = |x: f64| {
+        serde_json::to_value(Entity::new(Handle(1), EntityKind::Line(Line { a: Vec3::new(x, 0.0, 0.0), b: Vec3::new(1.0, 1.0, 0.0) }))).unwrap()
+    };
+    let mut wrong = good(3.0);
+    wrong["kind"]["a"]["x"] = serde_json::json!("three");
+    let mut unknown = good(1.0);
+    unknown["kind"]["type"] = serde_json::json!("hologram");
+    let data = super::tokens::encode(&serde_json::Value::Array(vec![good(0.0), unknown, good(2.0), wrong, good(4.0)]));
+    let (items, notes) = model::entity_list(&data, 1, &m).unwrap();
+    assert_eq!(items.iter().map(|e| if let EntityKind::Line(l) = &e.kind { l.a.x } else { -1.0 }).collect::<Vec<_>>(), vec![0.0, 2.0, 4.0]);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes.iter().all(|n| n.starts_with("an object couldn't be read (")), "{notes:?}");
+    assert_eq!((items, notes.len()), via_value_tree(&data, 1).map(|(i, n)| (i, n.len())).unwrap());
+    // Damaged tokens: the whole part is refused, as the value tree refused it, at every cut.
+    for cut in 0..data.len() {
+        let part = &data[..cut];
+        assert_eq!(model::entity_list(part, 1, &m).is_none(), via_value_tree(part, 1).is_none(), "cut at {cut}");
+    }
+}
+
 #[test]
 fn damaged_mesh_buffers_never_panic() {
     let d = walkthrough();

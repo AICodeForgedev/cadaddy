@@ -83,6 +83,24 @@ fn opening_holds_the_drawing_once_not_the_file_inflated_beside_it() {
     );
 }
 
+/// A chunk's objects are built as its tokens are read (Q6399): opening holds the objects and the
+/// chunk's inflated bytes, not a token list and a value tree of the chunk beside them. Before,
+/// one chunk in flight held about twelve times its inflated bytes.
+#[test]
+fn a_chunk_is_built_from_its_tokens_without_a_value_tree_beside_it() {
+    let _g = serial();
+    // Four model space chunks, read on one core: one chunk in flight at a time.
+    let n = 4 * 1024;
+    let (bytes, raw) = file(n);
+    let ((d, rep), peak, held, _) = open(&bytes, 1);
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(d.model.len(), n);
+    let over = peak.saturating_sub(held);
+    let chunk = raw as usize / 4;
+    println!("{n} objects: drawing {} KB, peak over it {} KB, one chunk inflates to about {} KB", held / 1024, over / 1024, chunk / 1024);
+    assert!(over < 2 * chunk, "opening held {} KB over the {} KB drawing; one chunk inflates to about {} KB", over / 1024, held / 1024, chunk / 1024);
+}
+
 /// Four times the objects: what opening holds over the drawing stays a few chunks in flight.
 #[test]
 fn what_opening_holds_over_the_drawing_does_not_grow_with_the_file() {
@@ -95,6 +113,34 @@ fn what_opening_holds_over_the_drawing_does_not_grow_with_the_file() {
     }
     let [small, big] = over[..] else { panic!("two sizes") };
     assert!(big < small + 16 * MB, "{} MB over the drawing for the small file, {} MB for four times it", small / MB, big / MB);
+}
+
+/// Any .cdy file opened the same way, named by `CADADDY_PROFILE_CDY` (a real model kept outside
+/// the repository): prints its open time, peak memory and breakdown. Does nothing without it.
+#[test]
+#[ignore = "opens a file named by CADADDY_PROFILE_CDY; run on demand"]
+fn a_model_file_opens_with_its_breakdown() {
+    let _g = serial();
+    let Some(path) = std::env::var_os("CADADDY_PROFILE_CDY") else { return };
+    let bytes = std::fs::read(path).unwrap();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let ((d, rep), peak, held, wall) = open(&bytes, threads);
+    println!(
+        "file {} MB, {} model space objects, {} notes; open on {threads} cores: {wall:.2?}; peak {} MB, drawing once open {} MB, peak over the drawing {} MB",
+        bytes.len() / MB,
+        d.model.len(),
+        rep.notes.len(),
+        peak / MB,
+        held / MB,
+        peak.saturating_sub(held) / MB
+    );
+    println!("{:#?}", rep.profile);
+    // What was read, as a fingerprint of the drawing saved again (the writer is deterministic):
+    // equal before and after a reader change means the same drawing.
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    cadaddy_io::cdy::write_cdy_checkpoint(&d).unwrap().hash(&mut h);
+    println!("drawing read, saved again: fingerprint {:016x}", h.finish());
 }
 
 /// The reproduction at the size of a print-set model: a million objects. Prints the breakdown.

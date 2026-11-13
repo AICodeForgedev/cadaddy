@@ -712,3 +712,83 @@ fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
     assert_eq!(count("GFCI", "circuit"), 1, "{r}");
     assert_eq!(r["types_corrected"], 4, "{r}");
 }
+
+/// Q6591: a panel schedule's header goes on its panel: bus, main, volts and phase, enclosure,
+/// AIC and mounting, and the schedule, each with the schedule as its source; a typical
+/// schedule's on each room panel of its type; the gear submittal's catalog parts the job keeps
+/// on the record are its product. Two header layouts; gear fed from a panel takes none of it.
+#[test]
+fn a_panel_schedules_header_goes_on_its_panels() {
+    let mut sp = spec();
+    let scheds = sp["mep"]["panel_schedules"].as_array_mut().expect("schedules");
+    scheds[0]["header"] = json!({"bus amps": "225A", "main size / type": "MLO", "mounting": "SURFACE",
+        "volts/phase": "208Y/120V, 3PH, 4W", "nema rating": "NEMA 1", "aic rating": "10,000", "ground bus": "YES"});
+    scheds[1]["header"] = json!({"bus rating": "125 A", "main": "100A MCB", "mtg": "RECESSED", "voltage": "120/240V", "phase": "1"});
+    let lp1 = sp["mep"]["equipment"].as_array_mut().expect("equipment").iter_mut().find(|e| e["tag"] == "LP1").expect("LP1");
+    lp1["properties"] = json!({"CATALOG_NUMBER": "QX30ML225, enclosure BX36, trim TR36S"});
+    lp1["sources"] = json!({"catalog_number": "panelboard submittal p.4"});
+    let mut s = built(sp, false);
+    // The job reads the gear submittals after the model is built: catalog parts its record takes
+    // then reach its element through the fill.
+    let mut now = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    let u = now["mep"]["equipment"].as_array_mut().expect("equipment").iter_mut().find(|e| e["tag"] == "U-101").expect("U-101");
+    u["properties"]["CATALOG_NUMBER"] = json!("LC24M125");
+    s.execute("bspec.set", &json!({"replace": true, "spec": now})).expect("spec again");
+    let fill = s.execute("bim.props.fill", &json!({})).expect("fill");
+    assert!(fill["filled"]["equipment"]["bus_amps"].as_u64().unwrap_or(0) >= 3, "{fill}");
+
+    let h = panel_handle(&mut s, "LP1");
+    let p = props_of(&mut s, &h);
+    let v = |p: &Value, k: &str| val(p, k).clone();
+    assert_eq!((v(&p, "bus_amps"), p["bus_amps"]["unit"].clone()), (json!(225), json!("A")), "{p:#}");
+    assert_eq!(
+        (v(&p, "main"), v(&p, "mounting"), v(&p, "voltage"), v(&p, "phase")),
+        (json!("MLO"), json!("surface"), json!("208Y/120V"), json!("3PH, 4W"))
+    );
+    assert_eq!((v(&p, "enclosure"), v(&p, "aic"), v(&p, "schedule")), (json!("NEMA 1"), json!("10,000"), json!("panel LP1 schedule (X-2)")));
+    assert_eq!(
+        (p["voltage"]["source"]["kind"].clone(), p["voltage"]["source"]["doc"].clone()),
+        (json!("schedule"), json!("panel LP1 schedule (X-2)"))
+    );
+    assert_eq!(v(&p, "catalog_number"), json!("QX30ML225, enclosure BX36, trim TR36S"));
+    assert_eq!(
+        (p["catalog_number"]["source"]["kind"].clone(), p["catalog_number"]["source"]["doc"].clone()),
+        (json!("submittal"), json!("panelboard submittal p.4"))
+    );
+
+    // The typical schedule's header on both room panels of its type, said typical.
+    for tag in ["U-101", "U-102"] {
+        let h = panel_handle(&mut s, tag);
+        let p = props_of(&mut s, &h);
+        assert_eq!((v(&p, "bus_amps"), v(&p, "main"), v(&p, "mounting")), (json!(125), json!("100A MCB"), json!("flush")), "{tag}: {p:#}");
+        assert_eq!((v(&p, "voltage"), v(&p, "phase")), (json!("120/240V"), json!("1PH")));
+        assert_eq!(v(&p, "schedule"), json!("panel U schedule (X-2), typical of 3"));
+        assert_eq!(v(&p, "catalog_number"), if tag == "U-101" { json!("LC24M125") } else { Value::Null }, "{tag}: {p:#}");
+        assert!(p["mounting"]["note"].as_str().is_some_and(|n| n.contains("RECESSED") && n.contains("every panel of its type")), "{p:#}");
+    }
+    // A damper's power box fed from LP1 and a rooftop unit: no panel header; a switchboard whose
+    // schedule prints none: its schedule only.
+    for tag in ["DPB-1", "RTU-1"] {
+        let h = panel_handle(&mut s, tag);
+        let p = props_of(&mut s, &h);
+        assert!(p["bus_amps"].is_null() && p["schedule"].is_null() && p["voltage"].is_null(), "{tag}: {p:#}");
+    }
+    let h = panel_handle(&mut s, "MDP");
+    let p = props_of(&mut s, &h);
+    assert_eq!(v(&p, "schedule"), json!("panel MDP schedule (X-2)"), "{p:#}");
+    assert!(p["bus_amps"].is_null(), "{p:#}");
+    // A panel whose circuits its own record holds: that is its schedule.
+    let h = panel_handle(&mut s, "LP2");
+    assert_eq!(v(&props_of(&mut s, &h), "schedule"), json!("panel LP2 schedule (X-3)"));
+
+    // Completeness counts them: every panel with a header has its fields.
+    let c = s.execute("bim.completeness", &json!({"kind": "panel"})).expect("completeness");
+    let f = &c["kinds"]["panel"]["fields"];
+    assert_eq!((f["bus_amps"]["documented"].as_u64(), f["schedule"]["documented"].as_u64()), (Some(3), Some(4)), "{c:#}");
+
+    // A person's value stays.
+    let h = panel_handle(&mut s, "LP1");
+    s.execute("bim.props.set", &json!({"handles": [h], "key": "mounting", "value": "flush"})).expect("set");
+    s.execute("bim.props.fill", &json!({})).expect("fill again");
+    assert_eq!(v(&props_of(&mut s, &h), "mounting"), json!("flush"));
+}

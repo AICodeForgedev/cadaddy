@@ -2026,6 +2026,12 @@ pub(crate) fn is_atom(e: &Entity) -> bool {
     super::bimlook::made_tag(e, "part").is_some_and(|p| p.starts_with("atom:"))
 }
 
+/// The circuit labels of a homerun's list (`LP-1,3, LP-5`: a label's poles are joined by a bare
+/// comma, the labels by a comma and a space), each trimmed; the empty ones dropped.
+pub(crate) fn circuit_list(text: &str) -> Vec<String> {
+    text.split(", ").map(str::trim).filter(|l| !l.is_empty()).take(64).map(str::to_string).collect()
+}
+
 /// The handles an element's `connects` property names.
 pub(crate) fn connects_of(e: &Entity) -> Vec<Handle> {
     props::read(&e.common.xdata)
@@ -2071,17 +2077,31 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
     let source_gear = |e: &Entity| {
         is_gear(e) && fa_source.as_ref().is_none_or(|t| super::bimlook::made_tag(e, "tag").is_some_and(|g| g.eq_ignore_ascii_case(t.trim())))
     };
+    // A unit a circuit feeds (a fan coil, a heat pump: equipment of a kind that is no gear) is a
+    // load, not where the circuit comes from: a power walk passes it by for gear that feeds
+    // circuits, and ends on it only when it reaches no such gear.
+    let load = |e: &Entity| {
+        fa_system.is_none()
+            && super::bimlook::made_tag(e, "part")
+                .and_then(|p| p.split_once(':').map(|(_, k)| k.trim().to_string()))
+                .is_some_and(|k| !k.is_empty() && !super::breakers::is_gear_kind(&k))
+    };
     // Breadth first over `connects` to the nearest gear (a panel): the shortest feed.
     let mut prev: HashMap<Handle, Handle> = HashMap::new();
     let mut seen: BTreeSet<Handle> = BTreeSet::from([h]);
     let mut queue: VecDeque<Handle> = VecDeque::from([h]);
     let mut found: Option<Handle> = None;
+    let mut at_load: Option<Handle> = None;
     while let Some(x) = queue.pop_front() {
         if seen.len() > limit {
             break;
         }
         let Some(e) = d.model.get(x) else { continue };
         if x != h && source_gear(e) {
+            if load(e) {
+                at_load.get_or_insert(x);
+                continue;
+            }
             found = Some(x);
             break;
         }
@@ -2095,6 +2115,7 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    let found = found.or(at_load);
     let mut path: Vec<Handle> = Vec::new();
     if let Some(mut x) = found {
         path.push(x);
@@ -2242,11 +2263,12 @@ pub(crate) fn element_detail(d: &Drawing, e: &Entity, upf: f64) -> Option<Value>
     }
     let boxed = ps.get("box").map(Prop::text).and_then(|b| Handle::parse_hex(b.trim()));
     let face = wall_face_of(d, e, upf);
-    if boxed.is_none() && face.is_none() {
-        return None;
-    }
+    // Equipment fed in its own wiring compartment has no box: what feeds it all the same.
     let fed: Vec<Handle> =
         ps.get("fed_by").map(Prop::text).map(|t| t.split([',', ' ']).filter_map(Handle::parse_hex).take(16).collect()).unwrap_or_default();
+    if boxed.is_none() && face.is_none() && fed.is_empty() {
+        return None;
+    }
     let mut j = json!({ "box": boxed.and_then(|b| d.model.get(b)).map(|n| node_json(n)), "fed_by": neighbours(&fed) });
     if let Some(f) = face {
         j["wall_face"] = f;

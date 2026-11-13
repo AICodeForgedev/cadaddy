@@ -703,16 +703,7 @@ pub(crate) fn documented_panels(sp: &BuildingSpec) -> BTreeSet<String> {
     for f in sp.mep.feeders.iter().take(MAX_PANELS) {
         out.extend([&f.from, &f.to].into_iter().map(|t| t.trim().to_ascii_uppercase()));
     }
-    // Whole words: a `fire alarm panel` is gear, a `heat_pump` or a `wireway` is not.
-    let words = |s: &str| {
-        format!(" {} ", s.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" "))
-    };
-    let gear: Vec<String> = super::conduitroute::rules().gear.kinds.iter().map(|k| words(k)).filter(|k| k.trim() != "").collect();
-    let is_gear = |kind: &str| {
-        let k = words(kind);
-        GEAR_KINDS.iter().any(|g| kind.trim().eq_ignore_ascii_case(g)) || gear.iter().any(|g| k.contains(g.as_str()))
-    };
-    for e in sp.mep.equipment.iter().filter(|e| is_gear(&e.kind)).take(MAX_PANELS) {
+    for e in sp.mep.equipment.iter().filter(|e| is_gear_kind(&e.kind)).take(MAX_PANELS) {
         out.insert(e.tag.trim().to_ascii_uppercase());
         if let Some(letter) = e.properties.get("PANEL") {
             out.insert(letter.trim().to_ascii_uppercase());
@@ -720,6 +711,18 @@ pub(crate) fn documented_panels(sp: &BuildingSpec) -> BTreeSet<String> {
     }
     out.retain(|t| !t.is_empty());
     out
+}
+
+/// Whether an equipment kind is gear that feeds circuits (a panel, a switchboard, a transformer):
+/// one of [`GEAR_KINDS`], or a kind the routing rules' gear words name (`conduitroute.json`), by
+/// whole words: a `fire alarm panel` is gear, a `heat_pump` or a `wireway` is not.
+pub(crate) fn is_gear_kind(kind: &str) -> bool {
+    let words = |s: &str| {
+        format!(" {} ", s.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" "))
+    };
+    let k = words(kind);
+    GEAR_KINDS.iter().any(|g| kind.trim().eq_ignore_ascii_case(g))
+        || super::conduitroute::rules().gear.kinds.iter().map(|g| words(g)).any(|g| g.trim() != "" && k.contains(g.as_str()))
 }
 
 /// Whether a circuit's panel (`panel`, as its label names it) is none of the documents' panels

@@ -41,27 +41,54 @@ impl Outline {
 /// foot) stand round, inside `lo`–`hi` (their faces' extents); none when they do not enclose it.
 #[cfg(test)]
 pub(super) fn building(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64) -> Option<Outline> {
-    building_with(walls, lo, hi, upf, false, &[], &mut 0)
+    building_with(walls, lo, hi, upf, false, &OpenBelow::default()).0
+}
+
+/// The spaces a plan labels open to the storey under it ([`building_open`]): each label's
+/// insertion point, and the plan's other lines that may edge such a space (a guardrail, a slab
+/// edge: centreline ends, sheet units), which are no walls.
+#[derive(Clone, Copy, Default)]
+pub(super) struct OpenBelow<'a> {
+    pub at: &'a [Vec2],
+    pub edges: &'a [(Vec2, Vec2)],
+}
+
+/// What [`building_open`] did with the spaces labelled open to below.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct OpenTally {
+    /// Spaces left out of the plate.
+    pub carved: usize,
+    /// Labels on the plate whose space could not be traced to an edge (it gets out to most of the
+    /// plate, or is smaller than a room, whatever edges it): the plate keeps its floor there.
+    pub missed: usize,
+    /// The walls do not close round the building: the plate is their extents less the spaces.
+    pub on_extents: bool,
 }
 
 /// [`building`] less the spaces labelled open to the storey under them (`OPEN TO BELOW` at each
-/// of `open_at`, Q6322): a mezzanine's or an upper floor's plate has no floor there. A space is
-/// traced from its label inside the walls (door gaps closed); one that gets out to most of the
-/// plate (its edge's guardrail drawn as no wall) or is smaller than a room stays floor.
-/// With how many spaces were left out.
-pub(super) fn building_open(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, open_at: &[Vec2]) -> (Option<Outline>, usize) {
-    let mut carved = 0;
-    let o = building_with(walls, lo, hi, upf, false, open_at, &mut carved);
-    (o, carved)
+/// label of `open`, Q6322): a mezzanine's or an upper floor's plate has no floor there. A space
+/// is traced from its label (door gaps closed) inside the walls and the plan's lines that may
+/// edge it (Q6397: a guardrail or a slab edge drawn as a line, no wall), else inside the walls
+/// alone; one that gets out to most of the plate or is smaller than a room stays floor. When the
+/// walls do not close round the building (its open side has no wall), the plate is the walls'
+/// extents less the spaces, and none when no space is left out.
+pub(super) fn building_open(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, open: &OpenBelow) -> (Option<Outline>, OpenTally) {
+    building_with(walls, lo, hi, upf, false, open)
 }
 
 /// [`building`] with every gap up to the widest closed ([`CLOSE_FT`]): the whole building, a
 /// corridor open at its ends to the outside included (what may stand in it, not its slab).
 pub(super) fn building_whole(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64) -> Option<Outline> {
-    building_with(walls, lo, hi, upf, true, &[], &mut 0)
+    building_with(walls, lo, hi, upf, true, &OpenBelow::default()).0
 }
 
-fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whole: bool, open_at: &[Vec2], carved: &mut usize) -> Option<Outline> {
+fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whole: bool, open: &OpenBelow) -> (Option<Outline>, OpenTally) {
+    let mut tally = OpenTally::default();
+    let o = plate_with(walls, lo, hi, upf, whole, open, &mut tally);
+    (o, tally)
+}
+
+fn plate_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whole: bool, open: &OpenBelow, tally: &mut OpenTally) -> Option<Outline> {
     let (w, h) = (hi.x - lo.x, hi.y - lo.y);
     if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite() && upf.is_finite() && upf > 0.0) {
         return None;
@@ -82,19 +109,42 @@ fn building_with(walls: &[(Vec2, Vec2, f64)], lo: Vec2, hi: Vec2, upf: f64, whol
     // Nothing enclosed even with the widest gaps closed (walls that stand alone, a plan that is
     // all gap): no outline.
     let walls_only = total(&wall);
-    if widest == 0 || (widest as f64) < 0.25 * (w * h) / (cell * cell) || widest <= walls_only + walls_only / 2 {
-        return None;
-    }
-    let fill = if whole { fills.last()? } else { fills.iter().find(|g| total(g) as f64 >= 0.8 * widest as f64)? };
-    let less;
-    let fill = if open_at.is_empty() {
-        fill
-    } else {
-        let (f, n) = carve_open(fill, &wall, Grid { nx, ny, cell, origin }, upf, open_at);
-        *carved = n;
-        less = f;
-        &less
+    let g = Grid { nx, ny, cell, origin };
+    let carve = |fill: &[bool], tally: &mut OpenTally| {
+        let edge = if open.edges.is_empty() {
+            None
+        } else {
+            let lines: Vec<(Vec2, Vec2, f64)> = open.edges.iter().take(MAX_OPEN_EDGES).map(|(a, b)| (*a, *b, 0.0)).collect();
+            raster(&lines, origin, cell, nx, ny).map(|e| e.iter().zip(&wall).map(|(e, w)| *e || *w).collect::<Vec<bool>>())
+        };
+        let (f, t) = carve_open(fill, &wall, edge.as_deref(), g, upf, open.at);
+        *tally = t;
+        f
     };
+    let less;
+    if widest == 0 || (widest as f64) < 0.25 * (w * h) / (cell * cell) || widest <= walls_only + walls_only / 2 {
+        // The walls do not close round the building: with a space labelled open to below, its
+        // plate is their extents less the space (a mezzanine whose open side has no wall).
+        if whole || open.at.is_empty() {
+            return None;
+        }
+        let extents: Vec<bool> = (0..nx * ny)
+            .map(|k| {
+                let p = Vec2::new(origin.x + ((k % nx) as f64 + 0.5) * cell, origin.y + ((k / nx) as f64 + 0.5) * cell);
+                p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
+            })
+            .collect();
+        less = carve(&extents, tally);
+        if tally.carved == 0 {
+            return None;
+        }
+        tally.on_extents = true;
+    } else {
+        let pick = if whole { fills.len().checked_sub(1)? } else { fills.iter().position(|g| total(g) as f64 >= 0.8 * widest as f64)? };
+        let fill = fills.into_iter().nth(pick)?;
+        less = if open.at.is_empty() { fill } else { carve(&fill, tally) };
+    }
+    let fill = &less;
     let x_at = |i: usize| (origin.x + i as f64 * cell).clamp(lo.x, hi.x);
     let y_at = |j: usize| (origin.y + j as f64 * cell).clamp(lo.y, hi.y);
     let at = |i: usize, j: usize| i < nx && j < ny && fill.get(j * nx + i).copied().unwrap_or(false);
@@ -157,31 +207,43 @@ const MAX_OPEN_LABELS: usize = 64;
 /// guardrail drawn as no wall): it stays floor.
 const MAX_OPEN_SHARE: f64 = 0.9;
 
-/// `fill` (a plate) less the space round each label of `open_at` ([`building_open`]), and how
-/// many spaces were left out.
-fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2]) -> (Vec<bool>, usize) {
+/// Most of the plan's lines looked at as the edges of spaces open to below.
+const MAX_OPEN_EDGES: usize = 200_000;
+/// How many cells wide an edge line's raster is at most ([`raster`]: within 0.75 of a cell of
+/// its line).
+const EDGE_LINE_CELLS: usize = 2;
+
+/// The barriers a space open to below is traced in: the cells blocked, and those with door gaps
+/// closed ([`DOOR_FT`]).
+struct Barrier {
+    blocked: Vec<bool>,
+    grown: Vec<bool>,
+}
+
+/// `fill` (a plate) less the space round each label of `open_at` ([`building_open`]), traced in
+/// the walls and the plan's edge lines (`edge`: the walls' cells and the lines', when it has
+/// any) first, else in the walls alone; what it did.
+fn carve_open(fill: &[bool], wall: &[bool], edge: Option<&[bool]>, g: Grid, upf: f64, open_at: &[Vec2]) -> (Vec<bool>, OpenTally) {
     let Grid { nx, ny, cell, origin } = g;
     let mut out = fill.to_vec();
-    let mut carved = 0;
+    let mut tally = OpenTally::default();
     // Every cell left out.
     let mut taken = vec![false; fill.len()];
     let plate = fill.iter().filter(|f| **f).count();
-    // Blocked: a wall, or off the plate.
-    let blocked: Vec<bool> = fill.iter().zip(wall).map(|(f, w)| !*f || *w).collect();
     let r = (DOOR_FT * upf / cell).ceil() as usize;
     let reach = (LABEL_REACH_FT * upf / cell).ceil() as usize;
-    let grown = grow(&blocked, nx, ny, r);
+    // Blocked: a wall (or an edge line), or off the plate.
+    let barrier = |lines: &[bool]| {
+        let blocked: Vec<bool> = fill.iter().zip(lines).map(|(f, w)| !*f || *w).collect();
+        let grown = grow(&blocked, nx, ny, r);
+        Barrier { blocked, grown }
+    };
+    let walls = barrier(wall);
+    let edged = edge.map(barrier);
     let min_cells = ROOM_SF.0 * upf * upf / (cell * cell);
-    for at in open_at.iter().take(MAX_OPEN_LABELS) {
-        let (fi, fj) = ((at.x - origin.x) / cell, (at.y - origin.y) / cell);
-        if !(fi >= 0.0 && fj >= 0.0 && (fi as usize) < nx && (fj as usize) < ny) {
-            continue;
-        }
-        let k0 = fj as usize * nx + fi as usize;
-        if blocked.get(k0).copied().unwrap_or(true) {
-            continue;
-        }
-        let Some(start) = nearest(&blocked, &grown, nx, ny, k0, reach) else { continue };
+    // The space round `k0` traced in `b`, when it is a room's size and not most of the plate.
+    let trace = |b: &Barrier, k0: usize| -> Option<Vec<bool>> {
+        let start = nearest(&b.blocked, &b.grown, nx, ny, k0, reach)?;
         let mut floor = vec![false; nx * ny];
         let mut queue = VecDeque::from([start]);
         if let Some(f) = floor.get_mut(start) {
@@ -189,9 +251,9 @@ fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2])
         }
         while let Some(k) = queue.pop_front() {
             let (i, j) = (k % nx, k / nx);
-            for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
-                let q = b.wrapping_mul(nx).wrapping_add(a);
-                if a < nx && b < ny && !grown.get(q).copied().unwrap_or(true) && floor.get(q) == Some(&false) {
+            for (a, b2) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                let q = b2.wrapping_mul(nx).wrapping_add(a);
+                if a < nx && b2 < ny && !b.grown.get(q).copied().unwrap_or(true) && floor.get(q) == Some(&false) {
                     if let Some(f) = floor.get_mut(q) {
                         *f = true;
                     }
@@ -199,12 +261,46 @@ fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2])
                 }
             }
         }
-        // Back out to the walls' faces.
-        let open: Vec<bool> = grow(&floor, nx, ny, r).into_iter().zip(&blocked).map(|(f, b)| f && !*b).collect();
+        // Back out to the walls' faces and the edge lines.
+        let mut open: Vec<bool> = grow(&floor, nx, ny, r).into_iter().zip(&b.blocked).map(|(f, b)| f && !*b).collect();
+        // The edge lines' own cells along it go with it (a rail's line, a wall face drawn
+        // again, a line across it that edges nothing): open beside them, on the plate, no
+        // wall. Never further than a line is wide, so the floor past a rail stays.
+        let line_in = |q: usize| fill.get(q) == Some(&true) && wall.get(q) == Some(&false) && b.blocked.get(q) == Some(&true);
+        for _ in 0..EDGE_LINE_CELLS {
+            let beside: Vec<usize> = (0..nx * ny)
+                .filter(|&q| line_in(q) && open.get(q) == Some(&false))
+                .filter(|&q| {
+                    let (i, j) = (q % nx, q / nx);
+                    [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)]
+                        .iter()
+                        .any(|&(a, b2)| a < nx && b2 < ny && open.get(b2 * nx + a) == Some(&true))
+                })
+                .collect();
+            for q in beside {
+                if let Some(o) = open.get_mut(q) {
+                    *o = true;
+                }
+            }
+        }
         let n = open.iter().filter(|f| **f).count();
-        if (n as f64) < min_cells || n as f64 > MAX_OPEN_SHARE * plate as f64 {
+        ((n as f64) >= min_cells && n as f64 <= MAX_OPEN_SHARE * plate as f64).then_some(open)
+    };
+    for at in open_at.iter().take(MAX_OPEN_LABELS) {
+        let (fi, fj) = ((at.x - origin.x) / cell, (at.y - origin.y) / cell);
+        if !(fi >= 0.0 && fj >= 0.0 && (fi as usize) < nx && (fj as usize) < ny) {
             continue;
         }
+        let k0 = fj as usize * nx + fi as usize;
+        // A label on a wall or off the plate is no space's; one in a space already left out
+        // (a second label in it) is that space's.
+        if walls.blocked.get(k0).copied().unwrap_or(true) || taken.get(k0) == Some(&true) {
+            continue;
+        }
+        let Some(open) = edged.as_ref().and_then(|b| trace(b, k0)).or_else(|| trace(&walls, k0)) else {
+            tally.missed += 1;
+            continue;
+        };
         let mut any = false;
         for ((o, f), t) in out.iter_mut().zip(&open).zip(taken.iter_mut()) {
             if *f && *o {
@@ -213,8 +309,9 @@ fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2])
                 any = true;
             }
         }
-        carved += usize::from(any);
+        tally.carved += usize::from(any);
     }
+    let carved = tally.carved;
     if carved > 0 {
         // The walls round a space left out go with it (the outside wall along an open space is
         // no floor); a wall the floor kept is beside (its edge's guardrail, its own walls) stays.
@@ -227,7 +324,7 @@ fn carve_open(fill: &[bool], wall: &[bool], g: Grid, upf: f64, open_at: &[Vec2])
             }
         }
     }
-    (out, carved)
+    (out, tally)
 }
 
 /// The cells of `fill` as rectangles: each row's runs, a run carried up while the rows above
@@ -979,24 +1076,76 @@ mod tests {
         walls.push(wall((40.0, 21.0), (40.0, 39.75)));
         let (lo, hi) = (Vec2::new(0.0, 0.0), Vec2::new(720.0, 480.0));
         let whole = building(&walls, lo, hi, 12.0).unwrap();
-        let (plate, carved) = building_open(&walls, lo, hi, 12.0, &[Vec2::new(20.0 * 12.0, 20.0 * 12.0)]);
+        let label = [Vec2::new(20.0 * 12.0, 20.0 * 12.0)];
+        let (plate, tally) = building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &label, edges: &[] });
         let plate = plate.unwrap();
-        assert_eq!(carved, 1);
+        assert_eq!(tally, OpenTally { carved: 1, missed: 0, on_extents: false });
         assert!((sf(&whole) - 2400.0).abs() < 30.0, "{} sf", sf(&whole));
         // The mezzanine's floor: its 20' (and the guardrail's and outer wall's width), no more.
         assert!(sf(&plate) > 19.0 * 40.0 && sf(&plate) < 21.0 * 40.0, "{} sf", sf(&plate));
         // Its boundary runs round the mezzanine only (the outside wall's stub at the guardrail
         // kept): the outside wall along the open space went with it.
         assert!(plate.edges.iter().all(|(a, b)| a.x >= 38.0 * 12.0 && b.x >= 38.0 * 12.0), "{:?}", plate.edges);
-        // A label in a space whose edge is drawn as no wall (the trace gets out to the whole
-        // plate) leaves the plate whole; so does a label off the plate, and none at all.
+        // A label in a space whose edge is drawn not at all (the trace gets out to the whole
+        // plate) leaves the plate whole and is counted untraced; a label off the plate is no
+        // space's, and no label leaves nothing out.
         let open_ring = ring(&[(0.25, 0.25), (59.75, 0.25), (59.75, 39.75), (0.25, 39.75)]);
-        for (w, at) in [(&open_ring, Vec2::new(240.0, 240.0)), (&walls, Vec2::new(-500.0, 240.0))] {
-            let (p, n) = building_open(w, lo, hi, 12.0, &[at]);
-            assert_eq!(n, 0);
-            assert!((sf(&p.unwrap()) - 2400.0).abs() < 30.0);
-        }
-        assert_eq!(building_open(&walls, lo, hi, 12.0, &[]).1, 0);
+        let (p, t) = building_open(&open_ring, lo, hi, 12.0, &OpenBelow { at: &label, edges: &[] });
+        assert_eq!(t, OpenTally { carved: 0, missed: 1, on_extents: false });
+        assert!((sf(&p.unwrap()) - 2400.0).abs() < 30.0);
+        let (p, t) = building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &[Vec2::new(-500.0, 240.0)], edges: &[] });
+        assert_eq!(t, OpenTally::default());
+        assert!((sf(&p.unwrap()) - 2400.0).abs() < 30.0);
+        assert_eq!(building_open(&walls, lo, hi, 12.0, &OpenBelow::default()).1, OpenTally::default());
+    }
+
+    /// Feet → a line's ends in sheet units (12 per foot).
+    fn edge(a: (f64, f64), b: (f64, f64)) -> (Vec2, Vec2) {
+        (Vec2::new(a.0 * 12.0, a.1 * 12.0), Vec2::new(b.0 * 12.0, b.1 * 12.0))
+    }
+
+    #[test]
+    fn an_open_space_edged_by_a_guardrail_line_is_left_out() {
+        // The same 60' × 40' plan, the mezzanine's edge at x = 40' a guardrail drawn as a line
+        // (no wall), and a line across the open space that edges nothing (a dimension's, the
+        // floor under it drawn through): the space west of the rail is left out, that line too.
+        let walls = ring(&[(0.25, 0.25), (59.75, 0.25), (59.75, 39.75), (0.25, 39.75)]);
+        let (lo, hi) = (Vec2::new(0.0, 0.0), Vec2::new(720.0, 480.0));
+        let edges = [edge((40.0, 0.5), (40.0, 39.5)), edge((10.0, 30.0), (30.0, 30.0))];
+        let label = [Vec2::new(20.0 * 12.0, 20.0 * 12.0)];
+        let (plate, tally) = building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &label, edges: &edges });
+        let plate = plate.unwrap();
+        assert_eq!(tally, OpenTally { carved: 1, missed: 0, on_extents: false });
+        assert!(sf(&plate) > 19.0 * 40.0 && sf(&plate) < 21.0 * 40.0, "{} sf", sf(&plate));
+        assert!(plate.rects.iter().all(|[a, _]| a.x >= 38.0 * 12.0), "no strip of slab along the stray line: {:?}", plate.rects);
+        // A second label in the same space is that space's.
+        let two = [label[0], Vec2::new(20.0 * 12.0, 10.0 * 12.0)];
+        assert_eq!(building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &two, edges: &edges }).1.carved, 1);
+        assert_eq!(building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &two, edges: &edges }).1.missed, 0);
+        // Lines that leave no space round the label (a hatch's, 2' apart) fall back to the walls'
+        // trace: here it gets out to the whole plate, so the label is untraced.
+        let hatch: Vec<(Vec2, Vec2)> = (1..20).map(|k| edge((2.0 * k as f64, 0.5), (2.0 * k as f64, 39.5))).collect();
+        let (_, t) = building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &label, edges: &hatch });
+        assert_eq!(t, OpenTally { carved: 0, missed: 1, on_extents: false });
+    }
+
+    #[test]
+    fn walls_that_do_not_close_give_their_extents_less_the_open_space() {
+        // The plan's walls on the north, east and south only (its west side open), the
+        // mezzanine's edge a guardrail line at x = 40': its extents less the space west of it.
+        let walls = vec![wall((0.0, 0.25), (59.75, 0.25)), wall((59.75, 0.25), (59.75, 39.75)), wall((59.75, 39.75), (0.0, 39.75))];
+        let (lo, hi) = (Vec2::new(0.0, 0.0), Vec2::new(720.0, 480.0));
+        assert!(building(&walls, lo, hi, 12.0).is_none());
+        let edges = [edge((40.0, 0.5), (40.0, 39.5))];
+        let label = [Vec2::new(20.0 * 12.0, 20.0 * 12.0)];
+        let (plate, tally) = building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &label, edges: &edges });
+        assert_eq!(tally, OpenTally { carved: 1, missed: 0, on_extents: true });
+        let plate = plate.unwrap();
+        assert!(sf(&plate) > 19.0 * 40.0 && sf(&plate) < 21.0 * 40.0, "{} sf", sf(&plate));
+        // No space left out (no edge drawn): no plate, the build's extents as before.
+        assert!(building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &label, edges: &[] }).0.is_none());
+        // Nor without a label.
+        assert!(building_open(&walls, lo, hi, 12.0, &OpenBelow { at: &[], edges: &edges }).0.is_none());
     }
 
     /// A storey 130' × 46': a stair (0–10') behind a 3' door at the west end of a 6' corridor

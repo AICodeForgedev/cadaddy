@@ -115,8 +115,17 @@ fn f64_at(c: &[u8]) -> f64 {
     f64::from_le_bytes(a)
 }
 
-/// A v2 payload split into its token list and its meshes by item; `None` when it's damaged.
+/// A v2 payload split into its token list and its meshes by item; `None` when it's damaged (the
+/// reader uses [`split`] and builds the objects straight from the tokens).
+#[cfg(test)]
 pub fn decode(data: &[u8]) -> Option<(Value, HashMap<usize, Mesh>)> {
+    let (toks, meshes) = split(data)?;
+    Some((tokens::decode(toks)?, meshes))
+}
+
+/// A v2 payload split into the bytes of its token list (not decoded: the reader builds the objects
+/// straight from them) and its meshes by item; `None` when the buffers are damaged.
+pub fn split(data: &[u8]) -> Option<(&[u8], HashMap<usize, Mesh>)> {
     let tail_at = data.len().checked_sub(12)?;
     let tail = data.get(tail_at..)?;
     let n = u32::from_le_bytes(tail.get(..4)?.try_into().ok()?);
@@ -152,7 +161,7 @@ pub fn decode(data: &[u8]) -> Option<(Value, HashMap<usize, Mesh>)> {
     if !c.0.is_empty() {
         return None;
     }
-    Some((tokens::decode(toks)?, meshes))
+    Some((toks, meshes))
 }
 
 /// Put a binary mesh's geometry back into its object (read with its record's `kind`).

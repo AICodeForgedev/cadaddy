@@ -92,6 +92,12 @@ A record's entries are written in key order, so equal drawings give equal bytes 
 Non-finite floats aren't representable. The model doesn't hold them; one that did would be read as a damaged
 object.
 
+CADaddy reads a model space chunk as a stream: the objects are built as their tokens are read, with no token list or
+value tree of the chunk in between, and each chunk's inflated bytes are let go once its objects are built. The checks
+are the same either way: the key-table and token caps, no list or record counting more tokens than the chunk
+declares, the nesting cap, keys only in a record's key places, and exactly one value using every token. A chunk that
+fails one is damaged; an object that is whole but doesn't read as its type is noted and skipped, and the rest read.
+
 ## Chunk types (schema 1)
 
 | tag | holds | encoding |
@@ -187,3 +193,4 @@ present, i.e. the previous complete save.
 | 2026-10-18 | Incremental saves (append, last complete index wins); one block per `BLKS` chunk, one store chunk per `ENTS` chunk. Readers of version 1 read these files unchanged. |
 | 2026-10-30 | New text chunks `BIMT` and `PRUL` (BIM types, project rules) and an `activeLayout` key in `TABL`. Older readers skip the chunks and ignore the key. The text chunk types are one table in the code shared by the writer, the incremental save and the reader. |
 | 2026-11-10 | Print sets: sheet sections and the `SHTI` sheet index (Q6418). Older readers skip the index and read every object. |
+| 2026-11-13 | Model space chunks are read as a stream: objects built as their tokens are read (Q6399). No change to the bytes. |
