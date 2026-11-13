@@ -2271,12 +2271,21 @@ const MAX_JAMB_PAIRS: usize = 20_000;
 /// (Q6614): one end meets a crossing wall of `walls` (the end's corners on that wall's body or at its face,
 /// the wall ahead of it) and the other end is an opening's side: a wall of the same thickness on
 /// the pair's line beyond a gap [`JAMB_OPENING_IN`] wide that no wall crosses (another jamb
-/// counts), or a drawn door swing's hinge or leaf end (`swings`) at it. A pair inside a wall's
-/// body is a reading of that wall. Lone pairs, and pairs held at one end only, are left out: the
+/// counts), or a drawn door swing's hinge or leaf end (`swings`) on its end line; and that end is
+/// drawn closed by a line of `segs` across it from face to face. A pair inside a wall's
+/// body is a reading of that wall; one overlapping a pair `set_aside` (read as a window's frame,
+/// a symbol, casework) is part of that. Lone pairs, and pairs held at one end only, are left out: the
 /// minimum length is for them. `k` is drawing units per inch. Returns indices into `squat`.
 ///
 /// [`pairs_and_squat`]: super::perceive::geometry::pairs_and_squat
-fn jamb_pairs(squat: &[super::perceive::geometry::Pair], walls: &[PlanWall], swings: &[Vec2], k: f64) -> Vec<usize> {
+fn jamb_pairs(
+    squat: &[super::perceive::geometry::Pair],
+    segs: &[super::perceive::geometry::Seg],
+    set_aside: &[(Vec2, Vec2, f64)],
+    walls: &[PlanWall],
+    swings: &[Vec2],
+    k: f64,
+) -> Vec<usize> {
     if !(k.is_finite() && k > 0.0) || squat.is_empty() || walls.is_empty() {
         return Vec::new();
     }
@@ -2284,6 +2293,7 @@ fn jamb_pairs(squat: &[super::perceive::geometry::Pair], walls: &[PlanWall], swi
     let (open_min, open_max) = (JAMB_OPENING_IN.0 * k, JAMB_OPENING_IN.1 * k);
     let max_thick = walls.iter().map(|w| w.thickness).filter(|t| t.is_finite()).fold(0.0f64, f64::max);
     let near = WallGrid::build(walls, (2.0 * max_thick).max(2.0 * tol));
+    let aside = WallGrid::of(set_aside.iter().map(|l| (l.0, l.1)), (2.0 * max_thick).max(2.0 * tol));
     // Each pair held by a crossing wall at one end: (pair, its other end, outward there).
     let mut held: Vec<(usize, Vec2, Vec2)> = Vec::new();
     for (i, p) in squat.iter().enumerate().take(MAX_JAMB_PAIRS) {
@@ -2294,6 +2304,20 @@ fn jamb_pairs(squat: &[super::perceive::geometry::Pair], walls: &[PlanWall], swi
         let u = (p.c1 - p.c0) * (1.0 / len);
         let mid = p.c0.mid(p.c1);
         if near.at(mid).iter().filter_map(|&j| walls.get(j)).any(|w| seg_dist(mid, w.a, w.b) < w.thickness / 2.0) {
+            continue;
+        }
+        // Over a pair set aside as something else (a window's frame across its opening, a
+        // symbol, a counter): part of that, no wall.
+        let (s0, s1) = (u.dot(p.c0), u.dot(p.c1));
+        let over = |l: &(Vec2, Vec2, f64)| {
+            let ll = l.0.dist(l.1);
+            if ll <= 1e-9 || ((l.1 - l.0) * (1.0 / ll)).cross(u).abs() > 0.02 || u.perp().dot(l.0 - p.c0).abs() > tol {
+                return false;
+            }
+            let (l0, l1) = (u.dot(l.0).min(u.dot(l.1)), u.dot(l.0).max(u.dot(l.1)));
+            l1.min(s1) - l0.max(s0) > tol
+        };
+        if aside.at(mid).iter().filter_map(|&j| set_aside.get(j)).any(over) {
             continue;
         }
         // A crossing wall at the end `e` (outward `out`): at least 30° across, the end's corners
@@ -2320,10 +2344,23 @@ fn jamb_pairs(squat: &[super::perceive::geometry::Pair], walls: &[PlanWall], swi
     let mut lines: Vec<(Vec2, Vec2, f64)> = walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
     lines.extend(held.iter().filter_map(|&(i, _, _)| squat.get(i)).map(|p| (p.c0, p.c1, p.thickness)));
     let far = WallGrid::of(lines.iter().map(|l| (l.0, l.1)), open_max);
+    let lines_of_segs = WallGrid::of(segs.iter().map(|g| (g.a, g.b)), (2.0 * max_thick).max(2.0 * tol));
     let mut out = Vec::new();
     for &(i, e, o) in &held {
         let Some(p) = squat.get(i) else { continue };
-        let swing = swings.iter().any(|s| s.dist(e) <= p.thickness / 2.0 + 2.0 * k);
+        let half = p.thickness / 2.0;
+        // The end at the opening is drawn closed: a line across it from face to face (the jamb
+        // line, a frame's edge). Two stray parallel lines are no jamb.
+        let capped = lines_of_segs.at(e).iter().filter_map(|&j| segs.get(j)).any(|g| {
+            let (a, b) = (g.a - e, g.b - e);
+            let (sa, sb) = (o.perp().dot(a), o.perp().dot(b));
+            o.dot(a).abs() <= tol && o.dot(b).abs() <= tol && sa.min(sb) <= -half + tol && sa.max(sb) >= half - tol
+        });
+        if !capped {
+            continue;
+        }
+        // A door's hinge or leaf end on the jamb's end line, within its thickness.
+        let swing = swings.iter().any(|s| o.dot(*s - e).abs() <= 2.0 * k && o.perp().dot(*s - e).abs() <= half + tol);
         let beyond = || {
             let ids = far.at(e);
             // The nearest side across the gap: a line of the pair's thickness on its line.
@@ -2831,6 +2868,9 @@ fn plan_level_with(
     // wall however short (Q6614), kept below once the walls it stands between are known.
     let (mut found, mut squat) = pairs_and_squat(&segs, &lim, Some(JAMB_MIN_IN * k));
     squat.retain(|p| p.faces.iter().all(|&f| f < own_segs));
+    // Every pair as first read: those the passes below take out (a window's frame, a symbol, a
+    // counter, stair treads) are no wall, and no squat pair over one is a jamb.
+    let read_as: Vec<([usize; 2], Vec2, Vec2, f64)> = found.iter().map(|p| (p.faces, p.c0, p.c1, p.thickness)).collect();
     // A thin outline's side paired with another wall's face is the air beside that wall.
     let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
     if slivers > 0 {
@@ -2917,6 +2957,8 @@ fn plan_level_with(
         ));
         return pl;
     }
+    let kept: std::collections::HashSet<[usize; 2]> = found.iter().map(|p| p.faces).collect();
+    let set_aside: Vec<(Vec2, Vec2, f64)> = read_as.iter().filter(|r| !kept.contains(&r.0)).map(|r| (r.1, r.2, r.3)).collect();
     // Each wall once: the most confident, longest pair of each.
     let source = wall_ents.first().map_or(Handle(0), |e| e.handle);
     let level_top = pl.top;
@@ -2996,7 +3038,7 @@ fn plan_level_with(
     // A pair of faces too short for a wall standing between an opening and a crossing wall is a
     // jamb: a wall however short (Q6614). The minimum length is for lone fragments.
     let mut jamb_count = 0usize;
-    for i in jamb_pairs(&squat, &pl.walls, &jambs, k) {
+    for i in jamb_pairs(&squat, &segs, &set_aside, &pl.walls, &jambs, k) {
         let Some(p) = squat.get(i) else { continue };
         let mid = p.c0.mid(p.c1);
         let w = PlanWall {
@@ -5925,6 +5967,44 @@ mod tests {
             head: None,
             basis: None,
         }
+    }
+
+    /// Q6614: a pair of faces too short for a wall is a jamb only when a crossing wall holds one
+    /// end and the other is an opening's side (a wall in line across the gap, or a door's swing on
+    /// its end line), drawn closed, and no part of something set aside (a window's frame).
+    #[test]
+    fn a_squat_pair_is_a_jamb_only_held_capped_and_beside_an_opening() {
+        use super::super::perceive::geometry::{Pair, Seg};
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let seg = |a: (f64, f64), b: (f64, f64)| Seg {
+            a: v(a.0, a.1),
+            b: v(b.0, b.1),
+            layer: "A-WALL".into(),
+            outline_width: f64::INFINITY,
+            unit_run: false,
+        };
+        let thick = |a: (f64, f64), b: (f64, f64)| PlanWall { thickness: 9.0, ..plan_wall(a, b) };
+        // A 6" piece of a 9" wall from a crossing wall's face (x 9) to its jamb line (x 15).
+        let squat =
+            vec![Pair { layer: "A-WALL".into(), c0: v(9.0, 4.5), c1: v(15.0, 4.5), thickness: 9.0, length: 6.0, confidence: 1.0, faces: [0, 1] }];
+        let faces = vec![seg((9.0, 0.0), (15.0, 0.0)), seg((9.0, 9.0), (15.0, 9.0))];
+        let mut capped = faces.clone();
+        capped.push(seg((15.0, 0.0), (15.0, 9.0)));
+        let crossing = thick((4.5, -60.0), (4.5, 120.0));
+        let beyond = thick((65.0, 4.5), (200.0, 4.5));
+        let both = vec![crossing.clone(), beyond.clone()];
+        assert_eq!(jamb_pairs(&squat, &capped, &[], &both, &[], 1.0), vec![0], "between the crossing wall and a 50\" opening");
+        assert!(jamb_pairs(&squat, &faces, &[], &both, &[], 1.0).is_empty(), "its end at the opening not drawn closed");
+        let frame = [(v(12.0, 4.5), v(60.0, 4.5), 9.0)];
+        assert!(jamb_pairs(&squat, &capped, &frame, &both, &[], 1.0).is_empty(), "over a window's frame set aside");
+        assert!(jamb_pairs(&squat, &capped, &[], std::slice::from_ref(&beyond), &[], 1.0).is_empty(), "no crossing wall holds it");
+        let alone = vec![crossing.clone()];
+        assert!(jamb_pairs(&squat, &capped, &[], &alone, &[], 1.0).is_empty(), "nothing at its other end");
+        assert_eq!(jamb_pairs(&squat, &capped, &[], &alone, &[v(15.0, 0.5)], 1.0), vec![0], "a door hung on its end");
+        assert!(jamb_pairs(&squat, &capped, &[], &alone, &[v(26.0, -6.0)], 1.0).is_empty(), "a swing off its end line");
+        // A crossing wall across the gap: the wall beyond is another room's.
+        let cut = vec![crossing, beyond, thick((40.0, -60.0), (40.0, 120.0))];
+        assert!(jamb_pairs(&squat, &capped, &[], &cut, &[], 1.0).is_empty(), "a wall crosses the gap");
     }
 
     #[test]
