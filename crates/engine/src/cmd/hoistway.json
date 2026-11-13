@@ -1,0 +1,25 @@
+{
+  "hoistway": {
+    "file_words": ["ELEVATOR", "ELEVATORS", "HOISTWAY", "LIFT"],
+    "hoistway_words": ["HOISTWAY", "HOISTWAYS", "HOISTWAY CLEAR", "CLEAR HOISTWAY", "ELEVATOR SHAFT"],
+    "width_words": ["WIDTH", "WIDE"],
+    "depth_words": ["DEPTH", "DEEP"],
+    "pit_words": ["PIT", "PIT DEPTH", "PIT DEPTH OF"],
+    "overhead_words": ["OVERHEAD", "OVERHEAD CLEARANCE", "TOP CLEARANCE"],
+    "not_shaft_words": ["ENTRANCE", "DOOR", "SILL", "HEADER", "CAB", "CAR", "PLATFORM", "TOLERANCE", "TOLERANCES", "MAXIMUM", "MINIMUM", "MAX", "MIN", "ROUGH", "OPENING", "BEAM"],
+    "clear_range_ft": [3.0, 15.0],
+    "pit_range_ft": [2.0, 15.0],
+    "overhead_range_ft": [8.0, 30.0],
+    "max_clear_ft": 12.0,
+    "tolerance_in": 3.0,
+    "default_pit_ft": 5.0,
+    "default_pit_basis": "trade practice: a passenger elevator's pit is about 5 ft below the lowest landing (ASME A17.1 sets it by the buffer and speed); no document gives it",
+    "default_overhead_ft": 13.0,
+    "default_overhead_basis": "trade practice: a machine-room-less traction elevator needs about 13 ft from the top landing to the hoistway's ceiling (ASME A17.1 top clearances); no document gives it",
+    "shaft_wall_in": 8.0,
+    "shaft_wall_basis": "trade practice: a hoistway is enclosed in rated shaft walls (IBC 713), 8 in masonry where the plan draws none",
+    "cap_ft": 1.0,
+    "pit_slab_ft": 1.0,
+    "rule": "IBC 713 / ASME A17.1"
+  }
+}

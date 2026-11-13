@@ -8856,6 +8856,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     {
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
+    // The elevator submittal's hoistway (Q6608): its clear size, pit and overhead, which the
+    // build sets the shaft, its pit and the overrun by.
+    if !job.submittals.is_empty() {
+        let t = web_time::Instant::now();
+        match s.execute("elevator.read", &json!({"files": job.submittals})) {
+            Ok(r) if !r["elevator_data"].is_null() => progress_line(&format!(
+                "  elevator hoistway read from the submittals in {:.1} s: {} ({:?})",
+                t.elapsed().as_secs_f64(),
+                r["elevator_data"],
+                r["files"]
+            )),
+            Ok(r) => progress_line(&format!("  elevator submittals: no hoistway size, pit or overhead read ({:?})", r["files"])),
+            Err(e) => progress_line(&format!("  elevator submittals not read: {e}")),
+        }
+    }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     few_openings_findings(job, &result);
     result["scope"] = scope_summary;
@@ -23111,6 +23126,8 @@ fn doc_objects_step(
     let mut connected: BTreeMap<String, (String, String, Option<(String, String)>)> = BTreeMap::new();
     // class → the notes speaking of every one there is (a rule, no new object).
     let mut rules_over_all: BTreeMap<String, String> = BTreeMap::new();
+    // class → the notes naming it that call for none (how to wire the ones there are).
+    let mut not_calls: BTreeMap<String, String> = BTreeMap::new();
     // The notes calling for a class in every room of a type: (class, count each, via, sheet,
     // the note, the type's words, the rooms).
     let mut room_calls: Vec<(String, u32, String, String, String, String, Vec<usize>)> = Vec::new();
@@ -23124,6 +23141,12 @@ fn doc_objects_step(
             }
             if nm.all {
                 rules_over_all.entry(class.kind.clone()).or_insert(cite);
+                continue;
+            }
+            // A note saying how to wire or build the ones there are (`CIRCUIT EXIT SIGNS TO …`)
+            // calls for none (Q6361): its connection is kept above for the ones the plans draw.
+            if !nm.calls {
+                not_calls.entry(class.kind.clone()).or_insert(cite);
                 continue;
             }
             // `IN EACH GUEST SUITE`: one (or the note's count) in every room of that type.
@@ -23788,7 +23811,7 @@ fn doc_objects_step(
     ));
     result["doc_objects"] = json!({
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
-        "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
+        "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "notes_calling_for_none": not_calls, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
         "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
         "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite, given))| json!({"kind": k, "count": n, "count_given": given, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
         "note_counts_differ": note_counts_differ,
@@ -37983,6 +38006,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -40535,6 +40559,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -40623,6 +40648,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         };
         let runs = vec![
             run("SAN", "Level 1"),
@@ -40724,6 +40750,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         };
         let runs = vec![
             // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.
@@ -41005,6 +41032,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         };
         let runs = vec![
             // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.

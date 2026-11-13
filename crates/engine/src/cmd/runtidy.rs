@@ -531,6 +531,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         }
     }
 

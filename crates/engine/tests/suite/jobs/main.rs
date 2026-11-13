@@ -60,6 +60,7 @@ mod gfciroute;
 mod grounding;
 mod grounding_hotel;
 mod guided;
+mod hoistway_build;
 mod imagetrace;
 mod imagetrace_accuracy;
 mod import_check;

@@ -2572,6 +2572,7 @@ fn apply_action(s: &mut Session, st: &mut RuleModelState, action: &str, target: 
                     made: Default::default(),
                     basis: String::new(),
                     corrections: Vec::new(),
+                    storey_points: Default::default(),
                 };
                 let id = run.id.clone();
                 sp.mep.runs.push(run);
