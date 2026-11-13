@@ -867,6 +867,44 @@ fn the_drawings_wire_length_table_decides_the_conductor_before_the_three_percent
 }
 
 #[test]
+fn a_length_table_the_job_kept_off_its_pages_is_validates_and_the_routers() {
+    // Q6545: a PDF job's wire-length table is on a legend page its drawing doesn't hold; the job
+    // keeps the table it read there in the spec. The router sizes the circuits by it and Validate
+    // judges them by it: one table, one rule. 20 A / 120 V: #12 to 55 ft, #10 to 120 ft, #8 to
+    // 300 ft; LP1-5 runs well over 120 ft both ways it is measured, so both ask #8 of it.
+    let mut s = building(Some(20), |_| {});
+    with_spec(&mut s, |sp| {
+        let band = |size: &str, max_ft: f64| json!({"amps": 20.0, "volts": 120.0, "size": size, "max_ft": max_ft});
+        sp["mep"]["wire_length_tables"] = json!([{"sheet": "X-701", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
+            "bands": [band("12", 55.0), band("10", 120.0), band("8", 300.0)]}]);
+        sp["mep"]["wire_length_read"] = json!("1 job pages looked at (X-701): 1 tables");
+    });
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert!(r["wire_size_table"]["read"].as_str().is_some_and(|t| t.ends_with("on X-701")), "{}", r["wire_size_table"]);
+    let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
+    assert!(up.iter().any(|u| u["circuit"] == "LP1-5" && u["to"] == "2#8 + 1#8G"), "{up:#?}");
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let vd = of(&fs, "E-VDROP");
+    assert!(vd.len() >= 3, "{vd:#?}");
+    // Every circuit judged by the kept table (never the 3% calculation), a pass exactly when
+    // its conductor is the size the table asks for its length, or larger.
+    let rank = |s: &str| ["#14", "#12", "#10", "#8", "#6", "#4"].iter().position(|x| *x == s);
+    for f in &vd {
+        assert_eq!(f["measured"]["table_from"], "X-701", "{f}");
+        assert!(f["measured"].get("drop_pct").is_none(), "the table, not the calculation: {f}");
+        let (have, need) =
+            (rank(f["measured"]["conductor"].as_str().unwrap_or_default()), rank(f["measured"]["needed"].as_str().unwrap_or_default()));
+        assert!(have.is_some() && need.is_some(), "{f}");
+        assert_eq!(f["verdict"], if have >= need { "pass" } else { "fail" }, "{f}");
+    }
+    let far = vd.iter().find(|f| f["measured"]["circuit"] == "LP1-5").copied().cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 120.0 && l <= 300.0), "{far}");
+    assert_eq!((&far["measured"]["needed"], &far["measured"]["conductor"], &far["verdict"]), (&json!("#8"), &json!("#8"), &json!("pass")), "{far}");
+}
+
+#[test]
 fn a_length_tables_column_past_two_ought_is_chosen_not_read_as_past_the_tables_reach() {
     // Q6456: the table's sizes run past 2/0 (the voltage-drop calculation's largest). LP1-5,
     // over 150 ft, is covered only by the #3/0 column: the table asks #3/0, it is not "longer

@@ -3323,28 +3323,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
     // The documents' wire-length tables (Q6340): drawn as a grid (by breaker and voltage, any
-    // layout) or as single lines (`0-60' = #12`), the drawing's sheets named by their outlines.
-    let sheet_of = |p: Vec2| -> String {
-        sp.sheets
-            .iter()
-            .filter_map(|l| {
-                let r = l.rect?;
-                let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-                (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, n)| n)
-            .unwrap_or_default()
-    };
-    let len_tables: Vec<super::wiretable::LengthTable> = {
-        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
-        for t in super::wiretable::read_drawing(d, &sheet_of) {
-            if !t.bands.is_empty() && !seen.iter().any(|o| o.bands == t.bands) {
-                seen.push(t);
-            }
-        }
-        seen
-    };
+    // layout) or as single lines (`0-60' = #12`); the drawing's sheets first, else those the job
+    // read off its pages and kept in the spec (Q6545: Validate's rule; a PDF job's legend sheet
+    // is often not in the drawing).
+    let (len_tables, len_from): (Vec<super::wiretable::LengthTable>, Vec<super::wiretable::ReadFrom>) =
+        super::wiretable::documents(d, sp, &[]).into_iter().unzip();
     let trip_of = |panel: &str, label: &str| -> Option<f64> {
         let num = super::printcond::parse_circuit(label)?.1;
         let first = num.split(',').next()?.trim().to_string();
@@ -5309,6 +5292,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "bands": t.bands.iter().map(|b| json!({"amps": b.amps, "volts": b.volts, "size": b.size, "max_ft": b.max_ft})).collect::<Vec<_>>(),
             "read": t.cite(),
             "sheet": t.sheet,
+            "from": len_from.first().map_or("", |f| f.words()),
             "tables": len_tables.len(),
         }),
     };
@@ -6233,6 +6217,13 @@ pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool) -> Result<Valu
     }
     if let Some(line) = feeders.line() {
         s.echo(line);
+    }
+    // A model built before the job kept its documents' wire-length tables (Q6545): the job's
+    // pages read for them now, once, and kept in the spec (they size the conductors below).
+    if sp.mep.wire_length_read.is_empty()
+        && let Some(n) = super::wiretable::keep_from_job(s, &mut sp)
+    {
+        s.echo(format!("wire-length tables read off the job's pages: {n} ({})", sp.mep.wire_length_read));
     }
     let t0 = web_time::Instant::now();
     // The fire alarm system's panel and power supplies as the gear stands now (Q6503): the

@@ -1082,33 +1082,17 @@ impl ScheduleDocs {
     /// else the drawing's own texts.
     pub(crate) fn read(s: &crate::Session, d: &Drawing, sp: &BuildingSpec) -> ScheduleDocs {
         let mut out = ScheduleDocs::default();
-        let sheet_of = |p: Vec2| -> String {
-            sp.sheets
-                .iter()
-                .filter_map(|l| {
-                    let r = l.rect?;
-                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-                    (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, n)| n)
-                .unwrap_or_default()
-        };
-        out.lengths = super::wiretable::read_drawing(d, &sheet_of);
         let job = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some());
+        let pages = match &job {
+            Some(job) => super::guided::panel_pages(d, job),
+            None => Vec::new(),
+        };
+        // The wire-length tables by the router's rule (Q6545): the drawing's, the job's kept in
+        // the spec, the job's pages.
+        out.lengths = super::wiretable::documents(d, sp, &pages).into_iter().map(|(t, _)| t).collect();
         match job {
-            Some(job) => {
-                let pages = super::guided::panel_pages(d, &job);
+            Some(_) => {
                 out.reread = super::guided::panel_schedules(&pages);
-                for (number, page) in &pages {
-                    let have = out.lengths.iter().any(|t| t.sheet.eq_ignore_ascii_case(number));
-                    if !have && out.lengths.len() < 32 {
-                        let texts = cadaddy_mepfix::sheet_facts::texts(page);
-                        if texts.iter().any(|t| super::wiretable::is_title(&t.value) || (t.value.contains('#') && t.value.contains('\''))) {
-                            out.lengths.extend(super::wiretable::read_page(&texts, &super::gridtable::segments(page), number));
-                        }
-                    }
-                }
                 out.sheets = pages.into_iter().map(|(n, _)| n).collect();
             }
             None => {
@@ -1124,14 +1108,6 @@ impl ScheduleDocs {
                 }
             }
         }
-        // A table read twice (the drawing's sheet and its page) counts once.
-        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
-        for t in std::mem::take(&mut out.lengths) {
-            if !seen.iter().any(|o| o.bands == t.bands) {
-                seen.push(t);
-            }
-        }
-        out.lengths = seen;
         out
     }
 
