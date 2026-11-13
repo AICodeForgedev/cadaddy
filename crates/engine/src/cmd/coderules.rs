@@ -205,6 +205,9 @@ pub(crate) fn silent_place_receptacles(
         }
     }
     sp.tags.extend(new_tags);
+    // A cab's, shaft's or pit's receptacle: at the top of the hoistway or in its pit (Q6615), and
+    // said so.
+    built.extend(super::hoistway::relocate(sp).into_iter().map(|l| format!("moved: {l}")));
     (built, no_room)
 }
 
