@@ -4,7 +4,8 @@
 //! with its sleeve and seal; the real conflicts stay hard clashes.
 
 use cadaddy_engine::Session;
-use cadaddy_engine::doc::Drawing;
+use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Mesh, MeshFace, RawTag};
+use cadaddy_engine::geom::Vec3;
 use serde_json::{Value, json};
 
 use crate::conduitroute::storey_walls;
@@ -179,4 +180,50 @@ fn a_recessed_can_deeper_than_its_wall_is_still_a_clash() {
     let can = clashes.iter().find(|c| has(c, "equipment", "wall")).unwrap_or_else(|| panic!("{}", short(&r)));
     assert_eq!(can["kind"], json!("hard"), "{can}");
     assert!(can["message"].as_str().unwrap_or_default().contains("deeper than"), "{can}");
+}
+
+/// A box (inches) on L1 tagged as a build tags its elements: part, level, source, then `tags`.
+fn built_box(s: &mut Session, part: &str, tags: &[&str], lo: [f64; 3], hi: [f64; 3]) {
+    let d = s.doc_mut().unwrap();
+    let v = |x: usize, y: usize, z: usize| Vec3 { x: [lo[0], hi[0]][x], y: [lo[1], hi[1]][y], z: [lo[2], hi[2]][z] };
+    let vertices = vec![v(0, 0, 0), v(1, 0, 0), v(1, 1, 0), v(0, 1, 0), v(0, 0, 1), v(1, 0, 1), v(1, 1, 1), v(0, 1, 1)];
+    let f = |a: [u32; 4]| MeshFace { v: a.to_vec(), hidden: 0 };
+    let faces = vec![f([0, 3, 2, 1]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([2, 3, 7, 6]), f([1, 2, 6, 5]), f([3, 0, 4, 7])];
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let mut e = Entity::new(h, EntityKind::Mesh(Mesh { vertices, faces, ..Default::default() }));
+    e.common.layer = "3D-Other".into();
+    let mut x = vec![RawTag { code: 1001, value: "CADADDY_WALLGEN".into() }];
+    for t in [part, "L1", "0"].into_iter().chain(tags.iter().copied()) {
+        x.push(RawTag { code: 1000, value: t.into() });
+    }
+    e.common.xdata = x.into();
+    d.model.push(e);
+}
+
+#[test]
+fn devices_in_casework_and_a_through_wall_unit_are_construction() {
+    let mut s = building(None, 4.0);
+    // A base cabinet's layout box over the receptacle and its drop (against the south wall,
+    // reaching into it), and a packaged terminal unit through the south wall in its sleeve.
+    built_box(&mut s, "casework", &["type:Base cabinet"], [100.0, 2.0, 0.0], [140.0, 31.25, 34.5]);
+    built_box(&mut s, "mep", &["kind:equipment", "part:equipment:ptac", "tag:U-1"], [300.0, -3.0, 4.0], [342.0, 14.0, 20.0]);
+    let r = s.execute("bim.clash", &json!({})).unwrap();
+    eprintln!("bim.clash: {}", short(&r));
+    let clashes = r["clashes"].as_array().cloned().unwrap_or_default();
+    for c in &clashes {
+        assert!(c["a"]["category"] != json!("casework") && c["b"]["category"] != json!("casework"), "hosted by the casework: {c}");
+        assert!(!has(c, "equipment", "wall"), "the unit is in its wall opening: {c}");
+    }
+    assert!(r["normal"]["hosted"].as_u64().unwrap_or(0) >= 2, "the device and its box: {}", r["normal"]);
+    let pens = r["penetrations"].as_array().cloned().unwrap_or_default();
+    let unit = pens.iter().find(|p| p["kind"] == json!("unit")).unwrap_or_else(|| panic!("{}", short(&r)));
+    assert_eq!((unit["a"]["category"].as_str(), unit["b"]["category"].as_str()), (Some("equipment"), Some("wall")), "{unit}");
+    assert!(unit["sleeve"].as_str().unwrap_or_default().contains("sleeve"), "{unit}");
+    // The same unit with no through-wall words is equipment run into the wall: a clash.
+    let mut s = building(None, 4.0);
+    built_box(&mut s, "mep", &["kind:equipment", "part:equipment:cabinet_heater", "tag:U-1"], [300.0, -3.0, 4.0], [342.0, 14.0, 20.0]);
+    let r = s.execute("bim.clash", &json!({})).unwrap();
+    let clashes = r["clashes"].as_array().cloned().unwrap_or_default();
+    assert!(clashes.iter().any(|c| has(c, "equipment", "wall")), "{}", short(&r));
 }
