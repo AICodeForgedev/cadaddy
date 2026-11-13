@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod doortags;
 mod heads;
 mod outline;
 
@@ -185,6 +186,15 @@ const MARK_TAG: &str = "mark:";
 const FOUND_TAG: &str = "found:";
 const SILL_TAG: &str = "sill:";
 const HEAD_TAG: &str = "head:";
+/// A door built at its schedule tag (Q6609, [`doortags`]): how it opens (`rolling`, `sliding`,
+/// `folding`, `pair`, `swing`), and that it closes onto a counter (`counter:yes`). Its `mark:`,
+/// `found:`, `sill:` and `head:` are as a window's.
+const OPERATION_TAG: &str = "operation:";
+/// The trade practice rule doors built at their schedule tags carry ([`doortags::RULE_ID`]).
+pub(crate) const DOOR_AT_TAG_RULE: &str = doortags::RULE_ID;
+/// A door placed again by its mark this close to its old tag (feet) is moved, not a second door.
+pub(crate) const DOOR_TAG_MOVE_FT: f64 = 6.0;
+const COUNTER_TAG: &str = "counter:";
 
 /// A built door's opening: its frame's two jambs on its level's plan. A door shut closes it, so
 /// a room traced on the built walls runs across it.
@@ -697,6 +707,14 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
         "levels": scene.levels.len(), "removed": removed, "notes": notes, "window_tags": window_tags, "openings_by_level": by_level,
     });
+    // Each level's doors built at door schedule tags with no opening drawn (Q6609).
+    let schedule_doors: Vec<Value> = planned
+        .iter()
+        .filter_map(|(si, pl)| scene.levels.get(*si).filter(|_| !pl.door_tags.is_empty()).map(|l| pl.door_tags.to_json(&l.name)))
+        .collect();
+    if !schedule_doors.is_empty() {
+        r["schedule_doors"] = Value::Array(schedule_doors);
+    }
     let mut floor_assemblies: Vec<&super::floorasm::Assembly> = assemblies.values().collect();
     floor_assemblies.sort_by(|a, b| a.level.cmp(&b.level));
     r["floor_assemblies"] = Value::Array(floor_assemblies.iter().map(|a| a.to_json()).collect());
@@ -1685,6 +1703,9 @@ struct Leaf {
     /// window there ([`WindowBasis`]).
     mark: Option<String>,
     basis: Option<WindowBasis>,
+    /// A door the door schedule tags where the plan draws no opening, built at its tag (Q6609):
+    /// how it was placed, how it opens, its basis. Its `mark` is the schedule's.
+    at_tag: Option<doortags::AtTag>,
 }
 
 /// How a window was found where it is (`found:` tag on the built element).
@@ -1793,6 +1814,8 @@ struct PlanLevel {
     k: f64,
     /// The level's window tags against the windows built (Q6311).
     window_tally: WindowTally,
+    /// The doors built at door schedule tags where the plan draws no opening (Q6609).
+    door_tags: doortags::DoorTagReport,
 }
 
 /// A box on the centreline `a`–`b`, `t` thick, from `z0` up to `z1`, added to `m`.
@@ -1857,10 +1880,11 @@ impl PlanLevel {
                 if c.s0 > s {
                     add_box(&mut m, at(s), at(c.s0), w.thickness, self.z0, w.top);
                 }
+                // A door from the floor, or from its sill (a counter shutter's counter top, Q6609).
                 let (lo, hi) = if c.window {
                     (self.z0 + c.sill.unwrap_or(self.sill), self.z0 + c.head.unwrap_or(self.head))
                 } else {
-                    (self.z0, self.z0 + c.head.unwrap_or(self.door_head))
+                    (self.z0 + c.sill.unwrap_or(0.0), self.z0 + c.head.unwrap_or(self.door_head))
                 };
                 add_box(&mut m, at(c.s0), at(c.s1), w.thickness, self.z0, lo);
                 add_box(&mut m, at(c.s0), at(c.s1), w.thickness, hi.min(w.top), w.top);
@@ -1888,7 +1912,7 @@ impl PlanLevel {
             let (lo, hi) = if l.window {
                 (self.z0 + l.sill.unwrap_or(self.sill), self.z0 + l.head.unwrap_or(self.head))
             } else {
-                (self.z0, self.z0 + l.head.unwrap_or(self.door_head))
+                (self.z0 + l.sill.unwrap_or(0.0), self.z0 + l.head.unwrap_or(self.door_head))
             };
             if l.window {
                 add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), lo, hi);
@@ -1898,7 +1922,8 @@ impl PlanLevel {
                 }
             }
             if let Some((a, b)) = l.frame {
-                self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window);
+                // A door over a sill is framed round like a window (its sill member too).
+                self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window || lo > self.z0);
             }
             // A single door's swing as drawn, for what must keep clear of it.
             let swing = l.along.filter(|_| !l.window && l.pair.is_none()).map(|along| {
@@ -1919,6 +1944,18 @@ impl PlanLevel {
                     let made = if b.drawn() { cadaddy_walk3d::Made::Drawn } else { cadaddy_walk3d::Made::Inferred };
                     extra.extend(super::provenance::tags(made, b.why()).into_iter().map(|t| t.value));
                 }
+                extra.push(format!("{SILL_TAG}{}", lo - self.z0));
+                extra.push(format!("{HEAD_TAG}{}", hi - self.z0));
+            } else if let Some(t) = &l.at_tag {
+                // A door built at its schedule tag (Q6609): its mark, how it was placed and opens,
+                // whether it closes onto a counter, its provenance, its sill and head.
+                extra.extend(l.mark.iter().map(|m| format!("{MARK_TAG}{m}")));
+                extra.push(format!("{FOUND_TAG}{}", t.placed.as_str()));
+                extra.push(format!("{OPERATION_TAG}{}", t.operation));
+                if t.counter {
+                    extra.push(format!("{COUNTER_TAG}yes"));
+                }
+                extra.extend(super::provenance::tags(cadaddy_walk3d::Made::Inferred, &t.basis).into_iter().map(|t| t.value));
                 extra.push(format!("{SILL_TAG}{}", lo - self.z0));
                 extra.push(format!("{HEAD_TAG}{}", hi - self.z0));
             }
@@ -2341,6 +2378,7 @@ fn plan_level_with(
         head: oz.window_head_ft * upf,
         k,
         window_tally: WindowTally::default(),
+        door_tags: doortags::DoorTagReport::default(),
     };
     // The level's objects: those inside its region (all of model space without one).
     let ents: Vec<&Arc<Entity>> = d
@@ -2792,6 +2830,7 @@ fn plan_level_with(
                     frame,
                     mark: None,
                     basis: None,
+                    at_tag: None,
                 });
                 doors += 1;
             }
@@ -2822,6 +2861,7 @@ fn plan_level_with(
                     frame: Some(leaf),
                     basis: window.then_some(if mark.is_some() { WindowBasis::Tag } else { WindowBasis::Symbol }),
                     mark: mark.filter(|_| window),
+                    at_tag: None,
                 });
             }
         }
@@ -3183,6 +3223,7 @@ fn plan_level_with(
                     frame: Some(frame),
                     mark: None,
                     basis: None,
+                    at_tag: None,
                 });
                 doors += 1;
             }
@@ -3244,6 +3285,7 @@ fn plan_level_with(
                     frame: Some((a, b)),
                     mark,
                     basis: Some(basis),
+                    at_tag: None,
                 });
                 windows += 1;
             }
@@ -3395,6 +3437,7 @@ fn plan_level_with(
                     frame: Some((a, b)),
                     mark: Some(tag.mark.clone()),
                     basis: Some(WindowBasis::TagOpenEnd),
+                    at_tag: None,
                 });
                 windows += 1;
                 open_ends += 1;
@@ -3438,6 +3481,7 @@ fn plan_level_with(
             frame: Some((a, b)),
             mark: Some(tag.mark.clone()),
             basis: Some(basis),
+            at_tag: None,
         });
         windows += 1;
     }
@@ -3446,6 +3490,46 @@ fn plan_level_with(
             "{}: {open_ends} open ends of the plan (two walls ending at the outside, no wall drawn across them) with a window tag at them: the end wall built (inferred) with the tag's window in it.",
             level.name
         ));
+    }
+    // The doors the door schedule tags where the plan draws no opening (Q6609): built at their
+    // tags, in the wall there, else on the line drawn there.
+    if let (Some(sp), Some(rule)) = (g.spec.as_ref(), doortags::DoorRule::load()) {
+        let tags = doortags::level_tags(sp, level, rule.connect_ft * upf);
+        if !tags.is_empty() {
+            // The plan's lines and their extents, worked out once (only a tag no door answers
+            // asks).
+            let boxes: std::cell::OnceCell<Vec<(cadaddy_geom::Bounds2, &Arc<Entity>)>> = std::cell::OnceCell::new();
+            let lines = |at: Vec2, r: f64| -> Vec<(super::perceive::geometry::Seg, Handle)> {
+                let boxes = boxes.get_or_init(|| {
+                    ents.iter()
+                        .filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)))
+                        .map(|e| (cadaddy_doc::entity_bounds(d, e, 0), *e))
+                        .filter(|(b, _)| !b.is_empty())
+                        .collect()
+                });
+                boxes
+                    .iter()
+                    .filter(|(b, _)| at.x >= b.min.x - r && at.x <= b.max.x + r && at.y >= b.min.y - r && at.y <= b.max.y + r)
+                    .take(MAX_OBJECTS)
+                    .flat_map(|(_, e)| segments(&[*e]).into_iter().map(move |sg| (sg, e.handle)))
+                    .collect()
+            };
+            let report = doortags::build(&mut pl, &tags, sp, &lines, &rule, k, min_gap);
+            doors += report.built.len();
+            if !report.built.is_empty() {
+                let on = |p: doortags::Placed| report.built.iter().filter(|b| b.2 == p).count();
+                notes.push(format!(
+                    "{}: {} doors the door schedule tags where the plan draws no opening built at their tags ({} cut into the wall there, {} set on the line drawn there, {} at the tag alone): the schedule's size, inferred position ({}).",
+                    level.name,
+                    report.built.len(),
+                    on(doortags::Placed::OnWall),
+                    on(doortags::Placed::OnLine),
+                    on(doortags::Placed::AtTag),
+                    doortags::RULE_ID
+                ));
+            }
+            pl.door_tags = report;
+        }
     }
     let mut same = Vec::new();
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k, &mut same).unwrap_or((doors, windows));
