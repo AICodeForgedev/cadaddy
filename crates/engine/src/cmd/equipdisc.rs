@@ -145,7 +145,7 @@ impl Rule {
     }
 }
 
-/// A circuit label as one key (`E-24,26`): the panel and its numbers, else as written.
+/// A circuit label as one key (`LP1-2,4`): the panel and its numbers, else as written.
 pub(crate) fn circuit_key(label: &str) -> String {
     match super::printcond::parse_circuit(label) {
         Some((p, n)) => format!("{p}-{n}"),
@@ -153,7 +153,7 @@ pub(crate) fn circuit_key(label: &str) -> String {
     }
 }
 
-/// The circuit (`E-24,26`) and panel a piece of equipment carries: its element's properties
+/// The circuit (`LP1-2,4`) and panel a piece of equipment carries: its element's properties
 /// (filled in or set), else its build record's (`prop:CIRCUIT`, `prop:PANEL`; a bare number with
 /// its panel beside it). None: no circuit a router can name.
 pub(crate) fn circuit_of(e: &Entity) -> Option<(String, String)> {
