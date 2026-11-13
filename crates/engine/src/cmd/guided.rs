@@ -9096,6 +9096,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         sp.mep.load_summaries = summaries;
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
+    // The wire-length tables these pages print that the drawing doesn't hold (Q6545), kept in
+    // the spec: the router sizes the circuits by them as Validate checks them.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+        let kept = super::wiretable::keep_job_tables(s.doc()?, &mut sp, &sched_pages);
+        if kept > 0 {
+            progress_line(&format!("  wire-length tables off the job's pages: {kept} ({})", sp.mep.wire_length_read));
+        }
+        result["wire_length_tables"] = json!({"kept": kept, "read": sp.mep.wire_length_read});
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    }
     bim_step(s, job, "panel schedules", t);
     // Q6516: the tables of sheets lettered in strokes that read unsure or not at all are asked
     // for, with their pictures.
