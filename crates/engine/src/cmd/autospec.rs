@@ -322,20 +322,41 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
     // its casework (Q6487). Where nearly all of such a layer's pairs lie within the building its
     // sorted walls already draw, they are that building's casework and finishes, no walls; where
     // a good part lies beyond (walls drawn with a lighter pen: a storefront wing), it keeps its
-    // walls.
-    let sorted_extents = layers
+    // walls. Weighed level by level (each plan's own sorted walls; a level whose plan sorted none,
+    // a roof plan, says nothing).
+    let level_of = |p: Vec2| {
+        if !regions {
+            return Some(0);
+        }
+        given_levels
+            .iter()
+            .position(|l| l.region.is_some_and(|[x0, y0, x1, y1]| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1)))
+    };
+    let mut sorted_extents: BTreeMap<usize, cadaddy_geom::Bounds2> = BTreeMap::new();
+    if let Some((_, (_, _, found))) = layers
         .iter()
         .zip(&layer_pairs)
         .find(|(layer, (_, _, found))| layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()) && found.len() >= 2)
-        .map(|(_, (_, _, found))| {
-            let b = cadaddy_geom::Bounds2::from_points(found.iter().flat_map(|p| [p.c0, p.c1]));
-            let g = SORTED_WALLS_MARGIN_IN * k;
-            cadaddy_geom::Bounds2 { min: b.min - Vec2::new(g, g), max: b.max + Vec2::new(g, g) }
-        });
+    {
+        for p in found {
+            let Some(l) = level_of((p.c0 + p.c1) * 0.5) else { continue };
+            let b = sorted_extents.entry(l).or_insert(cadaddy_geom::Bounds2::EMPTY);
+            for q in [p.c0, p.c1].into_iter().filter(|q| q.is_finite()) {
+                b.add(q);
+            }
+        }
+    }
+    let g = SORTED_WALLS_MARGIN_IN * k;
     let within_sorted = |found: &[super::perceive::geometry::Pair]| {
-        let Some(b) = sorted_extents.as_ref() else { return false };
-        let total: f64 = found.iter().map(|p| p.length).filter(|l| l.is_finite()).sum();
-        let inside: f64 = found.iter().filter(|p| b.contains((p.c0 + p.c1) * 0.5)).map(|p| p.length).filter(|l| l.is_finite()).sum();
+        let (mut total, mut inside) = (0.0f64, 0.0f64);
+        for p in found.iter().filter(|p| p.length.is_finite()) {
+            let mid = (p.c0 + p.c1) * 0.5;
+            let Some(b) = level_of(mid).and_then(|l| sorted_extents.get(&l)).filter(|b| !b.is_empty()) else { continue };
+            total += p.length;
+            if mid.x >= b.min.x - g && mid.x <= b.max.x + g && mid.y >= b.min.y - g && mid.y <= b.max.y + g {
+                inside += p.length;
+            }
+        }
         total > 0.0 && inside >= LEFTOVER_INSIDE_SHARE * total
     };
     for (layer, (mine, segs, found)) in layers.iter().zip(layer_pairs) {
