@@ -411,6 +411,90 @@
         "pair": ["PAIR", "PR", "DOUBLE", "2 LEAVES"]
       },
       "counter_words": ["COUNTER", "TRANSACTION", "PASS THROUGH", "SERVICE WINDOW"]
+    },
+    {
+      "id": "E-EQUIP-DISCONNECT",
+      "trade": "electrical",
+      "fills": "the connection of a piece of equipment that carries its circuit (its plan tag or its record names the circuit) where no device of that circuit stands at it: a disconnect its plans draw beside it with no circuit of its own takes the circuit; else its connection is built beside its housing, on the side toward its panel (a disconnect for a motor or air-conditioning load, a receptacle for a cord-and-plug unit, else an equipment connection), and the circuit is routed to it, then on to the equipment's terminal box (numbers: reach_ft, how far a device of its circuit of a connection's kind may stand and still be its connection, the code's within sight; at_ft, a device of any kind of its circuit this close is its connection; drawn_reach_ft, how far a drawn disconnect with no circuit may stand and be its disconnect; gap_in, how far from the housing the built connection stands; mount_in, its middle over the floor; high_bottom_ft, equipment whose bottom is this high takes its connection at its own middle height; connection_kinds, the device kinds that are a connection; disconnect_words and receptacle_words, the equipment words that take a disconnect or a receptacle; box_words, equipment that is itself a connection box; sizes_in, each connection's box, width along the housing, depth out from it, height)",
+      "basis": "NEC 440.14: air-conditioning and refrigerating equipment has a disconnecting means within sight of and readily accessible from it (on or within it allowed); NEC 430.102(B): a motor's disconnecting means is within sight of the motor (NEC Article 100, in sight from: visible and not more than 50 ft); NEC 440.13 and 440.63: a cord-and-plug connected unit's receptacle is its disconnecting means; NEC 422.31: an appliance's disconnecting means; trade practice: the safety switch stands beside the unit on the side its circuit comes from, its whip (liquidtight flexible conduit, NEC 350) on to the unit's terminal box",
+      "reach_ft": 50.0,
+      "at_ft": 10.0,
+      "drawn_reach_ft": 15.0,
+      "gap_in": 12.0,
+      "mount_in": 48.0,
+      "high_bottom_ft": 7.0,
+      "connection_kinds": [
+        "EQUIPMENT CONNECTION",
+        "DISCONNECT",
+        "SAFETY SWITCH",
+        "JUNCTION BOX",
+        "MOTOR",
+        "POWER BOX"
+      ],
+      "disconnect_words": [
+        "HEAT PUMP",
+        "CONDENSING",
+        "CONDENSER",
+        "COMPRESSOR",
+        "CHILLER",
+        "COOLING TOWER",
+        "FAN",
+        "AIR HANDL",
+        "AHU",
+        "RTU",
+        "ROOFTOP",
+        "DOAS",
+        "OUTDOOR AIR",
+        "MAKE UP AIR",
+        "ENERGY RECOVERY",
+        "ERV",
+        "HRV",
+        "UNIT HEATER",
+        "SPLIT",
+        "VRF",
+        "VRV",
+        "PUMP",
+        "BOILER",
+        "FURNACE",
+        "MOTOR",
+        "BLOWER",
+        "HVAC",
+        "AIR CONDITION",
+        "REFRIGERAT",
+        "WATER HEATER",
+        "DUCT HEATER"
+      ],
+      "receptacle_words": [
+        "PTAC",
+        "PACKAGED TERMINAL",
+        "ROOM AIR CONDITIONER",
+        "WINDOW UNIT",
+        "THROUGH WALL UNIT"
+      ],
+      "box_words": [
+        "POWER BOX",
+        "JUNCTION BOX",
+        "PULL BOX",
+        "CONNECTION BOX",
+        "PWR"
+      ],
+      "sizes_in": {
+        "disconnect": [
+          8.0,
+          5.0,
+          14.0
+        ],
+        "receptacle": [
+          2.25,
+          2.0,
+          4.0
+        ],
+        "equipment connection": [
+          4.0,
+          4.0,
+          2.125
+        ]
+      }
     }
   ]
 }

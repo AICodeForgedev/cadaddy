@@ -2845,6 +2845,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // (Q6503), built now its devices stand, before its circuits are routed.
     let fa_equipment = super::conduitroute::fa::place_equipment(d, &mut sp);
     mark("fire alarm equipment");
+    // Each piece of equipment that carries its circuit gets its connection where no device of
+    // that circuit stands at it (Q6624): its drawn disconnect, else one beside it by rule.
+    let equipment_connections = super::equipdisc::place(d, &sp);
+    mark("equipment connections");
     // The circuits routed through the model now its devices stand (Q6152): around the ducts,
     // pipes and structure, by the corridors, into each box and the panel's entry window; the
     // drawn conduit as it is. The estimated routes give way to them for the pieces.
@@ -2969,6 +2973,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    if equipment_connections["loads"].as_u64().unwrap_or(0) > 0 || equipment_connections["removed"].as_u64().unwrap_or(0) > 0 {
+        r["equipmentConnections"] = equipment_connections;
+    }
     if fa_equipment["devices"].as_u64().unwrap_or(0) > 0 {
         r["fireAlarmEquipment"] = fa_equipment;
     }

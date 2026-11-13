@@ -43,6 +43,7 @@ mod duct3d_truth;
 mod elemprops;
 mod emtsize;
 mod equip_mounting;
+mod equipcircuit;
 mod exterior;
 mod fawiring;
 mod feederfollow;

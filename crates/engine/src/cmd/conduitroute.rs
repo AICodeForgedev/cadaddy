@@ -1572,6 +1572,9 @@ struct Dev {
     unit_connection: bool,
     /// A box set in the floor (`mounting` floor, a floor box by its kind or type).
     floor_box: bool,
+    /// The equipment it is the connection of (Q6624, [`super::equipdisc`]: its handle) and its
+    /// own middle height: the circuit goes on from it to the equipment's terminal box.
+    serves: Option<(Handle, f64)>,
 }
 
 /// The devices a switch or sensor controls: its `controls` (their handles).
@@ -1740,7 +1743,7 @@ pub(crate) fn rated_walls(d: &Drawing, sp: &BuildingSpec, cap: usize) -> Vec<Rat
     rated
 }
 
-fn mesh_box(e: &Entity) -> Option<(Vec3, Vec3)> {
+pub(crate) fn mesh_box(e: &Entity) -> Option<(Vec3, Vec3)> {
     let EntityKind::Mesh(m) = &e.kind else { return None };
     let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut hi = Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -2618,6 +2621,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 controls: controls_of(&ps),
                 unit_connection: ps.get("receptacle_for").is_some_and(|p| !p.text().trim().is_empty()),
                 floor_box,
+                serves: ps.get(super::equipdisc::SERVES_HANDLE).and_then(|p| Handle::parse_hex(p.text().trim())).map(|h| (h, (lo.z + hi.z) / 2.0)),
             });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
@@ -3507,6 +3511,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     let mut under_slab_rows: Vec<Value> = Vec::new();
     let mut under_slab_ft = 0.0f64;
+    // Each equipment connection's whip on to its equipment's terminal box (Q6624).
+    let mut whip_rows: Vec<Value> = Vec::new();
+    let mut whip_n = 0usize;
+    let mut whip_ft = 0.0f64;
     let mut keynote_taken: BTreeSet<String> = BTreeSet::new();
     let r_of = |size_in: f64| size_in / 24.0 * upf;
     let add_clash = |clashes: &mut Vec<Value>, field: &Field, b: &Blocked, what: &str, circuit: &str, level: &str, size_in: f64| {
@@ -3945,6 +3953,64 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     "circuit": c.label, "level": c.level, "box": devs.get(*di).map(|d| d.handle.hex()).unwrap_or_default(),
                     "at": [r2(f.box_at.x), r2(f.box_at.y)], "stub_at": [r2(f.wall.x), r2(f.wall.y)], "length_ft": r1(ft),
                     "size_in": r.size_in[0], "keynote_run": f.keynote, "basis": f.called,
+                }));
+            }
+            runs.push(r);
+        }
+        // A connection that serves a piece of equipment (its disconnect beside it, Q6624): the
+        // circuit goes on from it to the equipment's terminal box, square along the plan's axes
+        // at the connection's middle height, up or down to the housing at its end (the field's
+        // whip: rules `E-EQUIP-DISCONNECT`).
+        for m in &members {
+            let Some((eh, mid)) = m.serves else { continue };
+            let Some(g) = gear.iter().find(|g| g.handle == eh) else { continue };
+            if runs.len() >= MAX_RUNS {
+                break;
+            }
+            let end = Vec2::new(m.at.x.clamp(g.lo.x, g.hi.x), m.at.y.clamp(g.lo.y, g.hi.y));
+            if end.dist(m.at) <= upf / 96.0 {
+                continue;
+            }
+            let rad = r_of(size);
+            let z_end = mid.clamp(g.lo.z + rad, (g.hi.z - rad).max(g.lo.z + rad));
+            let bot = |z: f64| (z - rad - floor) / upf;
+            let mut pts = vec![[m.at.x, m.at.y]];
+            let mut bots = vec![bot(mid)];
+            let corner = Vec2::new(end.x, m.at.y);
+            if corner.dist(m.at) > upf / 96.0 && corner.dist(end) > upf / 96.0 {
+                pts.push([corner.x, corner.y]);
+                bots.push(bot(mid));
+            }
+            pts.push([end.x, end.y]);
+            bots.push(bot(mid));
+            if (z_end - mid).abs() > upf / 96.0 {
+                pts.push([end.x, end.y]);
+                bots.push(bot(z_end));
+            }
+            leg_n += 1;
+            let mut r = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), pts, size, 0.0);
+            r.bottoms_ft = bots;
+            r.id = format!("{cid}#{leg_n}");
+            r.size_source = format!("minimum: {min_src}");
+            r.height_source = ROUTED.into();
+            r.basis = format!(
+                "the whip from its connection to {}'s terminal box: {}",
+                g.tag,
+                super::provenance::rule(super::equipdisc::RULE).basis_for("")
+            );
+            let ft = run_ft(&r, upf);
+            whip_n += 1;
+            whip_ft += ft;
+            let l = lens.entry(ci).or_default();
+            l.in_area += ft;
+            l.wire += (ft + box_makeup) * wires_in(&parts);
+            l.own_wire += (ft + box_makeup) * wires_in(&parts);
+            l.cable += ft + box_makeup;
+            *cable_legs.entry(ci).or_default().entry(0).or_default() += ft + box_makeup;
+            if whip_rows.len() < MAX_ITEMS {
+                whip_rows.push(json!({
+                    "circuit": c.label, "level": c.level, "equipment": g.tag, "connection": m.handle.hex(),
+                    "length_ft": r1(ft), "end": [r2(end.x), r2(end.y), r2((z_end - floor) / upf)],
                 }));
             }
             runs.push(r);
@@ -5352,6 +5418,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "source": rl.route.on_grade_source,
         "note": "each floor box on the slab on grade fed from below the slab: buried from the box to the nearest wall of its room and stubbed up there, where its circuit's raceway above the floor takes it on; a keynote's under-slab conduit from the box is that raceway (it carries the circuit, its empty copy goes)",
     });
+    out.report["equipment_whips"] = json!({
+        "whips": whip_n,
+        "length_ft": r1(whip_ft),
+        "items": whip_rows,
+        "source": super::provenance::rule(super::equipdisc::RULE).basis_for(""),
+    });
     out.keynote_taken = keynote_taken;
     out.report["clashes_corrected"] = json!(clash_offsets.len());
     out.report["same_circuit_members"] = json!(same_circuit_members);
@@ -6229,6 +6301,9 @@ pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool) -> Result<Valu
     // The fire alarm system's panel and power supplies as the gear stands now (Q6503): the
     // documents' placed since the build, those the rule placed placed again.
     let fa_equipment = fa::place_equipment(s.doc_mut()?, &mut sp);
+    // Each piece of equipment that carries its circuit: its connection (Q6624), as the
+    // equipment and its circuit stand now.
+    let equipment_connections = super::equipdisc::place(s.doc_mut()?, &sp);
     // From the circuits as read, not from the last routing's parts and sizes.
     let mut sp = unrouted(s.doc()?, &sp);
     let routed = route(s.doc()?, &sp);
@@ -6328,6 +6403,7 @@ pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool) -> Result<Valu
         // What the boxes did to clear each other, and the rated-wall remedy used (Q6488).
         "box_clearance": atoms["boxClearance"],
         "feeders": feeders.json(),
+        "equipment_connections": equipment_connections,
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
         "fire_alarm": {"equipment": fa_equipment, "circuits": routed.report["fire_alarm"]["circuits"], "routed_devices": routed.report["fire_alarm"]["routed_devices"],
@@ -6411,7 +6487,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand)} → {routed, removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, rerouted_list: [{feeder, why}], dropped_list}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand)} → {routed, removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, rerouted_list: [{feeder, why}], dropped_list}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, equipment_connections: {loads, connected, drawn_disconnects, built, built_by_kind, removed, connection_boxes, took_circuit, built_list} (Q6624: each piece of equipment that carries its circuit, its connection), circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
