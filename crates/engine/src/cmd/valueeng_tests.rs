@@ -24,6 +24,16 @@ fn a_specs_wiring_methods_table_says_each_applications_methods() {
     assert_eq!(b.len(), 3, "{b:#?}");
     assert_eq!(b[0].methods, ["mc", "raceway"]);
     assert_eq!(b[2].methods, ["raceway", "se"]);
+    // Q6544: a row naming rigid PVC conduit (below grade, as site work runs) says PVC, not a
+    // bare raceway; the cable rows don't take it.
+    let u = wiring_applications(
+        "3.1 WIRING METHODS\nA. Branch circuits underground and below slab: Schedule 40 PVC conduit.\nB. Site circuits in the earth: rigid nonmetallic conduit or Type UF.\nC. Branch circuits concealed in walls: Type NM.\n3.2 INSTALLATION",
+        "26 05 19",
+    );
+    assert_eq!(u.len(), 3, "{u:#?}");
+    assert_eq!(u[0].methods, ["pvc"]);
+    assert_eq!(u[1].methods, ["pvc", "uf"]);
+    assert_eq!(u[2].methods, ["nm"]);
 }
 
 #[test]

@@ -64,6 +64,9 @@ struct Built {
     handle: Handle,
     part: String,
     level: String,
+    /// The name it was built under (a roof's, for its deck, parapets, roof walls; a member's
+    /// starts with its roof's).
+    name: String,
     source: Handle,
     mesh: Mesh,
 }
@@ -77,7 +80,8 @@ fn built(d: &Drawing) -> Vec<Built> {
             let x = &e.common.xdata;
             let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP))?;
             let source = x.get(at + 3).and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok()).map_or(Handle(0), Handle);
-            Some(Built { handle: e.handle, part, level: made_level(e).unwrap_or_default(), source, mesh: m.clone() })
+            let name = x.get(at + 4).map(|t| t.value.trim().to_string()).unwrap_or_default();
+            Some(Built { handle: e.handle, part, level: made_level(e).unwrap_or_default(), name, source, mesh: m.clone() })
         })
         .collect()
 }
@@ -109,63 +113,300 @@ fn mesh_box<'a>(ms: impl Iterator<Item = &'a Mesh>) -> (Bounds2, f64, f64) {
     (b, lo, hi)
 }
 
-/// Roofs that don't meet their walls: a roof level's roof whose underside stands more than
-/// [`ROOF_GAP_FT`] over the top of the walls of the storey under it (nothing between them), or
-/// whose outline runs more than [`ROOF_OFF_FT`] past those walls or short of them on a side
-/// (shifted off the building).
-fn roofs_off_walls(sp: &BuildingSpec, made: &[Built], upf: f64) -> Vec<Finding> {
+/// How far a wall's face may stand off a roof's outline and still be under it, feet (a wall
+/// built flush with the roof's edge).
+const ROOF_EDGE_FT: f64 = 0.5;
+/// A roof deck's plan faces looked at, at most.
+const MAX_ROOF_FACES: usize = 20_000;
+/// The spacing of the points looked at along a wall's faces, feet, and their most on one face.
+const WALL_POINT_FT: f64 = 1.0;
+const WALL_FACE_POINTS: usize = 64;
+/// The sides a roof can be off its walls on, in the order the message lists them; then a notch
+/// or hole in it.
+const SIDES: [&str; 4] = ["west", "east", "south", "north"];
+const OPENING: usize = SIDES.len();
+
+/// One roof of a roof level: its decks and the parts built round them (its parapets, roof walls
+/// and framing), the plan its decks cover, its plan box, underside and the decks' high point.
+struct RoofPiece<'a> {
+    name: String,
+    parts: Vec<&'a Built>,
+    cover: Vec<(Bounds2, Vec<Vec2>)>,
+    bounds: Bounds2,
+    lo: f64,
+    top: f64,
+}
+
+impl RoofPiece<'_> {
+    /// Whether its decks cover a plan point (within `tol`).
+    fn covers(&self, p: Vec2, tol: f64) -> bool {
+        self.cover
+            .iter()
+            .any(|(b, q)| b.expand(tol).contains(p) && (cadaddy_geom::point_in_polygon(q, p) || edges(q).any(|(a, c)| seg_dist(p, a, c) <= tol)))
+    }
+
+    /// The point of its decks' outline nearest a plan point.
+    fn nearest(&self, p: Vec2) -> Option<Vec2> {
+        self.cover.iter().flat_map(|(_, q)| edges(q)).map(|(a, b)| closest_on_seg(p, a, b)).min_by(|x, y| x.dist(p).total_cmp(&y.dist(p)))
+    }
+}
+
+/// A mesh's faces as they lie in plan (faces standing on edge dropped).
+fn plan_faces(m: &Mesh) -> Vec<(Bounds2, Vec<Vec2>)> {
+    m.faces
+        .iter()
+        .take(MAX_ROOF_FACES)
+        .filter_map(|f| {
+            let q: Vec<Vec2> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize)).map(|v| v.xy()).collect();
+            let b = Bounds2::from_points(q.iter().copied());
+            let area = cadaddy_geom::shoelace(&q).abs();
+            (q.len() >= 3 && q.iter().all(|v| v.is_finite()) && area > 1e-12 && area > 1e-6 * b.width() * b.height()).then_some((b, q))
+        })
+        .collect()
+}
+
+/// A roof level's roof parts as roofs: one for each roof's decks (by the name they were built
+/// under); a parapet, roof wall or member joins the roof it was built for (its name, or its
+/// name's start for a member), else the roof whose decks are under its middle, else the nearest.
+/// No decks: one roof of all the parts.
+fn roof_pieces<'a>(parts: &[&'a Built]) -> Vec<RoofPiece<'a>> {
+    let piece = |b: &'a Built| RoofPiece {
+        name: b.name.clone(),
+        parts: vec![b],
+        cover: plan_faces(&b.mesh),
+        bounds: mesh_box(std::iter::once(&b.mesh)).0,
+        lo: f64::INFINITY,
+        top: f64::NEG_INFINITY,
+    };
+    let is_deck = |b: &Built| b.part.eq_ignore_ascii_case("roof");
+    let mut pieces: Vec<RoofPiece<'a>> = Vec::new();
+    for &b in parts.iter().filter(|b| is_deck(b)) {
+        match pieces.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&b.name)) {
+            Some(p) => {
+                p.parts.push(b);
+                p.cover.extend(plan_faces(&b.mesh));
+                p.bounds = p.bounds.union(&mesh_box(std::iter::once(&b.mesh)).0);
+            }
+            None => pieces.push(piece(b)),
+        }
+    }
+    for &b in parts.iter().filter(|b| !is_deck(b)) {
+        let name = b.name.to_ascii_lowercase();
+        let own = |p: &RoofPiece| {
+            let roof = p.name.to_ascii_lowercase();
+            !roof.is_empty() && (name == roof || name.strip_prefix(&roof).is_some_and(|rest| rest.starts_with(' ')))
+        };
+        let mid = mesh_box(std::iter::once(&b.mesh)).0.center();
+        let at = pieces.iter().position(own).or_else(|| pieces.iter().position(|p| p.covers(mid, 0.0))).or_else(|| {
+            pieces.iter().enumerate().min_by(|(_, x), (_, y)| shell_dist(&x.bounds, mid).total_cmp(&shell_dist(&y.bounds, mid))).map(|(i, _)| i)
+        });
+        match at.and_then(|i| pieces.get_mut(i)) {
+            Some(p) => p.parts.push(b),
+            None => pieces.push(piece(b)),
+        }
+    }
+    for p in &mut pieces {
+        let (b, lo, hi) = mesh_box(p.parts.iter().map(|x| &x.mesh));
+        let (_, _, deck_hi) = mesh_box(p.parts.iter().filter(|x| is_deck(x)).map(|x| &x.mesh));
+        p.bounds = b;
+        p.lo = lo;
+        p.top = if deck_hi.is_finite() { deck_hi } else { hi };
+    }
+    pieces
+}
+
+/// Points along the faces of a built wall's boxes (every [`WALL_POINT_FT`]), else its vertices.
+fn face_points(m: &Mesh, upf: f64) -> Vec<Vec2> {
+    let step = WALL_POINT_FT * upf;
+    let mut out = Vec::new();
+    for [p0, p1, p2, p3] in m.vertices.chunks_exact(8).take(MAX_BOXES).filter_map(box_plan) {
+        for (a, b) in [(p0, p1), (p3, p2)] {
+            let n = (a.dist(b) / step).ceil();
+            let n = if n.is_finite() { (n as usize).clamp(1, WALL_FACE_POINTS) } else { 1 };
+            out.extend((0..=n).map(|i| a + (b - a) * (i as f64 / n as f64)));
+        }
+    }
+    if out.is_empty() {
+        out = m.vertices.iter().map(|v| v.xy()).filter(|v| v.is_finite()).take(MAX_BOXES).collect();
+    }
+    out
+}
+
+/// A storey's built wall as a roof's check sees it: its storey's elevation, its top, plan box and
+/// the points along its faces.
+struct WallFaces<'a> {
+    built: &'a Built,
+    elevation: f64,
+    top: f64,
+    bounds: Bounds2,
+    points: Vec<Vec2>,
+}
+
+/// Roofs that don't meet their walls, each roof against the walls under its own decks (a stepped
+/// building's low roof on the wing's walls, its high roof on the upper storey's): a roof whose
+/// underside stands more than [`ROOF_GAP_FT`] over the top of the walls it bears on (the highest
+/// storey's walls under it; nothing between them), whose outline runs more than [`ROOF_OFF_FT`]
+/// past them on a side, or that stops that far short of a wall of a storey the roofs bear on
+/// that no roof covers (nor a storey over it). A roof over none of the walls: off the highest
+/// walled storey's walls as a whole.
+fn roofs_off_walls(levels: &[cadaddy_walk3d::Level], made: &[Built], upf: f64) -> Vec<Finding> {
     let mut out = Vec::new();
     let is = |b: &Built, level: &str, parts: &[&str]| b.level.eq_ignore_ascii_case(level) && parts.iter().any(|p| b.part.eq_ignore_ascii_case(p));
-    for roof in sp.levels.iter().filter(|l| super::wallgen::roof_level(&sp.levels, &l.name)).take(100) {
+    let edge = ROOF_EDGE_FT * upf;
+    let off_ft = ROOF_OFF_FT * upf;
+    for roof in levels.iter().filter(|l| super::wallgen::roof_level(levels, &l.name)).take(100) {
         let parts: Vec<&Built> = made.iter().filter(|b| is(b, &roof.name, ROOF_PARTS)).collect();
         if parts.is_empty() {
             continue;
         }
-        // The storey under it with walls built: the highest below it.
-        let mut storeys: Vec<&cadaddy_walk3d::Level> =
-            sp.levels.iter().filter(|l| l.elevation_ft < roof.elevation_ft && !super::wallgen::roof_level(&sp.levels, &l.name)).collect();
-        storeys.sort_by(|a, b| b.elevation_ft.total_cmp(&a.elevation_ft));
-        let Some((under, walls)) = storeys.into_iter().find_map(|l| {
-            let w: Vec<&Built> = made.iter().filter(|b| is(b, &l.name, &["wall"])).collect();
-            (!w.is_empty()).then_some((l, w))
-        }) else {
-            continue;
+        // The storeys under it and their walls.
+        let below = |name: &str| {
+            levels
+                .iter()
+                .find(|l| l.name.eq_ignore_ascii_case(name))
+                .filter(|l| l.elevation_ft < roof.elevation_ft && !super::wallgen::roof_level(levels, &l.name))
+                .map(|l| l.elevation_ft)
         };
-        let (rb, r_lo, _) = mesh_box(parts.iter().map(|b| &b.mesh));
-        let (wb, _, w_hi) = mesh_box(walls.iter().map(|b| &b.mesh));
-        if rb.is_empty() || wb.is_empty() || !(r_lo.is_finite() && w_hi.is_finite()) {
+        let walls: Vec<WallFaces> = made
+            .iter()
+            .filter(|b| b.part.eq_ignore_ascii_case("wall"))
+            .take(MAX_WALLS)
+            .filter_map(|b| {
+                let elevation = below(&b.level)?;
+                let (bounds, _, top) = mesh_box(std::iter::once(&b.mesh));
+                (!bounds.is_empty() && top.is_finite()).then(|| WallFaces { built: b, elevation, top, bounds, points: face_points(&b.mesh, upf) })
+            })
+            .collect();
+        if walls.is_empty() {
             continue;
         }
-        let handles: Vec<Handle> = parts.iter().map(|b| b.handle).take(MAX_HANDLES).collect();
-        let gap = r_lo - w_hi;
-        if gap > ROOF_GAP_FT * upf {
-            out.push(Finding {
-                kind: "roof_off_walls",
-                message: format!(
-                    "{}'s roof stands {} over the top of {}'s walls with nothing between them (no framing, roof walls or parapet down to the walls)",
-                    roof.name,
-                    feet(gap, upf),
-                    under.name
-                ),
-                level: Some(roof.name.clone()),
-                at: Some(rb.center()),
-                handles: handles.clone(),
-            });
+        let floors: Vec<(f64, Footprint)> =
+            made.iter().filter(|b| b.part.eq_ignore_ascii_case("floor")).filter_map(|b| Some((below(&b.level)?, footprint(&b.mesh)))).collect();
+        let pieces = roof_pieces(&parts);
+        // Each roof's sides off its walls: (side, past) → how far, whose walls and, in an opening,
+        // where.
+        let mut offs: Vec<BTreeMap<(usize, bool), (f64, String, Option<Vec2>)>> = vec![BTreeMap::new(); pieces.len()];
+        let mut bears: Vec<String> = vec![String::new(); pieces.len()];
+        let mut borne: Vec<f64> = Vec::new();
+        let label = |p: &RoofPiece| if pieces.len() > 1 && !p.name.is_empty() { format!(" ({})", p.name) } else { String::new() };
+        let handles = |p: &RoofPiece| p.parts.iter().map(|b| b.handle).take(MAX_HANDLES).collect::<Vec<Handle>>();
+        for (i, p) in pieces.iter().enumerate() {
+            if p.bounds.is_empty() || !p.lo.is_finite() {
+                continue;
+            }
+            // The walls under its decks: up to their high point (an upper storey's walls rising
+            // past a low roof stand beside it, not under it).
+            let reach = p.bounds.expand(edge);
+            let under: Vec<(&WallFaces, Vec<Vec2>)> = walls
+                .iter()
+                .filter(|w| w.top <= p.top + 1e-6 * upf.max(1.0) && w.bounds.intersects(&reach))
+                .filter_map(|w| {
+                    let on: Vec<Vec2> = w.points.iter().copied().filter(|q| p.covers(*q, edge)).collect();
+                    (!on.is_empty()).then_some((w, on))
+                })
+                .collect();
+            // It bears on the highest storey of them; under none, on the highest walled storey's
+            // walls as a whole.
+            let (on, held) = match under.iter().map(|(w, _)| w.elevation).max_by(f64::total_cmp) {
+                Some(e) => {
+                    borne.push(e);
+                    let on: Vec<&(&WallFaces, Vec<Vec2>)> = under.iter().filter(|(w, _)| w.elevation == e).collect();
+                    (on.iter().map(|(w, _)| *w).collect::<Vec<_>>(), Bounds2::from_points(on.iter().flat_map(|(_, q)| q.iter().copied())))
+                }
+                None => {
+                    let Some(e) = walls.iter().map(|w| w.elevation).max_by(f64::total_cmp) else { continue };
+                    let on: Vec<&WallFaces> = walls.iter().filter(|w| w.elevation == e).collect();
+                    let held = on.iter().fold(Bounds2::EMPTY, |b, w| b.union(&w.bounds));
+                    (on, held)
+                }
+            };
+            let Some(first) = on.first() else { continue };
+            let storey = first.built.level.clone();
+            let w_hi = on.iter().map(|w| w.top).fold(f64::NEG_INFINITY, f64::max);
+            let gap = p.lo - w_hi;
+            if gap > ROOF_GAP_FT * upf {
+                out.push(Finding {
+                    kind: "roof_off_walls",
+                    message: format!(
+                        "{}'s roof{} stands {} over the top of {}'s walls with nothing between them (no framing, roof walls or parapet down to the walls)",
+                        roof.name,
+                        label(p),
+                        feet(gap, upf),
+                        storey
+                    ),
+                    level: Some(roof.name.clone()),
+                    at: Some(p.bounds.center()),
+                    handles: handles(p),
+                });
+            }
+            // Each side: how far the roof runs past the walls it holds (+) or falls short of them (-).
+            let rb = p.bounds;
+            let sides = [held.min.x - rb.min.x, rb.max.x - held.max.x, held.min.y - rb.min.y, rb.max.y - held.max.y];
+            if let Some(o) = offs.get_mut(i) {
+                for (k, v) in sides.iter().enumerate().filter(|(_, v)| v.abs() > off_ft) {
+                    o.insert((k, *v > 0.0), (v.abs(), storey.clone(), None));
+                }
+            }
+            if let Some(b) = bears.get_mut(i) {
+                *b = storey;
+            }
         }
-        // Each side: how far the roof runs past the walls (+) or falls short of them (-).
-        let sides = [("west", wb.min.x - rb.min.x), ("east", rb.max.x - wb.max.x), ("south", wb.min.y - rb.min.y), ("north", rb.max.y - wb.max.y)];
-        let off: Vec<String> = sides
-            .iter()
-            .filter(|(_, v)| v.abs() > ROOF_OFF_FT * upf)
-            .map(|(s, v)| format!("{} on the {s} by {}", if *v > 0.0 { "past them" } else { "short of them" }, feet(v.abs(), upf)))
-            .collect();
-        if !off.is_empty() {
+        // The walls of the storeys the roofs bear on that no roof covers, nor a storey over them:
+        // the nearest roof stops short of them, or (inside its box) leaves them under a notch or
+        // hole in it.
+        for w in walls.iter().filter(|w| borne.contains(&w.elevation)) {
+            for q in &w.points {
+                if pieces.iter().any(|p| p.covers(*q, edge)) || floors.iter().any(|(e, f)| *e > w.elevation && f.covers(*q, edge)) {
+                    continue;
+                }
+                let Some((i, n)) = pieces
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| p.nearest(*q).map(|n| (i, n)))
+                    .min_by(|(_, a), (_, b)| a.dist(*q).total_cmp(&b.dist(*q)))
+                else {
+                    continue;
+                };
+                let d = *q - n;
+                let inside = pieces.get(i).is_some_and(|p| p.bounds.expand(edge).contains(*q));
+                let (k, v) = if inside {
+                    (OPENING, d.len())
+                } else if d.x.abs() >= d.y.abs() {
+                    (usize::from(d.x > 0.0), d.x.abs())
+                } else {
+                    (2 + usize::from(d.y > 0.0), d.y.abs())
+                };
+                if v > off_ft
+                    && let Some(o) = offs.get_mut(i)
+                {
+                    let e = o.entry((k, false)).or_insert((0.0, w.built.level.clone(), None));
+                    if v > e.0 {
+                        *e = (v, w.built.level.clone(), Some(*q));
+                    }
+                }
+            }
+        }
+        for ((p, o), storey) in pieces.iter().zip(&offs).zip(&bears) {
+            if o.is_empty() {
+                continue;
+            }
+            let off: Vec<String> = o
+                .iter()
+                .map(|((k, past), (v, whose, at))| {
+                    let them = if whose.eq_ignore_ascii_case(storey) { "them".to_string() } else { format!("{whose}'s walls") };
+                    match (SIDES.get(*k), at) {
+                        (Some(side), _) => format!("{} {them} on the {side} by {}", if *past { "past" } else { "short of" }, feet(*v, upf)),
+                        (None, Some(q)) => format!("open over {them} at {} ({} from its edge)", fmt_pt(*q), feet(*v, upf)),
+                        (None, None) => format!("open over {them}"),
+                    }
+                })
+                .collect();
             out.push(Finding {
                 kind: "roof_off_walls",
-                message: format!("{}'s roof is off {}'s walls: {}", roof.name, under.name, off.join(", ")),
+                message: format!("{}'s roof{} is off {}'s walls: {}", roof.name, label(p), storey, off.join(", ")),
                 level: Some(roof.name.clone()),
-                at: Some(rb.center()),
-                handles,
+                at: Some(p.bounds.center()),
+                handles: handles(p),
             });
         }
     }
@@ -284,17 +525,21 @@ fn plan_boxes(m: &Mesh) -> Vec<(Vec2, Vec2, f64)> {
         .chunks_exact(8)
         .take(MAX_BOXES)
         .filter_map(|c| {
-            let [p0, p1, p2, p3, q0, q1, q2, q3] = c else { return None };
-            let same = |p: &Vec3, q: &Vec3| p.xy().dist(q.xy()) <= 1e-6 * (1.0 + p.xy().len());
-            if !(same(p0, q0) && same(p1, q1) && same(p2, q2) && same(p3, q3)) {
-                return None;
-            }
-            let a = (p0.xy() + p3.xy()) * 0.5;
-            let b = (p1.xy() + p2.xy()) * 0.5;
-            let t = p0.xy().dist(p3.xy());
+            let [p0, p1, p2, p3] = box_plan(c)?;
+            let a = (p0 + p3) * 0.5;
+            let b = (p1 + p2) * 0.5;
+            let t = p0.dist(p3);
             (a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 && t.is_finite() && t > 0.0).then_some((a, b, t))
         })
         .collect()
+}
+
+/// The plan corners of one of wallgen's boxes (eight corners: four at its bottom, the same four
+/// at its top), else none.
+fn box_plan(c: &[Vec3]) -> Option<[Vec2; 4]> {
+    let [p0, p1, p2, p3, q0, q1, q2, q3] = c else { return None };
+    let same = |p: &Vec3, q: &Vec3| p.xy().dist(q.xy()) <= 1e-6 * (1.0 + p.xy().len());
+    (same(p0, q0) && same(p1, q1) && same(p2, q2) && same(p3, q3)).then(|| [p0.xy(), p1.xy(), p2.xy(), p3.xy()])
 }
 
 /// Boxes read off one built mesh, at most.
@@ -400,10 +645,15 @@ fn edges(q: &[Vec2]) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
 }
 
 fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    p.dist(closest_on_seg(p, a, b))
+}
+
+/// The point of segment `a`–`b` nearest `p`.
+fn closest_on_seg(p: Vec2, a: Vec2, b: Vec2) -> Vec2 {
     let d = b - a;
     let l2 = d.dot(d);
     let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    p.dist(a + d * t)
+    a + d * t
 }
 
 /// The part of convex polygon `subject` inside convex polygon `clip` (Sutherland–Hodgman).
@@ -679,7 +929,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
         });
     }
     step("objects outside the building");
-    for f in roofs_off_walls(&sp, &made, upf) {
+    for f in roofs_off_walls(&sp.levels, &made, upf) {
         push(f);
     }
     step("roofs on their walls");
@@ -1572,7 +1822,7 @@ mod tests {
         for (a, b, t) in boxes {
             super::super::wallgen::add_box(&mut m, Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), *t, 0.0, 100.0);
         }
-        Built { handle: Handle(h), part: part.into(), level: "L1".into(), source: Handle(h + 1000), mesh: m }
+        Built { handle: Handle(h), part: part.into(), level: "L1".into(), name: String::new(), source: Handle(h + 1000), mesh: m }
     }
 
     #[test]
@@ -1622,7 +1872,14 @@ mod tests {
         super::super::wallgen::wall_with_window(Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), 6.0, 100.0, cut)
             .into_iter()
             .zip(h..)
-            .map(|((part, mesh), h)| Built { handle: Handle(h), part: part.into(), level: "L1".into(), source: Handle(h + 1000), mesh })
+            .map(|((part, mesh), h)| Built {
+                handle: Handle(h),
+                part: part.into(),
+                level: "L1".into(),
+                name: String::new(),
+                source: Handle(h + 1000),
+                mesh,
+            })
             .collect()
     }
 
@@ -1688,6 +1945,106 @@ mod tests {
             ],
         );
         assert_eq!(kinds(&abutted), vec!["window_inside_building"]);
+    }
+
+    /// A box of `part` on `level` (feet, 12 units a foot): centreline `a`–`b`, `t` thick, from
+    /// `z0` to `z1`, built for the roof named `name`.
+    fn on(part: &str, level: &str, name: &str, h: u64, a: (f64, f64), b: (f64, f64), t: f64, z: (f64, f64)) -> Built {
+        let mut m = super::super::wallgen::empty_mesh();
+        let ft = |v: (f64, f64)| Vec2::new(v.0 * 12.0, v.1 * 12.0);
+        super::super::wallgen::add_box(&mut m, ft(a), ft(b), t * 12.0, z.0 * 12.0, z.1 * 12.0);
+        Built { handle: Handle(h), part: part.into(), level: level.into(), name: name.into(), source: Handle(0), mesh: m }
+    }
+
+    /// The four 6" walls of a `w` × `d` ft box on `level`, from `z0` to `z1` ft.
+    fn storey(level: &str, h: u64, w: f64, d: f64, z: (f64, f64)) -> Vec<Built> {
+        let s = |i: u64, a, b| on("wall", level, "", h + i, a, b, 0.5, z);
+        vec![s(0, (0.0, 0.0), (w, 0.0)), s(1, (w, 0.0), (w, d)), s(2, (w, d), (0.0, d)), s(3, (0.0, d), (0.0, 0.0))]
+    }
+
+    /// A 1 ft roof deck over `x0`–`x1` × `y0`–`y1` ft on ROOF, its underside at `z` ft.
+    fn deck(name: &str, h: u64, (x0, x1): (f64, f64), (y0, y1): (f64, f64), z: f64) -> Built {
+        let ym = (y0 + y1) / 2.0;
+        on("roof", "ROOF", name, h, (x0, ym), (x1, ym), y1 - y0, (z, z + 1.0))
+    }
+
+    fn levels() -> Vec<cadaddy_walk3d::Level> {
+        serde_json::from_value(json!([
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10},
+            {"name": "L2", "elevation_ft": 10, "height_ft": 10},
+            {"name": "ROOF", "elevation_ft": 20, "height_ft": 4},
+        ]))
+        .unwrap_or_default()
+    }
+
+    fn roof_messages(made: &[Built]) -> Vec<String> {
+        roofs_off_walls(&levels(), made, 12.0).into_iter().map(|f| f.message).collect()
+    }
+
+    #[test]
+    fn each_roof_piece_is_checked_against_the_walls_under_its_own_footprint() {
+        // A stepped building: Level 1 is 100' × 30', Level 2 the west 40' of it (6" walls on
+        // those lines: their outer faces 3" out). One roof level
+        // holds both roofs: the high one on Level 2's walls, the low one over the wing on Level
+        // 1's.
+        let stepped = |high_z: f64, low: (f64, f64)| {
+            let mut v = storey("L1", 10, 100.0, 30.0, (0.0, 10.0));
+            v.extend(storey("L2", 20, 40.0, 30.0, (10.0, 20.0)));
+            v.push(deck("Roof 1", 30, (0.0, 40.0), (0.0, 30.0), high_z));
+            v.push(deck("Roof 2", 31, low, (0.0, 30.0), 10.0));
+            v
+        };
+        // Each on its walls: nothing (the level-wide boxes read the roof 60' past the walls).
+        let ok = stepped(20.0, (40.0, 100.0));
+        assert_eq!(roof_messages(&ok), Vec::<String>::new());
+        // The high roof 2' off its walls: a gap (the low roof's underside hid it).
+        let lifted = stepped(22.0, (40.0, 100.0));
+        let found = roof_messages(&lifted);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("Roof 1") && found[0].contains("2'-0\" over the top of L2's walls"), "{found:?}");
+        // The low roof stops 10' short of the wing's east wall: off its walls on the east.
+        let short = stepped(20.0, (40.0, 90.0));
+        let found = roof_messages(&short);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("Roof 2") && found[0].contains("short of them on the east by 10'-3\""), "{found:?}");
+        // One roof over both parts at the high roof's height: past Level 2's walls by the wing,
+        // standing on nothing over it.
+        let mut one = storey("L1", 10, 100.0, 30.0, (0.0, 10.0));
+        one.extend(storey("L2", 20, 40.0, 30.0, (10.0, 20.0)));
+        one.push(deck("Roof 1", 30, (0.0, 100.0), (0.0, 30.0), 20.0));
+        let found = roof_messages(&one);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("off L2's walls: past them on the east by 59'-9\""), "{found:?}");
+    }
+
+    #[test]
+    fn a_roof_shifted_off_its_one_storey_is_past_its_walls_on_one_side_and_short_on_the_other() {
+        let lv: Vec<cadaddy_walk3d::Level> = serde_json::from_value(json!([
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10},
+            {"name": "ROOF", "elevation_ft": 10, "height_ft": 4},
+        ]))
+        .unwrap_or_default();
+        let mut v = storey("L1", 10, 40.0, 30.0, (0.0, 10.0));
+        v.push(deck("Roof 1", 30, (10.0, 50.0), (0.0, 30.0), 10.0));
+        let found: Vec<String> = roofs_off_walls(&lv, &v, 12.0).into_iter().map(|f| f.message).collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("short of them on the west by 10'-3\"") && found[0].contains("past them on the east by 9'-9\""), "{found:?}");
+        // Over the whole storey but for a notch from the north over a stub wall in a room: open
+        // over it (the roof's box holds every wall).
+        let mut v = storey("L1", 10, 40.0, 30.0, (0.0, 10.0));
+        v.push(on("wall", "L1", "", 20, (20.0, 10.0), (20.0, 13.0), 0.5, (0.0, 10.0)));
+        v.push(deck("Roof 1", 30, (0.0, 15.0), (0.0, 30.0), 10.0));
+        v.push(deck("Roof 1", 31, (15.0, 25.0), (0.0, 5.0), 10.0));
+        v.push(deck("Roof 1", 32, (25.0, 40.0), (0.0, 30.0), 10.0));
+        let found: Vec<String> = roofs_off_walls(&lv, &v, 12.0).into_iter().map(|f| f.message).collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("ROOF's roof is off L1's walls: open over them at "), "{found:?}");
+        // Wholly off the building: still off its walls (the storey's walls as a whole).
+        let mut v = storey("L1", 10, 40.0, 30.0, (0.0, 10.0));
+        v.push(deck("Roof 1", 30, (60.0, 100.0), (0.0, 30.0), 10.0));
+        let found: Vec<String> = roofs_off_walls(&lv, &v, 12.0).into_iter().map(|f| f.message).collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("off L1's walls") && found[0].contains("past them on the east by 59'-9\""), "{found:?}");
     }
 
     #[test]

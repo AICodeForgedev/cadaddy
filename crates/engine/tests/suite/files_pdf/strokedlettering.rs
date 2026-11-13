@@ -99,6 +99,10 @@ fn run_job(s: &mut Session, dir: &std::path::Path, table: &dyn Fn(&Value) -> Val
         let answer = if q["question"].as_str().is_some_and(|t| t.starts_with("Tables to read: ")) {
             asked.push(q.clone());
             table(&q)
+        } else if q["default"].is_null() && q["question"].as_str().is_some_and(|t| t.starts_with("No scale for plan sheet")) {
+            // Q6518: a DO NOT SCALE plan whose note doesn't read and that no plan of its floor
+            // scales is asked for its scale (never left at 1x): the set's printed one
+            q["choices"][0].clone()
         } else {
             q["default"].clone()
         };
