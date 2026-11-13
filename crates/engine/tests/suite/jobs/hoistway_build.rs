@@ -31,8 +31,8 @@ fn sides(d: &mut Drawing, layer: &str, (x0, y0): (f64, f64), (x1, y1): (f64, f64
 
 /// Plans side by side: storey `i`'s at x = 3000 i.
 const STEP: f64 = 3000.0;
-/// The shaft's clear box on each plan (inches, before the plan's x offset): 7'-4" x 6'-2".
-const CLEAR: ((f64, f64), (f64, f64)) = ((300.0, 200.0), (388.0, 274.0));
+/// The shaft's clear box on each plan (inches, before the plan's x offset): 7'-4" x 5'-11".
+const CLEAR: ((f64, f64), (f64, f64)) = ((300.0, 200.0), (388.0, 271.0));
 
 /// A storey: a 40' x 30' building of 8" walls, the hoistway's 8" walls (`east`: whether its east
 /// wall is drawn) and the car drawn inside it as a 4" double outline.
@@ -49,11 +49,18 @@ fn storey(d: &mut Drawing, ox: f64, east: bool) {
     sides(d, "A-WALL", (ox + x0 + 16.0, y0 + 16.0), (ox + x1 - 16.0, y1 - 16.0), all);
 }
 
-/// The test building, its spec stored; the session.
-fn building() -> Session {
+/// The test building, its spec stored; the session. `stray`: Level 1 draws another wall 1'-4"
+/// east of the shaft's (9'-4" from its west wall's face; the tracer pairs its line with the
+/// shaft's east wall line there, so that storey shows the stray wall's face, not the shaft's).
+fn building_with(stray: bool) -> Session {
     let mut d = Drawing::default();
     storey(&mut d, 0.0, true);
-    storey(&mut d, STEP, false);
+    if stray {
+        sides(&mut d, "A-WALL", (412.0, 192.0), (420.0, 282.0), [false, true, false, true]);
+    }
+    // Level 2 draws no east wall for the shaft (with the stray wall, it does: the other two
+    // storeys agree on the shaft's width).
+    storey(&mut d, STEP, stray);
     storey(&mut d, 2.0 * STEP, true);
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
@@ -82,6 +89,10 @@ fn building() -> Session {
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
     s
+}
+
+fn building() -> Session {
+    building_with(false)
 }
 
 /// The built elements made as `part` on `level`: (handle, plan bounds, z range).
@@ -128,7 +139,7 @@ fn near(a: f64, b: f64, tol: f64) -> bool {
 fn the_shaft_pit_and_overrun_are_built_from_the_elevator_submittal() {
     let mut s = building();
     let read = s
-        .execute("elevator.read", &json!({"text": "--- page 2 of 5 ---\nHOISTWAY 7'-4\" x 6'-2\", PIT 4'-8\", OVERHEAD 13'-10\"\n"}))
+        .execute("elevator.read", &json!({"text": "--- page 2 of 5 ---\nHOISTWAY 7'-4\" x 5'-11\", PIT 4'-8\", OVERHEAD 13'-10\"\n"}))
         .expect("elevator.read");
     assert_eq!(read["applied"], json!(true), "{read}");
     let built = s.execute("model.build", &json!({})).expect("build");
@@ -137,7 +148,7 @@ fn the_shaft_pit_and_overrun_are_built_from_the_elevator_submittal() {
     // Each storey's shaft is the submittal's clear size, at the shaft's walls, not the car's.
     for sh in h["shafts"].as_array().unwrap() {
         let c = sh["clear_ft"].as_array().unwrap();
-        assert!(near(c[0].as_f64().unwrap(), 88.0 / 12.0, 0.02) && near(c[1].as_f64().unwrap(), 74.0 / 12.0, 0.02), "{sh}");
+        assert!(near(c[0].as_f64().unwrap(), 88.0 / 12.0, 0.02) && near(c[1].as_f64().unwrap(), 71.0 / 12.0, 0.02), "{sh}");
         assert_eq!(sh["size_from"], json!(["submittal", "submittal"]), "{sh}");
         let b = &sh["box"];
         let ox = if sh["level"] == json!("Level 2") {
@@ -157,7 +168,7 @@ fn the_shaft_pit_and_overrun_are_built_from_the_elevator_submittal() {
     let east: Vec<_> = made(&s, "wall", "Level 2").into_iter().filter(|(_, _, _, e)| xdata_has(e, "hoistway:ELEV.")).collect();
     assert_eq!(east.len(), 1, "{h}");
     let (_, b, z, e) = &east[0];
-    assert!(near(b[0], STEP + 388.0, 0.5) && near(b[2], STEP + 396.0, 0.5) && near(b[1], 192.0, 0.5) && near(b[3], 282.0, 0.5), "{b:?}");
+    assert!(near(b[0], STEP + 388.0, 0.5) && near(b[2], STEP + 396.0, 0.5) && near(b[1], 192.0, 0.5) && near(b[3], 279.0, 0.5), "{b:?}");
     assert!(near(z.0, 120.0, 0.01) && near(z.1, 240.0, 0.01), "{z:?}");
     assert!(xdata_has(e, "type:CMU-8") && xdata_has(e, "derived"), "{:?}", e.common.xdata);
     // The pit: 4'-8" below Level 1 (and its slab under it).
@@ -193,7 +204,7 @@ fn with_no_submittal_the_shaft_is_the_plans_and_the_pit_and_overrun_follow_trade
     // The shaft's walls round the car, never the car.
     let l1 = h["shafts"].as_array().unwrap().iter().find(|x| x["level"] == json!("Level 1")).unwrap();
     let c = l1["clear_ft"].as_array().unwrap();
-    assert!(near(c[0].as_f64().unwrap(), 88.0 / 12.0, 0.02) && near(c[1].as_f64().unwrap(), 74.0 / 12.0, 0.02), "{l1}");
+    assert!(near(c[0].as_f64().unwrap(), 88.0 / 12.0, 0.02) && near(c[1].as_f64().unwrap(), 71.0 / 12.0, 0.02), "{l1}");
     assert_eq!(walls_inside(&s, "Level 1", 0.0), 0, "{h}");
     let pits = made(&s, "hoistway-pit", "Level 1");
     assert_eq!(pits.len(), 1, "{h}");
@@ -211,13 +222,34 @@ fn elevator_read_needs_a_source_and_reads_a_submittal_file() {
     assert!(s.execute("elevator.read", &json!({"files": 3})).is_err());
     let dir = std::env::temp_dir().join(format!("cadaddy-hoistway-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("Elevator Shop Drawings.txt"), "CLEAR HOISTWAY WIDTH 7'-4\"\nCLEAR HOISTWAY DEPTH 6'-2\"\n").unwrap();
-    std::fs::write(dir.join("Lighting Package.txt"), "HOISTWAY 9'-0\" x 9'-0\"\n").unwrap();
+    std::fs::write(dir.join("Lift Submittal.txt"), "CLEAR HOISTWAY WIDTH 7'-4\"\nCLEAR HOISTWAY DEPTH 5'-11\"\n").unwrap();
+    std::fs::write(dir.join("Fixture Data.txt"), "HOISTWAY 9'-0\" x 9'-0\"\n").unwrap();
     let r = s.execute("elevator.read", &json!({"files": [dir.to_string_lossy()]})).expect("read");
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(r["files"], json!(["Elevator Shop Drawings.txt"]), "{r}");
+    assert_eq!(r["files"], json!(["Lift Submittal.txt"]), "{r}");
     assert_eq!(r["elevator_data"]["width_ft"].as_array().map(Vec::len), Some(1), "{r}");
-    assert!(near(r["elevator_data"]["depth_ft"][0].as_f64().unwrap(), 74.0 / 12.0, 1e-6), "{r}");
+    assert!(near(r["elevator_data"]["depth_ft"][0].as_f64().unwrap(), 71.0 / 12.0, 1e-6), "{r}");
     let spec = s.execute("bspec.get", &json!({})).unwrap();
     assert!(spec["spec"]["elevator_data"]["width_ft"].is_array(), "{spec}");
+}
+
+/// A shop drawing's widths read twice, the misread one first: the storey whose walls happen to
+/// fit it too still takes the one every storey's walls agree with (one shaft, one size).
+#[test]
+fn every_storey_of_one_shaft_takes_the_size_the_storeys_walls_agree_with() {
+    let mut s = building_with(true);
+    let text = "9'-4\" HOISTWAY WIDTH
+7'-4\" HOISTWAY WIDTH
+HOISTWAY DEPTH 5'-11\"
+";
+    let read = s.execute("elevator.read", &json!({"text": text})).expect("elevator.read");
+    assert_eq!(read["elevator_data"]["width_ft"].as_array().map(Vec::len), Some(2), "{read}");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    let h = &built["hoistways"];
+    for sh in h["shafts"].as_array().unwrap() {
+        let c = sh["clear_ft"].as_array().unwrap();
+        assert!(near(c[0].as_f64().unwrap(), 88.0 / 12.0, 0.02) && near(c[1].as_f64().unwrap(), 71.0 / 12.0, 0.02), "{h}");
+    }
+    assert_eq!(h["pits"], json!(1), "{h}");
+    assert_eq!(h["overruns"], json!(1), "{h}");
 }

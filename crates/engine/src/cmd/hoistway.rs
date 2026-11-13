@@ -8,8 +8,8 @@
 //! for the overrun the roof equipment there sits on.
 //!
 //! - `elevator.read {files?, text?}` reads the submittal's text (rules as data in
-//!   `hoistway.json`): `HOISTWAY 8'-0" x 7'-0"`, `7'-4" HOISTWAY WIDTH`, `PIT 4'-6"`,
-//!   `-4'-6" PIT EL`, `OVERHEAD 13'-2"`, and stores it in the building spec's `elevator_data`.
+//!   `hoistway.json`): `HOISTWAY 7'-4" x 5'-11"`, `7'-4" HOISTWAY WIDTH`, `PIT 4'-8"`,
+//!   `-4'-8" PIT EL`, `OVERHEAD 13'-10"`, and stores it in the building spec's `elevator_data`.
 //!   A shop drawing repeats its sizes and its stroked lettering may be misread: every value read
 //!   is kept, the most read first.
 //! - `model.build` ([`build`]) sets each traced hoistway (the spec's `circulation`, else the
@@ -108,8 +108,8 @@ pub(crate) struct Reading {
     pub overheads: Vec<(f64, String)>,
 }
 
-/// A length written on a page: where it starts and ends (char indices), feet, and whether a
-/// minus sign leads it (an elevation below the floor: `-5'-0" PIT EL`).
+/// A length written on a page: where it starts and ends (char indices) and its feet (a lead
+/// minus sign, an elevation below the floor as in `-4'-8" PIT EL`, is left off: a depth).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Len {
     start: usize,
@@ -117,7 +117,7 @@ struct Len {
     ft: f64,
 }
 
-/// Every length in `t` (upper case, straight quotes): `8'-6"`, `8' - 6 1/2"`, `12'`, `102"`.
+/// Every length in `t` (upper case, straight quotes): `7'-4"`, `7' - 4 1/2"`, `12'`, `88"`.
 fn lengths(t: &[char]) -> Vec<Len> {
     let mut out = Vec::new();
     let digits = |i: &mut usize| -> Option<f64> {
@@ -447,12 +447,11 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── Building ────────────────────────────────────────────────────────────────
 
-/// A built wall element of a level: its bounds, height and type.
+/// A box of a built wall element of a level: its element, plan bounds and wall type.
 #[derive(Clone, Debug)]
 struct Wall {
     handle: Handle,
     b: Bounds2,
-    z: (f64, f64),
     wall_type: Option<String>,
 }
 
@@ -570,20 +569,118 @@ fn fit_axis(
     }
 }
 
-/// The level's built walls.
+/// A wall mesh's boxes (the build lays a wall as boxes of 8 corners and 6 faces: its pieces
+/// beside its openings, a closed shaft's four sides): each box's plan bounds, height, and
+/// whether it stands square to the axes. A mesh of another make is one piece, not square.
+fn pieces(m: &Mesh) -> Vec<(Bounds2, (f64, f64), bool, usize)> {
+    let n = m.vertices.len() / 8;
+    let boxes = m.vertices.len().is_multiple_of(8) && m.faces.len() == 6 * n && n > 0;
+    let one = |vs: &[cadaddy_geom::Vec3]| {
+        let b = Bounds2::from_points(vs.iter().map(|v| Vec2::new(v.x, v.y)));
+        let z = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |z, v| (z.0.min(v.z), z.1.max(v.z)));
+        let eps = 1e-6 * (1.0 + b.width().abs() + b.height().abs());
+        let square = vs
+            .iter()
+            .all(|v| ((v.x - b.min.x).abs() < eps || (v.x - b.max.x).abs() < eps) && ((v.y - b.min.y).abs() < eps || (v.y - b.max.y).abs() < eps));
+        (b, z, square)
+    };
+    if !boxes {
+        let (b, z, _) = one(&m.vertices);
+        return vec![(b, z, false, usize::MAX)];
+    }
+    (0..n).filter_map(|k| m.vertices.get(8 * k..8 * k + 8).map(&one).map(|(b, z, sq)| (b, z, sq, k))).collect()
+}
+
+/// The level's built walls, a [`Wall`] per box.
 fn level_walls(d: &Drawing, level: &str) -> Vec<Wall> {
-    d.model
+    let mut out = Vec::new();
+    for e in d
+        .model
         .iter()
         .take(MAX_ELEMENTS)
         .filter(|e| wallgen::made_as(e).as_deref() == Some("wall") && super::bspec::made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
-        .filter_map(|e| {
-            let EntityKind::Mesh(m) = &e.kind else { return None };
-            let b = Bounds2::from_points(m.vertices.iter().map(|v| Vec2::new(v.x, v.y)));
-            let z = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |z, v| (z.0.min(v.z), z.1.max(v.z)));
-            let wall_type = super::bimlook::made_tag(e, "type").map(str::to_string);
-            (!b.is_empty() && z.0.is_finite() && z.1 > z.0).then_some(Wall { handle: e.handle, b, z, wall_type })
-        })
-        .collect()
+    {
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let wall_type = super::bimlook::made_tag(e, "type").map(str::to_string);
+        for (b, z, _, _) in pieces(m) {
+            if !b.is_empty() && z.0.is_finite() && z.1 > z.0 && out.len() < MAX_ELEMENTS {
+                out.push(Wall { handle: e.handle, b, wall_type: wall_type.clone() });
+            }
+        }
+    }
+    out
+}
+
+/// What [`cut_out`] did to a wall element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Trim {
+    Kept,
+    Cut,
+    Removed,
+}
+
+/// Nothing of wall element `h` stands `inside` the shaft: a box of it there is dropped, one
+/// crossing it cut back to its face; the element goes when nothing is left.
+fn cut_out(d: &mut Drawing, h: Handle, inside: &Bounds2, tol: f64, max_t: f64) -> Trim {
+    let Some(EntityKind::Mesh(m)) = d.model.get(h).map(|e| e.kind.clone()) else { return Trim::Kept };
+    let area = |b: &Bounds2| (b.width() * b.height()).max(1e-9);
+    let hit = |b: &Bounds2| {
+        let ov = b.intersection(inside);
+        if ov.is_empty() || ov.width() <= 0.0 || ov.height() <= 0.0 { 0.0 } else { ov.width() * ov.height() / area(b) }
+    };
+    let ps = pieces(&m);
+    if ps.iter().all(|p| hit(&p.0) <= 0.0) {
+        return Trim::Kept;
+    }
+    let mut out = wallgen::empty_mesh();
+    let mut changed = false;
+    for (b, z, square, k) in ps {
+        let share = hit(&b);
+        let copy = |out: &mut Mesh| {
+            let (Some(vs), Some(fs)) = (m.vertices.get(8 * k..8 * k + 8), m.faces.get(6 * k..6 * k + 6)) else { return };
+            let base = u32::try_from(out.vertices.len()).unwrap_or(u32::MAX);
+            let from = u32::try_from(8 * k).unwrap_or(u32::MAX);
+            out.vertices.extend_from_slice(vs);
+            for f in fs {
+                out.faces
+                    .push(cadaddy_doc::MeshFace { v: f.v.iter().map(|i| i.saturating_sub(from).saturating_add(base)).collect(), hidden: f.hidden });
+            }
+        };
+        if share <= 0.0 && k != usize::MAX {
+            copy(&mut out);
+            continue;
+        }
+        changed = true;
+        let w = Wall { handle: h, b, wall_type: None };
+        match w.axis(max_t).filter(|_| square && k != usize::MAX) {
+            Some((run, th)) => {
+                let (a0, a1) = (lo(&b, run), hi(&b, run));
+                let (i0, i1) = (lo(inside, run), hi(inside, run));
+                let mid = if run == 0 { (b.min.y + b.max.y) / 2.0 } else { (b.min.x + b.max.x) / 2.0 };
+                let pt = |s: f64| if run == 0 { Vec2::new(s, mid) } else { Vec2::new(mid, s) };
+                for (p0, p1) in [(a0, i0.min(a1)), (i1.max(a0), a1)] {
+                    if p1 - p0 > tol {
+                        wallgen::add_box(&mut out, pt(p0), pt(p1), th, z.0, z.1);
+                    }
+                }
+            }
+            None if share < 0.5 => {
+                if k == usize::MAX {
+                    return Trim::Kept;
+                }
+                copy(&mut out);
+            }
+            None => {}
+        }
+    }
+    if !changed {
+        return Trim::Kept;
+    }
+    if out.faces.is_empty() {
+        d.model.remove(h);
+        return Trim::Removed;
+    }
+    if d.modify_entity(h, |e| e.kind = EntityKind::Mesh(out)).is_ok() { Trim::Cut } else { Trim::Kept }
 }
 
 /// The element tags of a part this module makes (`part`, its level, its name), with how it is
@@ -637,6 +734,16 @@ fn slab(m: &mut Mesh, rect: &Bounds2, z0: f64, z1: f64) {
     wallgen::add_box(m, Vec2::new(rect.min.x, y), Vec2::new(rect.max.x, y), rect.height(), z0, z1);
 }
 
+/// A traced hoistway with the walls round it: the faces across x and across y (below, above).
+struct Seen {
+    level: cadaddy_walk3d::Level,
+    name: String,
+    tr: Bounds2,
+    walls: Vec<Wall>,
+    fx: (Vec<(f64, f64, usize)>, Vec<(f64, f64, usize)>),
+    fy: (Vec<(f64, f64, usize)>, Vec<(f64, f64, usize)>),
+}
+
 /// One hoistway on one level as built.
 #[derive(Clone, Debug)]
 struct Shaft {
@@ -644,8 +751,8 @@ struct Shaft {
     name: String,
     rect: Bounds2,
     t: f64,
-    /// Its centre on the lowest level's plan (to stack the levels' shafts).
-    stacked: Vec2,
+    /// Which stack (one elevator's shafts on the storeys it serves) it is in.
+    stack: usize,
 }
 
 /// Build the hoistways (see the module doc); the report.
@@ -690,46 +797,109 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut shafts: Vec<Shaft> = Vec::new();
     let mut report: Vec<Value> = Vec::new();
     let (mut removed, mut clipped, mut added) = (0usize, 0usize, 0usize);
-    for (level_name, name, tr) in &traced {
-        let Some(level) = sp.level(level_name).cloned() else { continue };
-        let walls = level_walls(d, &level.name);
-        let near = tr.expand(r.max_clear_ft * upf);
-        let walls: Vec<Wall> = walls.into_iter().filter(|w| w.b.intersects(&near)).collect();
-        let (xs, ys) = ((tr.min.x, tr.max.x), (tr.min.y, tr.max.y));
-        let reach = 2.0 * upf;
-        let fx = (faces(&walls, 0, true, ys, reach, max_t), faces(&walls, 0, false, ys, reach, max_t));
-        let fy = (faces(&walls, 1, true, xs, reach, max_t), faces(&walls, 1, false, xs, reach, max_t));
-        // Each size read, both ways round: the one the plan's walls agree with best (the width
-        // across the trace's longer side first where they agree with none).
-        let mut best: Option<(f64, (f64, f64), (f64, f64), Option<usize>, [Option<f64>; 2])> = None;
-        let wide_x = tr.width() >= tr.height();
+    // Each traced hoistway with the walls round it.
+    let reach = 2.0 * upf;
+    let max = r.max_clear_ft * upf;
+    let seen: Vec<Seen> = traced
+        .iter()
+        .filter_map(|(level_name, name, tr)| {
+            let level = sp.level(level_name).cloned()?;
+            let near = tr.expand(max);
+            let walls: Vec<Wall> = level_walls(d, &level.name).into_iter().filter(|w| w.b.intersects(&near)).collect();
+            let (xs, ys) = ((tr.min.x, tr.max.x), (tr.min.y, tr.max.y));
+            let fx = (faces(&walls, 0, true, ys, reach, max_t), faces(&walls, 0, false, ys, reach, max_t));
+            let fy = (faces(&walls, 1, true, xs, reach, max_t), faces(&walls, 1, false, xs, reach, max_t));
+            Some(Seen { level, name: name.clone(), tr: *tr, walls, fx, fy })
+        })
+        .collect();
+    // One elevator's shaft on every storey it serves (its name, about one place on the stacked
+    // plans): one size for all of them.
+    let mut stacks: Vec<Vec<usize>> = Vec::new();
+    for (i, x) in seen.iter().enumerate() {
+        let at = x.tr.center() + off(&x.level.name);
+        let mine = stacks.iter_mut().find(|g| {
+            g.first()
+                .and_then(|j| seen.get(*j))
+                .is_some_and(|f| f.name.eq_ignore_ascii_case(&x.name) && (f.tr.center() + off(&f.level.name)).dist(at) <= max)
+        });
+        match mine {
+            Some(g) => g.push(i),
+            None => stacks.push(vec![i]),
+        }
+    }
+    let fit = |x: &Seen, sx: Option<f64>, sy: Option<f64>| {
+        let (ax, scx, wx) = fit_axis(&x.fx.0, &x.fx.1, (x.tr.min.x, x.tr.max.x), sx, max, tol);
+        let (ay, scy, wy) = fit_axis(&x.fy.0, &x.fy.1, (x.tr.min.y, x.tr.max.y), sy, max, tol);
+        (ax, ay, scx + scy, wx.or(wy))
+    };
+    let mut chosen: Vec<(usize, usize, [Option<f64>; 2], [&'static str; 2])> = Vec::new();
+    for (gi, g) in stacks.iter().enumerate() {
+        let members: Vec<&Seen> = g.iter().filter_map(|i| seen.get(*i)).collect();
+        let Some(first) = members.first() else { continue };
+        // What each storey's walls show with no size given: the extents their faces agree on.
+        let mut plan: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        for x in &members {
+            for (axis, list, span) in [(0usize, &x.fx, (x.tr.min.x, x.tr.max.x)), (1, &x.fy, (x.tr.min.y, x.tr.max.y))] {
+                let (ext, sc, _) = fit_axis(&list.0, &list.1, span, None, max, tol);
+                let v = ext.1 - ext.0;
+                if let Some(vals) = plan.get_mut(axis)
+                    && sc > 0.0
+                    && !vals.iter().any(|o| (o - v).abs() <= tol)
+                    && vals.len() < MAX_VALUES
+                {
+                    vals.push(v);
+                }
+            }
+        }
+        // Each size read, both ways round (the width across the trace's longer side first); an
+        // axis no document sizes takes what the walls show. The one the storeys' walls agree
+        // with best, the most read first among equals.
+        let wide_x = first.tr.width() >= first.tr.height();
+        let opts = |given: Option<f64>, axis: usize| -> Vec<(Option<f64>, &'static str)> {
+            match given {
+                Some(v) => vec![(Some(v), "submittal")],
+                None => plan.get(axis).into_iter().flatten().map(|v| (Some(*v), "plan walls")).chain(std::iter::once((None, "plan walls"))).collect(),
+            }
+        };
+        let mut options: Vec<([Option<f64>; 2], [&'static str; 2])> = Vec::new();
         for w in &widths {
             for dp in &depths {
                 let turns = if wide_x { [(*w, *dp), (*dp, *w)] } else { [(*dp, *w), (*w, *dp)] };
                 for (sx, sy) in turns {
-                    let (ax, scx, wx) = fit_axis(&fx.0, &fx.1, xs, sx, r.max_clear_ft * upf, tol);
-                    let (ay, scy, wy) = fit_axis(&fy.0, &fy.1, ys, sy, r.max_clear_ft * upf, tol);
-                    let sc = scx + scy;
-                    if best.as_ref().is_none_or(|b| sc > b.0 + 1e-9) {
-                        best = Some((sc, ax, ay, wx.or(wy), [sx, sy]));
+                    for (vx, fx) in opts(sx, 0) {
+                        for (vy, fy) in opts(sy, 1) {
+                            if options.len() < 400 {
+                                options.push(([vx, vy], [fx, fy]));
+                            }
+                        }
                     }
                 }
             }
         }
-        let Some((score, ax, ay, support, sizes)) = best else { continue };
+        let mut best: Option<(f64, [Option<f64>; 2], [&'static str; 2])> = None;
+        for (sizes, from) in options {
+            let sc: f64 = members.iter().map(|x| fit(x, sizes[0], sizes[1]).2).sum();
+            if best.as_ref().is_none_or(|b| sc > b.0 + 1e-9) {
+                best = Some((sc, sizes, from));
+            }
+        }
+        if let Some((_, sizes, from)) = best {
+            chosen.extend(g.iter().map(|i| (*i, gi, sizes, from)));
+        }
+    }
+    for (i, stack, sizes, from_doc) in chosen {
+        let Some(x) = seen.get(i) else { continue };
+        let (level, name, tr, walls) = (&x.level, &x.name, &x.tr, &x.walls);
+        let (ax, ay, score, support) = fit(x, sizes[0], sizes[1]);
         let rect = Bounds2::new(Vec2::new(ax.0, ay.0), Vec2::new(ax.1, ay.1));
         if !(rect.width() > 0.0 && rect.height() > 0.0) {
             continue;
         }
-        let from = |s: Option<f64>| {
-            if s.is_some() {
-                "submittal"
-            } else if score > 0.0 {
-                "plan walls"
-            } else {
-                "plan trace"
-            }
+        let from_axis = |axis: usize| -> &'static str {
+            let f = from_doc.get(axis).copied().unwrap_or("plan trace");
+            if f == "plan walls" && score <= 0.0 { "plan trace" } else { f }
         };
+        let from = [from_axis(0), from_axis(1)];
         let support_wall = support.and_then(|i| walls.get(i));
         let (t, wall_type) = match support_wall.and_then(|w| w.axis(max_t).map(|a| (a.1, w.wall_type.clone()))) {
             Some((t, ty)) if t > 0.0 => (t, ty),
@@ -737,42 +907,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         // Nothing inside the shaft is a wall: a wall there is removed, one crossing it cut back.
         let inside = rect.expand(-tol);
-        let mut kept: Vec<Wall> = Vec::new();
-        for w in walls {
-            let ov = w.b.intersection(&inside);
-            let area = (w.b.width() * w.b.height()).max(1e-9);
-            if ov.is_empty() || ov.width() <= 0.0 || ov.height() <= 0.0 {
-                kept.push(w);
-                continue;
-            }
-            if ov.width() * ov.height() >= 0.5 * area {
-                d.model.remove(w.handle);
-                removed += 1;
-                continue;
-            }
-            let Some((run, th)) = w.axis(max_t) else {
-                kept.push(w);
-                continue;
-            };
-            let (a0, a1) = (lo(&w.b, run), hi(&w.b, run));
-            let (i0, i1) = (lo(&inside, run), hi(&inside, run));
-            let mid = if run == 0 { (w.b.min.y + w.b.max.y) / 2.0 } else { (w.b.min.x + w.b.max.x) / 2.0 };
-            let pt = |s: f64| if run == 0 { Vec2::new(s, mid) } else { Vec2::new(mid, s) };
-            let mut m = wallgen::empty_mesh();
-            for (p0, p1) in [(a0, i0.min(a1)), (i1.max(a0), a1)] {
-                if p1 - p0 > tol {
-                    wallgen::add_box(&mut m, pt(p0), pt(p1), th, w.z.0, w.z.1);
-                }
-            }
-            let h = w.handle;
-            if m.faces.is_empty() {
-                d.model.remove(h);
-                removed += 1;
-            } else if d.modify_entity(h, |e| e.kind = EntityKind::Mesh(m.clone())).is_ok() {
-                clipped += 1;
-                kept.push(w);
+        let mut handles: Vec<Handle> = walls.iter().map(|w| w.handle).collect();
+        handles.sort_by_key(|h| h.0);
+        handles.dedup();
+        for h in handles {
+            match cut_out(d, h, &inside, tol, max_t) {
+                Trim::Removed => removed += 1,
+                Trim::Cut => clipped += 1,
+                Trim::Kept => {}
             }
         }
+        let near = rect.expand(t + 2.0 * tol);
+        let kept: Vec<Wall> = level_walls(d, &level.name).into_iter().filter(|w| w.b.intersects(&near)).collect();
         // Doors and windows built inside it (a car's door drawn) go with them.
         let inner: Vec<Handle> = d
             .model
@@ -804,8 +950,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             "elevator hoistway {name}: clear {:.2} x {:.2} ft ({}, {}); the plan draws no wall on this side of the shaft{}",
             rect.width() / upf,
             rect.height() / upf,
-            sizes[0].map_or_else(|| format!("{} across", from(None)), |_| format!("{} across", size_src("width"))),
-            sizes[1].map_or_else(|| format!("{} deep", from(None)), |_| format!("{} deep", size_src("depth"))),
+            if from[0] == "submittal" { format!("{} across", size_src("width")) } else { format!("{} across", from[0]) },
+            if from[1] == "submittal" { format!("{} deep", size_src("depth")) } else { format!("{} deep", from[1]) },
             if wall_type.is_some() { ", of the type its other walls are" } else { "" }
         );
         let wall_basis = if wall_type.is_none() { format!("{basis}; {}", r.shaft_wall_basis) } else { basis.clone() };
@@ -867,31 +1013,30 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 }
             }
         }
-        let c = rect.center();
         report.push(json!({
             "level": level.name, "name": name,
             "clear_ft": [(rect.width() / upf * 100.0).round() / 100.0, (rect.height() / upf * 100.0).round() / 100.0],
             "traced_ft": [(tr.width() / upf * 100.0).round() / 100.0, (tr.height() / upf * 100.0).round() / 100.0],
-            "size_from": [from(sizes[0]), from(sizes[1])],
+            "size_from": from,
             "box": [[rect.min.x, rect.min.y], [rect.max.x, rect.max.y]],
             "wall_in": (t / upf * 12.0 * 10.0).round() / 10.0, "wall_type": wall_type.clone(), "walls_added": sides_added,
         }));
-        shafts.push(Shaft { level: level.name.clone(), name: name.clone(), rect, t, stacked: c + off(&level.name) });
+        shafts.push(Shaft { level: level.name.clone(), name: name.clone(), rect, t, stack });
     }
     // The shafts one above the other: each stack's pit under its lowest landing and overrun over
     // its top one.
-    let mut stacks: Vec<Vec<usize>> = Vec::new();
-    for (i, s) in shafts.iter().enumerate() {
-        match stacks.iter_mut().find(|g| g.first().and_then(|j| shafts.get(*j)).is_some_and(|f| f.stacked.dist(s.stacked) <= 3.0 * upf)) {
+    let mut built: Vec<Vec<usize>> = Vec::new();
+    for (i, x) in shafts.iter().enumerate() {
+        match built.iter_mut().find(|g| g.first().and_then(|j| shafts.get(*j)).is_some_and(|f| f.stack == x.stack)) {
             Some(g) => g.push(i),
-            None => stacks.push(vec![i]),
+            None => built.push(vec![i]),
         }
     }
     let elevation = |s: &Shaft| sp.level(&s.level).map_or(0.0, |l| l.elevation_ft);
     let (mut pits, mut overruns, mut lifted) = (0usize, 0usize, 0usize);
     let mut sorted_levels: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
     sorted_levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-    for g in &stacks {
+    for g in &built {
         let mut g: Vec<&Shaft> = g.iter().filter_map(|i| shafts.get(*i)).collect();
         g.sort_by(|a, b| elevation(a).total_cmp(&elevation(b)));
         let (Some(low), Some(top)) = (g.first().copied(), g.last().copied()) else { continue };
@@ -1022,10 +1167,10 @@ mod tests {
 
     #[test]
     fn a_submittal_line_gives_the_hoistway_its_size_pit_and_overhead() {
-        let d = read("--- page 3 of 9 ---\nHOISTWAY 7'-4\" x 6'-2\", PIT 4'-8\", OVERHEAD 13'-10\"\n");
+        let d = read("--- page 3 of 9 ---\nHOISTWAY 7'-4\" x 5'-11\", PIT 4'-8\", OVERHEAD 13'-10\"\n");
         assert_eq!(d.width_ft.len(), 1);
         assert!((d.width_ft[0] - (7.0 + 4.0 / 12.0)).abs() < 1e-6, "{d:?}");
-        assert!((d.depth_ft[0] - (6.0 + 2.0 / 12.0)).abs() < 1e-6, "{d:?}");
+        assert!((d.depth_ft[0] - (5.0 + 11.0 / 12.0)).abs() < 1e-6, "{d:?}");
         assert!((d.pit_ft.unwrap_or(0.0) - (4.0 + 8.0 / 12.0)).abs() < 1e-6, "{d:?}");
         assert!((d.overhead_ft.unwrap_or(0.0) - (13.0 + 10.0 / 12.0)).abs() < 1e-6, "{d:?}");
         assert_eq!(d.sources.get("pit").map(String::as_str), Some("doc p.3"));
@@ -1034,18 +1179,18 @@ mod tests {
     #[test]
     fn labelled_values_read_before_or_after_their_words_and_the_most_read_comes_first() {
         let d = read(
-            "7'-10\" HOISTWAY WIDTH   PAINTED\nCLEAR HOISTWAY DEPTH 6'-5 1/2\"\n-4'-9\" PIT EL\n7'-10\" HOISTWAY WIDTH\n9'-10\" HOISTWAY WIDTH\nOVERHEAD 14'-1\"\n",
+            "7'-10\" HOISTWAY WIDTH   SEE NOTES\nCLEAR HOISTWAY DEPTH 6'-7 1/2\"\n-4'-9\" PIT EL\n7'-10\" HOISTWAY WIDTH\n9'-10\" HOISTWAY WIDTH\nOVERHEAD 14'-1\"\n",
         );
         assert_eq!(d.width_ft.len(), 2, "{d:?}");
         assert!((d.width_ft[0] - (7.0 + 10.0 / 12.0)).abs() < 1e-6, "the most read first: {d:?}");
-        assert!((d.depth_ft[0] - (6.0 + 5.5 / 12.0)).abs() < 1e-6, "{d:?}");
+        assert!((d.depth_ft[0] - (6.0 + 7.5 / 12.0)).abs() < 1e-6, "{d:?}");
         assert!((d.pit_ft.unwrap_or(0.0) - (4.0 + 9.0 / 12.0)).abs() < 1e-6, "{d:?}");
         assert!((d.overhead_ft.unwrap_or(0.0) - (14.0 + 1.0 / 12.0)).abs() < 1e-6, "{d:?}");
     }
 
     #[test]
     fn door_sill_and_tolerance_sizes_are_no_hoistway_size() {
-        let d = read("3'-6\" CLEAR DOOR OPENING HOISTWAY\n7'-9 1/2\" SILL WIDTH\nMAXIMUM ALLOWABLE CLEAR HOISTWAY WIDTH 9'-1\"\nPIT LADDER\n");
+        let d = read("3'-2\" CLEAR DOOR OPENING HOISTWAY\nHOISTWAY SILL 5'-10 1/2\"\nMAXIMUM HOISTWAY WIDTH 10'-5\"\nPIT LADDER\n");
         assert!(d.width_ft.is_empty() && d.depth_ft.is_empty() && d.pit_ft.is_none(), "{d:?}");
     }
 
