@@ -1875,6 +1875,7 @@ pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f6
         frame: Some((at(s0), at(s1))),
         mark: None,
         basis: None,
+        at_tag: None,
     };
     let pl = PlanLevel {
         walls: vec![wall],
@@ -1887,6 +1888,7 @@ pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f6
         head: 84.0,
         k: 1.0,
         window_tally: WindowTally::default(),
+        door_tags: doortags::DoorTagReport::default(),
     };
     pl.meshes().into_iter().map(|(p, m, ..)| (part_name(p), m)).collect()
 }
