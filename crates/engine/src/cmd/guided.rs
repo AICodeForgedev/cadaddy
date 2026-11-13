@@ -669,7 +669,8 @@ const SET_SCALE_AGREE: f64 = 0.01;
 /// note misread, two dimension strings taken for one) is a different size from the rest. Only
 /// where at least two other plans agree on one scale and it is the most common; a scale the job
 /// was given is the user's, and a sheet whose own plan views print the scale it came in at is
-/// drawn at another scale, not misread (a 1/8" roof plan in a set of 1/4" floor plans, Q6396).
+/// drawn at another scale, not misread (a 1/8" roof plan in a set of 1/4" floor plans, Q6396):
+/// it is never reported, but it still counts among the others' peers (Q6441).
 pub fn plans_off_set_scale(scales: &[SheetScale]) -> Vec<OffSetScale> {
     let same = |a: f64, b: f64| (a / b - 1.0).abs() <= SET_SCALE_AGREE;
     let plans: Vec<(&SheetScale, [f64; 2])> = scales
@@ -677,14 +678,15 @@ pub fn plans_off_set_scale(scales: &[SheetScale]) -> Vec<OffSetScale> {
         // A plan left at paper size is no evidence of the set's scale (Q6360: five plans read at
         // their notes were called off "the set's 1x" of three paper-size ones).
         .filter(|sc| sc.kind == "plan" && sc.how() != "given" && !sc.plan_at_paper_size() && sc.scale.is_finite() && sc.scale > 0.0)
-        .filter(|sc| !sc.plan_scale.is_some_and(|v| same(sc.scale * v, 12.0)))
         .filter_map(|sc| {
             let [w, h] = sc.paper?;
             (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((sc, [w.max(h), w.min(h)]))
         })
         .collect();
     let mut out = Vec::new();
-    for (sc, paper) in &plans {
+    // A sheet whose own plan views confirm its scale is exempt from being reported, but it still
+    // votes: it is the surest evidence of the set's scale (Q6441).
+    for (sc, paper) in plans.iter().filter(|(sc, _)| !sc.plan_scale.is_some_and(|v| same(sc.scale * v, 12.0))) {
         let peers: Vec<&SheetScale> =
             plans.iter().filter(|(o, p)| !std::ptr::eq(*o, *sc) && same(p[0], paper[0]) && same(p[1], paper[1])).map(|(o, _)| *o).collect();
         // the peers' most common scale
@@ -42563,6 +42565,43 @@ mod tests {
         job.sheet_scales.retain(|sc| sc.sheet == "P-1" || sc.sheet == "P-3");
         assert!(plans_off_set_scale(&job.sheet_scales).is_empty());
         assert!(job_warnings(&job, None).iter().all(|w| w["warning"] != "plan scale differs from the set"));
+    }
+
+    /// Q6441: a sheet whose own plan views confirm its scale is exempt from being reported, but it
+    /// still votes on the set's scale: a misread plan among five such sheets is reported.
+    #[test]
+    fn verified_plans_still_vote_on_the_sets_scale() {
+        let sc = |sheet: &str, scale: f64, source: &str, plan: Option<f64>, paper: [f64; 2]| SheetScale {
+            sheet: sheet.into(),
+            kind: "plan".into(),
+            scale,
+            source: source.into(),
+            plan_scale: plan,
+            paper: Some(paper),
+        };
+        let paper = [36.0, 24.0];
+        // Five sheets of a 1/8" plan and a 1/4" enlarged view (imported at the plan's 96x, the
+        // plan's scale recorded), one misread note.
+        let mut set: Vec<SheetScale> = (1..=5).map(|i| sc(&format!("S-{i}"), 96.0, "scale note 1/8\" = 1'-0\"", Some(0.125), paper)).collect();
+        set.push(sc("S-6", 25.0, "scale note 8\" 16'-8\"", None, paper));
+        let off: Vec<(String, f64, f64, usize)> =
+            plans_off_set_scale(&set).into_iter().map(|o| (o.sheet, o.scale, o.set_scale, o.set_sheets)).collect();
+        assert_eq!(off, vec![("S-6".to_string(), 25.0, 96.0, 5)], "the misread plan is reported against its verified peers");
+        // Mixed: two verified and one unverified peer at 96x still outvote the misread plan.
+        set[0].plan_scale = None;
+        set.truncate(3);
+        set.push(sc("S-6", 25.0, "scale note 8\" 16'-8\"", None, paper));
+        let off: Vec<(String, usize)> = plans_off_set_scale(&set).into_iter().map(|o| (o.sheet, o.set_sheets)).collect();
+        assert_eq!(off, vec![("S-6".to_string(), 3)]);
+        // A verified sheet off the set's scale (a 1/8" roof plan among 1/4" floor plans) votes but
+        // is never reported itself.
+        let set = vec![
+            sc("R-1", 96.0, "scale note 1/8\" = 1'-0\"", Some(0.125), paper),
+            sc("F-1", 48.0, "scale note 1/4\" = 1'-0\"", None, paper),
+            sc("F-2", 48.0, "scale note 1/4\" = 1'-0\"", Some(0.25), paper),
+            sc("F-3", 48.0, "scale note 1/4\" = 1'-0\"", None, paper),
+        ];
+        assert!(plans_off_set_scale(&set).is_empty(), "{:?}", plans_off_set_scale(&set));
     }
 
     /// Q6037: auto-rejected questions are listed as open.
