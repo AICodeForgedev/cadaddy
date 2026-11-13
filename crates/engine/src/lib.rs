@@ -2821,6 +2821,8 @@ impl Session {
         }
         // A project-scoped answer names its project (print set, briefing, BIM job, review).
         let r = r.map(|v| cmd::project_hub::tag_project(self, id, v));
+        // A takeoff, estimate, bid or export names the documents it was built from (Q6618).
+        let r = r.map(|v| if outer { cmd::docsource::tag_documents(self, id, v) } else { v });
         if rhai_watch {
             self.rhai_command_ended(id, rhai_before, r.is_ok());
         }
