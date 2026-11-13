@@ -452,8 +452,8 @@ fn halfway(pts: &[[f64; 2]]) -> [f64; 2] {
     pts.first().copied().unwrap_or([0.0, 0.0])
 }
 
-/// A run's source names a sheet of the set: the sheet itself (`E-101`), or the site plan the
-/// site work read it from (`site work C-101`: a civil service, a buried site circuit).
+/// A run's source names a sheet of the set: the sheet itself (`EP-5`), or the site plan the
+/// site work read it from (`site work CS-7`: a civil service, a buried site circuit).
 fn names_a_sheet(sheets: &BTreeSet<String>, source: &str) -> bool {
     let source = source.trim();
     let sheet = source.strip_prefix(super::sitework::SOURCE_PREFIX).unwrap_or(source);
