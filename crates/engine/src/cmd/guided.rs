@@ -4315,6 +4315,20 @@ fn device_census(
         // (`D,b` a dimmer on leg b, `3,a` a 3-way on leg a, a lone `c`): the switch and the leg
         // of fixtures it controls. A lone leg letter by an occupancy sensor is the sensor's leg.
         if electrical(&sheet) && kind.is_empty() {
+            let page: Vec<&TextItem> = texts.get(g).into_iter().flatten().collect();
+            // The sheet's short strokes, for switch symbols drawn as loose linework (Q6602), read
+            // once; and where a device stands already (no second one takes its symbol).
+            let strokes_g = std::cell::OnceCell::new();
+            let strokes_of = |h: f64| {
+                strokes_g.get_or_init(|| {
+                    super::labelspot::Strokes::of(
+                        objects.get(g).into_iter().flatten().map(|e| &e.kind),
+                        if h > 0.0 { h } else { DEFAULT_MARK_HEIGHT },
+                    )
+                })
+            };
+            let mut taken: Vec<cadaddy_geom::Vec2> =
+                c.placed.iter().filter(|dv| dv.sheet == sheet).map(|dv| cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])).collect();
             for (i, t) in texts.get(g).into_iter().flatten().enumerate() {
                 let Some((tag, leg)) = super::readers::switch_designation(&t.value) else { continue };
                 let text_handle = text_handles.get(g).and_then(|v| v.get(i)).copied().unwrap_or(0);
@@ -4351,10 +4365,10 @@ fn device_census(
                     (String::new(), String::new())
                 };
                 // Where a leader from the designation ends (Q6337), else the switch symbol by it
-                // the import read as a big letter, else (said so) its lettering.
-                let page: Vec<&TextItem> = texts.get(g).into_iter().flatten().collect();
-                let glyphs = super::labelspot::glyph_symbols(t, &page);
-                let (at, spot) = super::labelspot::locate(t, &[], Some(leaders_of(t.height)), &glyphs, super::labelspot::SWITCH_SYMBOL_REACH_H);
+                // the import read as a big letter or left as loose linework (Q6602), else (said
+                // so) its lettering.
+                let (at, spot) = super::labelspot::locate_switch(t, &page, Some(leaders_of(t.height)), Some(strokes_of(t.height)), &taken);
+                taken.push(at);
                 c.placed.push(super::readers::ReadDevice {
                     tag: tag.clone(),
                     at: [at.x, at.y],
@@ -12174,8 +12188,17 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 .chain(out.added.iter())
                 .filter(|dv| sheet_key(&dv.sheet) == key && inside(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
                 .collect();
+            let strokes = super::labelspot::Strokes::of(loose.iter().copied(), text_h);
             let leaders = super::labelspot::Leaders::of(loose, 4.0 * text_h);
-            let view = super::unitmarks::View { sheet: &sheet, level: &level, rect: *rect, texts: mine, read, leaders: Some(&leaders) };
+            let view = super::unitmarks::View {
+                sheet: &sheet,
+                level: &level,
+                rect: *rect,
+                texts: mine,
+                read,
+                leaders: Some(&leaders),
+                strokes: Some(&strokes),
+            };
             let added = super::unitmarks::read_view(&view, &symbols, &marks);
             if !added.is_empty() {
                 *out.report.entry(format!("{sheet} {title}")).or_default() += added.len();
@@ -34550,6 +34573,104 @@ mod tests {
         assert!(!handle("REC").is_empty() && handle("REC") != handle("TV"), "{:?}", job.devices);
     }
 
+    /// Q6602: a switch designation with no leader whose switch symbol is plain linework (an `S`
+    /// the import neither made a block of nor read as a letter) makes its switch on the symbol,
+    /// never on the lettering: one `S` drawn as one stroke, one as two (its lower bowl drawn
+    /// backwards). A box by a designation is no switch's symbol, nor is a stroke that is a word's
+    /// own letter: those designations stay at their lettering, said so for review.
+    #[test]
+    fn a_switch_symbol_drawn_as_loose_linework_takes_its_designations_switch() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-7", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("D,b", 100.0, 500.0, 4.0),
+            ("3,a", 300.0, 500.0, 4.0),
+            ("c", 500.0, 500.0, 4.0),
+            ("D,c", 900.0, 500.0, 4.0),
+            ("BATH", 900.0, 512.0, 8.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        // An `S` about `c`, `r` its bowls' radius: its upper bowl round one way, its lower the other.
+        let s_stroke = |c: [f64; 2], r: f64| -> Vec<cadaddy_geom::Vec2> {
+            let (top, bottom) = (cadaddy_geom::Vec2::new(c[0], c[1] + r), cadaddy_geom::Vec2::new(c[0], c[1] - r));
+            let mut pts: Vec<cadaddy_geom::Vec2> =
+                (0..=10).map(|i| top + cadaddy_geom::Vec2::from_angle((20.0 + 25.0 * f64::from(i)).to_radians()) * r).collect();
+            pts.extend((1..=10).map(|i| bottom + cadaddy_geom::Vec2::from_angle((90.0 - 25.0 * f64::from(i)).to_radians()) * r));
+            pts
+        };
+        let pline = |pts: &[cadaddy_geom::Vec2], closed: bool| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts.iter().map(|p| cadaddy_geom::PolyVertex { p: *p, bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect(),
+                closed,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        let two = s_stroke([290.0, 502.0], 3.5);
+        let (upper, lower) = two.split_at(11);
+        let mut back: Vec<cadaddy_geom::Vec2> = upper.last().into_iter().copied().chain(lower.iter().copied()).collect();
+        back.reverse();
+        let drawn = [
+            pline(&s_stroke([90.0, 502.0], 3.5), false),
+            pline(upper, false),
+            pline(&back, false),
+            pline(
+                &[
+                    cadaddy_geom::Vec2::new(484.0, 496.0),
+                    cadaddy_geom::Vec2::new(496.0, 496.0),
+                    cadaddy_geom::Vec2::new(496.0, 508.0),
+                    cadaddy_geom::Vec2::new(484.0, 508.0),
+                ],
+                true,
+            ),
+            pline(&s_stroke([912.0, 516.0], 2.0), false),
+        ];
+        {
+            let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+            for k in drawn {
+                d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, k).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-7".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-7".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut got: Vec<(String, String, [i64; 2])> = job
+            .devices
+            .iter()
+            .filter(|d| !d.leg.is_empty())
+            .map(|d| (d.tag.clone(), d.leg.clone(), [d.at[0].round() as i64, d.at[1].round() as i64]))
+            .collect();
+        got.sort();
+        let want: Vec<(String, String, [i64; 2])> =
+            [("S", "c", [500, 500]), ("S3", "a", [290, 502]), ("SD", "b", [90, 502]), ("SD", "c", [900, 500])]
+                .iter()
+                .map(|(t, l, p)| (t.to_string(), l.to_string(), *p))
+                .collect();
+        assert_eq!(got, want, "{r:#}");
+        // Each says how its spot was found: the linework symbol, else its lettering (to check).
+        let spot =
+            |leg: &str, x: f64| job.devices.iter().find(|d| d.leg == leg && (d.at[0] - x).abs() < 20.0).map(|d| d.spot.clone()).unwrap_or_default();
+        assert!(spot("b", 90.0).starts_with("at the switch symbol drawn as linework nearest its label D,b on E-7"), "{}", spot("b", 90.0));
+        assert!(spot("a", 290.0).starts_with("at the switch symbol drawn as linework"), "{}", spot("a", 290.0));
+        assert!(spot("c", 500.0).contains("location to check") && spot("c", 900.0).contains("location to check"), "{:?}", job.devices);
+    }
+
     /// A luminaire read from its mark alone carries its whole circuit label (Q6256): the switch
     /// leg after the circuit (`K-1,a`, a two-letter panel's `RP-14,c`) and every circuit number
     /// (`M-23,25`), never only the part before the first comma. The typical-room reader then finds
@@ -34616,6 +34737,7 @@ mod tests {
             texts: items.iter().collect(),
             read: job.devices.iter().collect(),
             leaders: None,
+            strokes: None,
         };
         let marks = super::super::unitmarks::Marks {
             luminaires: ["W3".to_string(), "Y2".to_string()].into(),
