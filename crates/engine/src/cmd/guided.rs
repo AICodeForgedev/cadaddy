@@ -28525,6 +28525,14 @@ fn arch_placer(
     let sheet_names: Vec<String> = super::identity::sheets_of(Some(sp)).into_iter().map(|b| b.number).collect();
     let log_p = log.clone();
     let (parts_c, plan_of) = (parts.clone(), plan_sheet.clone());
+    let log_bg = log.clone();
+    // The printed scales' ratio of a sheet to its level's plan, for a view's background fit.
+    let ratio_bg = {
+        let (plan_upf, plan_sheet) = (plan_upf.clone(), plan_sheet.clone());
+        move |i: usize, key: &str| {
+            super::sheetreg::scale_ratio(plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()), plan_upf.get(i).copied().flatten())
+        }
+    };
     // A sheet's own linework laid on its level's plan (Q6284: a trade plan whose tags are few or
     // disagree draws the floor plan's walls all the same); once per sheet and level.
     let own_fit = {
@@ -28665,20 +28673,53 @@ fn arch_placer(
                 let tgt = plan_lines.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
                 let started = web_time::Instant::now();
                 let pts = backgrounds.points_in(&bg);
-                // A whole floor's background at any scale; else a part of one (an enlarged view of
-                // a few rooms) at its sheet's scale.
-                let fit = super::grids::linework_fit(&pts, tgt, k_in)
-                    .filter(|f| f.2 >= 0.9 && f.3 >= 0.03)
-                    .or_else(|| part_of_plan(&pts, tgt).then(|| super::grids::linework_fit_part(&pts, tgt, k_in, 0.95, 1.05)).flatten());
+                // A whole floor's background at any scale, a near tie settled by the scale its sheet
+                // prints (Q6606); else a part of one (an enlarged view of a few rooms) at its
+                // sheet's scale.
+                let ratio = lines.sheet_at(p).map_or(1.0, |i| ratio_bg(i, &key));
+                let whole = super::grids::whole_view_fit(&pts, tgt, k_in, ratio, 0.9, 0.03);
+                let fitd = whole
+                    .fit()
+                    .or_else(|| part_of_plan(&pts, tgt).then(|| super::grids::linework_fit_part_detail(&pts, tgt, k_in, 0.95, 1.05)).flatten());
+                let fit = fitd.map(|f| (f.scale, f.offset, f.score, f.margin));
                 progress_line(&format!("  placer: a view's background fitted in {:.1} s", started.elapsed().as_secs_f64()));
-                if let Some((s, _, score, margin)) = fit {
-                    progress_line(&format!(
-                        "  background view at {:?} onto level {level}: scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best",
-                        [bg.min.x.round(), bg.min.y.round()],
-                        score * 100.0,
-                        margin * 100.0
-                    ));
-                }
+                let at = [bg.min.x.round(), bg.min.y.round()];
+                let said = |f: &super::grids::LineworkFit| {
+                    format!(
+                        "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best{}",
+                        f.scale,
+                        f.offset.x,
+                        f.offset.y,
+                        f.score * 100.0,
+                        f.margin * 100.0,
+                        f.runner.map_or_else(String::new, |(s2, t2, sc2)| format!(
+                            " (next: scale {s2:.3}, offset [{:.0}, {:.0}], {:.0}%)",
+                            t2.x,
+                            t2.y,
+                            sc2 * 100.0
+                        ))
+                    )
+                };
+                let how = match (&whole, &fitd) {
+                    (super::grids::ViewFit::PrintedScale { tie, .. }, Some(f)) => format!(
+                        "{}; over every scale a near tie ({}), settled by the scale its sheet prints (ratio {ratio:.3})",
+                        said(f),
+                        tie.as_ref().map_or_else(|| "no fit".to_string(), said)
+                    ),
+                    (super::grids::ViewFit::Uncertain { tie, at_scale }, None) => format!(
+                        "uncertain, left for review: over every scale {}; at the scale its sheet prints (ratio {ratio:.3}) {}",
+                        tie.as_ref().map_or_else(|| "no fit".to_string(), said),
+                        at_scale.as_ref().map_or_else(|| "no fit".to_string(), said)
+                    ),
+                    (_, Some(f)) => said(f),
+                    (_, None) => "no fit".to_string(),
+                };
+                progress_line(&format!("  background view at {at:?} onto level {level}: {how}"));
+                log_sheet(
+                    &log_bg,
+                    json!({"background": at, "level": level, "method": "background", "used": fitd.is_some(),
+                        "near_tie": !matches!(whole, super::grids::ViewFit::Decisive(_)), "how": how}),
+                );
                 // 90% of both ways, and 3 points over the best placement 10' or more away: a floor of
                 // repeating bays one bay over scores close behind (only its ends differ).
                 let part = part_of_plan(&pts, tgt);
@@ -28725,11 +28766,30 @@ fn arch_placer(
                     ));
                 }
                 // A fit a few percent off one to one is its sampling's error (lengths would shrink with
-                // it): one to one, about the view's middle.
+                // it): one to one. Where, by the fit weighed at one to one (Q6606: scales a percent
+                // apart tie, so which won was noise; restoring a window's lines on the plan swapped a
+                // two-level sheet's 0.999 and 0.989 and moved both views); else about the view's
+                // middle.
                 let pts = &level_views[i].2;
                 let mid = pts.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / pts.len().max(1) as f64);
-                let got = fit.filter(|f| f.2 >= LEVEL_VIEW_F1 && f.3 >= 0.03).map(|(s, t, _, _)| {
-                    let (s, t) = if (s - 1.0).abs() < 0.03 { (1.0, t + mid * (s - 1.0)) } else { (s, t) };
+                let got = fit.filter(|f| f.2 >= LEVEL_VIEW_F1 && f.3 >= 0.03).map(|(s, t, score, _)| {
+                    let (s, t) = if (s - 1.0).abs() < 0.03 {
+                        match super::grids::at_printed_scale(pts, tgt, k_in, 1.0, s, t, score) {
+                            Some(e) => {
+                                progress_line(&format!(
+                                    "  level view {:?} onto level {level}: weighed at one to one, offset [{:.0}, {:.0}], {:.0}% on the plan",
+                                    level_views[i].1.map(f64::round),
+                                    e.offset.x,
+                                    e.offset.y,
+                                    e.score * 100.0
+                                ));
+                                (1.0, e.offset)
+                            }
+                            None => (1.0, t + mid * (s - 1.0)),
+                        }
+                    } else {
+                        (s, t)
+                    };
                     cadaddy_mepfix::tagid::Sim::scale_offset(s, [t.x, t.y])
                 });
                 view_fits.lock().ok()?.insert(i, got);
@@ -37155,6 +37215,74 @@ mod tests {
         }))
         .unwrap_or_else(|e| panic!("{e}"));
         (s, sp)
+    }
+
+    /// Q6606: a floor plan sheet that also draws the floor at 73% below it (a key plan), and a
+    /// fire alarm sheet of another size whose only view is the floor's screened (grey) background
+    /// at the plan's printed scale, elsewhere on its page: no tags, grids or frame to place it by. Over every scale the
+    /// background lies as well on the key plan as on the floor (a coin flip a few lines decide);
+    /// the scale the sheets print settles it.
+    #[test]
+    fn a_background_view_tied_with_a_key_plan_at_another_scale_is_placed_by_the_printed_scale() {
+        let mut s = crate::Session::new();
+        // A 200' x 60' floor: two rows of rooms of different sizes and door places either side of
+        // a corridor.
+        let floor = |at: [f64; 2], k: f64| -> Vec<([f64; 2], [f64; 2])> {
+            let mut segs = vec![([0.0, 0.0], [2400.0, 0.0]), ([0.0, 720.0], [2400.0, 720.0])];
+            let room = |segs: &mut Vec<([f64; 2], [f64; 2])>, x: f64, y: f64, w: f64, h: f64, door: f64| {
+                segs.extend([
+                    ([x, y], [x + door, y]),
+                    ([x + door + 36.0, y], [x + w, y]),
+                    ([x + w, y], [x + w, y + h]),
+                    ([x + w, y + h], [x, y + h]),
+                    ([x, y + h], [x, y]),
+                ]);
+            };
+            let mut x = 0.0;
+            for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 276.0, 192.0, 228.0, 216.0].iter().enumerate() {
+                room(&mut segs, x, 360.0, *w, 360.0, 24.0 + 12.0 * i as f64);
+                room(&mut segs, x, 0.0, *w, 300.0, 30.0 + 9.0 * i as f64);
+                x += w;
+            }
+            segs.into_iter().map(|(a, b)| ([at[0] + a[0] * k, at[1] + a[1] * k], [at[0] + b[0] * k, at[1] + b[1] * k])).collect()
+        };
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let grey = cadaddy_doc::color::Color::True(cadaddy_doc::color::Rgb(160, 160, 160));
+            let lines = floor([200.0, 1100.0], 1.0)
+                .into_iter()
+                .chain(floor([300.0, 150.0], 0.73))
+                .map(|l| (l, cadaddy_doc::color::Color::ByLayer))
+                .chain(floor([10500.0, 1300.0], 1.0).into_iter().map(|l| (l, grey)));
+            // Each wall in 2' strokes, as a print's linework comes in.
+            for ((a, b), color) in lines {
+                let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / 24.0).ceil().max(1.0);
+                for i in 0..n as usize {
+                    let at = |f: f64| Vec3::new(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, 0.0);
+                    d.add(
+                        &Space::Model,
+                        Common { layer: "PDF".into(), color, ..Common::default() },
+                        EntityKind::Line(cadaddy_doc::Line { a: at(i as f64 / n), b: at((i + 1) as f64 / n) }),
+                    )
+                    .ok();
+                }
+            }
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [100, 50, 2700, 1900]}],
+            "sheets": [
+                {"number": "A-101", "discipline": "A", "level": "Level 1", "rect": [0, 0, 3000, 2000]},
+                {"number": "FA-101", "discipline": "FA", "level": "Level 1", "rect": [10000, 0, 13600, 2400]}
+            ]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        // A smoke detector in the fourth room drawn on the fire alarm sheet lands in that room on
+        // the floor plan (to the linework's resolution: its lines are compared a foot or two apart).
+        let p = [10500.0 + 700.0, 1300.0 + 540.0];
+        let got = place(p, "Level 1").map(|m| m.apply(p)).unwrap_or_else(|| panic!("not placed: {:#?}", log.lock().map(|l| l.clone())));
+        assert!((got[0] - 900.0).abs() < 18.0 && (got[1] - 1640.0).abs() < 18.0, "{got:?}: {:#?}", log.lock().map(|l| l.clone()));
     }
 
     /// Why the placer's log says `sheet`'s frame placement wasn't used.
