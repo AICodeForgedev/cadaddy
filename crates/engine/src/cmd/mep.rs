@@ -645,6 +645,7 @@ pub(crate) fn read_with(s: &Session, sp: &BuildingSpec, only: Option<&str>, unta
                 made: Default::default(),
                 basis: String::new(),
                 corrections: Vec::new(),
+                storey_points: Default::default(),
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -1437,6 +1438,7 @@ fn read_pipes_from_tags(
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         });
         if let Some(slot) = run_of.get_mut(ci) {
             *slot = Some(runs.len() - 1);
@@ -1494,6 +1496,7 @@ fn read_pipes_from_tags(
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         });
     }
 

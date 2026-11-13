@@ -499,6 +499,7 @@ pub(crate) fn run(system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>,
         made: Default::default(),
         basis: String::new(),
         corrections: Vec::new(),
+        storey_points: Default::default(),
     }
 }
 

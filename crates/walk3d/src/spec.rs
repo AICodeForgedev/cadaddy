@@ -2541,6 +2541,12 @@ pub struct MepRun {
     /// value, with the reason and the rule. Empty: built as the documents give it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<RunCorrection>,
+    /// A riser's plan point on other storeys it passes, by level name (sheet units, on that
+    /// level's own plan), where what each storey's plan draws puts it (a stack lined up by its
+    /// chase on every floor, Q6550): a storey's piece stands there, not where the levels' base
+    /// points carry its own point. Empty: carried by the base points.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub storey_points: BTreeMap<String, [f64; 2]>,
 }
 
 /// One value of a run the build corrected for the field: the property (`route`), the design
