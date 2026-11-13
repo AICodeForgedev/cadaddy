@@ -13,7 +13,7 @@
     {"key": "vent", "trade": "plumbing", "contains": ["vent"], "words": ["v", "vtr"]},
     {"key": "storm", "trade": "plumbing", "contains": ["storm", "rain", "drain"], "words": ["st", "rd", "sd", "od"]},
     {"key": "gas", "trade": "plumbing", "contains": ["gas", "propane"], "words": ["g", "ng", "lp"]},
-    {"key": "hot", "trade": "plumbing", "contains": ["hot", "recirc"], "words": ["hw", "dhw", "hwr", "hwc", "dhwr"]},
+    {"key": "hot", "trade": "plumbing", "contains": ["hot", "recirc"], "words": ["hw", "hws", "dhw", "dhws", "hwr", "hwc", "dhwr"]},
     {"key": "cold", "trade": "plumbing", "contains": ["cold", "domestic", "potable", "water"], "words": ["cw", "dcw", "dw"]}
   ],
   "unnamed_trade": "plumbing",

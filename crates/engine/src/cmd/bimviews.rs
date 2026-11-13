@@ -738,8 +738,7 @@ impl Scope {
             return false;
         }
         if super::wallgen::made_as(e).as_deref() == Some("room") {
-            let name = super::bspec::room_tag(e, "number:").filter(|n| !n.is_empty()).or_else(|| super::bspec::room_tag(e, "name:"));
-            return name.is_some_and(|n| n.eq_ignore_ascii_case(&r.name));
+            return super::bspec::room_element_label(e).is_some_and(|n| n.eq_ignore_ascii_case(&r.name));
         }
         let by_prop = cadaddy_doc::props::read(&e.common.xdata).get("room").map(|p| p.text()).filter(|t| !t.trim().is_empty());
         if let Some(t) = by_prop

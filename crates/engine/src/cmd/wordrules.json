@@ -4956,6 +4956,23 @@
     "VTAC"
    ]
   },
+  "units.room_list_joiners": {
+   "source": "plain English: a word that joins the room numbers a view title lists (`ROOMS 201, 301 AND 401`; fix-room-enlarged-view-copied-up)",
+   "words": [
+    "AND"
+   ]
+  },
+  "units.room_number_lead_words": {
+   "source": "drafting convention: a word a view title puts before a room's number (`STORAGE ROOM 201`, `RM 201`, `NO. 201`); a number after `#` is one too (fix-room-enlarged-view-copied-up)",
+   "words": [
+    "ROOM",
+    "ROOMS",
+    "RM",
+    "RMS",
+    "NO",
+    "NOS"
+   ]
+  },
   "units.type_word_aliases": {
    "source": "trade practice: a room type's word and the word it is written as (QUEEN as Q, ACCESSIBLE as ADA) (moved from guided.rs `type_words`)",
    "pairs": [
@@ -4989,6 +5006,13 @@
     "2BR",
     "3BR",
     "EFFICIENCY"
+   ]
+  },
+  "units.typical_title_words": {
+   "source": "drafting convention: a view title with one of these words is a typical one, for every room of the type it names; without it a title naming room numbers is those rooms' only (fix-room-enlarged-view-copied-up)",
+   "words": [
+    "TYPICAL",
+    "TYP"
    ]
   },
   "units.typical_view_words": {

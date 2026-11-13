@@ -31,7 +31,7 @@ pub use saved::before_save;
 const MAX_ITEMS: usize = 200_000;
 
 /// A revision report's lists, paged alike.
-const LISTS: [&str; 6] = ["added", "removed", "moved", "kept", "conflicts", "changed"];
+const LISTS: [&str; 7] = ["added", "removed", "moved", "kept", "conflicts", "changed", "selected"];
 /// Items per list in one page of a revision report, by default and at most.
 const PAGE: usize = 100;
 const PAGE_MAX: usize = 500;
@@ -41,7 +41,7 @@ const MAX_ROOM_PAGES: usize = 100;
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("model.revise", "Revise Model from Plans", run).long()
         .menu(&["Draw", "Modeling", "Revise Model from Plans"])
-        .params("{against?: path (an earlier or later version of the plan to compare with, rooms included; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units: how far an object may move and still count as moved rather than removed and added; default 5 % of the larger side of the box around both plans' objects), last?: bool (return the last revision that found changes, e.g. the one an associative model made when the plan was edited, instead of comparing again), offset?, limit? (default 100, at most 500: each list is paged alike)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, auto, kept: [handles], conflicts: [{handle?, part, source, change}], changed: [handles of rebuilt objects of changed plan objects], deleted: rebuilt objects taken away again because they were deleted by hand since the last build, totals: {added, removed, moved, kept, conflicts, changed}, offset, limit, next?: offset of the next page, last?: the last revision's totals when this one found nothing}")]
+        .params("{against?: path (an earlier or later version of the plan to compare with, rooms included; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units: how far an object may move and still count as moved rather than removed and added; default 5 % of the larger side of the box around both plans' objects), last?: bool (return the last revision that found changes, e.g. the one an associative model made when the plan was edited, instead of comparing again), offset?, limit? (default 100, at most 500: each list is paged alike)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, auto, kept: [handles], conflicts: [{handle?, part, source, change}], changed: [handles of rebuilt objects of changed plan objects], selected: [handles this revise selected to show them: the changed ones when run by hand; none when the model rebuilt itself (auto), which leaves the selection as it was], deleted: rebuilt objects taken away again because they were deleted by hand since the last build, totals: {added, removed, moved, kept, conflicts, changed, selected}, offset, limit, next?: offset of the next page, last?: the last revision's totals when this one found nothing}")]
 }
 
 fn read_file(cmd: &str, path: &str) -> Result<Vec<u8>> {
@@ -742,7 +742,8 @@ pub(crate) struct Revise {
 /// Compare `old` (its plan objects) and `old_rooms` (none: not read, the rooms now are taken for
 /// them) with the plan now and, when they differ and
 /// `how.rebuild`, build again keeping the hand edits; select the rebuilt objects of changed plan
-/// objects and echo a summary with the conflicts. The whole report (every list), also kept as
+/// objects (`selected`; not when `how.auto`: an automatic rebuild leaves the user's selection
+/// as it was) and echo a summary with the conflicts. The whole report (every list), also kept as
 /// the drawing's last revision when it found changes.
 pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Option<Vec<PlanItem>>, how: &Revise) -> Result<Value> {
     // Against the record of a build: the plan's rooms now read as that build's were (a job's
@@ -785,19 +786,35 @@ fn revise_rooms_settled(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_ro
         "kept": [],
         "conflicts": [],
         "changed": [],
+        "selected": [],
         "deleted": 0,
     });
     let (n_added, n_removed, n_moved) = (added.len() + r_added.len(), removed.len() + r_removed.len(), moved.len() + r_moved.len());
     if rebuild {
+        // The user's selection (the pickfirst set) as it was before the build.
+        let picked = s.selection();
         let (built, kept) = rebuild_keeping_edits(s, g, &changed_sources, Some(rooms_now))?;
-        // The rebuilt objects of changed plan objects, selected to show them.
         let changed: Vec<Handle> =
             s.doc()?.model.iter().filter(|e| source_of(e).is_some_and(|h| changed_sources.contains(&h))).map(|e| e.handle).collect();
-        s.set_selection(changed.clone());
+        // Only a revise the user ran selects the rebuilt objects of changed plan objects to show
+        // them (and says so in its reply). An automatic rebuild (`how.auto`: model.update, the
+        // rebuild before a command, the idle one) never touches the selection: the next typed
+        // command would take the model objects as its implied selection (Q6601). It keeps what
+        // the user had selected, less what the build took away.
+        let selected = if how.auto {
+            let d = s.doc()?;
+            let still: Vec<Handle> = picked.into_iter().filter(|h| d.entity(*h).is_some()).collect();
+            s.set_selection(still);
+            Vec::new()
+        } else {
+            s.set_selection(changed.clone());
+            changed.clone()
+        };
         if let Some(o) = out.as_object_mut() {
             o.insert("kept".into(), json!(kept.kept.iter().map(|h| h.hex()).collect::<Vec<_>>()));
             o.insert("conflicts".into(), json!(kept.conflicts));
             o.insert("changed".into(), json!(changed.iter().map(|h| h.hex()).collect::<Vec<_>>()));
+            o.insert("selected".into(), json!(selected.iter().map(|h| h.hex()).collect::<Vec<_>>()));
             o.insert("deleted".into(), json!(kept.deleted));
             o.insert("model".into(), built);
         }

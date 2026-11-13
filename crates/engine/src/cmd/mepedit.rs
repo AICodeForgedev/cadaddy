@@ -589,6 +589,9 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
 pub(crate) struct NetRun<'a> {
     pub run: &'a MepRun,
     pub kind: MepKind,
+    /// The service its system is part of ([`cadaddy_walk3d::mepties::service_key`]): a riser
+    /// joins the runs of its service it passes, whatever their systems are named (Q6598).
+    pub service: String,
     pub level: String,
     pub floor_ft: f64,
     pub seg: Option<Handle>,
@@ -667,14 +670,19 @@ pub(crate) fn join(d: &mut Drawing, net: &Net, upf: f64) -> usize {
     for (i, n) in net.runs.iter().enumerate().filter(|(_, n)| ducts_pipes(n.kind) && n.seg.is_some()) {
         by_system.entry(n.run.system.to_ascii_uppercase()).or_default().push(i);
     }
+    // By service: a riser's runs (Q6598: a main and its branches may be systems of their own).
+    let mut by_service: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, n) in net.runs.iter().enumerate().filter(|(_, n)| ducts_pipes(n.kind) && n.seg.is_some()) {
+        by_service.entry(n.service.as_str()).or_default().push(i);
+    }
     let mut tests = 0usize;
     let half = |s: [f64; 2]| s[0].max(0.0) / 2.0 * inch;
-    // Risers: through the runs of their system whose height they span, on any level.
+    // Risers: through the runs of their service whose height they span, on any level.
     for (i, n) in net.runs.iter().enumerate() {
         let (Some(top), Some(s), Some(p)) = (n.run.top_ft, seg(i), n.run.points.first().copied()) else { continue };
         let z0 = n.floor_ft + n.run.bottoms_ft.first().copied().unwrap_or(0.0);
         let z1 = n.floor_ft + top;
-        for j in by_system.get(&n.run.system.to_ascii_uppercase()).into_iter().flatten() {
+        for j in by_service.get(n.service.as_str()).into_iter().flatten() {
             let Some(m) = net.runs.get(*j).filter(|m| *j != i && m.run.top_ft.is_none()) else { continue };
             tests += m.run.points.len();
             if tests > MAX_JOIN_TESTS {

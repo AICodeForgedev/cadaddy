@@ -141,6 +141,14 @@ fn read_elements(d: &Drawing) -> Vec<El> {
                 }
             }
         }
+        if el.part == "room" {
+            // Its number and name as corrected (Q6593).
+            for k in ["number", "name"] {
+                if let Some(v) = super::bspec::room_value(e, k) {
+                    el.tags.insert(k.into(), v);
+                }
+            }
+        }
         if !measure(m, &mut el) {
             continue;
         }

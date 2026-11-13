@@ -84,10 +84,13 @@ pub enum RfiKind {
     /// Two documents (or a document and the code) disagree: each side is cited in the item's
     /// `sides`, and none is picked silently. Its `topic` says which check found it.
     Conflict,
+    /// A room built with its name and no number where rooms of its name are numbered (its number
+    /// lost on the plan): which number is it?
+    RoomUnnumbered,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 25] = [
+    pub const ALL: [RfiKind; 26] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -113,6 +116,7 @@ impl RfiKind {
         RfiKind::Lighting,
         RfiKind::MethodChoice,
         RfiKind::Conflict,
+        RfiKind::RoomUnnumbered,
     ];
 
     /// The snake_case name (as in JSON).
@@ -143,6 +147,7 @@ impl RfiKind {
             RfiKind::Lighting => "lighting",
             RfiKind::MethodChoice => "method_choice",
             RfiKind::Conflict => "conflict",
+            RfiKind::RoomUnnumbered => "room_unnumbered",
         }
     }
 
@@ -178,6 +183,7 @@ impl RfiKind {
             RfiKind::Lighting => "Lighting documents disagree (plans, fixture schedule, submittal)",
             RfiKind::MethodChoice => "A wiring method the code allows and the spec doesn't list (value engineering)",
             RfiKind::Conflict => "Documents disagree (each side cited)",
+            RfiKind::RoomUnnumbered => "Room with a name and no number",
         }
     }
 

@@ -106,6 +106,13 @@ pub fn rules() -> &'static Rules {
     R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default())
 }
 
+/// A trial of the same-floor check: (target scale index, target region, reference scale index,
+/// reference region, print scale tried).
+type Trial = (usize, usize, usize, usize, f64);
+/// A trial weighed: (target scale index, reference scale index, print scale, F1, [fit scale,
+/// margin], whether the outlines are the plan's).
+type Weighed = (usize, usize, f64, f64, [f64; 2], bool);
+
 /// A plan given its scale by another plan of its floor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rescaled {
@@ -170,13 +177,15 @@ fn built_plan(r: &SheetRegion) -> bool {
 /// scale of a plan of the same floor that prints its own when their building outlines agree at
 /// one ratio and their linework lies on each other there. The sheet's objects (`spans`) are
 /// scaled in the drawing and moved clear of the others, its rectangle, frame and scale updated
-/// (its source naming the plan it took the scale from). What was rescaled.
+/// (its source naming the plan it took the scale from). What was rescaled; `fits` says how many
+/// linework fits it ran and which it had to weigh on a sample ([`super::grids::MAX_FIT_VOTES`]).
 pub fn scale_from_same_floor(
     d: &mut Drawing,
     regions: &mut [SheetRegion],
     scales: &mut [SheetScale],
     spans: &[SheetSpan],
     log: &mut Vec<String>,
+    fits: &mut super::grids::FitStats,
 ) -> Vec<Rescaled> {
     let rr = rules();
     let k_in = super::perceive::units_per_inch(d);
@@ -224,6 +233,13 @@ pub fn scale_from_same_floor(
     if pairs.is_empty() {
         return Vec::new();
     }
+    // Said before it starts: the check is a few linework fits per pair.
+    super::guided::progress_line(&format!(
+        "  sheets: weighing {} plan(s) with no printed scale against the plans of their floor that print one ({} pair(s), up to {} print scales each)",
+        targets.len(),
+        pairs.len(),
+        rr.print_scales.len()
+    ));
     // The linework of the sheets weighed (lines and polylines of each sheet's objects).
     let wanted: BTreeSet<usize> = pairs.iter().flat_map(|p| [p.1, p.3]).collect();
     let mut spans_of: Vec<(u64, u64, usize)> = Vec::new();
@@ -279,9 +295,8 @@ pub fn scale_from_same_floor(
     // the rules data (the reference's own first), at one uniform scale within the rules'
     // agreement; the print scale whose fit holds best.
     let cands: Vec<f64> = rr.print_scales.iter().filter(|p| finite_pos(p.in_per_ft)).map(|p| 12.0 * k_in / p.in_per_ft).collect();
-    // Per target: every (plan, print scale) weighed, its F1, uniform scale and margin.
-    #[allow(clippy::type_complexity)]
-    let mut weighed: BTreeMap<usize, Vec<(usize, usize, f64, f64, [f64; 2], bool)>> = BTreeMap::new();
+    // Every (pair, print scale) to weigh, in order.
+    let mut trials: Vec<Trial> = Vec::new();
     for &(ti, tr, pi, pr) in &pairs {
         let (Some(src), Some(tgt)) = (plan_pts.get(&pr), all_pts.get(&tr)) else { continue };
         if src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
@@ -290,31 +305,114 @@ pub fn scale_from_same_floor(
             }
             continue;
         }
-        let old = scale_of(tr);
-        let mut tried: Vec<f64> = vec![scale_of(pr)];
-        tried.extend(cands.iter().copied().filter(|c| !same(*c, scale_of(pr), rr.same_scale)));
-        for c in tried {
-            let f = c / old;
-            if !finite_pos(f) {
-                continue;
-            }
-            let o = tgt.first().copied().unwrap_or(Vec2::new(0.0, 0.0));
-            let scaled: Vec<Vec2> = tgt.iter().map(|p| o + (*p - o) * f).collect();
-            let Some((s, _, f1, margin)) =
-                super::grids::linework_fit_part(src, &scaled, k_in, 1.0 - rr.outline_ratio_agree, 1.0 + rr.outline_ratio_agree)
-            else {
-                continue;
-            };
-            // The reference is the floor's outline: as wide and as tall as the plan's building
-            // (its biggest block), within the rules' share.
-            let (bs, bt) = (Bounds2::from_points(src.iter().copied()), plan_pts.get(&tr).map(|p| Bounds2::from_points(p.iter().copied())));
-            let near = |a: f64, b: f64| finite_pos(a) && finite_pos(b) && a.min(b) >= rr.min_outline_share * a.max(b);
-            let whole = bt.is_some_and(|bt| near(bs.width() * s, bt.width() * f) && near(bs.height() * s, bt.height() * f));
-            if finite_pos(s) && f1.is_finite() {
-                weighed.entry(tr).or_default().push((ti, pi, c, f1, [s, margin], whole));
-            }
-        }
+        trials.push((ti, tr, pi, pr, scale_of(pr)));
+        trials.extend(cands.iter().copied().filter(|c| !same(*c, scale_of(pr), rr.same_scale)).map(|c| (ti, tr, pi, pr, c)));
     }
+    // Each plan's building (its biggest block of lines), its extent.
+    let blocks: BTreeMap<usize, Bounds2> = plan_pts.iter().map(|(r, p)| (*r, Bounds2::from_points(p.iter().copied()))).collect();
+    let near = |a: f64, b: f64| finite_pos(a) && finite_pos(b) && a.min(b) >= rr.min_outline_share * a.max(b);
+    // The reference is the floor's outline: its building (scaled by the fit's `s`) as wide and as
+    // tall as the plan's building at the trial's ratio `f`, within the rules' share.
+    let whole_at = |pr: usize, tr: usize, s: f64, f: f64| match (blocks.get(&pr), blocks.get(&tr)) {
+        (Some(bs), Some(bt)) => near(bs.width() * s, bt.width() * f) && near(bs.height() * s, bt.height() * f),
+        _ => false,
+    };
+    // Whether a trial's fit can be the plan's outline at any scale the fit can find (its range,
+    // refined and polished a little past it): only those can give the plan its scale.
+    let (s_lo, s_hi) = ((1.0 - rr.outline_ratio_agree) * 0.99, (1.0 + rr.outline_ratio_agree) * 1.01);
+    let could = |a: f64, b: f64| finite_pos(a) && finite_pos(b) && a * s_hi >= rr.min_outline_share * b && rr.min_outline_share * a * s_lo <= b;
+    let can_be_whole = |&(_, tr, _, pr, c): &Trial| {
+        let f = c / scale_of(tr);
+        match (blocks.get(&pr), blocks.get(&tr)) {
+            (Some(bs), Some(bt)) => finite_pos(f) && could(bs.width(), bt.width() * f) && could(bs.height(), bt.height() * f),
+            _ => false,
+        }
+    };
+    // One trial: the fit at that print scale, whether the outlines are the plan's, and what the
+    // fit left out.
+    let weigh = |&(ti, tr, pi, pr, c): &Trial| -> (Option<Weighed>, super::grids::FitStats) {
+        let mut stats = super::grids::FitStats::default();
+        let (Some(src), Some(tgt)) = (plan_pts.get(&pr), all_pts.get(&tr)) else { return (None, stats) };
+        let f = c / scale_of(tr);
+        if !finite_pos(f) {
+            return (None, stats);
+        }
+        let o = tgt.first().copied().unwrap_or(Vec2::new(0.0, 0.0));
+        let scaled: Vec<Vec2> = tgt.iter().map(|p| o + (*p - o) * f).collect();
+        let Some((s, _, f1, margin)) =
+            super::grids::linework_fit_part_counted(src, &scaled, k_in, 1.0 - rr.outline_ratio_agree, 1.0 + rr.outline_ratio_agree, &mut stats)
+        else {
+            return (None, stats);
+        };
+        ((finite_pos(s) && f1.is_finite()).then_some((ti, pi, c, f1, [s, margin], whole_at(pr, tr, s, f))), stats)
+    };
+    // Trials weighed side by side, each on its own; their results in the trials' order.
+    let mut stats = super::grids::FitStats::default();
+    let mut weigh_all = |batch: &[(usize, Trial)]| -> Vec<(usize, usize, Weighed)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let results: Vec<_> = {
+            use rayon::prelude::*;
+            batch.par_iter().map(|(i, t)| (*i, t.1, weigh(t))).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let results: Vec<_> = batch.iter().map(|(i, t)| (*i, t.1, weigh(t))).collect();
+        let mut out = Vec::new();
+        for (i, tr, (w, st)) in results {
+            stats.fits += st.fits;
+            stats.thinned += st.thinned;
+            stats.most_votes = stats.most_votes.max(st.most_votes);
+            out.extend(w.map(|w| (i, tr, w)));
+        }
+        out
+    };
+    // First the trials that can be the plan's outline: the best of them is the scale a plan may
+    // take. The others only weigh against it (another scale fitting as well leaves the plan
+    // unscaled), so they are weighed only for a plan whose best fit holds otherwise, nearest its
+    // size first, and no further than one that fits as well (Q6581: every pair at every print
+    // scale was hundreds of fits a set, minutes of a job's rooms stage).
+    let (first, rest): (Vec<(usize, Trial)>, Vec<(usize, Trial)>) = trials.iter().copied().enumerate().partition(|(_, t)| can_be_whole(t));
+    let mut weighed: BTreeMap<usize, Vec<(usize, Weighed)>> = BTreeMap::new();
+    for (i, tr, w) in weigh_all(&first) {
+        weighed.entry(tr).or_default().push((i, w));
+    }
+    // The best fit whose outline is the plan's (the first of equal ones in the trials' order).
+    let top_of = |list: &[(usize, Weighed)]| {
+        let mut v: Vec<&(usize, Weighed)> = list.iter().filter(|x| x.1.5).collect();
+        v.sort_by_key(|x| x.0);
+        v.into_iter().map(|x| x.1).max_by(|a, b| a.3.total_cmp(&b.3))
+    };
+    let runner_of =
+        |list: &[(usize, Weighed)], top: &Weighed| list.iter().filter(|x| !same(x.1.2, top.2, rr.same_scale)).map(|x| x.1.3).fold(0.0, f64::max);
+    let holds = |top: &Weighed| top.3 >= rr.min_fit_f1 && top.4[1] >= super::sheetreg::FIT_MARGIN;
+    // How far a trial's building is from the plan's size (the nearest most likely fit as well).
+    let mismatch = |&(_, tr, _, pr, c): &Trial| match (blocks.get(&pr), blocks.get(&tr)) {
+        (Some(bs), Some(bt)) => {
+            let f = c / scale_of(tr);
+            let d = (bs.width() / (bt.width() * f)).ln().abs() + (bs.height() / (bt.height() * f)).ln().abs();
+            if d.is_finite() { d } else { f64::INFINITY }
+        }
+        _ => f64::INFINITY,
+    };
+    // Trials weighed at once while looking for another scale that fits as well.
+    const BATCH: usize = 16;
+    let mut all_weighed: BTreeMap<usize, bool> = BTreeMap::new();
+    for (tr, list) in weighed.iter_mut() {
+        let Some(top) = top_of(list) else { continue };
+        let mut more: Vec<(usize, Trial)> = rest.iter().filter(|(_, t)| t.1 == *tr).copied().collect();
+        if !holds(&top) {
+            all_weighed.insert(*tr, more.is_empty());
+            continue;
+        }
+        more.sort_by(|a, b| mismatch(&a.1).total_cmp(&mismatch(&b.1)).then(a.0.cmp(&b.0)));
+        let mut done = 0;
+        while done < more.len() && top.3 - runner_of(list, &top) >= rr.min_fit_lead {
+            let next = more.get(done..(done + BATCH).min(more.len())).unwrap_or_default();
+            done += next.len();
+            list.extend(weigh_all(next).into_iter().map(|(i, _, w)| (i, w)));
+        }
+        all_weighed.insert(*tr, done >= more.len());
+    }
+    *fits = stats;
     // The print scale whose fit holds (the rules' F1, the fit's margin over another placement)
     // and leads every other print scale's by the rules' lead: a scale off the fit's own few
     // percent is its sampling's, so the print scale itself.
@@ -323,20 +421,21 @@ pub fn scale_from_same_floor(
         // The best fit whose outline is the plan's, against every other scale weighed (an
         // outline of another size included: a plan shrunk to a small plan's size lies on its lines
         // as well, and leads nothing).
-        let Some(top) = list.iter().filter(|x| x.5).max_by(|a, b| a.3.total_cmp(&b.3)).copied() else { continue };
-        let runner = list.iter().filter(|x| !same(x.2, top.2, rr.same_scale)).map(|x| x.3).fold(0.0, f64::max);
-        if top.3 >= rr.min_fit_f1 && top.4[1] >= super::sheetreg::FIT_MARGIN && top.3 - runner >= rr.min_fit_lead {
+        let Some(top) = top_of(&list) else { continue };
+        let runner = runner_of(&list, &top);
+        if holds(&top) && top.3 - runner >= rr.min_fit_lead {
             let old = scale_of(tr);
             best.insert(tr, (top.0, top.1, top.2 / old, top.3, top.4));
         } else if let (Some(t), Some(p)) = (scales.get(top.0), scales.get(top.1)) {
             log.push(format!(
-                "{}: no plan of its floor gives its scale (best {} at {}: {:.0}% of their lines, {:.0} points over another placement, {:.0} over another scale; needs {:.0}%, {:.0} and {:.0})",
+                "{}: no plan of its floor gives its scale (best {} at {}: {:.0}% of their lines, {:.0} points over another placement, {:.0} over another scale{}; needs {:.0}%, {:.0} and {:.0})",
                 t.sheet,
                 p.sheet,
                 snap(top.2, k_in).1.unwrap_or_else(|| format!("{:.2}x", top.2)),
                 top.3 * 100.0,
                 top.4[1] * 100.0,
                 (top.3 - runner) * 100.0,
+                if all_weighed.get(&tr).copied().unwrap_or(true) { "" } else { " weighed" },
                 rr.min_fit_f1 * 100.0,
                 super::sheetreg::FIT_MARGIN * 100.0,
                 rr.min_fit_lead * 100.0
