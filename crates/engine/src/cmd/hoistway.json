@@ -20,6 +20,15 @@
     "shaft_wall_basis": "trade practice: a hoistway is enclosed in rated shaft walls (IBC 713), 8 in masonry where the plan draws none",
     "cap_ft": 1.0,
     "pit_slab_ft": 1.0,
-    "rule": "IBC 713 / ASME A17.1"
+    "rule": "IBC 713 / ASME A17.1",
+    "parts": {
+      "elevator_words": ["ELEVATOR", "ELEVATORS", "ELEV", "HOISTWAY", "HOISTWAYS", "LIFT"],
+      "pit_words": ["PIT", "SUMP"],
+      "top_words": ["SHAFT", "HOISTWAY", "HOISTWAYS", "OVERHEAD", "OVERRUN", "CAB", "CAR", "TOP"],
+      "reach_ft": 1.0,
+      "pit_basis": "trade practice: an elevator pit's devices (its light, receptacle, sump connection, detectors, switch at the pit access) are in the pit, below the lowest landing, their heights measured from the pit floor (NEC 620.23, 620.24, 620.85; ASME A17.1)",
+      "top_basis": "trade practice: a hoistway's devices (its light, receptacle, detectors, the car's and hoistway's circuits, the maker's auxiliary disconnects) are at the top of the hoistway on the top landing, where the machine-room-less controller is, never at a floor height in mid-shaft (NEC 620.22, 620.23, 620.24, 620.51; ASME A17.1)",
+      "source": "an elevator pit or top-of-hoistway (shaft) plan, and a panel row naming an elevator's pit, sump, cab, car, shaft or hoistway: elevator words with a pit word make the pit, else with a top word the top of the hoistway; a device moves only when it stands in a hoistway (within reach_ft of its outline) on the level it was read on"
+    }
   }
 }

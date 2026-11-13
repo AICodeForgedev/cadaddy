@@ -923,6 +923,10 @@ pub(crate) fn rated_box_remedy(d: &Drawing, b: &super::boxclear::BackToBack) -> 
         let src = format!("project rule {}/{}: {} ({})", b.rule_domain.trim(), b.rule_key.trim(), r.active.value.trim(), r.active.source.trim());
         return (m, src, true);
     }
+    // Documents that forbid back-to-back devices leave the pads no choice (Q6553).
+    if let Some((src, _)) = back_to_back_forbid(d, b) {
+        return (Remedy::Separate, src, true);
+    }
     let methods = super::super::conduitroute::Methods::stored(d);
     if let Some(m) = b.remedy_named(&methods.rated_box_remedy).filter(|_| !methods.rated_box_remedy.trim().is_empty()) {
         return (m, methods.rated_box_remedy_source.clone(), true);
@@ -931,12 +935,30 @@ pub(crate) fn rated_box_remedy(d: &Drawing, b: &super::boxclear::BackToBack) -> 
     (m, b.remedy_source.clone(), false)
 }
 
+/// Where back-to-back devices are forbidden (Q6553): the project rule's (rules `rule_domain`/
+/// `forbid_rule_key`; one allowing them overrides the documents), else the job's documents' (a
+/// general note, a keynote, a specification); the source that says so, and whether only in
+/// fire-rated walls.
+pub(crate) fn back_to_back_forbid(d: &Drawing, b: &super::boxclear::BackToBack) -> Option<(String, bool)> {
+    let rule = cadaddy_doc::projrules::RuleDomain::parse(&b.rule_domain).and_then(|dom| d.project_rules.get(dom, b.forbid_rule_key.trim()));
+    if let Some(r) = rule
+        && let Some(said) = b.forbid_value(&r.active.value)
+    {
+        let src =
+            format!("project rule {}/{}: {} ({})", b.rule_domain.trim(), b.forbid_rule_key.trim(), r.active.value.trim(), r.active.source.trim());
+        return said.map(|rated_only| (src, rated_only));
+    }
+    let methods = super::super::conduitroute::Methods::stored(d);
+    let src = methods.back_to_back_forbidden.trim();
+    (!src.is_empty()).then(|| (src.to_string(), methods.back_to_back_forbidden_rated_only))
+}
+
 /// The devices an earlier build moved off a back-to-back partner (their location's correction
 /// is the back-to-back rule's), put back where the documents draw them: the project's remedy
 /// is now the putty pads at the drawn spots (Q6488). How many.
-fn replace_back_to_back_moves(d: &mut Drawing, b2b_rule: &str, upf: f64) -> usize {
-    let rule = b2b_rule.trim();
-    if rule.is_empty() {
+fn replace_back_to_back_moves(d: &mut Drawing, b2b_rules: &[&str], upf: f64) -> usize {
+    let rules: Vec<&str> = b2b_rules.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
+    if rules.is_empty() {
         return 0;
     }
     let moved: Vec<(Handle, Vec2)> = d
@@ -947,7 +969,7 @@ fn replace_back_to_back_moves(d: &mut Drawing, b2b_rule: &str, upf: f64) -> usiz
         .filter_map(|e| {
             let ps = props::read(&e.common.xdata);
             let why = ps.get("correction:location").map(Prop::text)?;
-            (why.starts_with(rule)).then_some(())?;
+            rules.iter().any(|r| why.starts_with(r)).then_some(())?;
             Some((e.handle, moved_for_field(&ps, upf)?))
         })
         .collect();
@@ -1359,7 +1381,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // build moved for the other remedy.
     let (remedy, remedy_src, remedy_named) = rated_box_remedy(d, &rl.box_clear.back_to_back);
     let pads_first = remedy == super::boxclear::Remedy::Putty;
-    let replaced = if pads_first { replace_back_to_back_moves(d, &rl.box_clear.back_to_back.source, upf) } else { 0 };
+    // The documents forbid back-to-back devices (Q6553; a project rule choosing the pads over them
+    // is the project's answer): every pair in the walls they name is separated.
+    let forbid = back_to_back_forbid(d, &rl.box_clear.back_to_back).filter(|_| !pads_first);
+    let replaced = if pads_first {
+        replace_back_to_back_moves(d, &[&rl.box_clear.back_to_back.source, &rl.box_clear.back_to_back.forbid_source], upf)
+    } else {
+        0
+    };
     let devices: Vec<(Handle, String, Props, String, Bounds2, f64, f64)> = d
         .model
         .iter()
@@ -1830,15 +1859,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // pads). Its devices move with it; the design spot is kept beside the corrected one. --
     let mut cr_rule = rl.box_clear.clone();
     cr_rule.back_to_back.pads = pads_first;
+    cr_rule.back_to_back.forbidden = forbid.is_some();
     let cr = &cr_rule;
-    let rated_walls: BTreeSet<Handle> = clear_boxes
-        .iter()
-        .filter_map(|b| b.wall)
-        .filter(|w| !cr.back_to_back.rated_only || d.model.get(*w).is_some_and(|e| wall_rated(e, sp)))
-        .collect();
+    let fire_walls: BTreeSet<Handle> =
+        clear_boxes.iter().filter_map(|b| b.wall).filter(|w| d.model.get(*w).is_some_and(|e| wall_rated(e, sp))).collect();
+    // Where the documents forbid back-to-back devices in any wall, the rule is every wall's.
+    let every_wall = forbid.as_ref().is_some_and(|(_, rated_only)| !rated_only) || !cr.back_to_back.rated_only;
+    let rated_walls: BTreeSet<Handle> = clear_boxes.iter().filter_map(|b| b.wall).filter(|w| every_wall || fire_walls.contains(w)).collect();
+    let forbid_src = forbid.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
     for b in &mut clear_boxes {
         b.rated = b.wall.is_some_and(|w| rated_walls.contains(&w));
     }
+    let fire_rated = |i: usize| clear_boxes.get(i).and_then(|b| b.wall).is_some_and(|w| fire_walls.contains(&w));
     // The wall pieces near each box that can move (its own and any meeting it), once: a move
     // looks only at them.
     let reach = (cr.max_move_in.max(0.0) + 24.0) * inch;
@@ -1892,6 +1924,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut device_moves: HashMap<Handle, (Vec3, String, String)> = HashMap::new();
     let mut box_moves: BTreeMap<usize, (Vec3, Vec<String>, String)> = BTreeMap::new();
     let (mut moved_overlap, mut moved_back) = (0usize, 0usize);
+    // The remedy each back-to-back box took and why (Q6553): kept on the box.
+    let mut remedy_of: BTreeMap<usize, (String, String)> = BTreeMap::new();
     let describe = |i: usize| -> String {
         clear_of
             .get(i)
@@ -1912,14 +1946,26 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             super::boxclear::Why::BackToBack => {
                 moved_back += 1;
+                for k in [m.index, m.from] {
+                    if let Some((b, _, _)) = clear_of.get(k) {
+                        remedy_of.insert(*b, (super::boxclear::Remedy::Separate.as_str().to_string(), remedy_src.clone()));
+                    }
+                }
+                // A fire-rated wall's pair is the code's; any other wall's is the documents'.
+                let (wall, rule) = if fire_rated(m.index) {
+                    ("its fire-rated wall", cr.back_to_back.source.clone())
+                } else {
+                    ("its wall", cr.back_to_back.forbid_source.clone())
+                };
                 (
                     format!(
-                        "moved {} along its wall: back to back with {} on the other face of its fire-rated wall, closer than {} apart",
+                        "moved {} along its wall: back to back with {} on the other face of {wall}, closer than {} apart{}",
                         super::super::walltypes::frac(inches),
                         describe(m.from),
-                        super::super::walltypes::frac(cr.back_to_back.min_apart_in)
+                        super::super::walltypes::frac(cr.back_to_back.min_apart_in),
+                        if forbid.is_some() { format!(" (the documents forbid back-to-back devices: {forbid_src})") } else { String::new() }
                     ),
-                    cr.back_to_back.source.clone(),
+                    rule,
                 )
             }
         };
@@ -1970,16 +2016,37 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut putty_pads = 0usize;
     // One pad a box, whatever pairs it stands in.
     let mut padded: BTreeSet<usize> = BTreeSet::new();
-    for (i, j) in &cleared.putty {
+    // Pairs the documents forbid that no move clears (Q6553): a review; in a fire-rated wall the
+    // pads stay as the code's protection.
+    let left_pads: Vec<(usize, usize)> = cleared.unseparated.iter().copied().filter(|(i, _)| fire_rated(*i)).collect();
+    for (i, j) in &cleared.unseparated {
+        let padded_too = fire_rated(*i);
+        for k in [*i, *j] {
+            if let Some((b, _, _)) = clear_of.get(k) {
+                let what = if padded_too { "review: back to back, putty pads" } else { "review: back to back" };
+                remedy_of.insert(*b, (what.to_string(), format!("{}; {forbid_src}", cr.back_to_back.forbid_source)));
+            }
+        }
+    }
+    for (i, j) in cleared.putty.iter().chain(&left_pads) {
+        let forbidden_left = cleared.unseparated.contains(&(*i, *j));
         for k in [*i, *j] {
             let Some((bi, _, _)) = clear_of.get(k) else { continue };
+            if !forbidden_left {
+                remedy_of.insert(*bi, (super::boxclear::Remedy::Putty.as_str().to_string(), remedy_src.clone()));
+            }
             if !padded.insert(*bi) {
                 continue;
             }
             let Some((at, mut ctx)) = atoms.get(*bi).map(|(a, c)| (a.a, c.clone())) else { continue };
             let other = describe(if k == *i { *j } else { *i });
             let kept = [*i, *j].iter().filter_map(|x| clear_boxes.get(*x)).any(|b| b.keep);
-            let why = if pads_first {
+            let why = if forbidden_left {
+                format!(
+                    "back to back with {other} on the other face of its fire-rated wall: the documents forbid back-to-back devices ({forbid_src}) but no spot within {} along an unbroken stretch of its wall clears it, for either box: listed putty pads as the code's protection, and a review",
+                    super::super::walltypes::frac(cr.max_move_in)
+                )
+            } else if pads_first {
                 format!(
                     "back to back with {other} on the other face of its fire-rated wall, closer than {} apart: listed putty pads on both boxes, the devices where the documents put them ({}; {remedy_src})",
                     super::super::walltypes::frac(cr.back_to_back.min_apart_in),
@@ -2020,8 +2087,28 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
     // Which remedy the pairs took, and why (Q6488).
-    let pairs = moved_back + cleared.putty.len();
-    if (pairs > 0 || replaced > 0) && notes.len() < 200 {
+    let pairs = moved_back + cleared.putty.len() + cleared.unseparated.len();
+    for (bi, (what, src)) in remedy_of {
+        if let Some((a, _)) = atoms.get_mut(bi) {
+            a.extra.push(("back_to_back_remedy", what, src));
+        }
+    }
+    if let Some((_, rated_only)) = forbid.as_ref().filter(|_| pairs > 0 && notes.len() < 200) {
+        notes.push(format!(
+            "back-to-back devices are forbidden by the documents ({forbid_src}) in {}: {moved_back} pair(s) separated, one box moved along its wall ({} past the next stud bays or the box that would keep its spot){}",
+            if *rated_only { "fire-rated walls" } else { "every wall" },
+            cleared.moved_farther,
+            if cleared.unseparated.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} pair(s) no move along their walls clears: a review ({} in fire-rated walls keep listed putty pads as the code's protection)",
+                    cleared.unseparated.len(),
+                    left_pads.len()
+                )
+            }
+        ));
+    } else if (pairs > 0 || replaced > 0) && notes.len() < 200 {
         notes.push(if pads_first {
             format!(
                 "rated-wall boxes back to back: {} pair(s) take putty pads at the drawn positions ({remedy_src}){}; the alternative, separating the boxes by distance, is project rule {}/{}: separate",
@@ -3049,6 +3136,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             rl.one_raceway_source
         ));
     }
+    // Where the documents forbid back-to-back devices (Q6553): what the build did about it.
+    let b2b_forbidden = forbid.as_ref().map_or(Value::Null, |(src, rated_only)| {
+        json!({"source": src, "ratedOnly": rated_only, "movedFarther": cleared.moved_farther, "unseparated": cleared.unseparated.len(), "padsLeft": left_pads.len()})
+    });
     json!({
         "atoms": total,
         "atomsByKind": by_kind,
@@ -3081,6 +3172,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             "ratedWallRemedy": remedy.as_str(),
             "ratedWallRemedySource": remedy_src,
             "devicesPutBack": replaced,
+            "backToBackForbidden": b2b_forbidden,
         },
         "boxesSizedForRaceway": boxes_for_raceway,
         "boxesRacewayReview": raceway_reviews,
@@ -4167,6 +4259,19 @@ mod tests {
         let (r, src, named) = rated_box_remedy(&d, b);
         assert_eq!((r, named), (Remedy::Putty, true));
         assert!(src.starts_with("spec 26 05 33"), "{src}");
+        // A note forbidding back-to-back devices over the pads the documents name (Q6553).
+        let mut m = m;
+        m.back_to_back_forbidden = "Sheet X-9 note 4: DO NOT INSTALL DEVICES BACK-TO-BACK".into();
+        m.store(&mut d);
+        let (r, src, _) = rated_box_remedy(&d, b);
+        assert_eq!(r, Remedy::Separate);
+        assert!(src.starts_with("Sheet X-9 note 4"), "{src}");
+        assert_eq!(back_to_back_forbid(&d, b).map(|f| f.1), Some(false));
+        // A project rule allowing them over the note: the documents' pads again.
+        let v = cadaddy_doc::projrules::RuleValue::new("permitted").with_source("RFI 8");
+        d.project_rules.set(cadaddy_doc::projrules::RuleDomain::Clearance, "back_to_back_boxes", v, "answered");
+        assert_eq!(back_to_back_forbid(&d, b), None);
+        assert_eq!(rated_box_remedy(&d, b).0, Remedy::Putty);
         // A project rule over them.
         let v = cadaddy_doc::projrules::RuleValue::new("separate").with_source("RFI 7");
         d.project_rules.set(cadaddy_doc::projrules::RuleDomain::Clearance, "rated_wall_boxes", v, "answered");

@@ -221,6 +221,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 template: f("typical_view"),
                 circuit_basis: f("circuit_basis"),
                 circuit_review: String::new(),
+                hoistway: String::new(),
+                hoistway_view: String::new(),
             }
         })
         .collect();
@@ -1599,6 +1601,13 @@ pub struct ReadDevice {
     /// supports it (the view's panel feeds another floor).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub circuit_review: String,
+    /// Read off an elevator pit plan (`pit`) or a hoistway (shaft) plan (`top`): it belongs in the
+    /// hoistway's pit or at its top, not on the storey the view registered onto (Q6615); and
+    /// that view (its sheet, number and title).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hoistway: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hoistway_view: String,
 }
 
 /// What the symbol table says of a device found by its drawing ([`super::symtable`]).
@@ -2012,6 +2021,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                 e.set("design_device", fa.design.clone(), "plan");
             }
         }
+        // Read off an elevator pit or hoistway plan: its part of the hoistway (placed there below).
+        if !dv.hoistway.is_empty() {
+            e.set("hoistway_part", dv.hoistway.clone(), "plan");
+            e.set("hoistway_view", dv.hoistway_view.clone(), "plan");
+        }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {
             e.set("mount_height_in", format!("{h}"), "note");
@@ -2024,8 +2038,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         *by_level.entry(level).or_default() += 1;
         inserted += 1;
     }
+    // The devices of a hoistway's pit or top: there, not on the storey their view registered onto
+    // (Q6615).
+    let hoistway = super::hoistway::relocate(&mut sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
-    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level}))
+    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level, "hoistway": hoistway}))
 }
 
 /// The devices an earlier read put in the drawing's model: how many, by level and type.
