@@ -2002,7 +2002,7 @@ pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f6
         thickness: t,
         top,
         source: Handle(1),
-        cuts: vec![Cut { s0, s1, window: true, head: Some(head), sill: Some(sill) }],
+        cuts: vec![Cut { s0, s1, window: true, head: Some(head), sill: Some(sill), lift: 0.0 }],
         extra: Vec::new(),
         wall_type: None,
         fixed_top: false,
@@ -2023,6 +2023,7 @@ pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f6
         mark: None,
         basis: None,
         at_tag: None,
+        lift: 0.0,
     };
     let pl = PlanLevel {
         walls: vec![wall],
