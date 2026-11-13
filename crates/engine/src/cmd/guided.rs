@@ -33573,6 +33573,55 @@ mod model_stats_tests {
         assert_eq!(st["elements"]["count"], json!({"complete": true, "scanned": 600_003}));
     }
 
+    /// Q6619: what to ask before building leads the report and the status, by the build step it
+    /// blocks; a built set of several storeys with nothing open is a warning, never "clean".
+    #[test]
+    fn the_inconsistencies_lead_the_report_and_a_multi_storey_build_with_none_warns() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        for (name, z) in [("1", 0.0), ("2", 10.0)] {
+            sp.levels.push(serde_json::from_value(json!({"name": name, "elevation_ft": z, "height_ft": 10.0})).unwrap());
+        }
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        d.building_spec = Some(sp.to_json()).into();
+        let mut s = Session::new();
+        s.open_drawing(d, "Sample Building", None);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        for st in job.stages.iter_mut().filter(|st| st.status != StageStatus::Skipped) {
+            st.status = StageStatus::Done;
+        }
+        job.requirements = Some(json!({"requirements": 8, "ran": 0, "objects_checked": 0}));
+        save_job(&mut s, &job).unwrap();
+        let r = s.execute("job.report", &json!({})).unwrap();
+        assert_eq!(r["headline"], "0 things to ask before you build: 0 high");
+        assert!(warnings(&r).iter().any(|w| w == "no inconsistencies found"), "{:?}", warnings(&r));
+        assert_eq!(r["status"], "done_with_warnings");
+        assert_eq!(r["inconsistencies"]["requirements"]["ran"], 0, "the measure is reported");
+        let st = s.execute("job.status", &json!({})).unwrap();
+        assert_eq!(st["headline"], r["headline"]);
+        assert!(warnings(&st).iter().any(|w| w == "no inconsistencies found"));
+        assert_eq!(st["status"], "done_with_warnings");
+
+        // Something to ask before the slab and something at trim: the headline counts them, the
+        // slab's first.
+        let mut pour = cadaddy_walk3d::Rfi::new(cadaddy_walk3d::RfiKind::PourHold, "1", [0.0, 0.0], "stub-ups", "not confirmed", "");
+        pour.id = "RFI-901".into();
+        let mut cct = cadaddy_walk3d::Rfi::new(cadaddy_walk3d::RfiKind::Lighting, "2", [0.0, 0.0], "type A", "CCT differs", "");
+        cct.id = "RFI-900".into();
+        cct.topic = "lighting: CCT".into();
+        sp.rfis = vec![cct, pour];
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let r = s.execute("job.report", &json!({})).unwrap();
+        assert_eq!(r["headline"], "2 things to ask before you build: 1 high");
+        assert!(!warnings(&r).iter().any(|w| w == "no inconsistencies found"));
+        let first = &r["inconsistencies"]["items"][0];
+        assert_eq!((first["id"].as_str(), first["before"].as_str()), (Some("RFI-901"), Some("underground")), "{first}");
+        let steps = &r["inconsistencies"]["by_step"];
+        assert_eq!(steps[0]["step"], "underground");
+        assert_eq!(steps[0]["items"], 1);
+        assert_eq!(steps[2]["items"], 1, "the CCT at trim");
+        assert_eq!(s.execute("job.status", &json!({})).unwrap()["inconsistencies"]["open"], 2);
+    }
+
     /// A count the cap cuts short says so and raises no "0 elements" warning; a complete count
     /// of a model with nothing built still does.
     #[test]

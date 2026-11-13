@@ -1005,7 +1005,7 @@ fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     out["items"] = json!(list.iter().take(20).map(super::requirements::item_json).collect::<Vec<_>>());
     out["total"] = json!(list.len());
     out["open"] = json!(open.len());
-    out["headline"] = json!(format!("{} things to ask before you build: {high} high", open.len()));
+    out["headline"] = json!(super::requirements::headline(open.len(), high));
     out["requirements"] = measured;
     Ok(out)
 }

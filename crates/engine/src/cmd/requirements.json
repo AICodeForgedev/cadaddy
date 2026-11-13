@@ -8,6 +8,7 @@
     {"id": "trim", "order": 3, "label": "trim and finish"}
   ],
   "default_step": "rough_in",
+  "panel_keys": ["bus_amps", "main", "breakers", "spaces"],
   "kind_steps": {
     "untagged_wall": "rough_in",
     "unknown_tag": "rough_in",

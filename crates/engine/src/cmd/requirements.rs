@@ -128,6 +128,8 @@ pub(crate) struct Rules {
     empty_values: Vec<String>,
     pub steps: Vec<Step>,
     default_step: String,
+    /// The properties a panel's schedule gives (a panel to put a new circuit on).
+    panel_keys: Vec<String>,
     kind_steps: BTreeMap<String, String>,
     topic_steps: Vec<TopicStep>,
     pub requirements: Vec<Requirement>,
@@ -379,7 +381,8 @@ fn propose(rules: &Rules, r: &Requirement, m: &Model, idx: &[usize], i: usize, e
             let panel = m
                 .els
                 .iter()
-                .filter(|o| super::propuse::is_panel(o) || o.get("bus_amps").is_some())
+                // A panel by its schedule (its bus, main, breakers), never the load itself.
+                .filter(|o| o.handle() != el.handle() && rules.panel_keys.iter().any(|k| o.get(k).is_some()))
                 .filter(|o| o.tag().is_some())
                 .min_by(|a, b| {
                     let la = !same_level(&a.level(), &level);
@@ -440,7 +443,7 @@ fn rfi_for(rules: &Rules, r: &Requirement, level: &str, room: &str, open: &[&Ope
     let issue = if by_rule == n {
         format!("{n} {} {place} ({named}): no document gives {}; the build assumed one by a rule", r.object, r.what)
     } else {
-        format!("{n} {} {place} ({named}): no {} on any sheet, schedule or submittal", r.object, r.what)
+        format!("{n} {} {place} ({named}): no sheet, schedule or submittal gives {}", r.object, r.what)
     };
     let proposals: Vec<String> = open.iter().map(|o| o.proposal.clone()).collect::<BTreeSet<_>>().into_iter().take(3).collect();
     let assumed = format!("Proposed meanwhile (unsure, built so the takeoff carries it): {}", proposals.join("; "));
@@ -463,7 +466,7 @@ fn rfi_for(rules: &Rules, r: &Requirement, level: &str, room: &str, open: &[&Ope
     rfi.topic = format!("requirement: {} ({})", r.id, r.object);
     rfi.proposed = Some(format!("{} {}", r.ask, proposals.first().map(|p| format!("Proposed: {p}.")).unwrap_or_default()).trim().to_string());
     rfi.sides = vec![
-        RfiSide { document: shown, says: format!("shows {n} {} {place} with no {}", r.object, r.what) },
+        RfiSide { document: shown, says: format!("shows {n} {} {place} and does not give {}", r.object, r.what) },
         RfiSide { document: r.basis.split(':').next().unwrap_or("").trim().to_string(), says: r.basis.clone() },
     ];
     rfi.elements = open.iter().take(cadaddy_walk3d::rfi::MAX_RFI_ELEMENTS).map(|o| o.handle.hex()).collect();
@@ -689,7 +692,7 @@ pub(crate) fn report(sp: &BuildingSpec, measured: Option<&Value>) -> Value {
     }
     let items: Vec<Value> = open.iter().take(MAX_LISTED).map(item_json).collect();
     let mut v = json!({
-        "headline": format!("{} things to ask before you build: {high} high", open.len()),
+        "headline": headline(open.len(), high),
         "open": open.len(), "high": high, "by_step": by_step, "by_kind": by_kind, "items": items,
         "export": "rfi.export {path: <file>.pdf|.xlsx|.csv} sends them, one numbered item each",
     });
@@ -697,6 +700,11 @@ pub(crate) fn report(sp: &BuildingSpec, measured: Option<&Value>) -> Value {
         v["requirements"] = m.clone();
     }
     v
+}
+
+/// The line a report leads with.
+pub(crate) fn headline(open: usize, high: usize) -> String {
+    format!("{open} {} to ask before you build: {high} high", if open == 1 { "thing" } else { "things" })
 }
 
 /// An item for a report or a list: its kind's name and title, and the step it blocks.
