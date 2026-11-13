@@ -272,7 +272,12 @@ pub(crate) struct VDrop {
     pub voltage_ll: f64,
     pub voltage_source: String,
     pub cmil: BTreeMap<String, f64>,
+    /// The sizes the voltage-drop calculation chooses among, smallest first.
     pub sizes: Vec<String>,
+    /// Every standard conductor size, smallest first (AWG then kcmil): ranks any size a document
+    /// gives (a wire-length table's column, a circuit's conductor), Q6456.
+    pub size_order: Vec<String>,
+    pub size_order_source: String,
     pub source: String,
     /// How the load is placed along the circuit (each device's share at its own distance).
     pub moment_source: String,
@@ -281,6 +286,14 @@ pub(crate) struct VDrop {
     /// Most sizes a homerun goes over its circuit's legs.
     pub homerun_steps: usize,
     pub homerun_first_source: String,
+}
+
+impl VDrop {
+    /// The order conductor sizes are ranked by, smallest first: the rules' full order, else
+    /// (older rule data) the voltage-drop sizes.
+    pub fn order(&self) -> &[String] {
+        if self.size_order.is_empty() { &self.sizes } else { &self.size_order }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
