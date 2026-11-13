@@ -1866,8 +1866,6 @@ fn floor_rating(sp: &BuildingSpec, p: Vec2, below: &str) -> Option<String> {
 /// risers at each floor (`gearbuild`), so a feeder's vertical piece standing on its level's floor,
 /// over a level below, passed that floor. `carry` takes a point of one level's plan onto another's.
 fn feeder_floor_penetrations(sp: &BuildingSpec, carry: &dyn Fn(Vec2, &str, &str) -> Vec2, rl: &RouteRules, out: &mut Vec<Value>) {
-    let mut levels: Vec<_> = sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).collect();
-    levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
     for r in sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)) {
         if out.len() >= MAX_ITEMS {
             break;
@@ -1876,10 +1874,17 @@ fn feeder_floor_penetrations(sp: &BuildingSpec, carry: &dyn Fn(Vec2, &str, &str)
         if !(top > bot && bot.abs() < 1e-6) {
             continue;
         }
-        let Some(li) = levels.iter().position(|l| same_level(&l.name, &r.level)) else { continue };
-        let Some(below) = li.checked_sub(1).and_then(|j| levels.get(j)) else { continue };
-        let Some(l) = levels.get(li) else { continue };
         let at = Vec2::new(p[0], p[1]);
+        // The storey under it where it stands (Q6453): a mezzanine or partial level elsewhere
+        // is not the floor it came up through.
+        let Some(l) = sp.levels.iter().find(|l| same_level(&l.name, &r.level) && l.elevation_ft.is_finite()) else { continue };
+        let Some(below) = super::risercut::riser_levels(sp, &l.name, [at.x, at.y], &|q, from, to| super::gearbuild::feeder_carry(sp, q, from, to))
+            .into_iter()
+            .filter(|b| b.elevation_ft < l.elevation_ft - 1e-6)
+            .max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+        else {
+            continue;
+        };
         let rating = floor_rating(sp, carry(at, &l.name, &below.name), &below.name);
         let size_in = r.size_in[0];
         out.push(json!({
