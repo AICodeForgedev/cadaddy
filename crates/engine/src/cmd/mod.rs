@@ -85,6 +85,7 @@ pub(crate) mod loosesym;
 pub mod lowvolt;
 pub mod markup;
 pub mod mountlist;
+pub(crate) mod panelheader;
 pub mod panelsched;
 pub mod paramconv;
 pub(crate) mod planscale;

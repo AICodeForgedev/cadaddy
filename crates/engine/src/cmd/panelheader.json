@@ -1,0 +1,17 @@
+{
+  "_about": "A panel schedule's header facts onto its panel elements (Q6591): which header labels give which panel property and how its value reads. `labels` are whole words of the printed label, best first (the first label a header has wins). `read`: text (as printed), amps (its number, in A), volts / phase (that part of a volts/phase fact: `208Y/120V, 3PH, 4W` gives 208Y/120V and 3PH, 4W), word (one of `values`, each with the printed words that mean it; a word none lists is kept as printed). `prefix`: put before a bare printed value (`1` under NEMA RATING is NEMA 1). A typical schedule (TYPICAL OF n) is the schedule of every panel of its type: each takes its header.",
+  "fields": [
+    {"key": "bus_amps", "labels": ["BUS AMPS", "BUS AMP", "BUS RATING", "BUS SIZE", "BUS AMPACITY", "BUS"], "read": "amps", "unit": "A", "not_labels": ["GROUND BUS", "ISOL. GROUND BUS", "ISOLATED GROUND BUS", "NEUTRAL BUS", "BUS MATERIAL"]},
+    {"key": "main", "labels": ["MAIN SIZE / TYPE", "MAIN SIZE/TYPE", "MAIN TYPE", "MAIN SIZE", "MAIN BREAKER", "MAIN CB", "MAINS", "MAIN"], "read": "text", "not_labels": ["MAIN LUG SIZE"]},
+    {"key": "voltage", "labels": ["VOLTS/PHASE/WIRE", "VOLTS/PHASE", "VOLTAGE/PHASE", "VOLTS/PH", "V/PH", "SYSTEM VOLTAGE", "VOLTAGE", "VOLTS"], "read": "volts", "unit": "V"},
+    {"key": "phase", "labels": ["VOLTS/PHASE/WIRE", "VOLTS/PHASE", "VOLTAGE/PHASE", "VOLTS/PH", "V/PH", "PHASE/WIRE", "PHASES", "PHASE", "PH", "SYSTEM VOLTAGE", "VOLTAGE", "VOLTS"], "read": "phase"},
+    {"key": "enclosure", "labels": ["NEMA RATING", "NEMA TYPE", "NEMA", "ENCLOSURE TYPE", "ENCLOSURE", "ENCL"], "read": "text", "prefix": "NEMA "},
+    {"key": "aic", "labels": ["AIC RATING", "AIC", "KAIC", "INTERRUPTING RATING", "SHORT CIRCUIT RATING", "SCCR"], "read": "text"},
+    {"key": "mounting", "labels": ["MOUNTING", "MOUNTING TYPE", "MTG", "MOUNT"], "read": "word", "values": {
+      "surface": ["SURFACE", "SURF", "SURFACE MOUNTED"],
+      "flush": ["FLUSH", "RECESSED", "RECESS", "FLUSH MOUNTED"],
+      "floor": ["FLOOR", "FREESTANDING", "FREE STANDING", "FREE-STANDING", "FLOOR STANDING", "PAD"]
+    }}
+  ],
+  "typical_note": "a typical schedule: the schedule of every panel of its type"
+}
