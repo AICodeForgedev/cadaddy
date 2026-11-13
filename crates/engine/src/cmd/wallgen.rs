@@ -3280,6 +3280,8 @@ fn plan_level_with(
         .filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Corridor && c.level.eq_ignore_ascii_case(&level.name))
         .collect();
     let mut corridor_gaps = 0usize;
+    // Stretches of a door's gap past a wall parting it, with no door of their own, left open (Q6616).
+    let mut parted_open = 0usize;
     let mut crossing_gaps: Vec<(Vec2, Vec2)> = Vec::new();
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
@@ -3598,7 +3600,33 @@ fn plan_level_with(
         };
         let mut extra = Vec::new();
         if !leaves.is_empty() || covered {
-            extra.push((g0, g1, z0 + pl.door_head, top));
+            // The door's header over the spans that hold a door, up to the wall parting the gap
+            // (Q6616). A span past that wall with no door of its own is a gap of its own: a
+            // cased opening's header when nothing crosses the gap and it is an opening's width,
+            // else open (the room beyond the crossing wall).
+            let door_in = |s0: f64, s1: f64| {
+                spans.len() == 1
+                    || leaves.iter().any(|(.., (j0, j1))| {
+                        let m = u.dot((*j0 + *j1) * 0.5 - g0);
+                        m > s0 && m < s1
+                    })
+                    || pl.leaves.iter().any(|l| {
+                        let (f0, f1) = l.frame.unwrap_or((l.a, l.b));
+                        let m = (f0 + f1) * 0.5;
+                        !l.window && seg_dist(m, g0, g1) <= t + l.a.dist(l.b) && {
+                            let s = u.dot(m - g0);
+                            s > s0 && s < s1
+                        }
+                    })
+            };
+            for &(s0, s1) in &spans {
+                let (a, b) = (g0 + u * s0, g0 + u * s1);
+                if door_in(s0, s1) || (!no_header && s1 - s0 <= 8.0 * upf) {
+                    extra.push((a, b, z0 + pl.door_head, top));
+                } else {
+                    parted_open += 1;
+                }
+            }
             if !leaves.is_empty() {
                 extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
             }
@@ -3701,6 +3729,12 @@ fn plan_level_with(
     if corridor_gaps > 0 {
         notes.push(format!(
             "{}: {corridor_gaps} gaps between lined-up walls (across a corridor, or another wall across them) left open (no header).",
+            level.name
+        ));
+    }
+    if parted_open > 0 {
+        notes.push(format!(
+            "{}: {parted_open} stretches of a door's gap past a wall crossing it (no door of their own) left open: the door's header stops at that wall.",
             level.name
         ));
     }
@@ -6391,6 +6425,74 @@ mod tests {
             out.push(("A-WALL", line_ft((face, from), (face, y1))));
         }
         out
+    }
+
+    /// A door swing (feet) hinged at `hinge`, `r` wide, from angle `a0` to `a1` (degrees).
+    fn swing_ft(hinge: (f64, f64), r: f64, a0: f64, a1: f64) -> (&'static str, EntityKind) {
+        (
+            "A-DOOR",
+            EntityKind::Arc(cadaddy_doc::Arc {
+                center: Vec3::new(hinge.0 * 12.0, hinge.1 * 12.0, 0.0),
+                radius: r * 12.0,
+                start: a0.to_radians(),
+                end: a1.to_radians(),
+            }),
+        )
+    }
+
+    /// The pieces over the gaps of the wall line on `y` (feet) that start above the floor
+    /// (headers, a window's head): their x extents in feet, sorted.
+    fn heads_on_line(pl: &PlanLevel, y: f64) -> Vec<(f64, f64)> {
+        let mut out: Vec<(f64, f64)> = pl
+            .walls
+            .iter()
+            .flat_map(|w| w.extra.iter())
+            .filter(|(a, b, lo, _)| *lo > pl.z0 + 1.0 && (a.y / 12.0 - y).abs() < 0.2 && (b.y / 12.0 - y).abs() < 0.2)
+            .map(|(a, b, ..)| ((a.x.min(b.x) / 12.0), (a.x.max(b.x) / 12.0)))
+            .collect();
+        out.sort_by(|p, q| p.0.total_cmp(&q.0));
+        out
+    }
+
+    #[test]
+    fn a_doors_header_stops_at_the_wall_crossing_its_gap() {
+        // A 40' x 30' building of 6" walls. Inside it a wall line on y = 15: A from the west wall
+        // to x = 10, B from x = 25 to the east wall (a 15' gap between lined-up walls). A 4' door
+        // hangs from A's end; a 5" wall at x = 15 crosses the gap (or ends on its line), the
+        // stretch past it to B inside a room. Before Q6616 the door's header ran over the whole
+        // gap, x 10–25, through the crossing wall and 10' into the room beyond.
+        let building = |crossing: Vec<(&'static str, EntityKind)>, doors: Vec<(&'static str, EntityKind)>, gap: (f64, f64)| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(0.25, 6.0, 0.0, 40.0, &[]));
+            lines.extend(wall_x(29.75, 6.0, 0.0, 40.0, &[]));
+            lines.extend(wall_y(0.25, 6.0, 0.0, 30.0, &[]));
+            lines.extend(wall_y(39.75, 6.0, 0.0, 30.0, &[]));
+            lines.extend(wall_x(15.0, 6.0, 0.5, 39.5, &[gap]));
+            lines.extend(crossing);
+            lines.extend(doors);
+            plan_lines_level(lines)
+        };
+        let door_at_a = || vec![swing_ft((10.0, 15.0), 4.0, 0.0, 90.0)];
+        for (what, crossing) in [("across the gap", wall_y(15.0, 5.0, 5.0, 25.0, &[])), ("ending on its line", wall_y(15.0, 5.0, 15.0, 25.0, &[]))] {
+            let (pl, notes) = building(crossing, door_at_a(), (10.0, 25.0));
+            assert!(pl.leaves.iter().any(|l| !l.window), "{what}: no door hung: {notes:?}");
+            let heads = heads_on_line(&pl, 15.0);
+            assert!(heads.iter().all(|(_, x1)| *x1 < 15.0), "{what}: a header past the crossing wall: {heads:?} {notes:?}");
+            assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && *x1 > 14.5), "{what}: no header over the door: {heads:?} {notes:?}");
+            assert!(notes.iter().any(|n| n.contains("1 stretches of a door's gap past a wall crossing it")), "{what}: {notes:?}");
+        }
+        // Two doors either side of a wall across a 10' gap (two units' entries): each keeps its
+        // header, the crossing wall a pier between them.
+        let doors = vec![swing_ft((10.0, 15.0), 4.0, 0.0, 90.0), swing_ft((20.0, 15.0), 4.0, 90.0, 180.0)];
+        let (pl, notes) = building(wall_y(15.0, 5.0, 5.0, 25.0, &[]), doors, (10.0, 20.0));
+        assert_eq!(pl.leaves.iter().filter(|l| !l.window).count(), 2, "{notes:?}");
+        let heads = heads_on_line(&pl, 15.0);
+        assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && *x1 > 14.5 && *x1 < 15.0), "west door: {heads:?} {notes:?}");
+        assert!(heads.iter().any(|(x0, x1)| (x1 - 20.0).abs() < 0.1 && *x0 > 15.0 && *x0 < 15.5), "east door: {heads:?} {notes:?}");
+        // A door in a gap no wall parts: its header over the whole gap, as before.
+        let (pl, notes) = building(Vec::new(), door_at_a(), (10.0, 14.0));
+        let heads = heads_on_line(&pl, 15.0);
+        assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && (x1 - 14.0).abs() < 0.1), "{heads:?} {notes:?}");
     }
 
     #[test]
