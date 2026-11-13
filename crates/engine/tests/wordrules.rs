@@ -871,6 +871,41 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "[ARROW: moved (old to new) X: deleted, not built]",
         "our own output and command vocabulary (generated sheet names, file types, command ids, CAD entity types, layer names we write)",
     ),
+    (
+        "crates/engine/src/cmd/guided.rs",
+        "FLOOR | FLOORS",
+        "grammar: the words that say which floor a schedule row's description is for (FLOOR, LEVEL), dropped to compare uses; not words of one set",
+    ),
+    (
+        "crates/engine/src/cmd/lighting.rs",
+        " | K",
+        "units and their notation on cut sheets (K, LM, W, VA, CRI, lumens, watts): the same on every product's documents",
+    ),
+    (
+        "crates/engine/src/cmd/lighting.rs",
+        "[K W]",
+        "units and their notation on cut sheets (K, LM, W, VA, CRI, lumens, watts): the same on every product's documents",
+    ),
+    (
+        "crates/engine/src/cmd/lighting.rs",
+        "LUMENS | LUMEN",
+        "units and their notation on cut sheets (K, LM, W, VA, CRI, lumens, watts): the same on every product's documents",
+    ),
+    (
+        "crates/engine/src/cmd/lighting.rs",
+        "[DELIVERED NOMINAL]",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks (how a cut sheet qualifies a lumen figure)",
+    ),
+    (
+        "crates/engine/src/cmd/lighting.rs",
+        "[UP TO  MAX]",
+        "document format: the field and column labels of schedules, cut sheets, panel schedules and title blocks (how a cut sheet says a figure is a family's range, an option or an efficacy, not the ordered product's)",
+    ),
+    (
+        "crates/engine/src/cmd/lighting.rs",
+        "const SUBMITTAL_KEYS",
+        "model kinds and property values: our own property keys a submittal writes on a luminaire, not words read off a document",
+    ),
 ];
 
 #[test]
