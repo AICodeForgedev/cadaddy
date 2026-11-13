@@ -824,7 +824,11 @@ impl Ctx {
                         .iter()
                         .find_map(|k| ps.get(k).map(Prop::text).filter(|f| !f.trim().is_empty()))
                         .unwrap_or_else(|| tag("finish"));
-                    rooms.push(RoomEl { level, name: tag("name"), number: tag("number"), finish, outline, z, handle: e.handle });
+                    // Its name and number as corrected (a person's, a later reader's), else as the
+                    // build labelled it (Q6593).
+                    let name = super::bspec::room_value(e, "name").unwrap_or_default();
+                    let number = super::bspec::room_value(e, "number").unwrap_or_default();
+                    rooms.push(RoomEl { level, name, number, finish, outline, z, handle: e.handle });
                 }
                 "device" | "casework" => {
                     let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
@@ -850,13 +854,7 @@ impl Ctx {
 
     /// A room's label: its name and number.
     pub(crate) fn room_label(r: &RoomEl) -> String {
-        match (r.name.trim(), r.number.trim()) {
-            ("", "") => String::new(),
-            (n, "") => n.to_string(),
-            ("", k) => k.to_string(),
-            (n, k) if n.contains(k) => n.to_string(),
-            (n, k) => format!("{n} {k}"),
-        }
+        super::bspec::room_full_label(&r.name, &r.number)
     }
 }
 

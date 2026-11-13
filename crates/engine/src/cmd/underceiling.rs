@@ -199,7 +199,8 @@ fn measure_with(d: &Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<Handle>>,
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
         .filter_map(|e| {
             let level = super::bspec::made_level(e)?.trim().to_ascii_uppercase();
-            let number = super::bimlook::made_tag(e, "number")?.trim().to_ascii_uppercase();
+            // Its number as corrected (Q6593).
+            let number = super::bspec::room_value(e, "number")?.to_ascii_uppercase();
             let ft = super::bimlook::made_tag(e, "ceiling_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
             Some(((level, number), ft))
         })

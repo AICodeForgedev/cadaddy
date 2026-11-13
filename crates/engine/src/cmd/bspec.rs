@@ -2134,6 +2134,41 @@ pub(crate) fn room_tag<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
     x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix(key)).map(str::trim)
 }
 
+/// A room element's `number` or `name` (Q6593: one room identity): the value its properties hold
+/// (a person's `bim.props.set`, a later reader's) outranks the label the build traced, so every
+/// layout, list and element reads the room as corrected. None: neither gives one.
+pub(crate) fn room_value(e: &Entity, key: &str) -> Option<String> {
+    let store = cadaddy_doc::props::read(&e.common.xdata);
+    let own = store.get(key).filter(|p| p.has_value()).map(|p| p.text().trim().chars().take(240).collect::<String>()).filter(|v| !v.is_empty());
+    own.or_else(|| room_tag(e, &format!("{key}:")).filter(|v| !v.is_empty()).map(str::to_string))
+}
+
+/// The label a room element gives the elements in it (their `room`): its number, else its name;
+/// both as [`room_value`] reads them.
+pub(crate) fn room_element_label(e: &Entity) -> Option<String> {
+    room_value(e, "number").or_else(|| room_value(e, "name"))
+}
+
+/// A room's name and number as one label (`OFFICE 202`; the name alone when it holds the number):
+/// what the trade pieces in it carry as their room.
+pub(crate) fn room_full_label(name: &str, number: &str) -> String {
+    match (name.trim(), number.trim()) {
+        ("", "") => String::new(),
+        (n, "") => n.to_string(),
+        ("", k) => k.to_string(),
+        (n, k) if n.contains(k) => n.to_string(),
+        (n, k) => format!("{n} {k}"),
+    }
+}
+
+/// A room element's two labels: [`room_element_label`]'s and [`room_full_label`]'s. None: it
+/// has neither a name nor a number.
+pub(crate) fn room_element_labels(e: &Entity) -> Option<(String, String)> {
+    let short = room_element_label(e)?;
+    let full = room_full_label(&room_value(e, "name").unwrap_or_default(), &room_value(e, "number").unwrap_or_default());
+    Some((short, full))
+}
+
 /// The rooms built as model elements (part `room`), with their tags.
 #[derive(Clone, Debug)]
 pub(crate) struct RoomElement {
@@ -2178,8 +2213,8 @@ pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
         out.push(RoomElement {
             handle: e.handle,
             level: made_level(e).unwrap_or_default(),
-            name: room_tag(e, "name:").filter(|n| !n.is_empty()).unwrap_or("Room").to_string(),
-            number: room_tag(e, "number:").filter(|n| !n.is_empty()).map(str::to_string),
+            name: room_value(e, "name").unwrap_or_else(|| "Room".to_string()),
+            number: room_value(e, "number"),
             area_sf: num("area_sf:").unwrap_or(0.0),
             ceiling_ft: num("ceiling_ft:").unwrap_or(0.0),
             finish,
@@ -2205,17 +2240,46 @@ fn room_key(level: &str, name: &str, number: Option<&str>) -> (String, String) {
     (level.trim().to_ascii_uppercase(), id.to_ascii_uppercase())
 }
 
-/// The user edits on the model's room elements, by [`room_key`] (at most `MAX_ROOMS` × 10).
+/// An unnumbered room's key by its place too: its name and its outline's middle on its level's
+/// plan (whole feet), so that two rooms of one name with no number keep their own edits (Q6593:
+/// each its own number).
+fn room_place_key(level: &str, name: &str, plan_outline: &[Vec2], upf: f64) -> (String, String) {
+    let c = cadaddy_geom::Bounds2::from_points(plan_outline.iter().copied()).center() * (1.0 / upf.max(1e-9));
+    let ft = |v: f64| if v.is_finite() { format!("{}", v.round() as i64) } else { "?".into() };
+    (level.trim().to_ascii_uppercase(), format!("{}@{},{}", name.trim().to_ascii_uppercase(), ft(c.x), ft(c.y)))
+}
+
+/// The user edits on the model's room elements (at most `MAX_ROOMS` × 10): by [`room_key`], and an
+/// unnumbered room's also by [`room_place_key`]; a name two unnumbered rooms of a level share
+/// keys neither by name alone.
 fn room_user_edits(d: &Drawing) -> std::collections::BTreeMap<(String, String), cadaddy_doc::props::Props> {
+    let upf = super::elemprops::units_per_foot(d);
     let mut out = std::collections::BTreeMap::new();
+    let mut by_name: std::collections::BTreeMap<(String, String), usize> = std::collections::BTreeMap::new();
     for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("room")).take(MAX_ROOMS * 10) {
+        let level = made_level(e).unwrap_or_default();
+        let name = room_tag(e, "name:").unwrap_or("");
+        let number = room_tag(e, "number:").filter(|n| !n.trim().is_empty());
+        if number.is_none() {
+            *by_name.entry(room_key(&level, name, None)).or_default() += 1;
+        }
         let edits = cadaddy_doc::props::read(&e.common.xdata).user_edits();
         if edits.is_empty() {
             continue;
         }
-        let level = made_level(e).unwrap_or_default();
-        let name = room_tag(e, "name:").unwrap_or("");
-        out.insert(room_key(&level, name, room_tag(e, "number:")), edits);
+        if number.is_none()
+            && let EntityKind::Mesh(m) = &e.kind
+        {
+            let off = stacked_by(e);
+            let plan: Vec<Vec2> = m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect();
+            out.insert(room_place_key(&level, name, &plan, upf), edits.clone());
+        }
+        out.insert(room_key(&level, name, number), edits);
+    }
+    for (k, n) in by_name {
+        if n > 1 {
+            out.remove(&k);
+        }
     }
     out
 }
@@ -2281,7 +2345,8 @@ fn add_room_elements(
         if let Some(f) = &finish {
             xdata.push(tg(1000, format!("finish:{}", clip(f))));
         }
-        if let Some(kept) = edits.get(&room_key(&level.name, &name, number.as_deref())) {
+        let by_place = || number.is_none().then(|| edits.get(&room_place_key(&level.name, &name, &t.outline, upf))).flatten();
+        if let Some(kept) = by_place().or_else(|| edits.get(&room_key(&level.name, &name, number.as_deref()))) {
             xdata = cadaddy_doc::props::write(&xdata, kept);
         }
         let common = Common { layer: ROOM_LAYER.into(), visible: false, xdata: xdata.into(), ..Common::default() };
@@ -2290,6 +2355,97 @@ fn add_room_elements(
         }
     }
     by_level
+}
+
+/// The unit instances' numbers no room element has, and the instance's level: the numbers a
+/// room that lost its number may carry.
+fn unclaimed_unit_numbers(sp: &BuildingSpec, rooms: &[RoomElement]) -> Vec<(String, String)> {
+    let have: std::collections::BTreeSet<String> = rooms.iter().filter_map(|r| r.number.as_deref()).map(|n| n.trim().to_ascii_uppercase()).collect();
+    sp.unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(50_000)
+        .filter_map(|u| {
+            let t = |k: &str| u.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let n = t("number");
+            (!n.is_empty() && !have.contains(&n.to_ascii_uppercase())).then(|| (t("level"), n))
+        })
+        .collect()
+}
+
+/// A short stable id from a text (FNV-1a, 32 bits in hex).
+fn short_id(text: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{:08x}", h as u32)
+}
+
+/// At most this many rooms with no number are asked about in one build.
+const MAX_UNNUMBERED_ASKS: usize = 200;
+
+/// One room identity (Q6593): a room built with its name and no number where rooms of that name
+/// are numbered (a unit type's rooms, its number lost on the plan) is a review item: which number
+/// is it? Its question goes in the drawing's spec (an `room_unnumbered` RFI, the unit instances'
+/// numbers no room has proposed); one asked before and since numbered (by a person's
+/// `bim.props.set`, a later reader) is dropped while open. The build's notes for them.
+pub(crate) fn ask_unnumbered_rooms(d: &mut Drawing) -> Vec<String> {
+    use cadaddy_walk3d::{Rfi, RfiKind, RfiStatus};
+    let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok()) else { return Vec::new() };
+    let rooms = room_elements(d);
+    let numbered: std::collections::BTreeSet<String> =
+        rooms.iter().filter(|r| r.number.is_some()).map(|r| r.name.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()).collect();
+    let free = unclaimed_unit_numbers(&stored, &rooms);
+    let mut asks: Vec<Rfi> = Vec::new();
+    for r in rooms.iter().filter(|r| r.number.is_none() && r.outline.len() >= 3) {
+        let name = r.name.trim();
+        if name.is_empty() || !numbered.contains(&name.to_ascii_uppercase()) {
+            continue;
+        }
+        // Where on its level's plan (the build stacked the levels).
+        let off = d.model.get(r.handle).map_or(Vec2::ZERO, |e| stacked_by(e));
+        let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().map(|p| *p - off));
+        let c = b.center();
+        let here: Vec<&str> =
+            free.iter().filter(|(l, _)| l.is_empty() || l.eq_ignore_ascii_case(&r.level)).map(|(_, n)| n.as_str()).take(5).collect();
+        let id = format!("RFI-RN{}", short_id(&format!("{}|{}|{:.0}|{:.0}", r.level.to_ascii_uppercase(), name.to_ascii_uppercase(), c.x, c.y)));
+        asks.push(Rfi {
+            id,
+            kind: Some(RfiKind::RoomUnnumbered),
+            severity: RfiKind::RoomUnnumbered.severity(),
+            level: r.level.clone(),
+            at: [c.x, c.y],
+            extent: Some([[b.min.x, b.min.y], [b.max.x, b.max.y]]),
+            about: format!("room {name}"),
+            issue: format!("A room named {name} has no number on the plan, where the other {name} rooms are numbered: which number is it?"),
+            assumed: "Built with its name only: per-room layouts (unit types, accessories, circuits) skip it until it is numbered (bim.props.set {number} on the room).".into(),
+            proposed: (!here.is_empty()).then(|| format!("The unit numbers on its level no room has: {}", here.join(", "))),
+            topic: "rooms: unnumbered".into(),
+            ..Rfi::default()
+        });
+        if asks.len() >= MAX_UNNUMBERED_ASKS {
+            break;
+        }
+    }
+    let before = stored.rfis.len();
+    let kept_ids: std::collections::BTreeSet<String> = asks.iter().map(|a| a.id.clone()).collect();
+    // Open questions that no longer hold (the room was numbered) go; answered ones stay on record.
+    stored.rfis.retain(|x| x.kind != Some(RfiKind::RoomUnnumbered) || x.status != RfiStatus::Open || kept_ids.contains(&x.id));
+    let mut changed = stored.rfis.len() != before;
+    let mut notes = Vec::new();
+    for a in asks {
+        notes.push(format!("{} on {}: {} ({})", a.about, a.level, a.issue, a.id));
+        if !stored.rfis.iter().any(|x| x.id == a.id) && stored.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            stored.rfis.push(a);
+            changed = true;
+        }
+    }
+    if changed {
+        d.building_spec = Some(stored.to_json()).into();
+    }
+    notes
 }
 
 /// One room element of `level` added after the build (a room another trade's plan names that
@@ -2571,6 +2727,8 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Each room as a model element of its level (a space: its floor outline, name, number,
     // area, ceiling and floor finish), what bim.tree, the takeoff and the room commands list.
     let room_elements = add_room_elements(d, &sp, &rooms, upf, &room_edits);
+    // A room of a numbered name built with no number: asked which (Q6593).
+    notes.extend(ask_unnumbered_rooms(d));
     mark("room ceilings and elements");
     // The ground: the building's extents and the margin, a slab under the site elevation.
     let mut ground = 0;
