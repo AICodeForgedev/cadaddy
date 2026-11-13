@@ -3659,6 +3659,40 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         if let Some((_, m)) = rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("MODEL") && !v.trim().is_empty()) {
                             put(&mut store, "model", Prop::new(m.trim().to_string(), Source::from_doc(SourceKind::Schedule, &sched)), tally);
                         }
+                        // A panel's schedule header (Q6591): its bus, main, volts and phase,
+                        // enclosure, AIC and mounting, and the schedule itself; a typical
+                        // schedule's on each panel of its type.
+                        let panel_prop =
+                            rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("PANEL") && !v.trim().is_empty()).map(|(_, v)| v.as_str());
+                        if let Some((ps, typical)) = super::panelheader::schedule_of(&tag, &part, panel_prop, &schedules) {
+                            for (key, p) in super::panelheader::props_of(ps, typical) {
+                                put(&mut store, &key, p, tally);
+                            }
+                        } else if let Some(own) = equipment.get(&tag.to_ascii_uppercase()).filter(|q| !q.circuits.is_empty()) {
+                            // A panel whose circuits its own record holds: that is its schedule.
+                            let ps = cadaddy_walk3d::PanelSchedule {
+                                panel: own.tag.clone(),
+                                source: own.circuits.iter().map(|c| c.source.clone()).find(|s| !s.is_empty()).unwrap_or_default(),
+                                ..Default::default()
+                            };
+                            for (key, p) in super::panelheader::props_of(&ps, false) {
+                                put(&mut store, &key, p, tally);
+                            }
+                        }
+                        // Its gear submittal's catalog parts: its product. Its record's (the gear
+                        // is read after the model is built: an element made before keeps its
+                        // build's tags), else its own.
+                        let record = equipment.get(&tag.to_ascii_uppercase());
+                        let catalog = record
+                            .and_then(|q| q.properties.get(super::gearbuild::CATALOG_PROP))
+                            .or_else(|| rows.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case(super::gearbuild::CATALOG_PROP)).map(|(_, v)| v))
+                            .filter(|c| !c.trim().is_empty());
+                        if let Some(c) = catalog {
+                            let doc = record
+                                .and_then(|q| q.sources.get(super::gearbuild::CATALOG_SOURCE).cloned())
+                                .unwrap_or_else(|| "gear submittal".into());
+                            put(&mut store, "catalog_number", Prop::new(c.trim().to_string(), Source::from_doc(SourceKind::Submittal, &doc)), tally);
+                        }
                         if let Some(r) = room_at(&rooms, lvl, b.center()) {
                             put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()), tally);
                         }

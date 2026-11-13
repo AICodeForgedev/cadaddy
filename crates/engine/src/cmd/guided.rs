@@ -18617,9 +18617,7 @@ fn gear_step(
         else {
             continue;
         };
-        for (k, v) in super::gearbuild::submittal_gear(&text, &tags, &name) {
-            gear.entry(k).or_insert(v);
-        }
+        super::gearbuild::merge_submitted(&mut gear, super::gearbuild::submittal_gear(&text, &tags, &name));
         read_files.push((f.clone(), name, text));
     }
     // Gear the text gives no size for: its elevation drawing (a page naming it and its sections),
@@ -18804,6 +18802,12 @@ fn gear_step(
     };
     let (located, proposed) = (by_status(super::gearbuild::LOCATED), by_status(super::gearbuild::PROPOSED));
     sp.mep.equipment.extend(planned.equipment);
+    // Its gear submittal's catalog parts are each panel's product (Q6591), laid out here or
+    // drawn; a typical schedule's on each panel of its type.
+    let catalogued = super::gearbuild::take_catalog(&mut sp, &gear);
+    if catalogued > 0 {
+        result["gear_catalogued"] = json!(catalogued);
+    }
     // A panel only lettered or proposed, with no working space where that puts it, takes a face
     // in its room that has it.
     let refaced = panels_onto_clear_faces(s.doc()?, &mut sp, &rooms);
