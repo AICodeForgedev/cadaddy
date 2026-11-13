@@ -14307,10 +14307,52 @@ fn into_typical_rooms<T>(
     with: &dyn Fn(&T, &super::readers::ReadDevice, &super::readers::ReadDevice) -> bool,
     take: &mut dyn FnMut(&mut super::readers::ReadDevice, &T, &str),
 ) -> (usize, usize) {
+    if devices.is_empty() {
+        return (0, 0);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let mut set = 0usize;
+    let read = lay_into_typical_rooms(d, job, has, marks, &mut |m: &ViewMark<T>, sheet: &str, _: &str, ri: usize, room: &JobRoom, q| {
+        let (name, level, _, number) = room;
+        let label = stamped_room(name, number, ri);
+        let mut near: Vec<(f64, &mut super::readers::ReadDevice)> = devices
+            .iter_mut()
+            .filter(|dv| dv.room == label && dv.level == *level && wanted(dv, &m.what))
+            .map(|dv| (q.dist(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])), dv))
+            .filter(|(dd, _)| *dd <= reach_ft * 12.0 * k_in)
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // The nearest takes it; with it, each other one within reach `with` says goes with the
+        // nearest (a gang note's devices of its family).
+        let mut near = near.into_iter();
+        let Some((_, first)) = near.next() else { return };
+        let along: Vec<&mut super::readers::ReadDevice> = near.map(|(_, dv)| dv).filter(|dv| with(&m.what, first, dv)).collect();
+        take(first, &m.what, sheet);
+        set += 1;
+        for dv in along {
+            take(dv, &m.what, sheet);
+            set += 1;
+        }
+    });
+    (read, set)
+}
+
+/// Lays the points the typical rooms' views mark ([`ViewMark`]: `marks` of each sheet that `has`
+/// some) into every room of the view's type as the view goes into it (only where the view lies on
+/// the room by its lines: a share of its box is no place to tell one spot from the next): `each`
+/// gets the mark, its sheet, its view's title, the room's index in [`job_rooms`] and the room,
+/// and the point in the room (the rooms' plan units). The marks read in a typical room's view.
+fn lay_into_typical_rooms<T>(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    has: SheetHas,
+    marks: SheetMarks<T>,
+    each: &mut dyn FnMut(&ViewMark<T>, &str, &str, usize, &JobRoom, cadaddy_geom::Vec2),
+) -> usize {
     let rooms = job_rooms(job);
     let (types, vocabulary) = room_types(&rooms);
-    if types.is_empty() || devices.is_empty() {
-        return (0, 0);
+    if types.is_empty() {
+        return 0;
     }
     let k_in = super::perceive::units_per_inch(d);
     let bbox = |o: &[cadaddy_geom::Vec2]| {
@@ -14320,7 +14362,7 @@ fn into_typical_rooms<T>(
     };
     let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
     let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
-    let (mut read, mut set) = (0usize, 0usize);
+    let mut read = 0usize;
     for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
         let sub = super::printmep::sheet_drawing(d, sh);
         let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
@@ -14340,7 +14382,7 @@ fn into_typical_rooms<T>(
         let mut fits: BTreeMap<([u64; 4], usize), Option<RoomFit>> = BTreeMap::new();
         let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
         for m in &found {
-            let Some((_, view, words)) = views
+            let Some((title, view, words)) = views
                 .iter()
                 .filter(|(_, r, _)| inside(r, m.view_at))
                 .min_by(|a, b| ((a.1[2] - a.1[0]) * (a.1[3] - a.1[1])).total_cmp(&((b.1[2] - b.1[0]) * (b.1[3] - b.1[1]))))
@@ -14348,8 +14390,8 @@ fn into_typical_rooms<T>(
                 continue;
             };
             read += 1;
-            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
-                let b = bbox(outline);
+            for (ri, room) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                let b = bbox(&room.2);
                 let fit = *fits.entry((view.map(f64::to_bits), ri)).or_insert_with(|| {
                     let lines = view_lines.entry(view.map(f64::to_bits)).or_insert_with(|| {
                         let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
@@ -14360,30 +14402,11 @@ fn into_typical_rooms<T>(
                 });
                 let Some(fit) = fit else { continue };
                 let Some(q) = place_in_room([m.at.x, m.at.y], *view, b, fit) else { continue };
-                let q = cadaddy_geom::Vec2::new(q[0], q[1]);
-                let label = stamped_room(name, number, ri);
-                let mut near: Vec<(f64, &mut super::readers::ReadDevice)> = devices
-                    .iter_mut()
-                    .filter(|dv| dv.room == label && dv.level == *level && wanted(dv, &m.what))
-                    .map(|dv| (q.dist(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])), dv))
-                    .filter(|(dd, _)| *dd <= reach_ft * 12.0 * k_in)
-                    .collect();
-                near.sort_by(|a, b| a.0.total_cmp(&b.0));
-                // The nearest takes it; with it, each other one within reach `with` says goes
-                // with the nearest (a gang note's devices of its family).
-                let mut near = near.into_iter();
-                let Some((_, first)) = near.next() else { continue };
-                let along: Vec<&mut super::readers::ReadDevice> = near.map(|(_, dv)| dv).filter(|dv| with(&m.what, first, dv)).collect();
-                take(first, &m.what, &sh.number);
-                set += 1;
-                for dv in along {
-                    take(dv, &m.what, &sh.number);
-                    set += 1;
-                }
+                each(m, &sh.number, title, ri, room, cadaddy_geom::Vec2::new(q[0], q[1]));
             }
         }
     }
-    (read, set)
+    read
 }
 
 /// A keynote marker a typical room's view prints, and what its note asks
@@ -22811,6 +22834,13 @@ fn doc_objects_step(
         .take(100)
         .map(|(d, e)| json!({"sheet": e.sheet, "discipline": d, "code": e.code, "meaning": e.meaning, "class": dob::class_of(&e.meaning).map(|c| c.kind.clone())}))
         .collect();
+    // The typical rooms' views (an enlarged unit plan's): their keynote markers are read below,
+    // into every room of the view's type, never put where the sheet's registration takes them.
+    let room_view_areas = {
+        let numbers: BTreeSet<String> =
+            sheets.iter().filter(|sh| !super::keynotes::lists(&sh.texts).is_empty()).map(|sh| sheet_key(&sh.r.number)).collect();
+        room_view_regions(s.doc()?, job, &numbers)
+    };
     // The objects, onto their levels' plans.
     let mut found: Vec<Found> = Vec::new();
     let mut unregistered: BTreeMap<String, usize> = BTreeMap::new();
@@ -22843,6 +22873,11 @@ fn doc_objects_step(
             .collect();
         let lists = super::keynotes::lists(&sh.texts);
         let mut ktags: Vec<(String, String, Vec2)> = Vec::new();
+        let in_room_view = |p: Vec2| {
+            room_view_areas
+                .get(&sheet_key(&sh.r.number))
+                .is_some_and(|rs| rs.iter().any(|r| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3]))
+        };
         for list in &lists {
             let me = super::keynotes::subject(list);
             let others: Vec<String> = lists.iter().map(super::keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
@@ -22850,6 +22885,10 @@ fn doc_objects_step(
                 let Some(n) = list.notes.iter().find(|n| n.number == num) else { continue };
                 let at = Vec2::new(at[0], at[1]);
                 ktags.push((num.clone(), n.text.clone(), at));
+                // (A typical room's view's marker: read into its rooms below.)
+                if in_room_view(at) {
+                    continue;
+                }
                 // A keynote calling for one of its trade's classes (not a rule over all of them):
                 // its count of objects at each of its markers.
                 let Some(named) = dob::note_objects(&n.text).into_iter().find(|x| !x.all && dob::tagged_on(x.class, &sh.r.discipline)) else {
@@ -22942,6 +22981,16 @@ fn doc_objects_step(
             }
         }
     }
+    // A keynote marker in a typical room's view (an enlarged unit plan's range receptacle note):
+    // its object in every room of the view's type, at the marker there (Q6547).
+    let mut typical = typical_keynote_objects(s.doc()?, job);
+    for f in &mut typical {
+        if let Some(l) = sp.levels.iter().find(|l| same_level_name(&l.name, &f.level)) {
+            f.level = l.name.clone();
+        }
+    }
+    let typical_read = typical.len();
+    found.extend(typical);
     let marks_read = found.len();
     let found = dob::dedupe(found, r.dedupe_ft * upf);
     // What the model already has: a built element there naming the same class (another step's),
@@ -23440,6 +23489,36 @@ fn doc_objects_step(
     let mut spares_taken: BTreeMap<String, usize> = BTreeMap::new();
     // Connections only a rule calls for (no document draws or names them): proposed.
     let mut rule_only: Vec<String> = Vec::new();
+    // The model's receptacles (handle, level, point, circuit): a typical room's keynote object's
+    // receptacle is the one drawn at its marker, when there is one (Q6547).
+    let receptacles: Vec<(cadaddy_doc::Handle, String, Vec2, String)> = if found.iter().any(|f| !f.typical.is_empty()) {
+        let d = s.doc()?;
+        d.model
+            .iter()
+            .take(2_000_000)
+            .filter_map(|e| {
+                let kind = super::elemprops::element_kind(e)?;
+                if !super::elemprops::reported_kind(e, kind).to_ascii_lowercase().contains("receptacle") {
+                    return None;
+                }
+                let level = super::elemprops::level_of(e)?;
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                if b.is_empty() {
+                    return None;
+                }
+                let circuit = cadaddy_doc::props::read(&e.common.xdata).get("circuit").map(|p| p.text()).unwrap_or_default();
+                Some((e.handle, level, b.center() - super::bspec::stacked_by(e), circuit))
+            })
+            .take(200_000)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut receptacles_taken: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
+    // (the drawn receptacle, the object's tag and name, the note's rating and mounting, the note)
+    let mut receptacle_fixes: Vec<(cadaddy_doc::Handle, String, String, String, String, String)> = Vec::new();
+    let mut receptacles_built = 0usize;
+    let loads = sp.mep.load_summaries.clone();
     for f in &found {
         let Some(class) = dob::class_by_kind(&f.kind) else { continue };
         // A tag read off the plan keeps its code; another object is named by its kind (never
@@ -23469,6 +23548,9 @@ fn doc_objects_step(
         };
         let mut position = match f.how {
             How::Tag => format!("{} tag {}{}", f.sheet, f.code, if f.number.is_empty() { String::new() } else { format!("-{}", f.number) }),
+            How::Keynote if !f.typical.is_empty() => {
+                format!("{}, at its marker in the typical view {}, laid into the room as the view goes into it", f.source, f.typical)
+            }
             How::Keynote => format!("{}, at its marker", f.source),
             How::Note => format!("proposed: {} names it but no plan draws where (the room by trade practice)", f.source),
             How::Rooms => format!("{}; its place in the room not drawn", f.source),
@@ -23495,7 +23577,7 @@ fn doc_objects_step(
         }
         let _ = floor_h;
         let (hw, hd) = (w_in / 24.0 * upf, d_in / 24.0 * upf);
-        let room = room_at(&f.level, at);
+        let room = Some(room_at(&f.level, at)).filter(|r| !r.is_empty()).unwrap_or_else(|| f.room.clone());
         let scope = scope_of(class);
         let mut props: BTreeMap<String, String> = BTreeMap::new();
         props.insert("DOC_OBJECT".into(), f.how.label().into());
@@ -23538,6 +23620,13 @@ fn doc_objects_step(
         if f.how == How::Rooms {
             props.insert("STATUS".into(), "derived".into());
             props.insert("BASIS".into(), format!("derived: {position}"));
+        }
+        // A typical room's view's keynote, laid into this room: no plan of its floor draws it, the
+        // note at the view's marker is its basis (Q6547).
+        if !f.typical.is_empty() {
+            props.insert("TYPICAL_VIEW".into(), f.typical.clone());
+            props.insert("STATUS".into(), "inferred".into());
+            props.insert("BASIS".into(), format!("inferred from a typical room's keynote: {position}"));
         }
         let site_work = class.mount == "site";
         let mut sources = BTreeMap::new();
@@ -23606,7 +23695,36 @@ fn doc_objects_step(
             }
             btag
         };
+        // A typical room's keynote calling for the object's receptacle (`PROVIDE 30A 120V
+        // RECEPTACLE FOR RANGE`): the receptacle the plan draws at its marker is it, the note's
+        // rating corrected onto it; with none drawn there, one of that rating is built (Q6547).
+        let asked = f
+            .keynote
+            .as_ref()
+            .filter(|_| !f.typical.is_empty() && via == "power")
+            .and_then(|(_, t)| super::keynotes::object_receptacle(t, &class.kind, &class.name).map(|rc| (rc, t.clone())));
+        let drawn = asked.as_ref().and_then(|_| {
+            let reach = r.receptacle_reach_ft.max(0.0) * upf;
+            receptacles
+                .iter()
+                .filter(|(h, l, p, _)| !receptacles_taken.contains(h) && same_level_name(l, &f.level) && (*p - f.at).len() <= reach)
+                .min_by(|a, b| (a.2 - f.at).len().total_cmp(&(b.2 - f.at).len()))
+        });
+        let note_cite = f.keynote.as_ref().map(|(n, t)| format!("{} keynote {n}: {t}", f.sheet)).unwrap_or_default();
+        let mounting = asked.as_ref().map(|(_, t)| mount_sentence(t, &r.mount_words)).unwrap_or_default();
+        let rating = asked.as_ref().and_then(|(rc, _)| rc.rating()).unwrap_or_default();
+        if let Some((h, _, _, circuit)) = drawn {
+            receptacles_taken.insert(*h);
+            let what = if rating.is_empty() { String::new() } else { format!(", {rating} by its note") };
+            props.insert("RECEPTACLE".into(), format!("{} (drawn at its marker{what})", h.hex()));
+            if !circuit.is_empty() {
+                props.insert("POWER".into(), format!("circuit {circuit} (the receptacle drawn at its marker)"));
+            }
+            receptacle_fixes.push((*h, tag.clone(), class.name.clone(), rating.clone(), mounting.clone(), note_cite.clone()));
+            conn = json!({"via": "power", "receptacle": h.hex(), "drawn": true, "circuit": circuit, "rating": rating, "source": note_cite});
+        }
         match via.as_str() {
+            "power" if drawn.is_some() => {}
             "power" => {
                 let pc = circuit_of(&f.via_source, &panels);
                 let mut extra = BTreeMap::new();
@@ -23633,7 +23751,23 @@ fn doc_objects_step(
                     },
                 }
                 let why = if f.via_source.is_empty() { format!("rules data: {} takes power", class.name) } else { f.via_source.clone() };
-                let b = add_box(&mut sp, &r.power_box, 0, extra, why.clone());
+                // The note's receptacle, none drawn at its marker: built of its rating, inferred.
+                let rule_box = if asked.is_some() {
+                    if !rating.is_empty() {
+                        extra.insert("RATING".into(), rating.clone());
+                    }
+                    if !mounting.is_empty() {
+                        extra.insert("MOUNTING".into(), mounting.clone());
+                    }
+                    extra.insert("PROVENANCE".into(), "inferred".into());
+                    extra.insert("STATUS".into(), "inferred".into());
+                    extra.insert("BASIS".into(), format!("inferred: no receptacle is drawn at its marker; {note_cite}"));
+                    receptacles_built += 1;
+                    &r.receptacle_box
+                } else {
+                    &r.power_box
+                };
+                let b = add_box(&mut sp, rule_box, 0, extra, why.clone());
                 conn = json!({"via": "power", "box": b, "panel": pc.as_ref().map(|x| x.0.clone()), "circuit": pc.as_ref().map(|x| x.1.clone()), "source": why});
             }
             "data" => {
@@ -23703,7 +23837,87 @@ fn doc_objects_step(
             }));
         }
     }
+    // How many the load calculation's per-unit lines count (`RANGE CONNECTION (2,400VA/SUITE)`),
+    // against how many the typical rooms' keynotes built: a difference is a finding (Q6547).
+    let mut typical_built: BTreeMap<String, usize> = BTreeMap::new();
+    for f in found.iter().filter(|f| !f.typical.is_empty()) {
+        *typical_built.entry(f.kind.clone()).or_default() += 1;
+    }
+    let mut load_checks: Vec<Value> = Vec::new();
+    for (kind, n) in &typical_built {
+        let Some(class) = dob::class_by_kind(kind) else { continue };
+        let mut counted = 0u32;
+        let mut lines: Vec<String> = Vec::new();
+        for ls in loads.iter().take(200) {
+            for l in ls.lines.iter().take(400) {
+                if let Some(c) = dob::per_unit_count(&l.label, &l.text, &l.values, class) {
+                    counted = counted.saturating_add(c);
+                    lines.push(format!("{} {}: {} ({c})", ls.source, ls.title, l.label.trim()));
+                }
+            }
+        }
+        if lines.is_empty() {
+            continue;
+        }
+        let agrees = usize::try_from(counted).ok() == Some(*n);
+        if !agrees {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("{}: {n} built in the typical rooms, the load calculation counts {counted}", class.name),
+                &format!(
+                    "the typical rooms' keynote gives one in each room of its view's type; the load calculation's per-unit lines count otherwise ({}): {}",
+                    r.load_calc_source,
+                    lines.iter().take(8).cloned().collect::<Vec<_>>().join("; ")
+                ),
+                2,
+                vec!["Check the unit types and counts: rooms of a type the enlarged plans don't show, or a calculation of other units".into()],
+                None,
+                false,
+            );
+        }
+        if load_checks.len() < 50 {
+            load_checks.push(json!({"kind": kind, "built": n, "load_calculation": counted, "agrees": agrees, "lines": lines}));
+        }
+    }
     let made = build_new_mep(s, sp, Vec::new(), &new_equipment)?;
+    // Each drawn receptacle a typical room's keynote makes an object's: the note's rating on it
+    // (the drawn value kept beside it), the object it feeds, the note's mounting (Q6547).
+    if !receptacle_fixes.is_empty() {
+        use cadaddy_doc::props::{Prop, Source, SourceKind};
+        let d = s.doc_mut()?;
+        for (h, tag, name, rating, mounting, cite) in &receptacle_fixes {
+            if !rating.is_empty() {
+                let design = d
+                    .model
+                    .get(*h)
+                    .and_then(|e| cadaddy_doc::props::read(&e.common.xdata).get("rating").filter(|p| p.has_value()).map(Prop::text))
+                    .unwrap_or_else(|| "not given (as drawn)".to_string());
+                super::provenance::correct_element(
+                    d,
+                    *h,
+                    &super::provenance::Correction {
+                        key: "rating".into(),
+                        design,
+                        corrected: rating.clone(),
+                        reason: format!("its keynote makes it the {name}'s receptacle and gives its rating"),
+                        rule: cite.clone(),
+                    },
+                );
+            }
+            let _ = d.modify_entity(*h, |e| {
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                let note = Source::from_doc(SourceKind::Note, cite);
+                store.set("receptacle_for", Prop::new(tag.clone(), note.clone()));
+                if store.get("keynote").is_none_or(|p| !p.has_value()) {
+                    store.set("keynote", Prop::new(cite.clone(), note.clone()));
+                }
+                if !mounting.is_empty() {
+                    store.set("placement", Prop::new(mounting.clone(), note));
+                }
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            });
+        }
+    }
     // The site work's elements marked as the site work step marks its own.
     if !site_tags.is_empty() {
         let d = s.doc_mut()?;
@@ -23811,14 +24025,109 @@ fn doc_objects_step(
         found.iter().filter(|f| f.how == How::Note).count(),
         by_kind.iter().map(|(k, m)| format!("{k} {}", m.values().sum::<usize>())).collect::<Vec<_>>().join(", ")
     ));
+    if typical_read > 0 {
+        progress_line(&format!(
+            "  typical rooms' keynote objects: {typical_read} laid into rooms, built {typical_built:?}; their receptacles: {} drawn at the marker (rating corrected), {receptacles_built} built; load calculation: {}",
+            receptacle_fixes.len(),
+            load_checks
+                .iter()
+                .map(|c| format!("{} {} vs {}", c["kind"].as_str().unwrap_or(""), c["built"], c["load_calculation"]))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     result["doc_objects"] = json!({
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
         "proposed": proposed, "proposed_not_placed": proposed_not_placed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "notes_calling_for_none": not_calls, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
         "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
         "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite, given))| json!({"kind": k, "count": n, "count_given": given, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
         "note_counts_differ": note_counts_differ,
+        "typical_room_keynotes": {
+            "read": typical_read, "built": typical_built, "receptacles_drawn": receptacle_fixes.len(), "receptacles_built": receptacles_built,
+            "load_calculation": load_checks,
+        },
     });
     Ok(())
+}
+
+/// The sentences of a note that say where its receptacle is mounted (a word of `words`: `MOUNT
+/// RANGE RECEPTACLE TO BE ABOVE INTERIOR CABINET`), joined; empty when none says.
+fn mount_sentence(text: &str, words: &[String]) -> String {
+    text.split(['.', ';'])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .take(20)
+        .filter(|p| {
+            let w = super::doc_objects::words(p);
+            words.iter().any(|x| w.iter().any(|y| y.eq_ignore_ascii_case(x)))
+        })
+        .collect::<Vec<_>>()
+        .join(". ")
+        .chars()
+        .take(KEYNOTE_TEXT_CHARS)
+        .collect()
+}
+
+/// A keynote a typical room's view marks, calling for one object ([`typical_keynote_objects`]).
+struct TypicalKeyMark {
+    class: &'static super::doc_objects::Class,
+    num: String,
+    text: String,
+    via: &'static str,
+}
+
+/// The objects a keynote calls for at its marker in a typical room's view (an enlarged unit plan's
+/// `PROVIDE 30A 120V RECEPTACLE FOR RANGE` by its kitchenette, Q6547): each marker laid into every
+/// room of the view's type ([`lay_into_typical_rooms`]), one object a room, at the marker there, on
+/// the room's level, as the view's devices are stamped. A note over every one there is (`ALL …`)
+/// calls for none; a class counts on the sheets its trade tags it on.
+fn typical_keynote_objects(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::doc_objects::Found> {
+    use super::doc_objects::{self as dob, Found, How};
+    use super::keynotes;
+    let named = |text: &str| dob::note_objects(text).into_iter().find(|x| !x.all);
+    let has =
+        |texts: &[cadaddy_mepfix::sheet_facts::TextItem]| keynotes::lists(texts).iter().any(|l| l.notes.iter().any(|n| named(&n.text).is_some()));
+    let marks = |sub: &cadaddy_doc::Drawing, texts: &[cadaddy_mepfix::sheet_facts::TextItem]| -> Vec<ViewMark<TypicalKeyMark>> {
+        let lists = keynotes::lists(texts);
+        let (segs, boxes, rounds) = keynote_marker_shapes(sub, texts);
+        let mut out = Vec::new();
+        for (li, list) in lists.iter().enumerate() {
+            for (num, at) in keynotes::owned_tags(texts, &segs, &boxes, &rounds, &lists, li) {
+                let Some(n) = list.notes.iter().find(|n| n.number == num) else { continue };
+                let Some(x) = named(&n.text) else { continue };
+                let at = cadaddy_geom::Vec2::new(at[0], at[1]);
+                let text = n.text.chars().take(KEYNOTE_TEXT_CHARS).collect();
+                out.push(ViewMark { view_at: at, at, what: TypicalKeyMark { class: x.class, num, text, via: x.via } });
+            }
+        }
+        out
+    };
+    let cap = dob::rules().max_elements.max(1);
+    let mut found: Vec<Found> = Vec::new();
+    lay_into_typical_rooms(d, job, &has, &marks, &mut |m: &ViewMark<TypicalKeyMark>, sheet: &str, title: &str, ri: usize, room: &JobRoom, q| {
+        let k = &m.what;
+        if found.len() >= cap || !dob::tagged_on(k.class, &cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(sheet))) {
+            return;
+        }
+        let (name, level, _, number) = room;
+        found.push(Found {
+            kind: k.class.kind.clone(),
+            how: How::Keynote,
+            sheet: sheet.to_string(),
+            enlarged: true,
+            level: level.clone(),
+            meaning: k.text.clone(),
+            source: format!("{sheet} keynote {}", k.num),
+            at: q,
+            keynote: Some((k.num.clone(), k.text.clone())),
+            via: k.via.to_string(),
+            via_source: if k.via.is_empty() { String::new() } else { format!("{sheet} keynote {}: {}", k.num, k.text) },
+            typical: format!("{sheet} {title}, room {}", stamped_room(name, number, ri)),
+            room: stamped_room(name, number, ri),
+            ..Found::default()
+        });
+    });
+    found
 }
 
 /// The most review items one build asks for notes whose count isn't the plans'.
@@ -36373,6 +36682,161 @@ mod tests {
                 notes[1]
             );
         }
+    }
+
+    /// Q6547 fix-note-range-asked-not-built-per-unit: a keynote on a typical unit's enlarged plan
+    /// calling for an appliance's receptacle (`PROVIDE 30A 120V RECEPTACLE FOR RANGE`) builds the
+    /// appliance in every room of that unit type, at the keynote's marker, with the note's
+    /// receptacle (its rating and mounting, inferred, the note its basis); the rooms of the other
+    /// type the sheet shows get none, and nothing is asked. The load calculation's per-unit line
+    /// counts the same.
+    #[test]
+    fn a_typical_unit_plans_appliance_keynote_is_built_in_every_room_of_its_type() {
+        let run = |marked: bool, suites_kva: f64| {
+            let mut s = crate::Session::new();
+            let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+            let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+                s.execute("line", &json!({"points": [a, b]})).unwrap();
+            };
+            let unit = |s: &mut crate::Session, o: [f64; 2]| {
+                let mut segs =
+                    vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+                for k in 1..6 {
+                    segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+                }
+                segs.push(((0.0, 100.0), (60.0, 100.0)));
+                segs.push(((100.0, 210.0), (144.0, 210.0)));
+                for ((ax, ay), (bx, by)) in segs {
+                    line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+                }
+            };
+            let x0 = 4234.0;
+            let lo = s.doc().unwrap().handseed;
+            for (a, b) in
+                [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+            {
+                line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+            // Two unit types' enlarged plans on one sheet; the keynote's marker in the first.
+            let (va, vb) = ([x0 + 300.0, 200.0], [x0 + 800.0, 200.0]);
+            for (v, title) in [(va, "ENLARGED STUDIO"), (vb, "ENLARGED LOFT")] {
+                unit(&mut s, v);
+                s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": title, "height": 7.4})).unwrap();
+                s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+            }
+            if marked {
+                s.execute("text", &json!({"at": [va[0] + 27.0, va[1] + 12.0], "text": "1", "height": 4.0})).unwrap();
+            }
+            for (y, x, text) in [
+                (1300.0, 1500.0, "ELECTRICAL KEYNOTES:"),
+                (1290.0, 1500.0, "1."),
+                (1290.0, 1512.0, "PROVIDE 30A 120V RECEPTACLE FOR RANGE. MOUNT ABOVE THE COUNTER."),
+            ] {
+                s.execute("text", &json!({"at": [x0 + x, y], "text": text, "height": 4.0})).unwrap();
+            }
+            let hi = s.doc().unwrap().handseed;
+            // (room number, its name, level, x)
+            let rooms = [
+                ("201", "STUDIO", "Level 2", 10_000.0),
+                ("202", "LOFT", "Level 2", 10_400.0),
+                ("301", "STUDIO", "Level 3", 10_800.0),
+                ("302", "LOFT", "Level 3", 11_200.0),
+            ];
+            for (_, _, _, x) in rooms {
+                unit(&mut s, [x, 0.0]);
+            }
+            job.sheet_regions = vec![SheetRegion {
+                number: "E-9".into(),
+                level: "T".into(),
+                discipline: "E".into(),
+                kind: "enlarged_plan".into(),
+                rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+                area: None,
+                title_block: None,
+                not_built: String::new(),
+                levels: Vec::new(),
+                view: None,
+            }];
+            job.sheet_spans = vec![SheetSpan { sheet: "E-9".into(), lo, hi }];
+            let room = |(n, name, level, x): (&str, &str, &str, f64)| json!({"name": name, "number": n, "level": level, "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+            if let Some(st) = job.stage_mut(StageName::Rooms) {
+                st.result = Some(json!({"rooms": rooms.iter().map(|r| room(*r)).collect::<Vec<_>>()}));
+            }
+            let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+            for (name, elevation) in [("Level 2", 12.0), ("Level 3", 24.0)] {
+                let level: cadaddy_walk3d::Level = serde_json::from_value(
+                    json!({"name": name, "elevation_ft": elevation, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [9_900.0, -100.0, 11_500.0, 400.0]}),
+                )
+                .unwrap();
+                sp.levels.push(level);
+            }
+            let line_of = |label: &str, kva: f64| cadaddy_walk3d::LoadSummaryLine {
+                label: label.into(),
+                values: vec![kva],
+                text: format!("{label} {kva:.2} KVA"),
+            };
+            sp.mep.load_summaries = vec![cadaddy_walk3d::LoadSummary {
+                title: "UNIT FEEDER DEMAND CALCULATION".into(),
+                source: "E-2".into(),
+                lines: vec![line_of("SMALL APPLIANCE RECEPTACLES (3,000VA/SUITE):", 6.0), line_of("RANGE CONNECTION (2,400VA/SUITE):", suites_kva)],
+                ..Default::default()
+            }];
+            s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+            let mut result = json!({});
+            site_then_documented_objects(&mut s, &mut job, &[], None, &mut result);
+            assert!(result.get("doc_objects_error").is_none(), "{result:#}");
+            let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+            (sp, result, job)
+        };
+        let (sp, result, _) = run(true, 4.8);
+        let doc = &result["doc_objects"];
+        let ranges: Vec<&cadaddy_walk3d::MepEquipment> = sp.mep.equipment.iter().filter(|e| e.kind == "range").collect();
+        // One in each studio (201 on Level 2 at x 10,000, 301 on Level 3 at x 10,800), none in a loft.
+        let mut at: Vec<(String, f64)> = ranges.iter().map(|e| (e.level.clone(), (e.min[0] + e.max[0]) / 2.0)).collect();
+        at.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(at.len(), 2, "{doc:#}");
+        assert!(at[0].0 == "Level 2" && (10_000.0..=10_144.0).contains(&at[0].1), "{at:?}");
+        assert!(at[1].0 == "Level 3" && (10_800.0..=10_944.0).contains(&at[1].1), "{at:?}");
+        for e in &ranges {
+            let p = |k: &str| e.properties.get(k).cloned().unwrap_or_default();
+            assert_eq!(p("STATUS"), "inferred", "{:?}", e.properties);
+            assert!(p("TYPICAL_VIEW").contains("E-9 ENLARGED STUDIO"), "{:?}", e.properties);
+            assert!(p("BASIS").contains("E-9 keynote 1"), "{:?}", e.properties);
+            assert!(["201", "301"].contains(&p("ROOM").as_str()), "{:?}", e.properties);
+            // Its receptacle: the note's, beside it, of the note's rating and mounting.
+            let rec: Vec<&cadaddy_walk3d::MepEquipment> =
+                sp.mep.equipment.iter().filter(|b| b.properties.get("FOR") == Some(&e.tag) && b.kind == "appliance_receptacle").collect();
+            assert_eq!(rec.len(), 1, "{:#?}", sp.mep.equipment);
+            let r = |k: &str| rec[0].properties.get(k).cloned().unwrap_or_default();
+            assert_eq!(r("RATING"), "30 A, 120 V");
+            assert!(r("MOUNTING").contains("ABOVE THE COUNTER"), "{:?}", rec[0].properties);
+            assert_eq!(r("PROVENANCE"), "inferred");
+            assert!(r("BASIS").contains("E-9 keynote 1: PROVIDE 30A 120V RECEPTACLE FOR RANGE"), "{}", r("BASIS"));
+            assert_eq!(rec[0].level, e.level);
+        }
+        // Nothing asked about; the load calculation's 2 suites agree.
+        assert!(doc["proposed_not_placed"].as_array().is_some_and(Vec::is_empty), "{doc:#}");
+        let check = &doc["typical_room_keynotes"]["load_calculation"][0];
+        assert_eq!(
+            (check["kind"].as_str(), check["built"].as_u64(), check["load_calculation"].as_u64()),
+            (Some("range"), Some(2), Some(2)),
+            "{doc:#}"
+        );
+        assert_eq!(check["agrees"], json!(true));
+        // A calculation counting 3 suites: the 2 built, the difference a finding.
+        let (sp, result, job) = run(true, 7.2);
+        assert_eq!(sp.mep.equipment.iter().filter(|e| e.kind == "range").count(), 2);
+        assert_eq!(result["doc_objects"]["typical_room_keynotes"]["load_calculation"][0]["agrees"], json!(false));
+        assert!(
+            job.findings.iter().any(|f| f.description.contains("range: 2 built in the typical rooms, the load calculation counts 3")),
+            "{:?}",
+            job.findings
+        );
+        // No marker in any view: no room is its type's; the note is asked about, never a stand-in.
+        let (sp, result, _) = run(false, 4.8);
+        assert_eq!(sp.mep.equipment.iter().filter(|e| e.kind == "range").count(), 0);
+        let unplaced = result["doc_objects"]["proposed_not_placed"].as_array().cloned().unwrap_or_default();
+        assert!(unplaced.iter().any(|u| u["kind"] == json!("range")), "{:#}", result["doc_objects"]);
     }
 
     /// Q6249: a room-wide keynote's words name rooms by their names, and guest rooms by the
