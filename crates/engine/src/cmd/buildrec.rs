@@ -131,6 +131,16 @@ pub(crate) fn counts(d: &Drawing) -> BTreeMap<String, u64> {
 /// A hash of everything in the drawing a build reads besides the spec: the plan's objects (not
 /// the ones a build made), the blocks, layers, BIM types, project rules and overrides.
 pub(crate) fn drawing_hash(d: &Drawing) -> String {
+    hash_with(d, &super::overrides::build_input(d))
+}
+
+/// [`drawing_hash`] as records written before Q6620 hold it (every override, as stored): a
+/// record of one still matches the drawing it was made of.
+fn drawing_hash_before_q6620(d: &Drawing) -> String {
+    hash_with(d, &d.overrides)
+}
+
+fn hash_with(d: &Drawing, overrides: &dyn std::fmt::Debug) -> String {
     let mut h = Fnv::new();
     for e in d.model.iter().filter(|e| wallgen::made_as(e).is_none()) {
         let _ = write!(h, "{e:?}");
@@ -147,7 +157,7 @@ pub(crate) fn drawing_hash(d: &Drawing) -> String {
             let _ = write!(h, "|{e:?}");
         }
     }
-    let _ = write!(h, "|{:?}|{:?}|{:?}|{:?}", d.layers, d.bim_types, d.project_rules, d.overrides);
+    let _ = write!(h, "|{:?}|{:?}|{:?}|{overrides:?}", d.layers, d.bim_types, d.project_rules);
     h.hex()
 }
 
@@ -307,6 +317,8 @@ pub(crate) struct Inputs {
     pub exterior: BTreeMap<String, Vec<String>>,
     pub provenance: BTreeMap<String, String>,
     pub drawing: String,
+    /// The drawing hashed as a record written before Q6620 did it.
+    drawing_before: String,
 }
 
 impl Inputs {
@@ -320,7 +332,13 @@ impl Inputs {
             exterior: h.exterior,
             provenance: h.provenance,
             drawing: drawing_hash(d),
+            drawing_before: drawing_hash_before_q6620(d),
         }
+    }
+
+    /// Whether the drawing differs from the one `rec` was made of.
+    fn drawing_changed(&self, rec: &BuildRecord) -> bool {
+        self.drawing != rec.drawing && self.drawing_before != rec.drawing
     }
 
     /// The spec parts that differ from the record's.
@@ -344,7 +362,7 @@ impl Inputs {
         if !parts.is_empty() {
             why.push(format!("the spec changed since the build: {}", parts.join(", ")));
         }
-        if self.drawing != rec.drawing {
+        if self.drawing_changed(rec) {
             why.push("the plan (or its blocks, layers, BIM types, project rules or overrides) changed since the build".into());
         }
         why
@@ -354,7 +372,7 @@ impl Inputs {
     /// some levels' entries or the exterior's entries of some levels: those levels, and the
     /// storey under a level whose roof parts changed. `None`: the whole model is rebuilt.
     pub(crate) fn partial(&self, rec: &BuildRecord, sp: &BuildingSpec) -> Option<BTreeSet<String>> {
-        if self.engine != rec.engine || self.switches != rec.switches || self.drawing != rec.drawing || sp.buildings.several() {
+        if self.engine != rec.engine || self.switches != rec.switches || self.drawing_changed(rec) || sp.buildings.several() {
             return None;
         }
         let parts = self.spec_changed(rec);
@@ -431,6 +449,55 @@ pub(crate) fn keep_unaffected(d: &mut Drawing, old: &Drawing, affected: &BTreeSe
     }
     let rebuilt = d.model.iter().filter(|e| wallgen::made_as(e).is_some() && hit(e)).count();
     (rebuilt, back)
+}
+
+/// The names a built element answers to (lower case): its build part (`casework`, `ceiling`,
+/// `mep`), its element kind (`light_fixture`, `equipment`) and its own kind as read
+/// (`receptacle`).
+fn part_names(e: &Entity) -> Vec<String> {
+    let Some(part) = wallgen::made_as(e) else { return Vec::new() };
+    let mut out = vec![part.to_ascii_lowercase()];
+    if let Some(kind) = super::elemprops::element_kind(e) {
+        out.push(kind.to_ascii_lowercase());
+        out.push(super::elemprops::reported_kind(e, kind).to_ascii_lowercase());
+    }
+    out
+}
+
+/// A whole build of which only `parts` (lower case, [`part_names`]) are taken (Q6620): the
+/// build's elements of other parts go and the model's own (`old`) come back as they stood, with
+/// every correction made to them since their build. Returns (elements of the parts rebuilt,
+/// elements kept, the parts no element of either model is of).
+pub(crate) fn keep_parts(d: &mut Drawing, old: &Drawing, parts: &BTreeSet<String>) -> (usize, usize, Vec<String>) {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut hit = |e: &Entity| {
+        let mine: Vec<String> = part_names(e).into_iter().filter(|n| parts.contains(n)).collect();
+        let yes = !mine.is_empty();
+        seen.extend(mine);
+        yes
+    };
+    let mut rebuilt = 0;
+    let mut drop: Vec<cadaddy_doc::Handle> = Vec::new();
+    for e in d.model.iter().filter(|e| super::revise3d::built_object(e)) {
+        if hit(e) {
+            rebuilt += 1;
+        } else {
+            drop.push(e.handle);
+        }
+    }
+    for h in &drop {
+        d.model.remove(*h);
+    }
+    let mut back = 0;
+    for e in old.model.iter().filter(|e| super::revise3d::built_object(e)) {
+        if hit(e) || d.model.get(e.handle).is_some() {
+            continue;
+        }
+        d.bump_handseed(e.handle);
+        d.model.push_shared(Arc::clone(e));
+        back += 1;
+    }
+    (rebuilt, back, parts.iter().filter(|p| !seen.contains(*p)).cloned().collect())
 }
 
 /// What a rebuild changed: the categories (`level|part`) whose counts differ, before and after.

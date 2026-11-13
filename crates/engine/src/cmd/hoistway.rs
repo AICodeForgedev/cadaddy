@@ -588,7 +588,7 @@ fn pieces(m: &Mesh) -> Vec<(Bounds2, (f64, f64), bool, usize)> {
         let (b, z, _) = one(&m.vertices);
         return vec![(b, z, false, usize::MAX)];
     }
-    (0..n).filter_map(|k| m.vertices.get(8 * k..8 * k + 8).map(&one).map(|(b, z, sq)| (b, z, sq, k))).collect()
+    (0..n).filter_map(|k| m.vertices.get(8 * k..8 * k + 8).map(one).map(|(b, z, sq)| (b, z, sq, k))).collect()
 }
 
 /// The level's built walls, a [`Wall`] per box.
