@@ -392,7 +392,7 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
     let parts_rooms = |found: &[super::perceive::geometry::Pair]| {
         let mine: Vec<&super::perceive::geometry::Pair> = found.iter().filter(|p| weighed(p).is_some()).collect();
         let total: f64 = mine.iter().map(|p| p.length).sum();
-        if tags.len() < 2 || !(total > 0.0) {
+        if tags.len() < 2 || total.is_nan() || total <= 0.0 {
             return false;
         }
         let (parted, parting) = rooms_parted(&tags, &sorted_faces, &mine, ROOM_SIGHTLINE_FT * 12.0 * k);
