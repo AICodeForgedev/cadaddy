@@ -1677,6 +1677,17 @@ impl PageFacts {
 /// whose samples the legend readers still leave out).
 const LEGEND_PAGE_MAX_WALL_LENGTH: f64 = 0.25;
 
+/// Least share of its lettering that is lines of words for a page drawing no walls to be a
+/// legend/notes sheet: a plan's lettering is mostly tags, marks and numbers, a legend's is its
+/// descriptions and notes. A trade's plan printed without the building's walls (ducts, pipes or
+/// conduit runs alone) draws no walls either (Q6599). Measured on a real set: legend, notes and
+/// schedule sheets 0.20 to 0.61, the pages read as legends 0.37 and 0.47; a made-up two-plan duct
+/// sheet with no walls and its views untitled 0.06, real plans 0.02 up (their walls tell them).
+/// Lines of a table (rules evenly spaced, columns crossing them) were measured too and told the
+/// duct sheet from a legend no better: a duct's faces and the runs beside it are spaced like a
+/// table's rows.
+const LEGEND_PAGE_MIN_WORD_SHARE: f64 = 0.12;
+
 /// Fewest lines of notes and specification text that make a page with no plan view a sheet of
 /// notes whatever its linework (its ruled tables can space their rows unevenly, like walls'
 /// faces). Measured on two real sets: notes and specification sheets 255 to 369, the most on any
@@ -1688,11 +1699,14 @@ const NOTES_PAGE_MIN_HEADINGS: usize = 3;
 /// Whether a page is a sheet of legends, notes and specifications, whatever its title or number
 /// says (Q6361): no view on it is titled as a plan, it has a legend's, notes' or specification's
 /// heading, and either its linework draws (almost) no walls (table rules and sample symbols beside
-/// their lettering) or its lettering is mostly notes and specification text.
+/// their lettering) and its lettering is a legend's (lines of words, not a plan's tags: Q6599), or
+/// its lettering is mostly notes and specification text.
 pub(crate) fn legend_notes_page(c: &crate::sheet_facts::PageContent) -> bool {
+    let words = c.word_lines as f64 >= LEGEND_PAGE_MIN_WORD_SHARE * c.texts as f64;
     c.plan_views == 0
         && c.headings > 0
-        && (c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH || (c.headings >= NOTES_PAGE_MIN_HEADINGS && c.sentences >= NOTES_PAGE_MIN_SENTENCES))
+        && ((c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH && words)
+            || (c.headings >= NOTES_PAGE_MIN_HEADINGS && c.sentences >= NOTES_PAGE_MIN_SENTENCES))
 }
 
 /// A page of the set during classify: read now, or kept as it was (read before, unreadable, or
@@ -3629,12 +3643,18 @@ mod classify_tests {
             headings,
             sentences: 40,
             texts: 200,
+            word_lines: 80,
             ..Default::default()
         };
         assert!(super::legend_notes_page(&page(0.1, 0, 3)));
         assert!(!super::legend_notes_page(&page(0.1, 1, 3)), "a view titled as a plan");
         assert!(!super::legend_notes_page(&page(0.1, 0, 0)), "no legend or notes heading");
         assert!(!super::legend_notes_page(&page(0.41, 0, 3)), "the sparsest plan measured");
+        // Q6599: a trade's plan drawn without the building's walls, its views untitled, a notes
+        // heading in the title column: its lettering is the plan's tags, so it stays a plan.
+        let runs = crate::sheet_facts::PageContent { word_lines: 16, texts: 272, wall_length: 0.0, sentences: 4, ..page(0.0, 0, 2) };
+        assert!(!super::legend_notes_page(&runs), "ducts with no walls are a plan's linework");
+        assert!(super::legend_notes_page(&crate::sheet_facts::PageContent { word_lines: 40, ..runs }), "lettering mostly words: a legend");
         // Mostly notes and specification text: a sheet of notes whatever its ruled tables draw.
         let notes = |sentences: usize, headings: usize| crate::sheet_facts::PageContent {
             wall_length: 1.1,

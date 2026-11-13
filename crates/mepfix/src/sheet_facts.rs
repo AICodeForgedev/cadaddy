@@ -610,6 +610,9 @@ pub fn view_regions(d: &Drawing) -> Vec<([f64; 4], usize)> {
 const HEADING_WORDS: usize = 6;
 /// A text this many words or more is a line of notes or specification text.
 const SENTENCE_WORDS: usize = 6;
+/// A text with this many words of two letters or more is a line of words (`DUPLEX RECEPTACLE,
+/// 20A, AFF`), not a tag or a mark.
+const WORD_LINE_WORDS: usize = 3;
 /// Shortest straight line weighed as a wall's face, in the page's size (about 1/2" on a 36"
 /// sheet).
 const WALL_FACE_MIN: f64 = 0.015;
@@ -638,6 +641,10 @@ pub struct PageContent {
     pub sentences: usize,
     /// Lines of lettering in all.
     pub texts: usize,
+    /// Lines of lettering of [`WORD_LINE_WORDS`] words or more (a word two letters or more): a
+    /// legend's descriptions and the notes, where a plan's lettering is mostly tags, marks and
+    /// numbers (`S3`, `A-1`, `12x8`, `200 CFM`).
+    pub word_lines: usize,
     /// View titles naming a plan of some kind ([`names_a_plan`]), key plans left out.
     pub plan_views: usize,
     /// Headings of legends, notes, abbreviations and specifications (`sheets.legend_notes_heading_words`).
@@ -660,6 +667,9 @@ pub fn page_content(d: &Drawing, texts: &[TextItem], views: &[ViewTitle]) -> Pag
         }
         if w.len() >= SENTENCE_WORDS {
             out.sentences += 1;
+        }
+        if t.value.split(|c: char| !c.is_ascii_alphabetic()).filter(|x| x.len() >= 2).count() >= WORD_LINE_WORDS {
+            out.word_lines += 1;
         }
     }
     out.plan_views = views.iter().filter(|v| names_a_plan(&v.title) && !names_key_plan(&v.title)).count();
@@ -1636,6 +1646,15 @@ mod tests {
         let c = page_content(&legend, &texts(&legend), &[]);
         assert_eq!(c.wall_faces, 0, "evenly spaced rules are no walls: {c:?}");
         assert_eq!((c.headings, c.sentences, c.plan_views), (2, 8, 0), "{c:?}");
+        // Its headings and notes are lines of words; a plan's tags and marks are not.
+        assert_eq!(c.word_lines, 9, "{c:?}");
+        let mut tags = Drawing::default();
+        for (k, t) in ["S3", "A-1,3", "12x8", "200 CFM", "SD-1", "EF-2 ABOVE", "101"].iter().enumerate() {
+            text(&mut tags, t, 1.0, f64::from(u8::try_from(k).unwrap_or(0)), 0.1);
+        }
+        text(&mut tags, "SUPPLY AIR DIFFUSER", 1.0, 9.0, 0.1);
+        let c = page_content(&tags, &texts(&tags), &[]);
+        assert_eq!((c.texts, c.word_lines), (8, 1), "{c:?}");
         // A key plan's title is no plan view.
         assert_eq!(page_content(&legend, &texts(&legend), &[view("KEY PLAN", None, 0.0)]).plan_views, 0);
     }
