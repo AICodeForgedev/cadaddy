@@ -28089,17 +28089,25 @@ fn arch_placer(
     );
     lap("sheets' linework sampled");
     // Each sheet's plans in drawing units per foot (Q6396), as its import read them (`None`: a
-    // sheet of one scale, at it). A sheet whose plans came in at another scale than its level's
-    // plan is fitted onto it at the ratio of the two, never one to one.
+    // sheet of one scale, read at it: the job's units per foot). A sheet whose plans came in at
+    // another scale than its level's plan is fitted onto it at the ratio of the two, never one to
+    // one, a sheet of one scale too ([`super::sheetreg::scale_ratio`]).
     let plan_upf: std::sync::Arc<Vec<Option<f64>>> =
         std::sync::Arc::new(sheets.iter().map(|b| plan_units.iter().find(|(n, _)| n.eq_ignore_ascii_case(&b.number)).map(|(_, u)| *u)).collect());
-    // A level's plan whose units per foot aren't the job's: said, never silent.
+    // A level's plan whose units per foot aren't the job's: said, never silent, with the ratio a
+    // sheet at the job's scale is fitted onto it at (each fit's line says the one it was tried at).
     for (_, i, _) in targets.iter() {
         if let (Some(Some(u)), Some(b)) = (plan_upf.get(*i), sheets.get(*i))
             && (u / upf - 1.0).abs() > 0.02
         {
+            let r = super::sheetreg::scale_ratio(Some(*u), None, upf);
+            let how = if (r - 1.0).abs() <= 1e-9 {
+                "a ratio outside those tried, so its sheets are fitted onto it one to one".to_string()
+            } else {
+                format!("a sheet at the job's scale is fitted onto it at {r:.3}, one at another scale at the ratio of the two")
+            };
             progress_line(&format!(
-                "  placer: {} (level {}'s plan) prints {u:.2} drawing units per foot, the job {upf:.2}: its sheets fit onto it at that ratio",
+                "  placer: {} (level {}'s plan) prints {u:.2} drawing units per foot, the job {upf:.2}: {how}",
                 b.number, b.level
             ));
         }
@@ -28282,12 +28290,15 @@ fn arch_placer(
                 (Some(a), Some(b)) if i != j => super::sheetreg::other_parts(a, b),
                 _ => None,
             });
-            let ratio =
-                super::sheetreg::scale_ratio(plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()), plan_upf.get(i).copied().flatten());
+            let ratio = super::sheetreg::scale_ratio(
+                plan_sheet(key).and_then(|j| plan_upf.get(j).copied().flatten()),
+                plan_upf.get(i).copied().flatten(),
+                upf,
+            );
             let fit = if other.is_some() { None } else { lines.fit(i, &tgt, ratio) };
             let number = sheet_names.get(i).cloned().unwrap_or_default();
             progress_line(&format!(
-                "  placer: {number} on {level} by its linework: {} ({:.1} s)",
+                "  placer: {number} on {level} by its linework at {ratio:.3} of its plan: {} ({:.1} s)",
                 fit.as_ref().map_or_else(
                     || other.as_ref().map_or_else(
                         || format!("no fit ({})", lines.best_tried(i, &tgt, ratio)),
@@ -28314,9 +28325,9 @@ fn arch_placer(
                 match &fit {
                     Some(f) => {
                         json!({"sheet": number, "level": level, "method": "linework", "transform": {"a": f.sim.a, "b": f.sim.b, "tx": f.sim.tx, "ty": f.sim.ty},
-                        "scale": f.sim.scale(), "score": f.score, "margin": f.margin, "drawn_off_scale": f.off_scale, "used": true})
+                        "scale": f.sim.scale(), "ratio": ratio, "score": f.score, "margin": f.margin, "drawn_off_scale": f.off_scale, "used": true})
                     }
-                    None => json!({"sheet": number, "level": level, "method": "none", "used": false,
+                    None => json!({"sheet": number, "level": level, "method": "none", "used": false, "ratio": ratio,
                     "why_not": if tgt.is_empty() {
                         "its level has no plan to put it onto".to_string()
                     } else if let Some(o) = &other {
@@ -36723,6 +36734,99 @@ mod tests {
         assert!(entry("E-102", "linework")["transform"]["tx"].as_f64().is_some_and(|v| (v + 6060.0).abs() < 15.0), "{l:#?}");
     }
 
+    /// Four sheets of one title block, 4000 units apart: a level's plan whose sheet came in at
+    /// half the job's units per foot (`plan_k` times the walls), a trade's plan of the same walls
+    /// at `trade_k`, and two sheets of nothing but the title block. No tags anywhere.
+    fn off_scale_plan_sheets(plan_k: f64, trade_k: f64) -> (crate::Session, cadaddy_walk3d::BuildingSpec) {
+        let mut s = crate::Session::new();
+        let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+        let mut line = |a: [f64; 2], b: [f64; 2]| {
+            d.add(
+                &Space::Model,
+                Common { layer: "PDF".into(), ..Common::default() },
+                EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) }),
+            )
+            .ok();
+        };
+        // The walls: an outline, partitions at uneven spacing and stubs by a fixed sequence, so
+        // the plan fits itself in one place only.
+        let mut walls = vec![
+            ([100.0, 150.0], [1300.0, 150.0]),
+            ([1300.0, 150.0], [1300.0, 900.0]),
+            ([1300.0, 900.0], [100.0, 900.0]),
+            ([100.0, 900.0], [100.0, 150.0]),
+        ];
+        walls.extend([270.0, 410.0, 620.0, 740.0, 950.0, 1100.0, 1210.0].iter().map(|x| ([*x, 150.0], [*x, 900.0])));
+        walls.extend([300.0, 420.0, 610.0, 760.0].iter().map(|y| ([100.0, *y], [1300.0, *y])));
+        let mut r = 7_u64;
+        let mut next = |n: f64| {
+            r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((r >> 33) as f64 / f64::from(1u32 << 31)) * n
+        };
+        for _ in 0..40 {
+            let (x, y, l) = (100.0 + next(1200.0), 150.0 + next(750.0), 40.0 + next(80.0));
+            if next(1.0) < 0.5 { walls.push(([x, y], [x + l, y])) } else { walls.push(([x, y], [x, y + l])) }
+        }
+        for (x0, k) in [(0.0, plan_k), (4000.0, trade_k), (8000.0, 0.0), (12000.0, 0.0)] {
+            for (a, b) in [
+                ([40.0, 40.0], [3416.0, 40.0]),
+                ([3416.0, 40.0], [3416.0, 2264.0]),
+                ([3416.0, 2264.0], [40.0, 2264.0]),
+                ([40.0, 2264.0], [40.0, 40.0]),
+                ([3000.0, 40.0], [3000.0, 2264.0]),
+                ([3000.0, 600.0], [3416.0, 600.0]),
+                ([3000.0, 1400.0], [3416.0, 1400.0]),
+            ] {
+                line([x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+            if k > 0.0 {
+                for (a, b) in &walls {
+                    line([x0 + k * a[0], k * a[1]], [x0 + k * b[0], k * b[1]]);
+                }
+            }
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Roof", "elevation_ft": 30.0, "height_ft": 4.0, "ceiling_ft": 4.0,
+                "region": [60.0 * plan_k, 100.0 * plan_k, 1450.0 * plan_k, 1060.0 * plan_k]}],
+            "sheets": [
+                {"number": "A-401", "discipline": "A", "level": "Roof", "rect": [0, 0, 3456, 2304]},
+                {"number": "M-401", "discipline": "M", "level": "Roof", "rect": [4000, 0, 7456, 2304]},
+                {"number": "P-401", "discipline": "P", "level": "Roof", "rect": [8000, 0, 11456, 2304]},
+                {"number": "E-401", "discipline": "E", "level": "Roof", "rect": [12000, 0, 15456, 2304]}
+            ]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        (s, sp)
+    }
+
+    /// fix-plan-scale-ratio-none-means-one: a trade's sheet whose import recorded no plan print
+    /// scale (one scale note: it stands at the job's units per foot) is fitted onto a level's plan
+    /// that came in at half the job's units per foot at their ratio, a half, and its work is
+    /// placed; before the fix it was tried one to one, found no fit and was left out. A plan and
+    /// a sheet both at the job's scale stay one to one; the log says the ratio each fit was tried at.
+    #[test]
+    fn a_sheet_of_one_scale_note_fits_an_off_scale_plan_at_their_ratio() {
+        let (s, sp) = off_scale_plan_sheets(1.0, 2.0);
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[("A-401".to_string(), 6.0)], "A");
+        let at = |p: [f64; 2]| place(p, "Roof").map(|m| m.apply(p));
+        let l = || log.lock().map(|l| l.clone()).unwrap_or_default();
+        // The trade sheet's (500, 400) of the walls, drawn twice the plan's size.
+        let m = at([5000.0, 800.0]).unwrap_or_else(|| panic!("M-401 not placed: {:#?}", l()));
+        assert!((m[0] - 500.0).abs() < 15.0 && (m[1] - 400.0).abs() < 15.0, "{m:?}");
+        let entry = |sheet: &str| l().into_iter().find(|v| v["sheet"] == sheet && v["method"] == "linework").unwrap_or(Value::Null);
+        assert_eq!(entry("M-401")["used"], json!(true), "{:#?}", l());
+        assert_eq!(entry("M-401")["ratio"], json!(0.5), "{:#?}", l());
+        assert!(entry("M-401")["scale"].as_f64().is_some_and(|k| (k - 0.5).abs() < 0.02), "{:#?}", l());
+
+        // Both at the job's scale: one to one, as before.
+        let (s, sp) = off_scale_plan_sheets(1.0, 1.0);
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let p = [4500.0, 400.0];
+        let m = place(p, "Roof").map(|m| m.apply(p)).unwrap_or_else(|| panic!("M-401 not placed: {:#?}", log.lock().map(|l| l.clone())));
+        assert!((m[0] - 500.0).abs() < 15.0 && (m[1] - 400.0).abs() < 15.0, "{m:?}");
+    }
+
     #[test]
     fn trade_sheets_go_onto_the_plans_the_floors_were_taken_from_when_there_is_no_architecture() {
         // No architectural floor plans: the mechanical plans give the floors (two levels), and the
@@ -42019,8 +42123,8 @@ mod tests {
         let off: Vec<String> = plans_off_set_scale(&set).into_iter().map(|o| o.sheet).collect();
         assert_eq!(off, ["A-5"], "a sheet its own plans disagree with is still reported");
         // The trade's plan onto the architect's at a quarter, never one to one.
-        assert_eq!(super::super::sheetreg::scale_ratio(Some(3.0), Some(12.0)), 0.25);
-        assert_eq!(super::super::sheetreg::scale_ratio(None, Some(12.0)), 1.0);
+        assert_eq!(super::super::sheetreg::scale_ratio(Some(3.0), Some(12.0), 12.0), 0.25);
+        assert_eq!(super::super::sheetreg::scale_ratio(None, Some(12.0), 12.0), 1.0);
     }
 
     /// Q6323: a plan imported at paper size (no scale note, none in its lettering, no dimension
