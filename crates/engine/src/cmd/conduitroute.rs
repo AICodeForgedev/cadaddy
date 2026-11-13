@@ -305,6 +305,7 @@ pub(crate) struct MethodRules {
     pub nm: String,
     pub se: String,
     pub uf: String,
+    pub pvc: String,
     pub prefer: Vec<String>,
     pub branch_words: Vec<String>,
     pub feeder_words: Vec<String>,
@@ -312,6 +313,8 @@ pub(crate) struct MethodRules {
     pub concealed_words: Vec<String>,
     pub exposed_words: Vec<String>,
     pub below_words: Vec<String>,
+    /// What the code permits below grade (buried in the earth or under the slab, Q6544).
+    pub below: BelowRules,
     pub exposed_rooms: Vec<String>,
     pub minimum_size_in: f64,
     pub minimum_source: String,
@@ -319,6 +322,24 @@ pub(crate) struct MethodRules {
     /// Limited-energy cable (fire alarm, Class 2/3, communications): outside the power
     /// wiring-methods table, judged by the spaces its listing allows (Q6535).
     pub limited: LimitedRules,
+}
+
+/// The wiring methods the code permits below grade (direct buried, under or in the slab), for a
+/// run the documents' wiring-methods table gives no below-grade row (Q6544).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct BelowRules {
+    pub raceways: Vec<String>,
+    pub cables: Vec<String>,
+    /// The project rules' wiring-method key for below-grade work.
+    pub rule_key: String,
+    pub source: String,
+    /// What `in raceway` means in a below-grade row.
+    pub spec_raceway: String,
+    /// A stub-up's most rise above the floor (inches): the stub out of the slab into the gear is
+    /// the below-grade run's end, not the room's wiring.
+    pub stub_in: f64,
+    pub stub_source: String,
 }
 
 /// The limited-energy cable types and the spaces each is listed for (`plenum`, `riser`,
@@ -334,7 +355,7 @@ pub(crate) struct LimitedRules {
 
 impl MethodRules {
     /// The method name (`EMT`, `MC`) for a spec table's method key (`raceway`, `mc`).
-    fn name_of(&self, key: &str) -> Option<&str> {
+    pub(crate) fn name_of(&self, key: &str) -> Option<&str> {
         let v = match key {
             "raceway" => &self.raceway,
             "mc" => &self.mc,
@@ -342,6 +363,7 @@ impl MethodRules {
             "nm" => &self.nm,
             "se" => &self.se,
             "uf" => &self.uf,
+            "pvc" => &self.pvc,
             _ => return None,
         };
         Some(v.as_str()).filter(|v| !v.is_empty())
