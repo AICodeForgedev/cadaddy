@@ -2,7 +2,8 @@
 //! on its wall class layer; the counters, equipment and the walls' finish lines it left on its
 //! other layers pair up like wall faces but are no walls. Taken as walls they boxed a small
 //! building's kitchen in at its counters: rooms built at a fraction of their area. A stretch of
-//! wall drawn lighter in line with a wall, and a wing beyond the sorted walls, stay walls.
+//! wall drawn lighter in line with a wall, a wing beyond the sorted walls, and partitions drawn
+//! lighter inside them (each parting two rooms, Q6627) stay walls.
 
 use cadaddy_engine::Session;
 use serde_json::json;
@@ -162,4 +163,59 @@ fn unsorted_print_keeps_walls_found_by_their_faces() {
     let mut s = building("PDF-GEOMETRY", "PDF-GEOMETRY");
     let got = areas(&mut s);
     assert!(area(&got, "703") > 100.0, "{got:?}");
+}
+
+/// Q6627: a row of rooms whose partitions the import left on its catch-all layer (drawn with a
+/// lighter pen than the outside walls, inside them): each parts two room numbers with no sorted
+/// wall between them, so the layer keeps its walls and every room is built to its partitions,
+/// not one room the length of the building.
+#[test]
+fn partitions_drawn_lighter_inside_the_sorted_walls_stay_walls() {
+    let walls = cadaddy_io::pdf_read::content_wall_layer();
+    let mut s = Session::new();
+    layer(&mut s, walls);
+    // A 50' x 16' building, 6" outside walls.
+    rect(&mut s, [0.0, 0.0], [600.0, 192.0]);
+    rect(&mut s, [6.0, 6.0], [594.0, 186.0]);
+    // Three 6" partitions, wall to wall, on the catch-all layer.
+    layer(&mut s, "PDF-GEOMETRY");
+    for x in [150.0, 300.0, 450.0] {
+        line(&mut s, [x - 3.0, 6.0], [x - 3.0, 186.0]);
+        line(&mut s, [x + 3.0, 6.0], [x + 3.0, 186.0]);
+    }
+    layer(&mut s, "TEXT");
+    for (i, x) in [60.0, 210.0, 360.0, 510.0].into_iter().enumerate() {
+        text(&mut s, [x, 110.0], "OFFICE");
+        text(&mut s, [x, 95.0], &format!("80{}", i + 1));
+    }
+    s.execute("bspec.draft", &json!({"store": true})).unwrap();
+    let sp = s.execute("bspec.get", &json!({})).unwrap();
+    let kept = sp["spec"]["layers"].as_array().unwrap().iter().any(|l| l["layer"] == "PDF-GEOMETRY" && l["role"] == "wall");
+    assert!(kept, "the partitions' layer is walls: {}", sp["spec"]["layers"]);
+    let got = areas(&mut s);
+    // 11'-9" (end rooms) and 12' (middle rooms) by 15'.
+    for (n, want) in [("801", 176.25), ("802", 180.0), ("803", 180.0), ("804", 176.25)] {
+        let a = area(&got, n);
+        assert!((a - want).abs() <= 0.05 * want, "room {n}: {a} sf, not {want}: {got:?}");
+    }
+}
+
+/// Q6627: in the building above (casework on the catch-all layer), a storage room open to the
+/// kitchen with a counter across the sightline between their numbers: the counter parts two of
+/// the three numbers, but it is a small part of the layer's pairs (two equipment boxes too), so
+/// the layer stays casework, no walls.
+#[test]
+fn one_counter_between_two_open_rooms_does_not_make_casework_walls() {
+    let walls = cadaddy_io::pdf_read::content_wall_layer();
+    let mut s = building(walls, "PDF-GEOMETRY");
+    layer(&mut s, "PDF-GEOMETRY");
+    rect(&mut s, [120.0, 120.0], [180.0, 176.0]);
+    rect(&mut s, [124.0, 124.0], [176.0, 172.0]);
+    layer(&mut s, "TEXT");
+    text(&mut s, [300.0, 75.0], "STORAGE");
+    text(&mut s, [300.0, 60.0], "704");
+    s.execute("bspec.draft", &json!({"store": true})).unwrap();
+    let sp = s.execute("bspec.get", &json!({})).unwrap();
+    let casework = sp["spec"]["layers"].as_array().unwrap().iter().any(|l| l["layer"] == "PDF-GEOMETRY");
+    assert!(!casework, "the layer holds casework: no wall layer: {}", sp["spec"]["layers"]);
 }
