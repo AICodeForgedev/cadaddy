@@ -24,7 +24,7 @@ fn wall(d: &mut Drawing, layer: &str, y: f64) {
     line(d, layer, (0.0, y + 0.5), (12.0, y + 0.5));
 }
 
-const LAYERS: [&str; 5] = ["A-WALL-WOOD", "A-WALL-STEEL", "A-WALL-CMU", "A-WALL-NOLEGEND", "A-WALL-UNTYPED"];
+const LAYERS: [&str; 6] = ["A-WALL-WOOD", "A-WALL-STEEL", "A-WALL-CMU", "A-WALL-NOLEGEND", "A-WALL-UNTYPED", "A-WALL-NOGAUGE"];
 
 fn layer(material: &str, thickness: f64, side: &str, category: &str, cavity: bool) -> Value {
     json!({"material": material, "thickness_in": thickness, "side": side, "category": category, "in_cavity": cavity})
@@ -62,6 +62,12 @@ fn spec() -> Value {
         "fire_rating": "2 HR",
         "source": "A-901 wall types, mark M8",
     });
+    // A steel stud wall whose legend names no gauge and no stud depth (the reader's stand-in).
+    let no_gauge = json!({
+        "tag": "QS9",
+        "layers": [layer("3 1/2\" metal studs (depth not given)", 3.5, "core", "framing", false), layer("5/8\" gypsum board", 0.625, "side1", "board", false)],
+        "source": "A-901 wall types, mark QS9",
+    });
     json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
@@ -71,12 +77,14 @@ fn spec() -> Value {
             {"layer": LAYERS[2], "role": "wall", "wall_type": "M8"},
             {"layer": LAYERS[3], "role": "wall", "wall_type": "Partition"},
             {"layer": LAYERS[4], "role": "wall"},
+            {"layer": LAYERS[5], "role": "wall", "wall_type": "QS9"},
         ],
         "wall_types": [
             {"name": "PX7", "thickness_in": 6, "assembly": wood},
             {"name": "QS4", "thickness_in": 6, "assembly": steel},
             {"name": "M8", "thickness_in": 6, "assembly": cmu},
             {"name": "Partition", "thickness_in": 6},
+            {"name": "QS9", "thickness_in": 6, "assembly": no_gauge},
         ],
         // The wood wall's type is tagged on the plan; the others take their layer's type.
         "walls": [{"level": "L1", "a": [0, 3], "b": [144, 3], "wall_type": "PX7", "source": "A-100", "status": "drawing"}],
@@ -173,6 +181,18 @@ fn each_wall_shows_its_types_legend_data_with_the_legend_as_source() {
     assert!(text(cmu, "assembly").contains("8\" concrete masonry units"));
     assert_eq!(field(form, "stud_size")["status"], "n/a", "{form:#}");
     assert_eq!(field(form, "stud_spacing")["status"], "n/a", "{form:#}");
+
+    // No gauge and no depth on the legend: the size says so and is a default; the gauge is the
+    // rules' (a default) on its own; the spacing the rules' default.
+    let (_, ng, form) = &ws[5];
+    assert_eq!(text(ng, "stud_size"), "3 1/2\" metal stud");
+    assert_eq!(field(form, "stud_size")["status"], "default", "{form:#}");
+    assert_eq!(text(ng, "stud_gauge"), "20 ga");
+    assert_eq!(ng["stud_gauge"]["source"]["kind"], "default", "{ng:#}");
+    assert_eq!(ng["stud_spacing"]["value"].as_f64(), Some(16.0));
+    assert_eq!(ng["stud_spacing"]["source"]["kind"], "default", "{ng:#}");
+    // A gauge the legend names is in the size, with no separate gauge.
+    assert!(steel.get("stud_gauge").is_none_or(|v| v.is_null()), "{steel:#}");
 }
 
 #[test]
@@ -192,7 +212,7 @@ fn an_untyped_wall_lists_the_type_data_missing_and_says_why() {
     let c = s.execute("bim.completeness", &json!({"kind": "wall"})).expect("completeness");
     let fields = &c["kinds"]["wall"]["fields"];
     for key in ["assembly", "fire_rating"] {
-        assert_eq!(fields[key]["filled"].as_u64(), Some(3), "{key}: {fields:#}");
+        assert_eq!(fields[key]["filled"].as_u64(), Some(4), "{key}: {fields:#}");
         assert_eq!(fields[key]["missing"].as_u64(), Some(2), "{key}: {fields:#}");
     }
 }

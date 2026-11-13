@@ -746,11 +746,13 @@ fn wood_name(material: &str) -> Option<String> {
     })
 }
 
-/// A wall type's studs as its framing is laid (Q6594): what they are (`2x6`, `3 5/8" 20 ga`) and
-/// their spacing (inches), each with where it comes from.
+/// A wall type's studs as its framing is laid (Q6594): what they are (`2x6`, `3 5/8" 20 ga`,
+/// `5 1/2" metal stud`) and their spacing (inches), each with where it comes from; a steel stud's
+/// gauge on its own when the type names none (the rules' gauge is a default, the depth is not).
 pub(crate) struct Studs {
     pub size: String,
     pub size_src: Source,
+    pub gauge: Option<(String, Source)>,
     pub spacing_in: f64,
     pub spacing_src: Source,
 }
@@ -764,18 +766,29 @@ pub(crate) fn studs_of(wt: &cadaddy_walk3d::WallType, r: &Rules) -> Option<Studs
     let src = type_source(wt, asm);
     let wood = is_wood(r, &layer.material);
     let depth_in = layer_depth(layer).max(1.5);
+    // The legend reader's stand-in depth where the legend gives none is a default, not the legend's.
+    let depth_src = if layer.material.contains("(depth not given)") {
+        Source::from_doc(SourceKind::Default, &format!("{}: the legend gives no stud depth (a stand-in depth)", wt.name))
+    } else {
+        src.clone()
+    };
     let (spacing_in, spacing_src) = stud_spacing(wt, asm, layer, r, &src);
-    let (size, size_src) = if wood {
+    let (size, size_src, gauge) = if wood {
         match wood_name(&layer.material) {
-            Some(n) => (n, src),
-            None => (lumber(depth_in), src),
+            Some(n) => (n, src, None),
+            None => (lumber(depth_in), depth_src, None),
         }
     } else {
-        let (gauge, g_src) = stud_gauge(&layer.material, false, r, &src);
         let size = inches_text(depth_in);
-        if gauge.is_empty() { (size, src) } else { (format!("{size} {gauge}"), g_src) }
+        match text_gauge(&layer.material) {
+            Some(g) => (format!("{size} {g}"), depth_src, None),
+            None => {
+                let (g, g_src) = stud_gauge(&layer.material, false, r, &src);
+                (format!("{size} metal stud"), depth_src, (!g.is_empty()).then_some((g, g_src)))
+            }
+        }
     };
-    Some(Studs { size, size_src, spacing_in, spacing_src })
+    Some(Studs { size, size_src, gauge, spacing_in, spacing_src })
 }
 
 /// The studs, plates or tracks, headers, sills and blocking of a framing layer; the studs'

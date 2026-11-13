@@ -3178,6 +3178,9 @@ fn wall_type_data(
     match super::tradeatoms::studs_of(wt, rules) {
         Some(st) => {
             put(store, "stud_size", Prop::new(st.size, own(st.size_src)), tally);
+            if let Some((g, g_src)) = st.gauge {
+                put(store, "stud_gauge", Prop::new(g, own(g_src)), tally);
+            }
             put(store, "stud_spacing", Prop::new(round2(st.spacing_in), own(st.spacing_src)).with_unit("in"), tally);
         }
         None => {
