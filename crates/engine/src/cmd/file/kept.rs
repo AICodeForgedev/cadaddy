@@ -56,16 +56,26 @@ fn content(mut v: serde_json::Value) -> serde_json::Value {
 /// worked out from group 11, and the writers work it out again from CADaddy's font metrics, so a
 /// file's stored value that another program worked out differently is not content (test-asus-dwgrt:
 /// middle-aligned texts and centred attributes of sample drawings reported changed on first save).
+///
+/// Such text without an alignment point is drawn at its first point
+/// ([`cadaddy_doc::Text::justify_point`]), which the writers write as its alignment point: it is
+/// compared as that alignment point (test-coord-battle8: these texts reported 'text insert
+/// changed').
 fn drop_derived_first_point(t: &mut serde_json::Value) {
     let field = |k: &str| t.get(k).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     let (h, va) = (field("halign"), field("valign"));
     let by_first_point = (matches!(h.as_str(), "" | "left") && matches!(va.as_str(), "" | "baseline")) || matches!(h.as_str(), "aligned" | "fit");
-    if !by_first_point
-        && t.get("alignPt").is_some_and(|p| !p.is_null())
-        && let Some(o) = t.as_object_mut()
-    {
-        o.remove("insert");
+    if by_first_point {
+        return;
     }
+    let Some(o) = t.as_object_mut() else { return };
+    if o.get("alignPt").is_none_or(serde_json::Value::is_null) {
+        match o.get("insert").cloned() {
+            Some(p) if !p.is_null() => o.insert("alignPt".into(), p),
+            _ => return,
+        };
+    }
+    o.remove("insert");
 }
 
 /// Removes from the compared forms of `kind` the fields that mean nothing for it: a linear
@@ -954,6 +964,10 @@ mod tests {
         // Justified text with no alignment point is placed by its first point.
         let lone = |first: f64| json!({"type": "text", "insert": [first, 0.0, 0.0], "alignPt": null, "halign": "center", "valign": "baseline"});
         assert!(!kept(&content(lone(1.0)), &content(lone(2.0)), 0));
+        // Written, that point is its alignment point and the first point is worked out: kept.
+        let written = json!({"type": "text", "insert": [-3.0, 0.0, 0.0], "alignPt": [1.0, 0.0, 0.0], "halign": "center", "valign": "baseline"});
+        assert!(kept(&content(lone(1.0)), &content(written.clone()), 0));
+        assert!(!kept(&content(lone(2.0)), &content(written), 0));
         // An attribute definition's and a reference's attributes, the same way.
         let attdef = |first: f64| json!({"type": "attDef", "tag": "A", "text": text("center", "baseline", first)});
         assert!(kept(&content(attdef(1.0)), &content(attdef(2.0)), 0));

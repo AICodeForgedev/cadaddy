@@ -234,7 +234,7 @@ pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec
     let mut plan = dxf_post::Plan::new(&views, dxf_write::bridge_job(version));
     let (floor, ceil) = tag_caps();
     check_reopens("DWG", plan.groups(), ceil.max(floor))?;
-    let (dxf, linetypes, tags) = dxf_write::dwg_bridge_from(d, &mut plan);
+    let (dxf, linetypes, tags) = dxf_write::dwg_bridge_from(d, &mut plan, version);
     drop(plan);
     drop(views);
     check_reopens("DWG", tags, ceil.max(floor))?;
