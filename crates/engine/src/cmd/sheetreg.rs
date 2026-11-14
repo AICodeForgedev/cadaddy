@@ -13,7 +13,7 @@
 //!   of the scales the two sheets' plans print at (one to one when both came in at their
 //!   printed scales; a quarter for a trade's 1/4" roof plan onto a roof plan read at a tenth of
 //!   its scale), with the fit's score and its margin over the next best placement recorded
-//!   ([`SheetLines::fit`]);
+//!   ([`SheetLines::fit_why`]);
 //! - a sheet whose views name another part of the site than the plan's (`BUILDING 3 - UNIT 8`
 //!   against `BUILDING 2 - UNIT 6`: [`site_parts`]) is never laid on it, however alike its
 //!   linework (the units of a complex repeat a few typical layouts, so another building's unit
@@ -221,21 +221,22 @@ impl SheetLines {
             .then(|| (Sim::scale_offset(k, start), on, under))
     }
 
+    /// [`Self::fit_why`]'s fit, if any.
+    #[cfg(test)]
+    pub(crate) fn fit(&self, i: usize, tgt: &[Vec2], ratio: f64) -> Option<LineworkFit> {
+        self.fit_why(i, tgt, ratio, &mut super::grids::FitStats::default()).ok()
+    }
+
     /// Sheet `i` fitted onto `tgt` (its level's plan linework) by its linework at `ratio` (the
     /// plan's drawing units per foot over the sheet's, from the scales their plans print: 1 when
     /// both came in at them) within 2.5% (a fit off that is its sampling's error, so at `ratio`
     /// about its middle; one at the end of the scales tried is no fit), the whole floor or a part
     /// of it (an enlarged plan). Never scaled to fit without that ratio, but for a sheet drawn a
     /// few percent off its printed scale whose fit is decisive ([`MAX_OFF_SCALE`]): placed at the
-    /// scale it is drawn at. `None` without a fit that holds ([`FIT_F1`], [`FIT_MARGIN`]).
-    pub(crate) fn fit(&self, i: usize, tgt: &[Vec2], ratio: f64) -> Option<LineworkFit> {
-        self.fit_why(i, tgt, ratio, &mut super::grids::FitStats::default()).ok()
-    }
-
-    /// [`Self::fit`], or why there is none, for the log: the best placement weighed at `ratio`
-    /// and what the off-scale trial lacked. Told from the fits the placement itself ran (Q6566: a
-    /// sheet that fit nowhere was weighed a second time just to say why); the plan's linework is
-    /// made ready once for them all. `stats` counts the fits.
+    /// scale it is drawn at. Without a fit that holds ([`FIT_F1`], [`FIT_MARGIN`]), why, for the
+    /// log: the best placement weighed at `ratio` and what the off-scale trial lacked, told from
+    /// the fits the placement ran (Q6566: a sheet that fit nowhere was weighed a second time just
+    /// to say why). The plan's linework is made ready once for them all; `stats` counts the fits.
     pub(crate) fn fit_why(&self, i: usize, tgt: &[Vec2], ratio: f64, stats: &mut super::grids::FitStats) -> Result<LineworkFit, String> {
         let (Some(src), true) = (self.pts.get(i), self.stripped(i)) else { return Err("its template could not be told from its drawing".into()) };
         if src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
@@ -290,7 +291,7 @@ impl SheetLines {
         Err(why)
     }
 
-    /// The fit of the points `src` on `plan` at the ratio `r` ([`Self::fit`]) and the scale its
+    /// The fit of the points `src` on `plan` at the ratio `r` ([`Self::fit_why`]) and the scale its
     /// best placement was weighed at; and the best placement weighed (scale, offset, score,
     /// margin), held or not, for the log.
     fn fit_points_at(
