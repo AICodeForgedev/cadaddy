@@ -1593,11 +1593,10 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
                     && !t.split_whitespace().any(|w| w.eq_ignore_ascii_case("ROOM"))
                     && !names_a_room(&texts, *j)
             })
-            .map(|(_, t)| t)
-            .min_by(|(_, a, _, _), (_, b, _, _)| a.dist(center).total_cmp(&b.dist(center)));
+            .min_by(|(_, (_, a, _, _)), (_, (_, b, _, _))| a.dist(center).total_cmp(&b.dist(center)));
 
         let (tag_text, kind) = match tag {
-            Some((t, _, _, _)) => {
+            Some((j, (t, _, _, _))) => {
                 let up = t.to_ascii_uppercase();
                 // A `word:` entry is a whole word of the tag, any other a part of it.
                 let has = |w: &str| match w.strip_prefix("word:") {
@@ -1612,7 +1611,13 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
                 } else {
                     "unknown"
                 };
-                (t.clone(), k.to_string())
+                // Its letters with its number printed under them (`AHU` over `1`) are the
+                // whole tag, as the text-only reading below takes them: one tag, not two.
+                let t = match stacked_number(&texts, j) {
+                    Some((n, _)) => format!("{}-{n}", t.trim().trim_end_matches(['-', ' '])),
+                    None => t.clone(),
+                };
+                (t, k.to_string())
             }
             None => continue,
         };
@@ -2768,6 +2773,21 @@ mod tests {
             .map(|e| (e.kind.clone(), e.tag.clone(), [((e.min.x + e.max.x) / 2.0).round(), ((e.min.y + e.max.y) / 2.0).round()]))
             .collect();
         assert_eq!(got, [("fan_coil_unit".to_string(), "FCU-7".to_string(), [402.0, 397.0])]);
+    }
+
+    #[test]
+    fn a_boxed_unit_tagged_letters_over_number_is_one_unit_by_its_whole_tag() {
+        // A unit's outline (60 x 36) with its tag inside it, `AHU` over `1` (Q6579): the box's
+        // reading and the text-only reading are one unit, `AHU-1`, not `AHU` and `AHU-1`.
+        let mut p = Print::new().with_both_pens();
+        let corners = [[300.0, 300.0], [360.0, 300.0], [360.0, 336.0], [300.0, 336.0]];
+        let vertices = corners.iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
+        let outline = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+        p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), outline).expect("unit");
+        p.text(false, "TEXT", "AHU", [326.0, 318.0], 4.0);
+        p.text(false, "TEXT", "1", [329.0, 311.0], 4.0);
+        let got: Vec<(String, String)> = detect_equipment(&p.d, true, false).iter().map(|e| (e.kind.clone(), e.tag.clone())).collect();
+        assert_eq!(got, [("ahu".to_string(), "AHU-1".to_string())]);
     }
 
     #[test]

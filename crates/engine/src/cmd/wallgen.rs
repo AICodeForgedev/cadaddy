@@ -1549,11 +1549,18 @@ pub fn model_behind(s: &Session) -> bool {
 
 /// After a command: when the drawing has an associative model and an object on its rules'
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
-pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
-    // First the copies a person made of generated elements, recorded as theirs (Q6620): what
-    // follows takes them for no build's.
-    super::overrides::after_command(s, before);
-    behind_after_command(s, before);
+/// `uid` (when known) is the drawing the command started in: one that left another drawing
+/// current (`open`, a new drawing, a switch) edited no model, so nothing compares the drawing
+/// before with this one (it took a whole opened model for added: a step "open" in its build
+/// record and a second on a large model, Q6567); a build the command made is still recorded.
+pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, uid: Option<u64>) {
+    let switched = uid.is_some_and(|u| s.state().is_ok_and(|st| st.uid != u));
+    if !switched {
+        // First the copies a person made of generated elements, recorded as theirs (Q6620): what
+        // follows takes them for no build's.
+        super::overrides::after_command(s, before);
+        behind_after_command(s, before);
+    }
     // The outermost command is over: the sheet changes it made are forgotten (they hold
     // drawing states, the sheets put out among them).
     if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
@@ -1563,11 +1570,11 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     }
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
-    super::revise3d::after_command(s, before);
+    super::revise3d::after_command(s, before, switched);
     // Last, the saved model's record (Q6403): the spec it is written into is no edit of the
     // model or its plan, so the state it makes is the one the command left, behind or built.
     let left = s.state().ok().map(|st| Arc::clone(&st.doc));
-    super::buildrec::after_command(s, before);
+    super::buildrec::after_command(s, before, switched);
     if let Some(left) = left
         && let Ok(st) = s.state_mut()
         && !Arc::ptr_eq(&left, &st.doc)
@@ -3082,6 +3089,33 @@ fn plan_level_with(
     let mut it = frames.iter();
     found.retain(|_| !it.next().copied().unwrap_or(false));
     let mut frame_pairs = frames.iter().filter(|x| **x).count();
+    // A print the import sorted by what it draws (Q6487): where its leftover layers hold the
+    // building's casework they are no wall layers (`bspec.draft`), but a stretch of the outside
+    // wall drawn lighter (round a service window) is on them too. A pair of their lines along the
+    // building's outside, in line from a wall's end, is that wall run on; its windows' frames
+    // across its gaps are left out as below.
+    let sorted = found.iter().any(|p| p.layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()));
+    let leftover_ents: Vec<&Arc<Entity>> = if sorted {
+        ents.iter().copied().filter(|e| cadaddy_io::pdf_read::is_content_leftover_layer(&e.common.layer) && !on_walls(&e.common.layer)).collect()
+    } else {
+        Vec::new()
+    };
+    if !leftover_ents.is_empty() {
+        let leftover_segs = segments(&leftover_ents);
+        let mut runs = outside_runs(pairs(d, &leftover_segs, &lim), &found, k);
+        let frames = frames_in_gaps(&runs, &leftover_segs, &found, false, &all_segs, range, k);
+        let mut it = frames.iter();
+        runs.retain(|_| !it.next().copied().unwrap_or(false));
+        frame_pairs += frames.iter().filter(|x| **x).count();
+        if !runs.is_empty() {
+            notes.push(format!(
+                "{}: {} stretches of outside wall drawn lighter (on an imported print's leftover layers, in line from a wall's end) taken for walls.",
+                level.name,
+                runs.len()
+            ));
+        }
+        found.extend(runs);
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // storefront's glazing drawn lighter): it is wall too, unless it is a window's across the gap.
     if !screened_ents.is_empty() && !found.is_empty() {
@@ -3480,6 +3514,8 @@ fn plan_level_with(
         .filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Corridor && c.level.eq_ignore_ascii_case(&level.name))
         .collect();
     let mut corridor_gaps = 0usize;
+    // Stretches of a door's gap past a wall parting it, with no door of their own, left open (Q6616).
+    let mut parted_open = 0usize;
     let mut crossing_gaps: Vec<(Vec2, Vec2)> = Vec::new();
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
@@ -3798,7 +3834,33 @@ fn plan_level_with(
         };
         let mut extra = Vec::new();
         if !leaves.is_empty() || covered {
-            extra.push((g0, g1, z0 + pl.door_head, top));
+            // The door's header over the spans that hold a door, up to the wall parting the gap
+            // (Q6616). A span past that wall with no door of its own is a gap of its own: a
+            // cased opening's header when nothing crosses the gap and it is an opening's width,
+            // else open (the room beyond the crossing wall).
+            let door_in = |s0: f64, s1: f64| {
+                spans.len() == 1
+                    || leaves.iter().any(|(.., (j0, j1))| {
+                        let m = u.dot((*j0 + *j1) * 0.5 - g0);
+                        m > s0 && m < s1
+                    })
+                    || pl.leaves.iter().any(|l| {
+                        let (f0, f1) = l.frame.unwrap_or((l.a, l.b));
+                        let m = (f0 + f1) * 0.5;
+                        !l.window && seg_dist(m, g0, g1) <= t + l.a.dist(l.b) && {
+                            let s = u.dot(m - g0);
+                            s > s0 && s < s1
+                        }
+                    })
+            };
+            for &(s0, s1) in &spans {
+                let (a, b) = (g0 + u * s0, g0 + u * s1);
+                if door_in(s0, s1) || (!no_header && s1 - s0 <= 8.0 * upf) {
+                    extra.push((a, b, z0 + pl.door_head, top));
+                } else {
+                    parted_open += 1;
+                }
+            }
             if !leaves.is_empty() {
                 extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
             }
@@ -3901,6 +3963,12 @@ fn plan_level_with(
     if corridor_gaps > 0 {
         notes.push(format!(
             "{}: {corridor_gaps} gaps between lined-up walls (across a corridor, or another wall across them) left open (no header).",
+            level.name
+        ));
+    }
+    if parted_open > 0 {
+        notes.push(format!(
+            "{}: {parted_open} stretches of a door's gap past a wall crossing it (no door of their own) left open: the door's header stops at that wall.",
             level.name
         ));
     }
@@ -5203,8 +5271,8 @@ struct Swing {
 }
 
 /// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive,
-/// alone or joined to its leaf and the wall's lines) on one circle through 60–100°, a door's
-/// radius (16"–54" at `k` units per inch).
+/// alone or joined to its leaf and the wall's lines, or printed dash by dash) on one circle
+/// through 60–100°, a door's radius (16"–54" at `k` units per inch).
 fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     let mut out = Vec::new();
@@ -5235,6 +5303,14 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
             out.push(Swing { c, r, ends, handle: e.handle });
         }
     }
+    // A swing printed dashed, dash by dash (Q6487).
+    for (handle, _, pts) in super::perceive::geometry::dash_runs(ents, k) {
+        for (c, r, _, ends) in super::perceive::geometry::flat_swings(&pts) {
+            if c.is_finite() && (rmin..=rmax).contains(&r) && out.len() < MAX_OBJECTS {
+                out.push(Swing { c, r, ends, handle });
+            }
+        }
+    }
     out
 }
 
@@ -5245,6 +5321,63 @@ pub(crate) fn swing_hinges(ents: &[&Arc<Entity>], k: f64) -> Vec<Vec2> {
 
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
 const MAX_CLUSTERED: usize = 20_000;
+
+/// Most passes [`outside_runs`] makes taking in a run of pairs from a wall's end.
+const MAX_RUN_PASSES: usize = 64;
+/// How near the walls' extents' edge (inches, past the run's thickness) a run of the outside wall
+/// lies.
+const OUTSIDE_EDGE_IN: f64 = 12.0;
+
+/// Of the pairs `cands`, those that run on in line from the end of one of the `walls` (or of a
+/// pair so taken: [`fills_a_wall`]), about as thick, along the edge of the walls' extents it runs
+/// parallel to, where no wall is yet: the building's outside wall continued where it is drawn
+/// with a lighter pen (Q6487).
+fn outside_runs(
+    cands: Vec<super::perceive::geometry::Pair>,
+    walls: &[super::perceive::geometry::Pair],
+    k: f64,
+) -> Vec<super::perceive::geometry::Pair> {
+    let b = cadaddy_geom::Bounds2::from_points(walls.iter().flat_map(|p| [p.c0, p.c1]).filter(|q| q.is_finite()));
+    if b.is_empty() {
+        return Vec::new();
+    }
+    // Running along an edge of the extents (an edge it is parallel to), near it.
+    let on_edge = |p: &super::perceive::geometry::Pair| {
+        let m = (p.c0 + p.c1) * 0.5;
+        let d = p.c1 - p.c0;
+        let reach = p.thickness.abs() + OUTSIDE_EDGE_IN * k;
+        let edge = if d.x.abs() >= 20.0 * d.y.abs() {
+            (m.y - b.min.y).abs().min((b.max.y - m.y).abs())
+        } else if d.y.abs() >= 20.0 * d.x.abs() {
+            (m.x - b.min.x).abs().min((b.max.x - m.x).abs())
+        } else {
+            f64::INFINITY
+        };
+        b.contains(m) && edge <= reach
+    };
+    // In line from the end of one of `ws` and about as thick: the rest of that wall.
+    let continues = |p: &super::perceive::geometry::Pair, ws: &[super::perceive::geometry::Pair]| {
+        ws.iter().any(|w| {
+            (p.thickness - w.thickness).abs() <= 0.5 * w.thickness.abs() && fills_a_wall(p.c0, p.c1, p.thickness, std::slice::from_ref(w), k)
+        })
+    };
+    // Along a wall already there (its finish or insulation lines): nothing to take in.
+    let along = |p: &super::perceive::geometry::Pair, ws: &[super::perceive::geometry::Pair]| {
+        let m = (p.c0 + p.c1) * 0.5;
+        ws.iter().any(|w| seg_dist(m, w.c0, w.c1) <= 0.5 * (w.thickness + p.thickness))
+    };
+    let mut left: Vec<_> = cands.into_iter().filter(|p| on_edge(p) && !along(p, walls)).collect();
+    let mut taken: Vec<super::perceive::geometry::Pair> = Vec::new();
+    for _ in 0..MAX_RUN_PASSES {
+        let (fill, rest): (Vec<_>, Vec<_>) = left.into_iter().partition(|p| !along(p, &taken) && (continues(p, walls) || continues(p, &taken)));
+        left = rest;
+        if fill.is_empty() {
+            break;
+        }
+        taken.extend(fill);
+    }
+    taken
+}
 
 /// Whether a pair (centreline `a`–`b`, `t` thick) runs in line with one of the walls and meets
 /// its end (within its thickness and 3"): the rest of that wall across a gap, not a thing beside it.
@@ -6629,6 +6762,74 @@ mod tests {
             out.push(("A-WALL", line_ft((face, from), (face, y1))));
         }
         out
+    }
+
+    /// A door swing (feet) hinged at `hinge`, `r` wide, from angle `a0` to `a1` (degrees).
+    fn swing_ft(hinge: (f64, f64), r: f64, a0: f64, a1: f64) -> (&'static str, EntityKind) {
+        (
+            "A-DOOR",
+            EntityKind::Arc(cadaddy_doc::Arc {
+                center: Vec3::new(hinge.0 * 12.0, hinge.1 * 12.0, 0.0),
+                radius: r * 12.0,
+                start: a0.to_radians(),
+                end: a1.to_radians(),
+            }),
+        )
+    }
+
+    /// The pieces over the gaps of the wall line on `y` (feet) that start above the floor
+    /// (headers, a window's head): their x extents in feet, sorted.
+    fn heads_on_line(pl: &PlanLevel, y: f64) -> Vec<(f64, f64)> {
+        let mut out: Vec<(f64, f64)> = pl
+            .walls
+            .iter()
+            .flat_map(|w| w.extra.iter())
+            .filter(|(a, b, lo, _)| *lo > pl.z0 + 1.0 && (a.y / 12.0 - y).abs() < 0.2 && (b.y / 12.0 - y).abs() < 0.2)
+            .map(|(a, b, ..)| ((a.x.min(b.x) / 12.0), (a.x.max(b.x) / 12.0)))
+            .collect();
+        out.sort_by(|p, q| p.0.total_cmp(&q.0));
+        out
+    }
+
+    #[test]
+    fn a_doors_header_stops_at_the_wall_crossing_its_gap() {
+        // A 40' x 30' building of 6" walls. Inside it a wall line on y = 15: A from the west wall
+        // to x = 10, B from x = 25 to the east wall (a 15' gap between lined-up walls). A 4' door
+        // hangs from A's end; a 5" wall at x = 15 crosses the gap (or ends on its line), the
+        // stretch past it to B inside a room. Before Q6616 the door's header ran over the whole
+        // gap, x 10–25, through the crossing wall and 10' into the room beyond.
+        let building = |crossing: Vec<(&'static str, EntityKind)>, doors: Vec<(&'static str, EntityKind)>, gap: (f64, f64)| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(0.25, 6.0, 0.0, 40.0, &[]));
+            lines.extend(wall_x(29.75, 6.0, 0.0, 40.0, &[]));
+            lines.extend(wall_y(0.25, 6.0, 0.0, 30.0, &[]));
+            lines.extend(wall_y(39.75, 6.0, 0.0, 30.0, &[]));
+            lines.extend(wall_x(15.0, 6.0, 0.5, 39.5, &[gap]));
+            lines.extend(crossing);
+            lines.extend(doors);
+            plan_lines_level(lines)
+        };
+        let door_at_a = || vec![swing_ft((10.0, 15.0), 4.0, 0.0, 90.0)];
+        for (what, crossing) in [("across the gap", wall_y(15.0, 5.0, 5.0, 25.0, &[])), ("ending on its line", wall_y(15.0, 5.0, 15.0, 25.0, &[]))] {
+            let (pl, notes) = building(crossing, door_at_a(), (10.0, 25.0));
+            assert!(pl.leaves.iter().any(|l| !l.window), "{what}: no door hung: {notes:?}");
+            let heads = heads_on_line(&pl, 15.0);
+            assert!(heads.iter().all(|(_, x1)| *x1 < 15.0), "{what}: a header past the crossing wall: {heads:?} {notes:?}");
+            assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && *x1 > 14.5), "{what}: no header over the door: {heads:?} {notes:?}");
+            assert!(notes.iter().any(|n| n.contains("1 stretches of a door's gap past a wall crossing it")), "{what}: {notes:?}");
+        }
+        // Two doors either side of a wall across a 10' gap (two units' entries): each keeps its
+        // header, the crossing wall a pier between them.
+        let doors = vec![swing_ft((10.0, 15.0), 4.0, 0.0, 90.0), swing_ft((20.0, 15.0), 4.0, 90.0, 180.0)];
+        let (pl, notes) = building(wall_y(15.0, 5.0, 5.0, 25.0, &[]), doors, (10.0, 20.0));
+        assert_eq!(pl.leaves.iter().filter(|l| !l.window).count(), 2, "{notes:?}");
+        let heads = heads_on_line(&pl, 15.0);
+        assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && *x1 > 14.5 && *x1 < 15.0), "west door: {heads:?} {notes:?}");
+        assert!(heads.iter().any(|(x0, x1)| (x1 - 20.0).abs() < 0.1 && *x0 > 15.0 && *x0 < 15.5), "east door: {heads:?} {notes:?}");
+        // A door in a gap no wall parts: its header over the whole gap, as before.
+        let (pl, notes) = building(Vec::new(), door_at_a(), (10.0, 14.0));
+        let heads = heads_on_line(&pl, 15.0);
+        assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && (x1 - 14.0).abs() < 0.1), "{heads:?} {notes:?}");
     }
 
     #[test]

@@ -117,6 +117,7 @@ pub(crate) fn fixture_lines(
                 size_in: f.sizes.get(sys).map_or_else(|| rule.size_for(&f.words), |z| z.0),
                 segs: Vec::new(),
                 size_basis: f.sizes.get(sys).map_or_else(|| rule.id.clone(), |z| z.1.clone()),
+                drawn: true,
             })
             .collect();
         if needs.is_empty() {
@@ -199,12 +200,18 @@ pub(crate) fn terminal_ducts(sp: &BuildingSpec, rule: &PracticeRule, same_floor:
             size_in: size,
             segs: Vec::new(),
             size_basis: String::new(),
+            drawn: t.made.is_drawn(),
         });
     }
     for ((level, sys), needs) in groups {
         let n = needs.len();
         let mains: Vec<&MepRun> = sp.mep.runs.iter().filter(|r| r.system == sys && same_floor(&r.level, &level)).take(MAX_ITEMS).collect();
-        let ru = fill_rules(rule, &sys);
+        let mut ru = fill_rules(rule, &sys);
+        // A duct's branch is never larger than the duct it leaves, and its main is carried on
+        // only to a terminal a document draws (Q6554).
+        let data = super::provenance::rule_data(&rule.id);
+        ru.main_to_drawn_only = data.get("main_to_drawn_only").and_then(Value::as_bool).unwrap_or(false);
+        ru.branch_within_run_basis = data.get("branch_within_run_basis").and_then(Value::as_str).unwrap_or_default().chars().take(400).collect();
         let inf = super::waterfill::infer(&level, &mains, &mains, needs, upf, &ru);
         // A return grille no return duct reaches returns through the plenum (the usual; a ducted
         // return is the alternative).
@@ -481,5 +488,54 @@ mod tests {
         sp.mep.runs.extend(f.runs.iter().cloned());
         let after = connections(&Drawing::default(), Some(&sp));
         assert_eq!((after["hvac"]["connected"].as_u64(), after["hvac"]["connected_by_inferred_duct"].as_u64()), (Some(3), Some(1)));
+    }
+
+    /// Q6554: a 6" duct with a 12" neck grille beside it and an 18x18 main with a grille 20 ft
+    /// past its end that no document draws (a terminal copied in by a rule) and one that is
+    /// drawn. The branch is never larger than the duct it leaves; the main is carried on only to
+    /// the drawn grille, the other takes a branch off its end.
+    #[test]
+    fn an_inferred_branch_is_never_larger_than_its_duct_and_a_main_runs_on_only_to_a_drawn_terminal() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.mep.systems = vec![
+            serde_json::from_value(json!({"name": "RA", "layer": "M-RETURN", "kind": "duct", "size_in": [18, 18], "bottom_ft": 9.0}))
+                .unwrap_or_else(|e| panic!("{e}")),
+        ];
+        let mut small = run("RA", &[[0.0, 0.0], [30.0, 0.0]]);
+        small.size_in = [6.0, 0.0];
+        let mut main = run("RA", &[[0.0, 100.0], [40.0, 100.0]]);
+        main.size_in = [18.0, 18.0];
+        sp.mep.runs = vec![small, main];
+        let t = |x: f64, y: f64, neck: f64, made: &str| -> cadaddy_walk3d::MepTerminal {
+            serde_json::from_value(json!({"system": "RA", "level": "2", "at": [x * 12.0, y * 12.0], "size_in": [neck, 0], "bottom_ft": 9.0,
+                "terminal_kind": "return_grille", "made": made}))
+            .unwrap_or_else(|e| panic!("{e}"))
+        };
+        // The 12" grille 15 ft off the 6" duct; the copied one 20 ft past the main's east end, 2 ft
+        // off its line (so no tee reaches it); a drawn one the same past its west end.
+        sp.mep.terminals = vec![t(15.0, 15.0, 12.0, "drawn"), t(60.0, 102.0, 10.0, "derived"), t(-20.0, 102.0, 10.0, "drawn")];
+        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        let rule = super::super::provenance::rule("M-BRANCH-DUCT");
+        let got = terminal_ducts(&sp, &rule, &same);
+        let f = got.get(&("2".to_string(), "RA".to_string())).unwrap_or_else(|| panic!("{got:?}"));
+        assert_eq!((f.needs, f.served), (3, 3), "{f:?}");
+        let near = |r: &MepRun, x: f64, y: f64| r.points.iter().any(|p| (p[0] - x * 12.0).hypot(p[1] - y * 12.0) < 1.0);
+        // Off the 6" duct: a 6" branch (the 12" neck cut down to it), saying so.
+        let off_small: Vec<&MepRun> = f.runs.iter().filter(|r| near(r, 15.0, 15.0)).collect();
+        assert!(!off_small.is_empty(), "{:?}", f.runs);
+        for r in &off_small {
+            assert_eq!(r.size_in, [6.0, 0.0], "never larger than the 6\" duct it leaves: {r:?}");
+            assert!(
+                r.size_source.contains("cut down to the 6\"") && r.size_source.contains("never larger than the duct it leaves"),
+                "{}",
+                r.size_source
+            );
+        }
+        // No 18x18 main carried on toward the grille no document draws; to the drawn one it is.
+        let mains: Vec<&MepRun> = f.runs.iter().filter(|r| r.size_in == [18.0, 18.0]).collect();
+        assert_eq!(mains.len(), 1, "one main carried on, to the drawn grille: {mains:?}");
+        assert!(mains.iter().all(|r| r.size_source.contains("main carried on")), "{mains:?}");
+        let to_copied: Vec<&MepRun> = f.runs.iter().filter(|r| near(r, 60.0, 102.0)).collect();
+        assert!(!to_copied.is_empty() && to_copied.iter().all(|r| r.size_in[0] <= 10.0 && r.size_in[1] == 0.0), "{to_copied:?}");
     }
 }

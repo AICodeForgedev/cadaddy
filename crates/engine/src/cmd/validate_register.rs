@@ -862,7 +862,7 @@ pub(crate) struct Laid {
 impl Laid {
     /// A point of the view (feet off its middle, as drawn) on the plan (feet off the room's
     /// middle), and back.
-    fn to_plan(self, v: [f64; 2]) -> [f64; 2] {
+    pub(crate) fn to_plan(self, v: [f64; 2]) -> [f64; 2] {
         let q = rotate(mirror(v, self.mirrored), self.rotation_deg.to_radians());
         [q[0] + self.offset_ft[0], q[1] + self.offset_ft[1]]
     }

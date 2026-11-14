@@ -50,6 +50,7 @@ pub(crate) fn dialog_refused() -> bool {
 pub mod aliasdlg;
 pub mod animation;
 pub mod annomon;
+pub mod asked;
 pub mod autosave;
 pub mod bedit;
 pub mod blockspalette;
@@ -88,6 +89,7 @@ pub mod activitypalette;
 pub mod agentdlg;
 pub mod agentpalette;
 pub mod authorpalette;
+pub mod bgread;
 pub mod bimpalette;
 pub mod busy;
 pub mod clashpalette;
@@ -163,6 +165,7 @@ pub mod workspaces;
 pub mod autocomplete;
 pub mod debug_overlay;
 pub mod designcenter;
+pub mod devicelost;
 pub mod diag;
 pub mod etransmit;
 pub mod exchange;
@@ -803,9 +806,12 @@ impl CadApp {
     }
 
     /// Wait up to `timeout` for a long command running in the background to end (its follow-up
-    /// runs). True when none is left running.
+    /// runs), and the reads of the drawing dialogs asked for. True when none is left running.
     pub fn wait_for_work(&mut self, timeout: std::time::Duration) -> bool {
-        busy::wait(self, timeout)
+        // A dialog's read of the drawing too (`bgread`): the next frame shows its answer.
+        let started = web_time::Instant::now();
+        let done = busy::wait(self, timeout);
+        bgread::wait(timeout.saturating_sub(started.elapsed())) && done
     }
 
     /// The long command running in the background, if any.
@@ -1288,6 +1294,10 @@ impl CadApp {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // A lost graphics device takes no more drawing (see `devicelost`).
+        if self.lost_frame(ctx) {
+            return;
+        }
         let _busy = diag::busy("logic");
         let t_start = now_ms();
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
@@ -1505,8 +1515,13 @@ impl CadApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if self.lost_frame(ui.ctx()) {
+            return;
+        }
         let _busy = diag::busy("draw");
         i18n::with_language(self.language(), || self.draw(ui));
+        // Lost while this frame was drawn: what it painted would go to the dead device.
+        self.lost_frame(ui.ctx());
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {

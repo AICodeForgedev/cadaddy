@@ -85,14 +85,18 @@ pub(crate) struct BuildRecord {
 }
 
 /// FNV-1a over formatted text (no copy of it is made).
-struct Fnv(u64);
+pub(crate) struct Fnv(u64);
 
 impl Fnv {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Fnv(0xcbf2_9ce4_8422_2325)
     }
     fn hex(&self) -> String {
         format!("{:016x}", self.0)
+    }
+    /// The hash of the text written so far.
+    pub(crate) fn value(&self) -> u64 {
+        self.0
     }
 }
 
@@ -211,6 +215,8 @@ fn spec_hashes(sp: &BuildingSpec) -> Hashes {
 
 /// The drawing's stored spec, when it can be read.
 fn stored(d: &Drawing) -> Option<BuildingSpec> {
+    #[cfg(test)]
+    tests::SPEC_READS.with(|n| n.set(n.get() + 1));
     d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).and_then(|t| BuildingSpec::from_json(t).ok())
 }
 
@@ -241,7 +247,156 @@ fn write(s: &mut Session, rec: &BuildRecord) {
     let Ok(v) = serde_json::to_value(rec) else { return };
     sp.kept.insert(KEY.into(), v);
     if let Ok(d) = s.doc_mut() {
-        d.building_spec = Some(sp.to_json()).into();
+        let text = sp.to_json();
+        let span = top_level_value(&text, KEY);
+        d.building_spec = Some(text).into();
+        if let Some(span) = span {
+            remember(d, span, rec);
+        }
+    }
+}
+
+thread_local! {
+    /// The record last written into (or read from) a stored spec, and where its value sits in
+    /// that spec's text (Q6567): the step a command adds replaces that span alone. Reading and
+    /// writing the whole spec (tens of megabytes on a whole job) made a move or erase of one
+    /// built element cost 100-150 ms on a large model. Keyed by the very copy of the text
+    /// ([`cadaddy_doc::shared::Shared::is`]): a spec changed any other way, undo's or another
+    /// drawing's, is read afresh.
+    static KEPT: std::cell::RefCell<Option<Kept>> = const { std::cell::RefCell::new(None) };
+}
+
+struct Kept {
+    text: std::sync::Weak<Option<String>>,
+    span: std::ops::Range<usize>,
+    rec: BuildRecord,
+}
+
+fn remember(d: &Drawing, span: std::ops::Range<usize>, rec: &BuildRecord) {
+    let k = Kept { text: d.building_spec.downgrade(), span, rec: rec.clone() };
+    KEPT.with(|c| *c.borrow_mut() = Some(k));
+}
+
+/// The record `d`'s stored spec keeps (`None`: none), and where its value sits in the spec's
+/// text (`None`: not where a scan finds it). Read whole once per copy of the text, so the record
+/// is the one [`read`] gives.
+fn record_in_text(d: &Drawing) -> Option<(Option<std::ops::Range<usize>>, BuildRecord)> {
+    let held = KEPT.with(|c| c.borrow().as_ref().filter(|k| d.building_spec.is(&k.text)).map(|k| (Some(k.span.clone()), k.rec.clone())));
+    if held.is_some() {
+        return held;
+    }
+    let rec = read(d)?;
+    let span = d.building_spec.as_deref().and_then(|t| {
+        let span = top_level_value(t, KEY)?;
+        let at: BuildRecord = serde_json::from_str(t.get(span.clone())?).ok()?;
+        (at == rec).then_some(span)
+    });
+    if let Some(span) = &span {
+        remember(d, span.clone(), &rec);
+    }
+    Some((span, rec))
+}
+
+/// Write `rec` over the record at `span` of the drawing's stored spec text: the rest of the text
+/// is kept as it is, not read and written again. The text as [`write`] makes it: the record's
+/// value in the spec's own JSON form.
+fn write_at(s: &mut Session, span: std::ops::Range<usize>, rec: &BuildRecord) {
+    let Some(json) = serde_json::to_value(rec).ok().and_then(|v| serde_json::to_string(&v).ok()) else { return };
+    let Ok(d) = s.doc_mut() else { return };
+    let text = d.building_spec.as_deref().and_then(|t| Some((t.get(..span.start)?, t.get(span.end..)?)));
+    let Some((head, tail)) = text else { return write(s, rec) };
+    let mut t = String::with_capacity(head.len().saturating_add(json.len()).saturating_add(tail.len()));
+    t.push_str(head);
+    t.push_str(&json);
+    t.push_str(tail);
+    let end = span.start.saturating_add(json.len());
+    d.building_spec = Some(t).into();
+    remember(d, span.start..end, rec);
+}
+
+/// Where the value of the top-level member `key` sits in the JSON object `text` (its byte range),
+/// by a scan that builds nothing; `None` when the text is no object, has no such member, or is
+/// cut short. A key written with escapes is no match.
+fn top_level_value(text: &str, key: &str) -> Option<std::ops::Range<usize>> {
+    let b = text.as_bytes();
+    let ws = |mut i: usize| {
+        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        i
+    };
+    let mut i = ws(0);
+    if b.get(i) != Some(&b'{') {
+        return None;
+    }
+    i = ws(i + 1);
+    loop {
+        let end = string_end(b, i)?;
+        let name = text.get(i + 1..end.checked_sub(1)?)?;
+        i = ws(end);
+        if b.get(i) != Some(&b':') {
+            return None;
+        }
+        let start = ws(i + 1);
+        let stop = value_end(b, start)?;
+        if name == key {
+            return Some(start..stop);
+        }
+        i = ws(stop);
+        if b.get(i) != Some(&b',') {
+            return None;
+        }
+        i = ws(i + 1);
+    }
+}
+
+/// Just past the JSON string starting at `i`.
+fn string_end(b: &[u8], i: usize) -> Option<usize> {
+    if b.get(i) != Some(&b'"') {
+        return None;
+    }
+    let mut j = i + 1;
+    loop {
+        match b.get(j)? {
+            b'\\' => j += 2,
+            b'"' => return Some(j + 1),
+            _ => j += 1,
+        }
+    }
+}
+
+/// Just past the JSON value starting at `i`.
+fn value_end(b: &[u8], i: usize) -> Option<usize> {
+    match b.get(i)? {
+        b'"' => string_end(b, i),
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            let mut j = i;
+            loop {
+                match b.get(j)? {
+                    b'"' => {
+                        j = string_end(b, j)?;
+                        continue;
+                    }
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        depth = depth.checked_sub(1)?;
+                        if depth == 0 {
+                            return Some(j + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+        }
+        _ => {
+            let mut j = i;
+            while b.get(j).is_some_and(|c| !matches!(c, b',' | b'}' | b']') && !c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            (j > i).then_some(j)
+        }
     }
 }
 
@@ -578,8 +733,9 @@ pub(crate) fn step(s: &mut Session, name: &str) {
 
 /// After a command: at the end of the command called from outside, a build it made is recorded
 /// with the model, spec and drawing it left; a command that changed a built model's elements is
-/// added to its record as a step.
-pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
+/// added to its record as a step. `switched`: the command started in another drawing (it made
+/// no step: nothing to compare with it).
+pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, switched: bool) {
     if !s.journal.at_top() {
         return;
     }
@@ -602,7 +758,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         write(s, &rec);
         return;
     }
-    let Some(before) = before else { return };
+    let Some(before) = before.filter(|_| !switched) else { return };
     let Ok(st) = s.state() else { return };
     let now = Arc::clone(&st.doc);
     if Arc::ptr_eq(before, &now) || now.model.unchanged_from(&before.model) {
@@ -614,7 +770,8 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     if touched == 0 {
         return;
     }
-    let Some(mut rec) = read(&now) else { return };
+    // The record and where it sits in the spec's text: the step is written over it alone.
+    let Some((span, mut rec)) = record_in_text(&now) else { return };
     let mut counted = rec.now.clone();
     for h in added.iter().chain(&modified).chain(&erased) {
         if let Some(k) = made(before, h)
@@ -628,12 +785,100 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     }
     counted.retain(|_, n| *n > 0);
     rec.push(&by, &by, counted, touched as u64);
-    write(s, &rec);
+    match span {
+        Some(span) => write_at(s, span, &rec),
+        None => write(s, &rec),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Stored specs read whole ([`stored`]) on this thread.
+        pub(super) static SPEC_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Q6567: a command that changes built elements adds its step to the model's record without
+    /// reading and writing the whole stored spec (tens of megabytes on a whole job; a move or
+    /// erase of one built element took 100-150 ms on a large model). The spec is read whole once
+    /// per copy of its text the session didn't write itself (the first edit, the edit after an
+    /// undo), and the text each step leaves is the spec as writing it whole makes it.
+    #[test]
+    fn edits_of_built_elements_add_steps_without_reading_the_whole_spec() {
+        let levels: Vec<Value> =
+            (0..300).map(|i| json!({"name": format!("Level {i}"), "elevation_ft": i * 10, "height_ft": 10, "ceiling_ft": 8})).collect();
+        let mut sp = BuildingSpec::from_json(&json!({"version": 1, "units_per_foot": 12, "levels": levels}).to_string()).unwrap();
+        let mut s = Session::new();
+        let mut handles = Vec::new();
+        {
+            let d = s.doc_mut().unwrap();
+            for i in 0..8 {
+                let mut common = cadaddy_doc::Common { layer: "3D-Devices".into(), ..Default::default() };
+                common.xdata = vec![
+                    cadaddy_doc::RawTag { code: 1001, value: wallgen::APP.into() },
+                    cadaddy_doc::RawTag { code: 1000, value: "device".into() },
+                    cadaddy_doc::RawTag { code: 1000, value: "Level 1".into() },
+                    cadaddy_doc::RawTag { code: 1000, value: "0".into() },
+                ]
+                .into();
+                let p = cadaddy_geom::Vec3::new(f64::from(i) * 24.0, 0.0, 0.0);
+                handles
+                    .push(d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p, angle: 0.0 })).unwrap());
+            }
+            let rec = BuildRecord { built: counts(d), now: counts(d), engine: "test".into(), ..BuildRecord::default() };
+            sp.kept.insert(KEY.into(), serde_json::to_value(&rec).unwrap());
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let hex = |h: &cadaddy_doc::Handle| h.hex();
+        let steps = |s: &Session| read(s.doc().unwrap()).unwrap().steps;
+        SPEC_READS.with(|n| n.set(0));
+        for h in handles.iter().take(3) {
+            s.execute("erase", &json!({"handles": [hex(h)]})).unwrap();
+        }
+        for h in handles.iter().skip(3).take(2) {
+            s.execute("move", &json!({"handles": [hex(h)], "delta": [6, 0]})).unwrap();
+        }
+        let reads = SPEC_READS.with(std::cell::Cell::get);
+        assert!(reads <= 1, "five edits read the whole spec {reads} times");
+        let st = steps(&s);
+        assert_eq!(st.len(), 5, "{st:?}");
+        assert_eq!(st.iter().map(|x| x.by.as_str()).collect::<Vec<_>>(), ["erase", "erase", "erase", "move", "move"]);
+        assert_eq!(st[2].changed, BTreeMap::from([("Level 1|device".to_string(), -1)]));
+        assert_eq!(read(s.doc().unwrap()).unwrap().now, BTreeMap::from([("Level 1|device".to_string(), 5)]));
+        // The text is the spec as written whole, byte for byte.
+        let text = s.doc().unwrap().building_spec.as_deref().unwrap().to_string();
+        assert_eq!(BuildingSpec::from_json(&text).unwrap().to_json(), text);
+        // Undone, the drawing's spec is the one before the last step; the next edit adds its step
+        // to that one.
+        s.execute("undo", &json!({})).unwrap();
+        assert_eq!(steps(&s).len(), 4);
+        SPEC_READS.with(|n| n.set(0));
+        s.execute("erase", &json!({"handles": [hex(&handles[6])]})).unwrap();
+        s.execute("erase", &json!({"handles": [hex(&handles[7])]})).unwrap();
+        assert!(SPEC_READS.with(std::cell::Cell::get) <= 1);
+        let st = steps(&s);
+        assert_eq!(st.len(), 6, "{st:?}");
+        assert_eq!(read(s.doc().unwrap()).unwrap().now, BTreeMap::from([("Level 1|device".to_string(), 3)]));
+    }
+
+    #[test]
+    fn a_top_level_member_is_found_by_a_scan() {
+        let t = r#"{"a":"x}\"{","b":[1,{"build_record":2}],"n":-1.5e3,"build_record":{"s":"]}","v":[[]]},"z":null}"#;
+        let span = top_level_value(t, "build_record").unwrap();
+        assert_eq!(&t[span], r#"{"s":"]}","v":[[]]}"#);
+        assert_eq!(&t[top_level_value(t, "n").unwrap()], "-1.5e3");
+        assert_eq!(&t[top_level_value(t, "z").unwrap()], "null");
+        assert_eq!(&t[top_level_value(t, "a").unwrap()], r#""x}\"{""#);
+        let spaced = "{ \"k\" : [ 1 , 2 ] , \"build_record\" : { } }";
+        assert_eq!(&spaced[top_level_value(spaced, "build_record").unwrap()], "{ }");
+        assert!(top_level_value(t, "missing").is_none());
+        assert!(top_level_value("[1]", "a").is_none());
+        assert!(top_level_value(r#"{"a":{"b":1"#, "a").is_none());
+        assert!(top_level_value("", "a").is_none());
+        assert!(top_level_value("{}", "a").is_none());
+    }
 
     /// Q6620: `model.build {parts: [hoistway]}` takes the shaft's walls, pit and overrun.
     #[test]

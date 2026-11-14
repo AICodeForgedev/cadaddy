@@ -7,7 +7,10 @@
 //! shower's trim: `SEAT: MAKER` with its model) stay with it as its parts: its first line names it.
 //! Columns giving connection sizes (`CW`, `HW`, `WASTE`, `VENT`, `TRAP`) or electrical data
 //! (`VOLTS`, `PHASE`, `AMPS`, `HP`, `WATTS`) are kept per row. Two schedules side by side (a
-//! two-sided sheet) are two tables: a header row ends at the next tag header.
+//! two-sided sheet) are two tables: a header row ends at the next tag header. A legend or another
+//! table lettered on the header's line is none of its columns: a ruled schedule's columns are
+//! inside its frame (the rules over and under its header row), and an unruled one ends at a header
+//! repeating one it already has, so a row's cells are always its own table's.
 //!
 //! The rough-in table beside it ([`read_connections`]): a table keyed by fixture name (`LAVATORY`,
 //! `WATER CLOSET (TANK)`) whose columns give each fixture's trap, waste, vent, cold and hot water
@@ -213,12 +216,21 @@ pub fn tags_of(tag: &str) -> Vec<String> {
 /// Most line pieces looked at for a schedule's column rules.
 const MAX_SEGMENTS: usize = 200_000;
 
-/// A sheet's vertical line pieces (x, y0, y1).
-fn verticals(d: &Drawing) -> Vec<(f64, f64, f64)> {
-    let mut verticals: Vec<(f64, f64, f64)> = Vec::new();
+/// A sheet's ruling: its vertical line pieces (x, y0, y1) and its horizontal ones (y, x0, x1).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Rules {
+    pub verticals: Vec<(f64, f64, f64)>,
+    pub horizontals: Vec<(f64, f64, f64)>,
+}
+
+/// A sheet's vertical and horizontal line pieces.
+fn rules_of(d: &Drawing) -> Rules {
+    let mut out = Rules::default();
     let mut push = |a: [f64; 2], b: [f64; 2]| {
-        if (a[0] - b[0]).abs() <= 1e-3 * (a[1] - b[1]).abs() && verticals.len() < MAX_SEGMENTS {
-            verticals.push((a[0], a[1].min(b[1]), a[1].max(b[1])));
+        if (a[0] - b[0]).abs() <= 1e-3 * (a[1] - b[1]).abs() && out.verticals.len() < MAX_SEGMENTS {
+            out.verticals.push((a[0], a[1].min(b[1]), a[1].max(b[1])));
+        } else if (a[1] - b[1]).abs() <= 1e-3 * (a[0] - b[0]).abs() && out.horizontals.len() < MAX_SEGMENTS {
+            out.horizontals.push((a[1], a[0].min(b[0]), a[0].max(b[0])));
         }
     };
     for e in d.model.iter() {
@@ -234,13 +246,13 @@ fn verticals(d: &Drawing) -> Vec<(f64, f64, f64)> {
             _ => {}
         }
     }
-    verticals
+    out
 }
 
 /// The plumbing fixture schedule on a sheet, if it has one: its lettering, in the columns its
 /// vertical rules make.
 pub fn read(d: &Drawing) -> Option<FixtureSchedule> {
-    read_lettering(&crate::sheet_facts::texts(d), &verticals(d))
+    read_ruled(&crate::sheet_facts::texts(d), &rules_of(d))
 }
 
 /// Schedule titles on one sheet looked under, at most.
@@ -273,7 +285,7 @@ pub fn read_under_title(d: &Drawing) -> Option<FixtureSchedule> {
     if titles.is_empty() {
         return None;
     }
-    let verticals = verticals(d);
+    let rules = rules_of(d);
     titles.iter().find_map(|title| {
         let h = title.height;
         let under: Vec<TextItem> = texts
@@ -286,7 +298,7 @@ pub fn read_under_title(d: &Drawing) -> Option<FixtureSchedule> {
             })
             .cloned()
             .collect();
-        read_lettering_where(&under, &verticals, &|s| s.extent[0] - 2.0 * h <= title.at.x && title.at.x <= s.extent[2])
+        read_lettering_where(&under, &rules, &|s| s.extent[0] - 2.0 * h <= title.at.x && title.at.x <= s.extent[2])
     })
 }
 
@@ -304,13 +316,97 @@ fn middle_of(t: &TextItem) -> f64 {
 /// are the sheet's vertical line pieces: the ones crossing the header row are the columns'
 /// rules (without them a column reaches halfway to the next header).
 pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Option<FixtureSchedule> {
-    read_lettering_where(texts, verticals, &|_| true)
+    read_ruled(texts, &Rules { verticals: verticals.to_vec(), horizontals: Vec::new() })
+}
+
+/// The plumbing fixture schedule among a sheet's texts ([`read_lettering`]), with the sheet's
+/// horizontal rules as well: the rules over and under its header row are its frame, and a column
+/// headed outside the frame (a legend or another table beside it on the same line) is none of its.
+pub fn read_ruled(texts: &[TextItem], rules: &Rules) -> Option<FixtureSchedule> {
+    read_lettering_where(texts, rules, &|_| true)
+}
+
+/// A header's top and bottom rules lie within this many of its heights from its baseline.
+const FRAME_BAND_H: f64 = 3.0;
+/// Pieces of one rule (a rule drawn cell by cell) meet within this many heights.
+const RULE_JOIN_H: f64 = 0.5;
+/// Rules at one height lie within this many heights of each other.
+const RULE_SAME_Y_H: f64 = 0.1;
+/// A table's frame is at least this many heights wide (a shorter rule is an underline).
+const MIN_FRAME_H: f64 = 6.0;
+
+/// The ruled table a header heads, as its x extent `(x0, x1)`: the nearest horizontal rule above
+/// its line and the nearest below that pass over it (pieces joined end to end), as wide as both
+/// reach. None when no rule near the header passes over it.
+fn frame_of(head: &TextItem, horizontals: &[(f64, f64, f64)]) -> Option<(f64, f64)> {
+    let h = head.height;
+    let x = head.at.x;
+    // The run of one rule (all pieces at height `y`) that passes over `x`.
+    let run_at = |y: f64| -> Option<(f64, f64)> {
+        let mut pieces: Vec<(f64, f64)> =
+            horizontals.iter().filter(|(py, _, _)| (py - y).abs() <= RULE_SAME_Y_H * h).map(|(_, a, b)| (*a, *b)).collect();
+        pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in pieces {
+            match runs.last_mut() {
+                Some(last) if a <= last.1 + RULE_JOIN_H * h => last.1 = last.1.max(b),
+                _ => runs.push((a, b)),
+            }
+        }
+        runs.into_iter().find(|(a, b)| *a <= x + 0.5 * h && *b >= x && b - a >= MIN_FRAME_H * h)
+    };
+    // The nearest rule on one side (`above`: over the baseline) that passes over the header.
+    let side = |above: bool| -> Option<(f64, f64)> {
+        let mut ys: Vec<f64> = horizontals
+            .iter()
+            .map(|(y, _, _)| *y)
+            .filter(
+                |y| if above { *y > head.at.y && *y <= head.at.y + FRAME_BAND_H * h } else { *y < head.at.y && *y >= head.at.y - FRAME_BAND_H * h },
+            )
+            .collect();
+        ys.sort_by(|a, b| (a - head.at.y).abs().total_cmp(&(b - head.at.y).abs()));
+        ys.dedup_by(|a, b| (*a - *b).abs() <= RULE_SAME_Y_H * h);
+        ys.into_iter().take(MAX_ROWS).find_map(run_at)
+    };
+    match (side(true), side(false)) {
+        (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The header cells of the tag header's own table, `on_row` sorted left to right: from the tag
+/// header outwards (right, then left), each side up to a header that repeats one already taken
+/// word for word (a second `DESCRIPTION`: another table lettered on the same line).
+fn own_table<'a>(on_row: Vec<&'a TextItem>, tag_head: &TextItem) -> Vec<&'a TextItem> {
+    let Some(at) = on_row.iter().position(|t| std::ptr::eq(*t, tag_head)) else { return on_row };
+    let mut seen: Vec<String> = vec![header_words(&tag_head.value)];
+    let mut keep = vec![false; on_row.len()];
+    if let Some(k) = keep.get_mut(at) {
+        *k = true;
+    }
+    let mut walk = |idx: &mut dyn Iterator<Item = usize>| {
+        for i in idx {
+            let Some(t) = on_row.get(i) else { break };
+            let w = header_words(&t.value);
+            if seen.contains(&w) {
+                break;
+            }
+            seen.push(w);
+            if let Some(k) = keep.get_mut(i) {
+                *k = true;
+            }
+        }
+    };
+    walk(&mut (at + 1..on_row.len()));
+    walk(&mut (0..at).rev());
+    on_row.into_iter().zip(keep).filter_map(|(t, k)| k.then_some(t)).collect()
 }
 
 /// The first plumbing fixture schedule among a sheet's texts ([`read_lettering`]) that `accept`
 /// takes: a table it turns down is passed over for the next one.
-fn read_lettering_where(texts: &[TextItem], verticals: &[(f64, f64, f64)], accept: &dyn Fn(&FixtureSchedule) -> bool) -> Option<FixtureSchedule> {
+fn read_lettering_where(texts: &[TextItem], sheet_rules: &Rules, accept: &dyn Fn(&FixtureSchedule) -> bool) -> Option<FixtureSchedule> {
     let middle = middle_of;
+    let verticals = &sheet_rules.verticals;
     // A fixture schedule's title over a header at `head` (height `h`): a few heights above it.
     let titled_over = |head: &TextItem| {
         let h = head.height;
@@ -350,8 +446,16 @@ fn read_lettering_where(texts: &[TextItem], verticals: &[(f64, f64, f64)], accep
         let lo = tag_xs.iter().copied().filter(|x| *x < tag_head.at.x - h).fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))));
         let lo = if lo.is_some() { tag_head.at.x - h } else { f64::NEG_INFINITY };
         let hi = tag_xs.iter().copied().filter(|x| *x > tag_head.at.x + h).fold(f64::INFINITY, f64::min) - h;
+        // A ruled table's columns are inside its frame: a legend or another table lettered on
+        // the same line (its own headers maybe drawn as shapes, so no tag header ends it) is not.
+        let frame = frame_of(tag_head, &sheet_rules.horizontals);
+        let (lo, hi) = match frame {
+            Some((x0, x1)) => (lo.max(x0 - 0.5 * h), hi.min(x1)),
+            None => (lo, hi),
+        };
         // A header is a few words: a note lettered on the header's line is no column.
         on_row.retain(|t| t.at.x >= lo && t.at.x < hi && t.value.split_whitespace().count() <= MAX_HEADER_WORDS);
+        let on_row = own_table(on_row, tag_head);
         let mut heads: Vec<(String, f64)> = on_row.iter().map(|t| (t.value.trim().to_string(), middle(t))).collect();
         // The columns besides the marks' own (a TYPE header holding the marks names no fixture).
         let cols: Vec<Col> = on_row.iter().filter(|t| !std::ptr::eq(**t, tag_head)).map(|t| col_of(&t.value)).collect();
@@ -371,8 +475,14 @@ fn read_lettering_where(texts: &[TextItem], verticals: &[(f64, f64, f64)], accep
                 *y0 <= tag_head.at.y && *y1 >= tag_head.at.y && *x >= tag_head.at.x - 20.0 * h && *x <= tag_head.at.x + MAX_WIDTH_H * h
             })
             .map(|(x, _, _)| *x)
+            .filter(|x| frame.is_none_or(|(x0, x1)| *x >= x0 - 0.5 * h && *x <= x1 + 0.5 * h))
             .collect();
+        // The frame's sides are its first and last columns' outer rules.
+        if let Some((x0, x1)) = frame {
+            rules.extend([x0, x1]);
+        }
         rules.sort_by(f64::total_cmp);
+        rules.dedup_by(|a, b| (*a - *b).abs() <= 0.05 * h);
         heads.sort_by(|a, b| a.1.total_cmp(&b.1));
         // Each column between the rules either side of its header (a cell's text starts there),
         // else from halfway to the header before it to halfway to the one after (the outer ones
@@ -939,5 +1049,120 @@ mod tests {
         }
         assert_eq!(tags_of("WH-1,2,3"), ["WH-1,2,3", "WH-1", "WH-2", "WH-3"]);
         assert_eq!(tags_of("P-1H"), ["P-1H"]);
+    }
+
+    /// A legend lettered left of a schedule on its header line (its own symbol headers drawn as
+    /// shapes, so no tag header ends it): `DESCRIPTION | ABBREVIATIONS`, its rows' words on the
+    /// schedule's row lines. `at` shifts the whole sheet off the origin.
+    fn legend_beside(at: f64) -> Vec<TextItem> {
+        vec![
+            t("DESCRIPTION", at + 2.3, 28.73),
+            t("ABBREVIATIONS", at + 7.6, 28.73),
+            t("FCO", at + 1.6, 25.95),
+            t("FLOOR CLEAN OUT", at + 2.3, 25.95),
+            t("HB", at + 7.6, 25.95),
+            t("HOSE BIBB", at + 2.3, 24.9),
+            t("STRAINER", at + 2.3, 23.9),
+        ]
+    }
+
+    #[test]
+    fn a_legend_beside_a_ruled_schedule_lends_it_no_column() {
+        for at in [0.0, 40.0] {
+            let mut texts = legend_beside(at);
+            texts.extend([
+                t("TAG", at + 11.46, 28.71),
+                t("FIXTURE", at + 13.05, 28.71),
+                t("MANUFACTURER", at + 15.6, 28.71),
+                t("MODEL NO.", at + 18.5, 28.71),
+                t("DESCRIPTION", at + 23.5, 28.71),
+                t("PF-1A", at + 11.5, 25.95),
+                t("ACCESSIBLE WATER CLOSET", at + 12.7, 25.95),
+                t("MAKER ONE", at + 15.4, 25.95),
+                t("WC-100", at + 18.2, 25.95),
+                t("ELONGATED TOILET", at + 20.5, 25.95),
+                t("PF-2A", at + 11.5, 24.9),
+                t("ACCESSIBLE LAVATORY", at + 12.9, 24.9),
+                t("MAKER TWO", at + 14.9, 24.9),
+                t("LV-200", at + 18.6, 24.9),
+                t("UNDERMOUNT SINK", at + 20.5, 24.9),
+                t("PF-3A", at + 11.5, 23.9),
+                t("ACCESSIBLE TUB SHOWER", at + 12.7, 23.9),
+                t("MAKER THREE", at + 15.4, 23.9),
+                t("TS-300", at + 18.2, 23.9),
+                t("TUB AND SHOWER UNIT", at + 20.5, 23.9),
+            ]);
+            // Each table's frame: its rules over and under the header line, the legend's drawn
+            // cell by cell; the column rules cross the header line, the schedule's left side not
+            // among them (its tag column's nearest rule on the left is the legend's right side).
+            let rules = Rules {
+                verticals: [1.52, 2.24, 7.52, 10.59, 12.18, 14.52, 17.93, 19.86, 34.35].iter().map(|x| (at + x, 21.0, 28.87)).collect(),
+                horizontals: vec![
+                    (28.87, at + 1.52, at + 7.52),
+                    (28.87, at + 7.52, at + 10.59),
+                    (28.66, at + 1.52, at + 10.59),
+                    (28.86, at + 11.04, at + 34.35),
+                    (28.45, at + 11.04, at + 34.35),
+                ],
+            };
+            let s = read_ruled(&texts, &rules).expect("schedule");
+            assert_eq!(s.headers, ["TAG", "FIXTURE", "MANUFACTURER", "MODEL NO.", "DESCRIPTION"], "at {at}");
+            let got: Vec<(&str, &str, &str)> = s.rows.iter().map(|r| (r.tag.as_str(), r.fixture.as_str(), r.description.as_str())).collect();
+            assert_eq!(
+                got,
+                [
+                    ("PF-1A", "ACCESSIBLE WATER CLOSET", "ELONGATED TOILET"),
+                    ("PF-2A", "ACCESSIBLE LAVATORY", "UNDERMOUNT SINK"),
+                    ("PF-3A", "ACCESSIBLE TUB SHOWER", "TUB AND SHOWER UNIT")
+                ],
+                "at {at}"
+            );
+
+            // A schedule with no description column of its own and a ruled legend right of it:
+            // the legend's descriptions are none of its rows'.
+            let mut right: Vec<TextItem> = texts.iter().filter(|x| x.at.x < at + 20.0 && x.at.x > at + 11.0).cloned().collect();
+            right.extend(legend_beside(at + 24.0));
+            let rules = Rules {
+                verticals: [12.18, 14.52, 17.93, 20.5, 25.52, 26.24, 31.52, 34.59].iter().map(|x| (at + x, 21.0, 28.87)).collect(),
+                horizontals: vec![
+                    (28.86, at + 11.04, at + 20.5),
+                    (28.45, at + 11.04, at + 20.5),
+                    (28.87, at + 25.52, at + 34.59),
+                    (28.66, at + 25.52, at + 34.59),
+                ],
+            };
+            let s = read_ruled(&right, &rules).expect("schedule");
+            assert_eq!(s.headers, ["TAG", "FIXTURE", "MANUFACTURER", "MODEL NO."], "at {at}");
+            assert!(s.rows.iter().all(|r| r.description.is_empty()), "at {at}: {:?}", s.rows);
+        }
+    }
+
+    #[test]
+    fn an_unruled_schedule_ends_at_a_header_it_already_has() {
+        // No rules at all, the schedule's description column next to its tags: the legend's
+        // `DESCRIPTION` left of it repeats a header the schedule has, so the legend is another table.
+        let mut texts = legend_beside(0.0);
+        texts.extend([
+            t("PLUMBING FIXTURE SCHEDULE", 16.0, 29.2),
+            t("TAG", 11.46, 28.71),
+            t("DESCRIPTION", 13.0, 28.71),
+            t("FIXTURE", 17.0, 28.71),
+            t("MFR", 20.0, 28.71),
+            t("MODEL", 22.0, 28.71),
+            t("PF-1A", 11.5, 25.95),
+            t("ELONGATED TOILET", 12.6, 25.95),
+            t("ACCESSIBLE WATER CLOSET", 16.5, 25.95),
+            t("MAKER ONE", 19.8, 25.95),
+            t("WC-100", 21.8, 25.95),
+            t("PF-2A", 11.5, 24.9),
+            t("UNDERMOUNT SINK", 12.6, 24.9),
+            t("ACCESSIBLE LAVATORY", 16.6, 24.9),
+            t("MAKER TWO", 19.6, 24.9),
+            t("LV-200", 21.9, 24.9),
+        ]);
+        let s = read_lettering(&texts, &[]).expect("schedule");
+        assert_eq!(s.headers, ["ABBREVIATIONS", "TAG", "DESCRIPTION", "FIXTURE", "MFR", "MODEL"]);
+        let got: Vec<(&str, &str)> = s.rows.iter().map(|r| (r.tag.as_str(), r.description.as_str())).collect();
+        assert_eq!(got, [("PF-1A", "ELONGATED TOILET"), ("PF-2A", "UNDERMOUNT SINK")]);
     }
 }

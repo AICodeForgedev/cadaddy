@@ -123,6 +123,18 @@ fn doc_key(app: &CadApp) -> (u64, u64) {
     app.session.state().map(|st| (st.uid, st.revision)).unwrap_or_default()
 }
 
+/// A job command's reply, read off the UI thread (a large job's status and worklist took a
+/// quarter of a second to read, Q6574): `None` while it is read, with a line saying so. An error
+/// reads as nothing (`null`), as a missing job does.
+fn read(app: &mut CadApp, ui: &mut egui::Ui, key: (u64, u64), tag: &str, command: &str, params: &Value) -> Option<Value> {
+    let r = crate::bgread::read(app, &ui.ctx().clone(), id().with(tag), key, command, params);
+    if r.is_none() {
+        let line = crate::i18n::t(crate::bgread::READING);
+        text(ui, RichText::new(line).color(Tokens::get().text_dim), crate::bgread::READING);
+    }
+    r.map(|r| r.unwrap_or(Value::Null))
+}
+
 fn set_error(st: &State, e: Option<String>) {
     if let Ok(mut g) = st.error.lock() {
         *g = e;
@@ -179,7 +191,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         st.key = key;
     }
     if st.status.is_none() {
-        st.status = app.session.execute("job.status", &json!({})).ok();
+        match read(app, ui, key, "status", "job.status", &json!({})) {
+            Some(v) => st.status = Some(v),
+            None => {
+                set_state(ui.ctx(), st);
+                return;
+            }
+        }
     }
     let job = st.status.as_ref().filter(|s| s.get("job_id").is_some()).cloned();
     if job.is_none() || (job.as_ref().is_some_and(replaceable) && st.new_job) {
@@ -400,6 +418,20 @@ fn show_summary(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, job: &Value
     } else {
         text(ui, &state, &state);
     }
+    // What to ask before building leads a job that has built its model (Q6619).
+    if let Some(open) = job.pointer("/inconsistencies/open").and_then(Value::as_u64) {
+        let high = job.pointer("/inconsistencies/high").and_then(Value::as_u64).unwrap_or(0);
+        let head = if open == 1 {
+            crate::tf!("1 thing to ask before you build: {high} high", high = high)
+        } else {
+            crate::tf!("{n} things to ask before you build: {high} high", n = open, high = high)
+        };
+        let colour = if high > 0 { egui::Color32::from_rgb(210, 60, 50) } else { t.accent };
+        text(ui, RichText::new(&head).strong().color(colour), &head);
+        if open > 0 && button(ui, crate::tl!("Open RFI List")) {
+            app.cmdline("rfilist");
+        }
+    }
     ui.add(egui::ProgressBar::new(progress as f32).text(format!("{:.0}%", progress * 100.0)));
     ui.horizontal_wrapped(|ui| {
         if !done && error.is_none() {
@@ -422,9 +454,12 @@ fn show_summary(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, job: &Value
 /// The report: how it ended, its warnings, the answers' totals, and the whole report as text.
 fn show_report(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) {
     if st.report.is_none() {
-        st.report = app.session.execute("job.report", &json!({})).ok();
+        match read(app, ui, st.key, "report", "job.report", &json!({})) {
+            Some(v) => st.report = Some(v),
+            None => return,
+        }
     }
-    let Some(r) = st.report.clone() else {
+    let Some(r) = st.report.clone().filter(|r| !r.is_null()) else {
         ui.label(crate::tl!("No report yet."));
         return;
     };
@@ -471,7 +506,10 @@ fn show_report(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) 
 fn show_worklist(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens, action: &mut Option<Value>) {
     if st.worklist.is_none() {
         let filter = if st.filter.is_empty() || st.filter == "all" { json!({}) } else { json!({"status": st.filter}) };
-        st.worklist = app.session.execute("job.worklist", &filter).ok();
+        match read(app, ui, st.key, "worklist", "job.worklist", &filter) {
+            Some(v) => st.worklist = Some(v),
+            None => return,
+        }
     }
 
     // Filter bar.
@@ -651,7 +689,8 @@ fn show_progress(ui: &mut egui::Ui, st: &State, t: &Tokens) {
 fn show_findings(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) {
     if st.findings.is_none() {
         // Findings come from job.worklist filtered to kind=finding.
-        st.findings = app.session.execute("job.worklist", &json!({})).ok().map(|v| {
+        let Some(v) = read(app, ui, st.key, "findings", "job.worklist", &json!({})) else { return };
+        st.findings = Some(v).map(|v| {
             let items = v
                 .get("items")
                 .and_then(Value::as_array)
@@ -691,7 +730,10 @@ fn show_findings(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens
 
 fn show_rules(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, t: &Tokens) {
     if st.rules.is_none() {
-        st.rules = app.session.execute("job.rules", &json!({})).ok();
+        match read(app, ui, st.key, "rules", "job.rules", &json!({})) {
+            Some(v) => st.rules = Some(v),
+            None => return,
+        }
     }
 
     let rules = st.rules.as_ref().and_then(|r| r.get("rules")).and_then(Value::as_array).cloned().unwrap_or_default();

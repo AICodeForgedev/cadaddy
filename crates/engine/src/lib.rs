@@ -2770,6 +2770,8 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        // The building spec is read once while the command runs, however many of its parts ask.
+        let _spec_scope = outer.then(cmd::bspec::read_spec_scope);
         // A call from outside starts outside any one-step group (one a failed command left).
         if outer {
             self.one_undo_step = 0;
@@ -3684,6 +3686,13 @@ impl Session {
     fn after_command(&mut self, before: Option<&Arc<Drawing>>, uid: Option<u64>, ok: bool) {
         #[cfg(test)]
         crate::guard::tests::panic_if_armed();
+        // A command that opened, closed or switched to another drawing (OPEN, NEW, CLOSE, a tab
+        // switch) started in a drawing that is not the one open now: `before` is that other
+        // drawing, not this one as it was. Compared with it, every object of the drawing now open
+        // looked added: opening a built model wrote a step into its build record with each count
+        // doubled (and so marked it changed), and a large model's open spent seconds comparing
+        // two unrelated drawings (Q6569). The drawing now open had no state before the command.
+        let before = before.filter(|_| uid.is_none_or(|u| self.state().is_ok_and(|st| st.uid == u)));
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
@@ -3693,8 +3702,8 @@ impl Session {
         fields::after_command(self, before);
         // Built elements moved to another storey are filed under it (before the model's own
         // record of the command, which takes the drawing as this leaves it).
-        cmd::relevel::after_command(self, before);
-        cmd::wallgen::after_command(self, before);
+        cmd::relevel::after_command(self, before, uid);
+        cmd::wallgen::after_command(self, before, uid);
         // After the live rebuild: the model's count index follows every change to its pieces.
         cmd::mepatoms::after_command(self, before, uid);
         script_tools::monitor_after(self);

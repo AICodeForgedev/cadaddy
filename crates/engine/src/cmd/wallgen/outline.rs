@@ -574,6 +574,8 @@ pub(crate) struct Floors {
     /// Which traced room (1-based) a cell is on; 0 none.
     owner: Vec<u32>,
     rooms: Vec<Vec<[Vec2; 2]>>,
+    /// The walls it was drawn from (centreline ends, thickness): where their lines end.
+    walls: Vec<(Vec2, Vec2, f64)>,
 }
 
 impl Floors {
@@ -639,7 +641,7 @@ impl Floors {
             })
             .collect();
         let exterior = exterior_of(&outside, &keeps_out, &blocked, nx, ny, r);
-        Some(Floors { nx, ny, cell, origin, upf, blocked, grown, exterior, owner: vec![0; nx * ny], rooms: Vec::new() })
+        Some(Floors { nx, ny, cell, origin, upf, blocked, grown, exterior, owner: vec![0; nx * ny], rooms: Vec::new(), walls: walls.to_vec() })
     }
 
     /// The room whose floor holds `at` (a room label): which one (traced in order) and its
@@ -843,7 +845,134 @@ impl Floors {
         self.rooms.push(rects_new);
         Some(new)
     }
+
+    /// Traced room `n` parted where one of its walls stops short of the next wall across its open
+    /// floor (no farther than `reach`, sheet units): the wall's line run on across the opening, as
+    /// a room separation line closes an open side (and area measurement runs it). The part that
+    /// holds `at` and none of `others` (the room's other labels) becomes a room of its own: the
+    /// smallest such part, each part at least a room ([`ROOM_SF`]). Which one; None when no one
+    /// line parts them (nothing changes then) (Q6487).
+    pub(crate) fn split_open(&mut self, n: usize, at: Vec2, others: &[Vec2], reach: f64) -> Option<usize> {
+        let (nx, ny, cell) = (self.nx, self.ny, self.cell);
+        let id = u32::try_from(n + 1).ok()?;
+        let new_id = u32::try_from(self.rooms.len() + 1).ok()?;
+        if self.rooms.get(n).is_none() || !(reach.is_finite() && reach > 0.0 && cell > 0.0) {
+            return None;
+        }
+        let cell_of = |p: Vec2| {
+            let (i, j) = ((p.x - self.origin.x) / cell, (p.y - self.origin.y) / cell);
+            (i >= 0.0 && j >= 0.0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
+        };
+        let mine = |k: usize| self.owner.get(k) == Some(&id);
+        let start = cell_of(at).filter(|k| mine(*k))?;
+        let theirs: Vec<usize> = others.iter().filter_map(|p| cell_of(*p)).filter(|k| mine(*k) && *k != start).collect();
+        if theirs.is_empty() {
+            return None;
+        }
+        let total = self.owner.iter().filter(|o| **o == id).count();
+        let sf = cell * cell / (self.upf * self.upf);
+        // The best part so far: its cells.
+        let mut best: Option<Vec<usize>> = None;
+        let mut floods = 0usize;
+        for (a, b, t) in self.walls.iter().take(MAX_SPLIT_WALLS) {
+            let len = a.dist(*b);
+            if !(len.is_finite() && len > 0.0 && t.is_finite()) {
+                continue;
+            }
+            for (end, from) in [(*a, *b), (*b, *a)] {
+                let dir = (end - from) * (1.0 / len);
+                // Out of the wall's own end (and a wall it meets there), then across open floor of
+                // this room only, to the next wall within reach.
+                let step = cell * 0.5;
+                let (mut s, mut cut, mut hit, mut left_wall) = (0.0, Vec::new(), false, false);
+                while s <= reach + t.abs() {
+                    let Some(k) = cell_of(end + dir * s) else { break };
+                    let wall = self.blocked.get(k).copied().unwrap_or(true);
+                    if !left_wall {
+                        if !wall {
+                            left_wall = true;
+                        } else if s > t.abs() + 2.0 * cell {
+                            break;
+                        }
+                    }
+                    if left_wall {
+                        if wall {
+                            hit = true;
+                            break;
+                        }
+                        if !mine(k) {
+                            break;
+                        }
+                        if cut.last() != Some(&k) {
+                            cut.push(k);
+                        }
+                    }
+                    s += step;
+                }
+                if !hit || cut.is_empty() {
+                    continue;
+                }
+                // The part on the label's side of the line.
+                let cuts: std::collections::HashSet<usize> = cut.iter().copied().collect();
+                if cuts.contains(&start) || floods >= MAX_SPLIT_FLOODS {
+                    continue;
+                }
+                floods += 1;
+                let mut part: std::collections::HashSet<usize> = std::collections::HashSet::from([start]);
+                let mut queue = VecDeque::from([start]);
+                let mut cells = vec![start];
+                while let Some(k) = queue.pop_front() {
+                    let (i, j) = (k % nx, k / nx);
+                    for (x, y) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                        if x >= nx || y >= ny {
+                            continue;
+                        }
+                        let q = y * nx + x;
+                        if mine(q) && !cuts.contains(&q) && part.insert(q) {
+                            cells.push(q);
+                            queue.push_back(q);
+                        }
+                    }
+                }
+                let kept = total.saturating_sub(cells.len());
+                if theirs.iter().any(|k| part.contains(k))
+                    || (cells.len() as f64 * sf) < ROOM_SF.0
+                    || (kept as f64 * sf) < ROOM_SF.0
+                    || best.as_ref().is_some_and(|b| b.len() <= cells.len())
+                {
+                    continue;
+                }
+                best = Some(cells);
+            }
+        }
+        let moved = best?;
+        let mut fill_new = vec![false; nx * ny];
+        for &k in &moved {
+            if let Some(f) = fill_new.get_mut(k) {
+                *f = true;
+            }
+        }
+        let fill_old: Vec<bool> = self.owner.iter().enumerate().map(|(k, o)| *o == id && !fill_new.get(k).copied().unwrap_or(false)).collect();
+        let (ox, oy) = (self.origin.x, self.origin.y);
+        let rects_new = rects_of(&fill_new, nx, ny, |i| ox + i as f64 * cell, |j| oy + j as f64 * cell)?;
+        let rects_old = rects_of(&fill_old, nx, ny, |i| ox + i as f64 * cell, |j| oy + j as f64 * cell)?;
+        for &k in &moved {
+            if let Some(o) = self.owner.get_mut(k) {
+                *o = new_id;
+            }
+        }
+        if let Some(slot) = self.rooms.get_mut(n) {
+            *slot = rects_old;
+        }
+        self.rooms.push(rects_new);
+        Some(self.rooms.len() - 1)
+    }
 }
+
+/// Most walls whose ends [`Floors::split_open`] tries, and most lines it parts the room along
+/// (hostile plans).
+const MAX_SPLIT_WALLS: usize = 20_000;
+const MAX_SPLIT_FLOODS: usize = 64;
 
 /// The open floor (`blocked` clear) that the `outside` reaches through gaps in `keeps_out`
 /// wider than `r` cells each side: the outside flooded through what the grown `keeps_out` leaves
@@ -1346,6 +1475,39 @@ mod tests {
         let sliver = [p(1.0, 10.0), p(3.0, 10.0), p(3.0, 12.0), p(1.0, 12.0)];
         assert_eq!(f.carve(n, &sliver), None);
         assert!((sf_of(f.rects(n).unwrap()) - room).abs() < 1e-9);
+    }
+
+    /// Q6487: a room open to the next one along one side (its wall stops 10' short of the far
+    /// wall) is in that room's trace; with a label of its own there it is parted along its wall's
+    /// line, and with no other label in the trace nothing changes.
+    #[test]
+    fn a_room_open_on_one_side_is_parted_along_its_walls_line() {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        // 40' x 20'; a wall at y 12 from x 14 to 40: the strip above it (y 12-20) is open to the
+        // rest between x 0 and 14.
+        let mut walls = ring(&[(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0)]);
+        walls.push((p(14.0, 12.0), p(40.0, 12.0), 6.0));
+        let shell = vec![[p(0.0, 0.0), p(40.0, 20.0)]];
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let (main, at_main) = (p(20.0, 5.0), p(28.0, 16.0));
+        let (n, rects) = f.room_at(main).unwrap();
+        let before = sf_of(rects);
+        assert_eq!(f.room_at(at_main).unwrap().0, n, "the strip is in the room's trace");
+        // Too short a reach: nothing changes.
+        assert_eq!(f.split_open(n, at_main, &[main], 8.0 * 12.0), None);
+        // No other label in the room: nothing to part.
+        assert_eq!(f.split_open(n, at_main, &[], 16.0 * 12.0), None);
+        let s = f.split_open(n, at_main, &[main], 16.0 * 12.0).expect("parted");
+        assert_ne!(s, n);
+        let (room, strip) = (sf_of(f.rects(n).unwrap()), sf_of(f.rects(s).unwrap()));
+        // The strip: 40' x 8' less the walls' halves (about 39.5' x 7.5').
+        assert!((260.0..=310.0).contains(&strip), "strip {strip} sf");
+        assert!((room + strip - before).abs() <= 10.0 && room > strip, "{before} → {room} + {strip}");
+        assert_eq!(f.room_at(at_main).unwrap().0, s, "its label finds the strip");
+        assert_eq!(f.room_at(main).unwrap().0, n);
+        // Hostile reaches change nothing.
+        assert_eq!(f.split_open(n, main, &[at_main], f64::NAN), None);
+        assert_eq!(f.split_open(n, main, &[at_main], -1.0), None);
     }
 
     #[test]

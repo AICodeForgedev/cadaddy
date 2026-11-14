@@ -439,6 +439,7 @@ pub(crate) fn draft_rfis(
             sides: Vec::new(),
             elements: Vec::new(),
             sketch: sketch_path.clone(),
+            before: String::new(),
         };
         sp.rfis.retain(|x| x.id != id);
         if sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {

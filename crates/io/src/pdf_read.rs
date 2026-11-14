@@ -145,6 +145,20 @@ pub const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
 /// kept for review, not drawn as the sheet's lettering.
 pub const OCR_REVIEW_LAYER: &str = "PDF-OCR-REVIEW";
 
+/// The layer content classification ([`LayerMode::Content`]) puts a sheet's heavy black lines on:
+/// the walls as cut.
+pub fn content_wall_layer() -> &'static str {
+    content_class_layer(ContentClass::Wall)
+}
+
+/// Whether a layer is one content classification ([`LayerMode::Content`]) leaves the linework on
+/// that it called nothing in particular: thin short strokes (dimensions, leaders) and every other
+/// line (casework, equipment, a wall's finish and insulation lines). The heavy cut lines went to
+/// [`content_wall_layer`].
+pub fn is_content_leftover_layer(layer: &str) -> bool {
+    [ContentClass::Anno, ContentClass::Geometry].into_iter().any(|c| layer.eq_ignore_ascii_case(content_class_layer(c)))
+}
+
 impl Default for PdfOptions {
     fn default() -> Self {
         PdfOptions {

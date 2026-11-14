@@ -295,3 +295,46 @@ fn every_parameter_the_commands_take_is_one_their_docs_name() {
         assert_eq!(cadaddy_engine::unknown_params(spec, &json!({"zzz_not_one": 1})), vec!["zzz_not_one".to_string()], "{id} refuses others");
     }
 }
+
+/// Q6630: a unit added by hand while no plan placed it (the electrical side's load: its panel and
+/// circuit on it), which another trade's schedule and plan then build on the same level 5 ft away
+/// (the readers write the lists again, the model is rebuilt): one tag, one unit. The model has one
+/// such unit, where the documents put it, with the added piece's data, and the edit list says why.
+#[test]
+fn a_unit_added_by_hand_then_built_by_another_trades_documents_is_built_once() {
+    let mut s = building();
+    s.execute(
+        "mep.add",
+        &json!({"element": "equipment", "level": "L1", "tag": "RTU-3", "kind": "mechanical_unit", "at": [420, 300], "size_ft": [4, 3], "height_ft": 4,
+                "properties": {"PANEL": "SB9", "CIRCUIT": "4,6,8"}, "reason": "the switchboard's load: its feeder lands on it, no plan shows it yet"}),
+    )
+    .unwrap();
+    assert_eq!(built(&s, "equipment", "").iter().filter(|(_, t)| tag(t, "tag") == Some("RTU-3")).count(), 1);
+    // The mechanical schedule and plan now place it (its own place, 5 ft from the added piece's).
+    s.execute(
+        "bspec.set",
+        &json!({"spec": {"mep": {"equipment": [
+            {"tag": "AHU-1", "kind": "ahu", "level": "L1", "min": [0.0, 40.0], "max": [24.0, 80.0], "bottom_ft": 8.0, "height_ft": 3.0, "systems": ["M-DUCT-SUPP"], "confidence": 1.0},
+            {"tag": "RTU-3", "kind": "rooftop_unit", "level": "L1", "min": [336.0, 282.0], "max": [384.0, 318.0], "bottom_ft": 0.0, "height_ft": 4.5, "systems": ["M-DUCT-SUPP"], "confidence": 0.9,
+             "sources": {"position": "its tag RTU-3 on a made-up mechanical plan", "schedule": "a made-up unit schedule"}}
+        ]}}}),
+    )
+    .unwrap();
+    s.execute("model.build", &json!({"echo": false})).unwrap();
+    let units: Vec<(String, Vec<String>)> = built(&s, "equipment", "").into_iter().filter(|(_, t)| tag(t, "tag") == Some("RTU-3")).collect();
+    assert_eq!(units.len(), 1, "one tag, one unit: {units:?}");
+    let t = &units[0].1;
+    // The documents' unit (its kind, its plan's place), the added piece's data on it.
+    assert_eq!(tag(t, "part"), Some("equipment:rooftop_unit"), "{t:?}");
+    assert!(t.iter().any(|x| x == "prop:PANEL=SB9") && t.iter().any(|x| x.starts_with("prop:SOURCE joined:ME-")), "{t:?}");
+    let sp = cadaddy_engine::walk3d::BuildingSpec::from_json(s.doc().unwrap().building_spec.as_deref().unwrap_or("{}")).unwrap();
+    assert_eq!(
+        sp.mep.equipment.iter().filter(|e| e.tag == "RTU-3").count(),
+        1,
+        "the stored lists keep the documents' unit; the edit stays beside them"
+    );
+    let listed = s.execute("mep.edits", &json!({})).unwrap();
+    let row = listed["edits"].as_array().and_then(|a| a.iter().find(|e| e["tag"] == "RTU-3")).cloned().unwrap_or(Value::Null);
+    assert_eq!(row["status"], json!("applied"), "{listed:#}");
+    assert!(row["why"].as_str().is_some_and(|w| w.contains("not a second box") && w.contains("5.0 ft")), "{row:#}");
+}

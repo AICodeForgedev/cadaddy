@@ -911,6 +911,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "const WALL_TYPE_KEYS",
         "our own output: the property keys a wall's form asks for that its wall type gives (assembly, fire rating, stud size and spacing, Q6594), not words read off a document",
     ),
+    (
+        "crates/engine/src/cmd/readers.rs",
+        "const CHECK_FIELDS",
+        "our own output: the property keys a check writes on a device it made and its built element carries (confidence, why no engineer's sheet has it, the proposals, the RFI, Q6612), not words read off a document",
+    ),
 ];
 
 #[test]

@@ -38,7 +38,7 @@ pub(crate) const TERMINAL_MARK: &str = "TYPE MARK";
 pub(crate) const TERMINAL_CFM: &str = "CFM";
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
-const SLAB_FT: f64 = 0.5;
+pub(crate) const SLAB_FT: f64 = 0.5;
 /// How far above its level's ceiling a run sits at least, feet.
 const PLENUM_CLEAR_FT: f64 = 0.25;
 
@@ -80,8 +80,12 @@ fn ceiling_along(points: &[[f64; 2]], areas: &[(Vec<Vec2>, f64)], level_ceiling:
 /// Seat the runs whose height the drawings don't give (a default, an estimated route) in their
 /// level's plenum: above the highest ceiling they pass under ([`PLENUM_CLEAR_FT`]; the reflected
 /// ceiling plans' areas, else the level's ceiling) and under the slab of the floor above
-/// ([`SLAB_FT`]), as high as they fit. One too deep for the plenum sits just above the ceiling
-/// (model.clashes reports it into the structure); a run the drawings give a height keeps it
+/// ([`SLAB_FT`]), as high as they fit. A duct stays under the structure over its level (Q6554:
+/// the floor or roof framing and deck as the documents give them,
+/// [`super::ceilingseat::structure_under`]), never up in the joist space: one too deep for the
+/// plenum hangs under the structure, below the ceiling (`ceilingseat` marks it for review). Any
+/// other run too deep for the plenum sits just above the ceiling (model.clashes reports it into
+/// the structure); a run the drawings give a height keeps it
 /// unless it is up in the floor above (then it comes under that floor's slab, its height source
 /// saying so), and a riser and the roof's keep theirs. An air terminal above the ceiling where it is comes down into it, and
 /// a diffuser, register or grille in a ceiling area is at that area's height (it is in the
@@ -96,7 +100,16 @@ pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d
     let areas = ceiling_areas(sp, more);
     let none: Vec<(Vec<Vec2>, f64)> = Vec::new();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let plenum: Vec<Option<(f64, f64)>> = sp
+    let heights = super::ceilheight::Rule::load();
+    let ducts: Vec<&str> = sp.mep.systems.iter().filter(|s| s.kind == MepKind::Duct).map(|s| s.name.as_str()).collect();
+    // A duct's top under the structure over its level (feet over its floor; else the slab's).
+    let structure: Vec<Option<f64>> = sp
+        .mep
+        .runs
+        .iter()
+        .map(|r| if ducts.contains(&r.system.as_str()) { super::ceilingseat::structure_under(sp, &r.level, &heights) } else { None })
+        .collect();
+    let plenum: Vec<Option<(f64, f64, Option<f64>)>> = sp
         .mep
         .runs
         .iter()
@@ -106,16 +119,23 @@ pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d
             let ceiling = ceiling_along(&r.points, here, l.ceiling_ft, CEILING_STEP_FT * upf);
             (ceiling.is_finite() && l.height_ft.is_finite() && l.height_ft > ceiling).then_some((ceiling, l.height_ft))
         })
+        .zip(&structure)
+        .map(|(p, s)| p.map(|(c, h)| (c, h, *s)))
         .collect();
     let mut moved = 0;
     for (r, p) in sp.mep.runs.iter_mut().zip(plenum) {
-        let Some((ceiling, height)) = p else { continue };
+        let Some((ceiling, height, structure)) = p else { continue };
         if r.top_ft.is_some() {
             continue;
         }
         let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }.max(0.0) / 12.0;
         let low = ceiling + PLENUM_CLEAR_FT;
-        let high = (height - SLAB_FT - depth).max(low);
+        // A duct: never up in the structure, even when that puts it under the ceiling.
+        let high = match structure {
+            Some(s) => (s - depth).max(0.0),
+            None => (height - SLAB_FT - depth).max(low),
+        };
+        let low = low.min(high);
         if !matches!(r.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route") {
             // A height the drawings give stays (one too deep for the plenum is a clash
             // model.clashes reports), unless its bottom is up in the floor above (a misread tag):

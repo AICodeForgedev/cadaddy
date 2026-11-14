@@ -27,6 +27,20 @@ use crate::{Result, Session};
 const MAX_LAYERS: usize = 2_000;
 /// Rooms traced, at most.
 const MAX_ROOMS: usize = 1_000;
+/// Of an imported PDF's leftover layer ([`cadaddy_io::pdf_read::is_content_leftover_layer`]), the
+/// share of its wall face pairs (by length) inside its sorted walls' extents (grown by
+/// [`SORTED_WALLS_MARGIN_IN`]) at which they are that building's casework and finishes, no walls
+/// (Q6487).
+const LEFTOVER_INSIDE_SHARE: f64 = 0.9;
+const SORTED_WALLS_MARGIN_IN: f64 = 24.0;
+/// Such a layer is walls drawn with a lighter pen, no casework, where its pairs part at least this
+/// share of the room numbers on its levels from a neighbour (no sorted wall between them)...
+const LEFTOVER_PARTED_ROOMS_SHARE: f64 = 0.5;
+/// ...and the pairs that part them are at least this share of its pairs' length: one counter
+/// across a room open to the next doesn't make the casework walls (Q6627).
+const LEFTOVER_PARTING_LENGTH_SHARE: f64 = 0.25;
+/// Two room numbers this near (feet) are neighbours whose rooms a wall between them parts.
+const ROOM_SIGHTLINE_FT: f64 = 30.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("bspec.draft", "Draft Building Spec", run_draft).params(
@@ -298,24 +312,106 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
     let all_texts = texts(&ents);
     let mut roles: Vec<LayerRole> = Vec::new();
     let mut wall_types: Vec<WallType> = Vec::new();
-    for layer in &layers {
+    // Each layer's line pairs (wall faces, by spacing and overlap).
+    let layer_pairs: Vec<_> = layers
+        .iter()
+        .map(|layer| {
+            let mine = on(layer);
+            let segs = segments(&mine);
+            let mut found = pairs(d, &segs, &lim);
+            // A stair's tread lines pair up like wall faces: a layer of treads is no wall layer (Q6429).
+            super::wallgen::drop_stair_treads(&segs, &mut found, k);
+            (mine, segs, found)
+        })
+        .collect();
+    // A PDF sheet the import sorted by what it draws: its heavy cut lines (the walls) are on the
+    // wall class layer. The lines it left on its other layers pair up too: counters, equipment, a
+    // wall's finish and insulation lines, dimension ticks. Taken as walls they box a room in at
+    // its casework (Q6487). Where nearly all of such a layer's pairs lie within the building its
+    // sorted walls already draw, they are that building's casework and finishes, no walls; where
+    // a good part lies beyond (walls drawn with a lighter pen: a storefront wing), it keeps its
+    // walls. Weighed level by level (each plan's own sorted walls; a level whose plan sorted none,
+    // a roof plan, says nothing).
+    let level_of = |p: Vec2| {
+        if !regions {
+            return Some(0);
+        }
+        given_levels
+            .iter()
+            .position(|l| l.region.is_some_and(|[x0, y0, x1, y1]| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1)))
+    };
+    let mut sorted_extents: BTreeMap<usize, cadaddy_geom::Bounds2> = BTreeMap::new();
+    if let Some((_, (_, _, found))) = layers
+        .iter()
+        .zip(&layer_pairs)
+        .find(|(layer, (_, _, found))| layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()) && found.len() >= 2)
+    {
+        for p in found {
+            let Some(l) = level_of((p.c0 + p.c1) * 0.5) else { continue };
+            let b = sorted_extents.entry(l).or_insert(cadaddy_geom::Bounds2::EMPTY);
+            for q in [p.c0, p.c1].into_iter().filter(|q| q.is_finite()) {
+                b.add(q);
+            }
+        }
+    }
+    let g = SORTED_WALLS_MARGIN_IN * k;
+    // The pairs on a level with sorted walls (those weighed), and whether one lies within them.
+    let weighed = |p: &super::perceive::geometry::Pair| -> Option<bool> {
+        let mid = (p.c0 + p.c1) * 0.5;
+        let b = level_of(mid).and_then(|l| sorted_extents.get(&l)).filter(|b| !b.is_empty() && p.length.is_finite())?;
+        Some(mid.x >= b.min.x - g && mid.x <= b.max.x + g && mid.y >= b.min.y - g && mid.y <= b.max.y + g)
+    };
+    let within_sorted = |found: &[super::perceive::geometry::Pair]| {
+        let (mut total, mut inside) = (0.0f64, 0.0f64);
+        for p in found {
+            let Some(within) = weighed(p) else { continue };
+            total += p.length;
+            if within {
+                inside += p.length;
+            }
+        }
+        total > 0.0 && inside >= LEFTOVER_INSIDE_SHARE * total
+    };
+    // Walls drawn with a lighter pen inside the sorted ones (a building's partitions, its heavy
+    // pen kept for the outside and the corridors) part the rooms: on the two sides of each, a room
+    // number with no sorted wall between them. Casework, equipment and finish lines stand in a
+    // room. Such a layer keeps its walls where its pairs part at least
+    // [`LEFTOVER_PARTED_ROOMS_SHARE`] of the room numbers on those levels, the parting pairs at
+    // least [`LEFTOVER_PARTING_LENGTH_SHARE`] of its pairs' length (Q6627).
+    let sorted_faces = layers
+        .iter()
+        .zip(&layer_pairs)
+        .find(|(layer, _)| layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()))
+        .map(|(_, (_, segs, _))| segs.clone())
+        .unwrap_or_default();
+    let tags: Vec<(usize, Vec2)> = all_texts
+        .iter()
+        .filter(|(_, t, _, _)| room_number(t) && !super::perceive::geometry::equipment_mark_number(t))
+        .filter_map(|(_, _, at, _)| level_of(*at).filter(|l| sorted_extents.contains_key(l)).map(|l| (l, *at)))
+        .collect();
+    let parts_rooms = |found: &[super::perceive::geometry::Pair]| {
+        let mine: Vec<&super::perceive::geometry::Pair> = found.iter().filter(|p| weighed(p).is_some()).collect();
+        let total: f64 = mine.iter().map(|p| p.length).sum();
+        if tags.len() < 2 || total.is_nan() || total <= 0.0 {
+            return false;
+        }
+        let (parted, parting) = rooms_parted(&tags, &sorted_faces, &mine, ROOM_SIGHTLINE_FT * 12.0 * k);
+        parted as f64 >= LEFTOVER_PARTED_ROOMS_SHARE * tags.len() as f64 && parting >= LEFTOVER_PARTING_LENGTH_SHARE * total
+    };
+    for (layer, (mine, segs, found)) in layers.iter().zip(layer_pairs) {
         // The OCR review layer keeps readings for a person to check: never what a layer of the
         // building is (Q6332).
         if review_layer(layer) {
             continue;
         }
-        let mine = on(layer);
-        let segs = segments(&mine);
-        let mut found = pairs(d, &segs, &lim);
-        // A stair's tread lines pair up like wall faces: a layer of treads is no wall layer (Q6429).
-        super::wallgen::drop_stair_treads(&segs, &mut found, k);
+        let leftover = cadaddy_io::pdf_read::is_content_leftover_layer(layer) && within_sorted(&found) && !parts_rooms(&found);
         let by_name = role_by_name(layer);
         // Else what it holds: wall face pairs, door swings, room names. Not on a layer that is
         // off or frozen: what it holds isn't on the sheet (an imported PDF's lettering strokes,
         // kept off under the text the OCR read from them, hold plenty of "face pairs").
         let shown = d.layers.iter().find(|l| l.name.eq_ignore_ascii_case(layer)).is_none_or(|l| l.on && !l.frozen);
         let by_content = || -> Option<(Role, String)> {
-            if !by_content || !shown {
+            if !by_content || !shown || leftover {
                 return None;
             }
             if found.len() >= 2 {
@@ -546,6 +642,65 @@ fn draft_levels(s: &Session, by_content: bool, given: Vec<(Level, Option<String>
     Ok(sp)
 }
 
+/// Whether the segments `a`-`b` and `c`-`d` cross (touching ends count).
+fn segments_cross(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
+    let side = |p: Vec2, q: Vec2, r: Vec2| (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    let (d1, d2, d3, d4) = (side(c, d, a), side(c, d, b), side(a, b, c), side(a, b, d));
+    d1 * d2 <= 0.0 && d3 * d4 <= 0.0 && (d1 != 0.0 || d2 != 0.0) && (d3 != 0.0 || d4 != 0.0)
+}
+
+/// Most room numbers weighed for the rooms a layer's pairs part (hostile drawings).
+const MAX_PARTED_TAGS: usize = 4_000;
+
+/// The room numbers `tags` (level, where) that the pairs `found` part from another room number on
+/// their level within `reach` (the sightline between the two crosses a pair's centreline and none
+/// of the `walls` faces), and the length of the pairs that part them. A wall parts two rooms;
+/// casework stands in a room (Q6627).
+fn rooms_parted(
+    tags: &[(usize, Vec2)],
+    walls: &[super::perceive::geometry::Seg],
+    found: &[&super::perceive::geometry::Pair],
+    reach: f64,
+) -> (usize, f64) {
+    let tags = tags.get(..tags.len().min(MAX_PARTED_TAGS)).unwrap_or_default();
+    if found.is_empty() || !(reach.is_finite() && reach > 0.0) {
+        return (0, 0.0);
+    }
+    let crosses_box = |a: Vec2, b: Vec2, p: Vec2, q: Vec2| {
+        a.x.max(b.x) >= p.x.min(q.x) && p.x.max(q.x) >= a.x.min(b.x) && a.y.max(b.y) >= p.y.min(q.y) && p.y.max(q.y) >= a.y.min(b.y)
+    };
+    let mut parted = vec![false; tags.len()];
+    let mut parting = vec![false; found.len()];
+    for (i, (li, a)) in tags.iter().enumerate() {
+        for (j, (lj, b)) in tags.iter().enumerate().skip(i + 1) {
+            if li != lj || a.dist(*b) > reach || a.dist(*b) < 1e-9 {
+                continue;
+            }
+            let across: Vec<usize> = found
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| crosses_box(*a, *b, p.c0, p.c1) && segments_cross(*a, *b, p.c0, p.c1))
+                .map(|(n, _)| n)
+                .collect();
+            if across.is_empty() || walls.iter().any(|w| crosses_box(*a, *b, w.a, w.b) && segments_cross(*a, *b, w.a, w.b)) {
+                continue;
+            }
+            for n in [i, j] {
+                if let Some(x) = parted.get_mut(n) {
+                    *x = true;
+                }
+            }
+            for n in across {
+                if let Some(x) = parting.get_mut(n) {
+                    *x = true;
+                }
+            }
+        }
+    }
+    let len = found.iter().zip(&parting).filter(|(p, x)| **x && p.length.is_finite()).map(|(p, _)| p.length).sum();
+    (parted.iter().filter(|x| **x).count(), len)
+}
+
 fn run_draft(s: &mut Session, p: &Value) -> Result<Value> {
     let mut sp = draft_levels(s, true, given_levels(p)?)?;
     sp.stack = bool_or(p, "stack", false);
@@ -560,6 +715,42 @@ fn run_draft(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    /// Q6627: a pair between two room numbers with no sorted wall between them parts them; a
+    /// sorted wall across the sightline, numbers out of reach or on another level, and hostile
+    /// numbers part none.
+    #[test]
+    fn a_pair_between_two_room_numbers_parts_them() {
+        use super::super::perceive::geometry::{Pair, Seg};
+        use cadaddy_geom::Vec2;
+        let pair = |x: f64| Pair {
+            layer: "L".into(),
+            c0: Vec2::new(x, 0.0),
+            c1: Vec2::new(x, 180.0),
+            thickness: 6.0,
+            length: 180.0,
+            confidence: 1.0,
+            faces: [0, 1],
+        };
+        let seg = |x: f64| Seg { a: Vec2::new(x, 0.0), b: Vec2::new(x, 180.0), layer: "W".into(), outline_width: f64::INFINITY, unit_run: false };
+        let (p100, p200) = (pair(100.0), pair(200.0));
+        let found = [&p100, &p200];
+        // Three numbers in a row, a partition between each two.
+        let tags = [(0, Vec2::new(50.0, 90.0)), (0, Vec2::new(150.0, 90.0)), (0, Vec2::new(250.0, 90.0))];
+        let (n, len) = super::rooms_parted(&tags, &[], &found, 360.0);
+        assert_eq!((n, len), (3, 360.0));
+        // A sorted wall beside the first partition: the first two are parted by it already.
+        let (n, len) = super::rooms_parted(&tags, &[seg(101.0)], &found, 360.0);
+        assert_eq!((n, len), (2, 180.0));
+        // Out of reach, or on other levels: nothing parted.
+        assert_eq!(super::rooms_parted(&tags, &[], &found, 60.0).0, 0);
+        let apart = [(0, Vec2::new(50.0, 90.0)), (1, Vec2::new(150.0, 90.0))];
+        assert_eq!(super::rooms_parted(&apart, &[], &found, 360.0).0, 0);
+        // Hostile numbers.
+        assert_eq!(super::rooms_parted(&tags, &[], &found, f64::NAN), (0, 0.0));
+        assert_eq!(super::rooms_parted(&[(0, Vec2::new(f64::NAN, 0.0)), (0, Vec2::new(150.0, 90.0))], &[], &found, 360.0).0, 0);
+        assert_eq!(super::rooms_parted(&tags, &[], &[], 360.0), (0, 0.0));
+    }
+
     #[test]
     fn a_wall_types_note_is_no_room() {
         assert!(!super::room_like_name("1 HOUR FIRE RATED PARTITION"));

@@ -1931,9 +1931,45 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .any(|(bb, z0, z1)| *z0 < hi && *z1 > lo && front.x >= bb.min.x && front.x <= bb.max.x && front.y >= bb.min.y && front.y <= bb.max.y)
     };
     let lands = |i: usize, p: Vec3| -> bool { clear_boxes.get(i).is_some_and(|b| !behind(b, p) || behind(b, b.centre)) };
-    let cleared = super::boxclear::clear(&clear_boxes, cr, inch, &fits, &lands);
+    // A wall box never stands in an opening's jamb studs (Q6623): the king stud stays where the
+    // opening needs it, and the electrician sets the box against its far face, in the bay. The
+    // jambs are where the trades' stud layout puts them (its wall type's framing and rules).
+    let jamb_walls: BTreeSet<Handle> = clear_boxes.iter().filter(|b| b.movable).filter_map(|b| b.wall).collect();
+    let (jambs, jamb_src) = super::super::tradeatoms::jambs_of(d, sp, &jamb_walls);
+    let mut off_jamb: Vec<(usize, Vec2)> = Vec::new();
+    let mut in_jamb_left = 0usize;
+    for (i, b) in clear_boxes.iter().enumerate() {
+        let Some(js) = b.wall.filter(|_| b.movable).and_then(|w| jambs.get(&w)) else { continue };
+        let Some(first) = js.first() else { continue };
+        let hw = b.along.dot(first.u).abs() * b.w / 2.0 + b.out.dot(first.u).abs() * b.t / 2.0;
+        let Some(shift) = super::super::tradeatoms::off_jambs(b.centre, hw, b.h / 2.0, js) else { continue };
+        let p = b.centre + Vec3::new(shift.x, shift.y, 0.0);
+        if super::super::tradeatoms::off_jambs(p, hw, b.h / 2.0, js).is_none() && fits(i, p) && lands(i, p) {
+            off_jamb.push((i, shift));
+        } else {
+            in_jamb_left += 1;
+        }
+    }
+    // The other boxes are cleared from where these stand now.
+    let mut from_jambs = clear_boxes.clone();
+    for (i, shift) in &off_jamb {
+        if let Some(b) = from_jambs.get_mut(*i) {
+            b.centre = b.centre + Vec3::new(shift.x, shift.y, 0.0);
+        }
+    }
+    let cleared = super::boxclear::clear(&from_jambs, cr, inch, &fits, &lands);
     let mut device_moves: HashMap<Handle, (Vec3, String, String)> = HashMap::new();
     let mut box_moves: BTreeMap<usize, (Vec3, Vec<String>, String)> = BTreeMap::new();
+    for (i, shift) in &off_jamb {
+        let Some((bi, _, _)) = clear_of.get(*i) else { continue };
+        let why = format!(
+            "moved {} along its wall: it stood in the jamb studs of the opening beside it; set against the jamb's far face, in the bay",
+            super::super::walltypes::frac(shift.len() / inch)
+        );
+        let e = box_moves.entry(*bi).or_insert_with(|| (Vec3::new(0.0, 0.0, 0.0), Vec::new(), jamb_src.clone()));
+        e.0 = e.0 + Vec3::new(shift.x, shift.y, 0.0);
+        e.1.push(why);
+    }
     let (mut moved_overlap, mut moved_back) = (0usize, 0usize);
     // The remedy each back-to-back box took and why (Q6553): kept on the box.
     let mut remedy_of: BTreeMap<usize, (String, String)> = BTreeMap::new();
@@ -2097,6 +2133,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             putty_pads += 1;
         }
     }
+    if (!off_jamb.is_empty() || in_jamb_left > 0) && notes.len() < 200 {
+        notes.push(format!(
+            "{} wall box(es) moved along their walls off the jamb studs of the opening beside them{} ({jamb_src})",
+            off_jamb.len(),
+            if in_jamb_left > 0 {
+                format!("; {in_jamb_left} with no spot along their wall's face clear of the jambs: a review")
+            } else {
+                String::new()
+            }
+        ));
+    }
     // Which remedy the pairs took, and why (Q6488).
     let pairs = moved_back + cleared.putty.len() + cleared.unseparated.len();
     for (bi, (what, src)) in remedy_of {
@@ -2210,7 +2257,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let spacing = rl.knockout_spacing_in.max(0.0) / 12.0 * upf;
     let keep = super::super::conduitroute::rules().clearance_in("conduit") / 12.0 * upf;
     // Every routed run's end in a box, its knockout chosen with the others' coming into it.
-    let mut planned = plan_knockouts(&paths, &boxes, &gear, &moves, routed_touch, spacing, keep, upf, &mut knocked);
+    // A drop into a knockout never stands in a framing member over the level (Q6631: a knockout
+    // moved off the box's centre went down through a joist's depth): its column from the run's
+    // height down to the box clear of every joist, rim and truss, as the router keeps its rises.
+    let frame_cols: std::cell::OnceCell<FrameCols> = std::cell::OnceCell::new();
+    let drop_r = (spacing - keep).max(0.0) / 2.0;
+    let dr: &Drawing = d;
+    let col_clear = |b: &DevBox, at: Vec3, top: f64| frame_cols.get_or_init(|| FrameCols::of(dr, sp, &moves, upf)).clear(&b.level, at, top, drop_r);
+    let mut planned = plan_knockouts(&paths, &boxes, &gear, &moves, routed_touch, spacing, keep, upf, &col_clear, &mut knocked);
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
     // Buried raceway that comes up into the raceway above the floor: the project's wiring method
@@ -2409,8 +2463,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         taken.insert(bi);
                         let before = super::path_ft(&c.pts, upf);
                         let came = came_from(&c.pts, end, upf);
+                        let top = drop_top(&c.pts, end, upf);
                         let entry = planned_entry(&mut planned, b.atom, p, came)
-                            .unwrap_or_else(|| knockout(b, knocked.entry(b.atom).or_default(), came, spacing, keep));
+                            .unwrap_or_else(|| knockout(b, knocked.entry(b.atom).or_default(), came, spacing, keep, &|q: Vec3| col_clear(b, q, top)));
                         land_on(&mut c.pts, end, entry, upf);
                         landing_ft += super::path_ft(&c.pts, upf) - before;
                         if let Some(l) = landed.get_mut(end) {
@@ -2453,8 +2508,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 if let Some((bi, b, atom)) = near_box {
                     let entry = if m.estimated || m.routed {
                         let came = came_from(&c.pts, end, upf);
+                        let top = drop_top(&c.pts, end, upf);
                         planned_entry(&mut planned, atom, p, came)
-                            .unwrap_or_else(|| knockout(b, knocked.entry(atom).or_default(), came, spacing, keep))
+                            .unwrap_or_else(|| knockout(b, knocked.entry(atom).or_default(), came, spacing, keep, &|q: Vec3| col_clear(b, q, top)))
                     } else {
                         b.entry
                     };
@@ -3189,6 +3245,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "devicesPigtailed": pigtailed,
         "boxClearance": {
             "movedOffOverlap": moved_overlap,
+            "movedOffJambs": off_jamb.len(),
+            "inJambsReview": in_jamb_left,
             "movedOffBackToBack": moved_back,
             "devicesMoved": device_moves.len(),
             "puttyPads": putty_pads,
@@ -3782,6 +3840,47 @@ fn planned_entry(planned: &mut HashMap<KnockKey, Vec<Vec3>>, atom: usize, p: Vec
     planned.get_mut(&knock_key(atom, p, came)).and_then(Vec::pop)
 }
 
+/// The top of a run's drop at its end `end` (0: its first point; else its last): the highest of
+/// the points over that end's plan point; its end's own height when it has none.
+fn drop_top(pts: &[Vec3], end: usize, upf: f64) -> f64 {
+    let tiny = upf / 192.0;
+    let plan = |v: &Vec3| Vec2::new(v.x, v.y);
+    let Some(p) = (if end == 0 { pts.first() } else { pts.last() }).copied() else { return 0.0 };
+    let it: Box<dyn Iterator<Item = &Vec3>> = if end == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+    it.take_while(|q| plan(q).dist(plan(&p)) <= tiny).fold(p.z, |z, q| z.max(q.z))
+}
+
+/// The framing over each level (its joists, rim boards and trusses, as the router sees them, on
+/// the level's plan; Q6631): where a run's drop into a box may not stand.
+#[derive(Default)]
+struct FrameCols {
+    /// By level (lowercased): each member's centreline ends, half its thickness, its bottom and top.
+    by_level: HashMap<String, Vec<(Vec2, Vec2, f64, f64, f64)>>,
+}
+
+impl FrameCols {
+    fn of(d: &Drawing, sp: &BuildingSpec, moves: &HashMap<String, Vec2>, upf: f64) -> FrameCols {
+        let members = super::super::tradeatoms::framing_members(d, sp);
+        let by_level = super::super::conduitroute::framing_over_levels(d, sp, &members, moves, upf)
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().map(|(o, f)| (f.a, f.b, f.t / 2.0, o.lo.z, o.hi.z)).collect()))
+            .collect();
+        FrameCols { by_level }
+    }
+
+    /// Whether a drop at `at` (its plan point; radius `r`) from its height up to `top` stands
+    /// clear of every member over `level` (a member it reaches into it would go through the depth of).
+    fn clear(&self, level: &str, at: Vec3, top: f64, r: f64) -> bool {
+        let Some(list) = self.by_level.get(&level.to_ascii_lowercase()) else { return true };
+        if !(at.is_finite() && top.is_finite() && r.is_finite()) {
+            return true;
+        }
+        let (lo, hi) = (at.z.min(top), at.z.max(top));
+        let p = Vec2::new(at.x, at.y);
+        !list.iter().any(|(a, b, half, zb, zt)| hi > *zb && lo < *zt && super::super::conduitroute::seg_dist(p, *a, *b) < half + r)
+    }
+}
+
 /// Each box's knockouts for the routed runs ending in it (Q6552), chosen together so that no run
 /// passes through another's drop: the runs coming along the box's long way from one end take its
 /// knockouts from that end in, the lowest first (a higher run passes over a lower one's elbow);
@@ -3798,6 +3897,7 @@ fn plan_knockouts(
     spacing: f64,
     keep: f64,
     upf: f64,
+    clear: &dyn Fn(&DevBox, Vec3, f64) -> bool,
     knocked: &mut HashMap<usize, Vec<i64>>,
 ) -> HashMap<KnockKey, Vec<Vec3>> {
     let mut out: HashMap<KnockKey, Vec<Vec3>> = HashMap::new();
@@ -3827,8 +3927,7 @@ fn plan_knockouts(
                 let Some(b) = boxes.get(bi) else { continue };
                 let came = came_from(&path.pts, end, upf);
                 // The height it comes at: the top of its drop.
-                let mut it: Box<dyn Iterator<Item = &Vec3>> = if end == 0 { Box::new(path.pts.iter()) } else { Box::new(path.pts.iter().rev()) };
-                let top = it.by_ref().take_while(|q| plan(**q).dist(plan(p)) <= tiny).fold(p.z, |z, q| z.max(q.z));
+                let top = drop_top(&path.pts, end, upf);
                 let side = came.map_or(0, |c| {
                     let v = c - plan(b.entry);
                     let along = v.dot(b.along);
@@ -3847,25 +3946,35 @@ fn plan_knockouts(
         let n = knockouts_each_side(b, spacing, keep);
         arrivals.sort_by(|x, y| x.1.total_cmp(&y.1));
         let taken = knocked.entry(atom).or_default();
-        // One run into it: its centre.
-        if let [(_, _, key)] = arrivals.as_slice() {
-            taken.push(0);
-            out.entry(*key).or_default().push(knockout_at(b, 0, n, spacing, keep));
+        // A knockout whose drop from `top` stands clear of the framing (Q6631).
+        let ok = |k: i64, top: f64| clear(b, knockout_at(b, k, n, spacing, keep), top);
+        // One run into it: its centre; where a framing member stands over it, the nearest clear
+        // knockout of its top, then of its ends.
+        if let [(_, top, key)] = arrivals.as_slice() {
+            let mut near: Vec<i64> = (-(n + 1)..=(n + 1)).collect();
+            near.sort_by_key(|k| (k.abs() > n, k.abs(), *k));
+            let k = near.into_iter().find(|k| ok(*k, *top)).unwrap_or(0);
+            taken.push(k);
+            out.entry(*key).or_default().push(knockout_at(b, k, n, spacing, keep));
             continue;
         }
         // Its knockouts from one end to the other (steps); more runs than its top takes: one
         // into each of its ends too.
         let mut free: Vec<i64> = (-n..=n).collect();
-        if arrivals.len() > free.len() {
+        // A knockout a framing member stands over is none of its top's (Q6631).
+        let highest = arrivals.iter().map(|a| a.1).fold(f64::NEG_INFINITY, f64::max);
+        let shut = free.iter().filter(|k| !ok(**k, highest)).count();
+        if arrivals.len() + shut > free.len() {
             free.insert(0, -(n + 1));
             free.push(n + 1);
         }
-        for (side, _, key) in arrivals.iter().filter(|a| a.0 != 0).chain(arrivals.iter().filter(|a| a.0 == 0)) {
-            // From its own end inward; across: the middle; none free: its side's again.
+        for (side, top, key) in arrivals.iter().filter(|a| a.0 != 0).chain(arrivals.iter().filter(|a| a.0 == 0)) {
+            // From its own end inward; across: the middle; none free: its side's again. Each the
+            // first whose drop clears the framing (Q6631), else as if none stood there.
             let pick = match side {
-                -1 => free.first().copied(),
-                1 => free.last().copied(),
-                _ => free.iter().copied().min_by_key(|k| k.abs()),
+                -1 => free.iter().copied().find(|k| ok(*k, *top)).or_else(|| free.first().copied()),
+                1 => free.iter().rev().copied().find(|k| ok(*k, *top)).or_else(|| free.last().copied()),
+                _ => free.iter().copied().filter(|k| ok(*k, *top)).min_by_key(|k| k.abs()).or_else(|| free.iter().copied().min_by_key(|k| k.abs())),
             };
             let k = pick.unwrap_or(match side {
                 -1 => -n,
@@ -3904,7 +4013,7 @@ fn knockout_at(b: &DevBox, k: i64, n: i64, spacing: f64, keep: f64) -> Vec3 {
 /// first, its centre, then the free one of its top nearest the side it comes from (`from`), then
 /// one in its end on that side; every one taken, the nearest of its top's. `taken`: the box's
 /// knockouts so far.
-fn knockout(b: &DevBox, taken: &mut Vec<i64>, from: Option<Vec2>, spacing: f64, keep: f64) -> Vec3 {
+fn knockout(b: &DevBox, taken: &mut Vec<i64>, from: Option<Vec2>, spacing: f64, keep: f64, clear: &dyn Fn(Vec3) -> bool) -> Vec3 {
     if !(spacing.is_finite() && spacing > 0.0 && b.width.is_finite() && b.along.is_finite()) || taken.len() > 64 {
         return b.entry;
     }
@@ -3920,10 +4029,19 @@ fn knockout(b: &DevBox, taken: &mut Vec<i64>, from: Option<Vec2>, spacing: f64, 
         x.0.cmp(&y.0).then(x.1.total_cmp(&y.1))
     };
     let all: Vec<i64> = (-(n + 1)..=(n + 1)).collect();
-    let k = if taken.is_empty() {
+    // Its drop clear of the framing over the box (Q6631): a free knockout clear of it first.
+    let ok = |k: &i64| clear(knockout_at(b, *k, n, spacing, keep));
+    let k = if taken.is_empty() && ok(&0) {
         0
     } else {
-        all.iter().copied().filter(|k| !taken.contains(k)).min_by(by).or_else(|| all.iter().copied().filter(|k| k.abs() <= n).min_by(by)).unwrap_or(0)
+        all.iter()
+            .copied()
+            .filter(|k| !taken.contains(k) && ok(k))
+            .min_by(by)
+            .or_else(|| taken.is_empty().then_some(0))
+            .or_else(|| all.iter().copied().filter(|k| !taken.contains(k)).min_by(by))
+            .or_else(|| all.iter().copied().filter(|k| k.abs() <= n).min_by(by))
+            .unwrap_or(0)
     };
     taken.push(k);
     knockout_at(b, k, n, spacing, keep)
@@ -4334,7 +4452,7 @@ mod tests {
         let mut paths = BTreeMap::new();
         paths.insert(key, (m, vec![run(0.0, 108.0), run(10.0, 100.0), run(20.0, 104.0), run(96.0, 100.0)]));
         let mut knocked = HashMap::new();
-        let mut planned = plan_knockouts(&paths, &[box_at_48()], &[], &HashMap::new(), 6.0, 1.5, 0.5, 12.0, &mut knocked);
+        let mut planned = plan_knockouts(&paths, &[box_at_48()], &[], &HashMap::new(), 6.0, 1.5, 0.5, 12.0, &|_, _, _| true, &mut knocked);
         let mut at = |from_x: f64| planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(from_x, 0.0))).expect("planned");
         // Four into a box of three knockouts: the lowest from the west into its west end
         // (beside it, into its side at half its height), the next ones further in; the east one
@@ -4348,13 +4466,67 @@ mod tests {
         assert!(planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).is_none());
         // Unplanned, one at a time: the first at the centre, then the free one of its top nearest
         // its side.
-        assert_eq!(knockout(&box_at_48(), &mut vec![], Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(48.0, 0.0, 20.0));
+        assert_eq!(knockout(&box_at_48(), &mut vec![], Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(48.0, 0.0, 20.0));
         let mut taken = vec![0];
-        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(46.5, 0.0, 20.0));
-        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(49.5, 0.0, 20.0));
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(46.5, 0.0, 20.0));
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(49.5, 0.0, 20.0));
         // Its top full: into its end on the run's side.
-        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5), Vec3::new(45.5, 0.0, 18.0));
-        let _ = knockout(&box_at_48(), &mut vec![], Some(Vec2::new(f64::NAN, 0.0)), f64::NAN, 0.5);
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(45.5, 0.0, 18.0));
+        let _ = knockout(&box_at_48(), &mut vec![], Some(Vec2::new(f64::NAN, 0.0)), f64::NAN, 0.5, &|_| true);
+    }
+
+    #[test]
+    fn a_drop_into_a_knockout_never_stands_in_a_framing_member() {
+        // Q6631: an I-joist (1-3/4" wide, 90 to 110 sheet inches) runs square to the box's long
+        // way over one of its knockouts; a run's drop there would go through the joist's depth.
+        let joist_at =
+            |x: f64| FrameCols { by_level: HashMap::from([("l1".to_string(), vec![(Vec2::new(x, -50.0), Vec2::new(x, 50.0), 0.875, 90.0, 110.0)])]) };
+        let r = (1.5 - 0.5) / 2.0;
+        let in_joist = |q: Vec3, x: f64| (q.x - x).abs() < 0.875 + r;
+        // The column's own test: under the joist's bottom, or beside it, it is clear.
+        let fc = joist_at(46.5);
+        assert!(!fc.clear("L1", Vec3::new(46.5, 0.0, 20.0), 100.0, r));
+        assert!(fc.clear("L1", Vec3::new(46.5, 0.0, 20.0), 80.0, r), "a drop wholly under the joist");
+        assert!(fc.clear("L1", Vec3::new(48.0, 0.0, 20.0), 100.0, r));
+        assert!(fc.clear("L2", Vec3::new(46.5, 0.0, 20.0), 100.0, r), "another level's framing");
+        let key =
+            GroupKey { system: "E-BRANCH".into(), level: "L1".into(), circuit_tag: "c".into(), cable: false, buried: false, steel: false, copy: 0 };
+        let run = |from_x: f64, z: f64| Path3 { pts: vec![Vec3::new(from_x, 0.0, z), Vec3::new(48.0, 0.0, z), Vec3::new(48.0, 0.0, 20.0)], run: 0 };
+        let plan = |runs: Vec<Path3>, x: f64| {
+            let fc = joist_at(x);
+            let clear = |b: &DevBox, q: Vec3, top: f64| fc.clear(&b.level, q, top, r);
+            let mut paths = BTreeMap::new();
+            paths.insert(key.clone(), (Method { routed: true, ..Method::default() }, runs));
+            plan_knockouts(&paths, &[box_at_48()], &[], &HashMap::new(), 6.0, 1.5, 0.5, 12.0, &clear, &mut HashMap::new())
+        };
+        // Two from the west: the lowest would take the west knockout (46.5), in the joist; it
+        // takes the centre, the next the east one.
+        let mut planned = plan(vec![run(10.0, 100.0), run(0.0, 104.0)], 46.5);
+        let low = planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).expect("planned");
+        let high = planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(0.0, 0.0))).expect("planned");
+        assert!(!in_joist(low, 46.5) && !in_joist(high, 46.5), "{low:?} {high:?}");
+        assert_eq!((low, high), (Vec3::new(48.0, 0.0, 20.0), Vec3::new(49.5, 0.0, 20.0)));
+        // Three runs (west, east, across) into a box of three knockouts, one shut by the joist:
+        // none takes the shut one; the box's end is opened for the third.
+        let across = Path3 { pts: vec![Vec3::new(48.0, 60.0, 104.0), Vec3::new(48.0, 0.0, 104.0), Vec3::new(48.0, 0.0, 20.0)], run: 0 };
+        let mut planned = plan(vec![run(10.0, 100.0), run(96.0, 100.0), across], 46.5);
+        let entries: Vec<Vec3> = [Vec2::new(10.0, 0.0), Vec2::new(96.0, 0.0), Vec2::new(48.0, 60.0)]
+            .iter()
+            .map(|c| planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(*c)).expect("planned"))
+            .collect();
+        assert!(entries.iter().all(|q| !in_joist(*q, 46.5)), "{entries:?}");
+        assert!(entries.iter().enumerate().all(|(i, q)| entries.iter().skip(i + 1).all(|o| o != q)), "each its own: {entries:?}");
+        // One run, the joist over the box's centre: the nearest knockout clear of it.
+        let mut planned = plan(vec![run(10.0, 100.0)], 48.0);
+        let one = planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).expect("planned");
+        assert_eq!(one, Vec3::new(46.5, 0.0, 20.0));
+        // Unplanned, one at a time: the same.
+        let fc = joist_at(48.0);
+        let clear = |q: Vec3| fc.clear("L1", q, 100.0, r);
+        let first = knockout(&box_at_48(), &mut vec![], Some(Vec2::new(96.0, 0.0)), 1.5, 0.5, &clear);
+        assert_eq!(first, Vec3::new(49.5, 0.0, 20.0), "the clear one nearest the run's side");
+        // No clear one at all: as before (the centre), never no knockout.
+        assert_eq!(knockout(&box_at_48(), &mut vec![], None, 1.5, 0.5, &|_| false), Vec3::new(48.0, 0.0, 20.0));
     }
 
     #[test]

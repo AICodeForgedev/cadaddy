@@ -16,8 +16,10 @@ struct Clutter {
     dashes: bool,
     strokes: bool,
     dims: bool,
-    /// Every `open`-th room's door drawn as its swing alone (no leaf: the room stays open to
-    /// the corridor), and a name in the corridor, open at its ends. 0: none.
+    /// Every `open`-th room entered through a cased opening (no door drawn, neither leaf nor
+    /// swing: the room stays open to the corridor), and a name in the corridor, open at its
+    /// ends. 0: none. (A swing drawn alone still reads as a door: its leaf is taken from the
+    /// swing, Q6487.)
     open: usize,
 }
 
@@ -108,13 +110,13 @@ fn floor(s: &mut Session, origin: (f64, f64), rooms: usize, level: usize, c: Clu
             line(s, "A-WALL", (x0, far), (x0 + w, far));
             let out = if side == 0 { far - 8.0 } else { far + 8.0 };
             line(s, "A-WALL", (x0, out), (x0 + w, out));
-            // The door: leaf and swing, into the room.
+            // The door: leaf and swing, into the room; an open room's opening is cased (none).
             let inward = if side == 0 { -1.0 } else { 1.0 };
             if c.open == 0 || !(side * per_side + i).is_multiple_of(c.open) {
                 line(s, "A-DOOR", (g0, back), (g0, back + inward * 36.0));
+                let (a0, a1) = if side == 0 { (-std::f64::consts::FRAC_PI_2, 0.0) } else { (0.0, std::f64::consts::FRAC_PI_2) };
+                swing(s, (g0, back), 36.0, a0, a1);
             }
-            let (a0, a1) = if side == 0 { (-std::f64::consts::FRAC_PI_2, 0.0) } else { (0.0, std::f64::consts::FRAC_PI_2) };
-            swing(s, (g0, back), 36.0, a0, a1);
             // The bath: 8' × 8' in the corner by the corridor, its door 30".
             let by = if side == 0 { back - 96.0 } else { back + 96.0 };
             let bx = x0 + w - t / 2.0 - 96.0;
@@ -219,7 +221,7 @@ fn trace(s: &mut Session, regions: &[[f64; 4]]) -> (usize, f64) {
 }
 
 /// A floor of 160 guest rooms with a print's clutter, every fourth room open to the corridor
-/// (its door drawn as the swing alone): their names and the corridor's search out to the trace's
+/// (a cased opening, no door drawn): their names and the corridor's search out to the trace's
 /// reach from each of their points. That takes about as long as the same floor with every room
 /// closed, not many times longer (the open names' windows a wing wide were searched again for
 /// each point: 20 s a floor here, the minutes a print set's trace took, Q6388). The rooms found
