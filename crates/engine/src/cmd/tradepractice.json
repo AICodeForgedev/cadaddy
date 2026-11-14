@@ -352,6 +352,35 @@
       ]
     },
     {
+      "id": "M-EQUIP-SUBMITTAL-SIZE",
+      "trade": "mechanical",
+      "fills": "the size of a piece of equipment (its box: height, width, depth) and the curb or rails it stands on, where its approved submittal gives them; the schedule's size, else its kind's usual size, only where no approved submittal does (not_unit_words: a word right before a height, width, depth or length label that makes it something else's, a shipping carton's or an opening's; accessory_words: a data sheet's words that make its size an accessory's, not the unit's; generic_words: words too common to tie a size to its unit)",
+      "basis": "trade practice: the field sets the unit the approved submittal shows, often another maker's than the schedule's (a substitution), at the cut sheet's dimensions and on the curb or rails it gives; the schedule's or the plan's size is kept beside it as the design value; a submittal sent back (revise and resubmit, rejected) is not built from",
+      "not_unit_words": ["SHIPPING", "SHIP", "SHIPPED", "CARTON", "CRATE", "CRATED", "PACKAGED", "PACKAGE", "PACKING", "BOX", "OPENING", "CUTOUT", "ROUGH", "CURB", "SUPPLY", "RETURN", "MOUNTING", "CEILING", "ROOM", "LIFT", "PIPING", "PIPE", "LINE", "CABLE", "CORD", "WIRE", "LEAD", "HOSE", "TUBING", "FIN", "BLADE", "BACKPAN", "NECK", "INLET", "OUTLET", "FILTER", "DISCHARGE", "DUCT", "GRILLE", "FLANGE", "CONNECTION", "CLEARANCE", "SERVICE", "ACCESS", "MIN", "MIN.", "MINIMUM", "MAX", "MAX.", "MAXIMUM", "LETTER", "TEXT", "FRAME", "SLOT", "STROKE", "WATER", "HEAD", "STATIC", "TRAVEL", "MODULE"],
+      "accessory_words": ["REMOTE", "CONTROLLER", "CONTROL", "THERMOSTAT", "SENSOR", "WIRELESS", "WI-FI", "WIFI", "BACNET", "MODULE", "KIT", "ACCESSORY", "ACCESSORIES", "BAFFLE", "BRACKET", "ADAPTER", "GATEWAY", "INTERFACE", "RECEIVER", "TRANSMITTER", "DISPLAY", "CONDENSATE PUMP", "PANEL KIT"],
+      "kind_words": {
+        "ahu": ["AIR HANDLER", "AIR HANDLING", "AHU", "SPLIT", "FAN COIL"],
+        "rtu": ["ROOFTOP", "RTU", "PACKAGED", "DOAS", "OUTSIDE AIR", "OUTDOOR AIR", "MAKEUP AIR", "MAKE-UP AIR", "MAKE UP AIR"],
+        "outdoor_air_unit": ["DOAS", "OUTSIDE AIR", "OUTDOOR AIR", "MAKEUP AIR", "MAKE-UP AIR", "ROOFTOP"],
+        "energy_recovery_unit": ["ENERGY RECOVERY", "ERV", "HEAT RECOVERY", "HRV", "DOAS"],
+        "heat_pump": ["HEAT PUMP", "SPLIT", "DUCTLESS", "MINI SPLIT", "MINI-SPLIT", "VRF", "VRV"],
+        "split_system": ["SPLIT", "DUCTLESS", "MINI-SPLIT", "HEAT PUMP"],
+        "condensing_unit": ["CONDENSING", "CONDENSER", "SPLIT", "HEAT PUMP"],
+        "fan_coil_unit": ["FAN COIL", "SPLIT", "DUCTLESS", "AIR HANDLER"],
+        "unit_heater": ["HEATER", "UNIT HEATER", "CABINET HEATER", "WALL HEATER"],
+        "ptac": ["PTAC", "PACKAGED TERMINAL", "PTHP", "THROUGH-WALL", "THROUGH WALL"],
+        "vav": ["VAV", "TERMINAL UNIT", "AIR TERMINAL", "AIR DEVICE", "HVAC DEVICE"],
+        "exhaust_fan": ["EXHAUST", "FAN", "VENTILATOR"],
+        "fan": ["FAN", "VENTILATOR"],
+        "relief_hood": ["RELIEF", "HOOD", "INTAKE", "GOOSENECK"],
+        "louver": ["LOUVER", "LOUVRE"],
+        "pump": ["PUMP"],
+        "water_heater": ["WATER HEATER", "HEATER", "BOILER"],
+        "gas_meter": ["GAS"]
+      },
+      "generic_words": ["UNIT", "UNITS", "SYSTEM", "SYSTEMS", "EQUIPMENT", "SCHEDULE", "TYPE", "MODEL", "NUMBER", "MARK", "TAG", "SIZE", "WITH", "FROM", "THAT", "THIS", "EACH", "NOTE", "NOTES", "REMARKS", "DESCRIPTION", "SERVICE", "LOCATION", "SERVES", "AREA", "ROOM", "LEVEL", "FLOOR", "ROOF"]
+    },
+    {
       "id": "M-THROUGH-WALL",
       "trade": "mechanical",
       "fills": "where a through-wall unit (a packaged terminal unit or another wall-sleeve unit, by its kind) goes: in the outside wall its plan symbol stands against, its wall sleeve through that wall (an opening cut in the wall, the sleeve flush with the wall's outside face and the outside grille in its end), the unit in the sleeve with its room cabinet projecting into the room; the plan symbol gives only its place along the wall (numbers: reach_in, how far in front of a wall's face its plan box may stand; unit_depth_in, the unit's depth from the outside face to the front of its cabinet when its product data gives none; sleeve_depth_in, the sleeve's depth when the wall is thinner; grille_in, the outside grille's depth; probe_in, how far past a wall's outside face the floor must end for it to be an outside wall; behind_ft, when its level has no floor or shell outline, how far behind an outside wall no wall of its level stands)",

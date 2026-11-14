@@ -52,6 +52,7 @@ mod edit3d;
 pub mod elemprops;
 mod equipconn;
 mod equipdisc;
+pub mod equipsize;
 pub mod equipsub;
 pub mod estimate;
 mod exact_ends;
@@ -997,6 +998,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(codebook::specs());
         v.extend(spec_import::specs());
         v.extend(submittals::specs());
+        v.extend(equipsize::specs());
         v.extend(fashop::specs());
         v.extend(products::specs());
         v.extend(scope::specs());

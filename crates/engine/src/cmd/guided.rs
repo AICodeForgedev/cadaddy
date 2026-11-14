@@ -7879,6 +7879,38 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     if fitted > 0 {
                         progress_line(&format!("  equipment boxes far bigger than the unit, set to its size: {fitted}"));
                     }
+                    // Each unit's box from its approved submittal (a substitution's too), its
+                    // roof curb's height from the same; the schedule's size beside it (Q6655).
+                    let before = super::equipsize::basis_counts(&sp.mep.equipment);
+                    if let Some((sized, reading)) = super::equipsize::size_spec(&mut sp, &job.submittals) {
+                        let after = super::equipsize::basis_counts(&sp.mep.equipment);
+                        progress_line(&format!(
+                            "  equipment sized by their approved submittals: {} resized, {} confirmed, {} curbs ({} files read, {} sent back); boxes by basis before {:?}, after {:?}",
+                            sized.resized.len(),
+                            sized.confirmed,
+                            sized.curbs,
+                            reading.read.len(),
+                            reading.sent_back.len(),
+                            before,
+                            after
+                        ));
+                        let diffs: Vec<String> =
+                            sized.resized.iter().take(20).map(|r| format!("{}: {} → {} ({})", r.tag, r.was, r.now, r.source)).collect();
+                        if !diffs.is_empty() {
+                            job.add_finding(
+                                StageName::BimBuild,
+                                &format!("{} piece(s) of equipment built at their approved submittal's size, not the schedule's or the usual size", sized.resized.len()),
+                                &format!(
+                                    "the field sets the unit the approved submittal shows (M-EQUIP-SUBMITTAL-SIZE); the size it had is kept beside it (the unit, was → built, the page): {}",
+                                    diffs.join("; ")
+                                ),
+                                1,
+                                vec!["Check clearances and coordination at the units that grew".into()],
+                                None,
+                                false,
+                            );
+                        }
+                    }
                     if typed.by_tag + typed.by_room > 0 || !typed.untold.is_empty() {
                         progress_line(&format!(
                             "  built equipment given its schedule row: {} by its tag, {} by the row serving its room; {} with no one row ({:?})",
