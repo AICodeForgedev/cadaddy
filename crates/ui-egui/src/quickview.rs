@@ -32,6 +32,11 @@ impl QuickView {
     pub fn new(kind: Kind) -> Self {
         QuickView { kind, textures: Vec::new() }
     }
+
+    /// The window was made again: the thumbnails were the old window's textures.
+    pub(crate) fn forget_textures(&mut self) {
+        self.textures.clear();
+    }
 }
 
 /// The quick view commands from anywhere: opening and closing the strip (the engine lists and

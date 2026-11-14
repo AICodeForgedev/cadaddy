@@ -64,6 +64,41 @@ struct App {
     fit_frames: u8,
     #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
+    /// Where the app goes when this window closes for anything but a normal exit.
+    carry: Carry,
+    /// The graphics device was lost: the window closes, to be made again on a new one.
+    handing_over: bool,
+    /// The app exited normally (`on_exit`): nothing to hand over.
+    exited: bool,
+}
+
+/// The app between two windows. After its graphics device was lost (a driver reset, a GPU out of
+/// memory), or its window's drawing panicked, the window closes and is made again on a new device
+/// with this same app ([`graphics::Restarts`]): the drawings, their undo and their file names stay
+/// as they were. It ended the process with exit 101 before.
+#[derive(Clone, Default)]
+struct Carry(std::rc::Rc<std::cell::RefCell<Option<Box<CadApp>>>>);
+
+impl Carry {
+    fn put(&self, app: Box<CadApp>) {
+        if let Ok(mut slot) = self.0.try_borrow_mut() {
+            *slot = Some(app);
+        }
+    }
+
+    fn take(&self) -> Option<Box<CadApp>> {
+        self.0.try_borrow_mut().ok().and_then(|mut slot| slot.take())
+    }
+}
+
+impl Drop for App {
+    /// A window closed by anything but a normal exit hands its app over to the next window.
+    fn drop(&mut self) {
+        if !self.exited {
+            let app = std::mem::replace(&mut self.cad, CadApp::new(Session::empty(), Services::default()));
+            self.carry.put(Box::new(app));
+        }
+    }
 }
 
 impl App {
@@ -136,6 +171,13 @@ impl eframe::App for App {
         }
         self.fit_first_window(ctx);
         self.cad.guarded_logic(ctx);
+        // The graphics device is lost (the frame drew nothing): close, to be made again on a new
+        // one with this app.
+        if self.cad.graphics_lost() && !self.handing_over {
+            self.handing_over = true;
+            log::warn!("the graphics device was lost: making the window again");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
         if std::mem::take(&mut self.cad.quit_requested) {
@@ -155,6 +197,11 @@ impl eframe::App for App {
     /// crash leaves them for recovery).
     fn on_exit(&mut self) {
         self.persist_workspace(true);
+        // Made again on a new device: the session goes on, and its autosave files with it.
+        if self.handing_over {
+            return;
+        }
+        self.exited = true;
         self.cad.shutdown_autosave();
         if let Some(u) = &self.cad.updater {
             u.on_exit();
@@ -469,6 +516,121 @@ fn open_in_redline(path: &str) -> Result<bool, String> {
     }
 }
 
+/// The app's own event loop, made once: winit allows one per process, and every window (the first
+/// and any made again after a lost graphics device) runs on it.
+fn event_loop() -> eframe::Result<winit::event_loop::EventLoop<eframe::UserEvent>> {
+    #[allow(unused_mut)]
+    let mut builder = winit::event_loop::EventLoop::<eframe::UserEvent>::with_user_event();
+    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
+    // manager showed a "no" cursor. Run through XWayland when it's there; CADADDY_WAYLAND=1
+    // keeps the native Wayland backend.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("CADADDY_WAYLAND").is_none() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
+    builder.build().map_err(eframe::Error::WinitEventLoop)
+}
+
+/// What the first window's app is made from (see [`first_app`]).
+struct First<'a> {
+    debug: bool,
+    /// The graphics fallback in use, to tell the user.
+    fallback: Option<&'static str>,
+    surface: eframe::egui_wgpu::SurfaceConfig,
+    restored: Option<cadaddy_ui_egui::UiState>,
+    workspace_error: Option<&'a str>,
+    sample: bool,
+    files: &'a [String],
+    control_port: Option<u16>,
+    waker: control_server::Waker,
+}
+
+/// The app of the first window: the preferences, autosave, the control channel and the files to
+/// open. A window made again after a lost graphics device keeps its app instead.
+fn first_app(cc: &eframe::CreationContext<'_>, first: First<'_>) -> CadApp {
+    let mut app = CadApp::new(Session::for_app(), services());
+    // The first DWG save returns once written; its "not kept" check follows.
+    app.session.background_checks = true;
+    app.debug_overlay = first.debug;
+    cadaddy_ui_egui::startup::mark("app state");
+    if let Some(note) = first.fallback {
+        log::warn!("{note}");
+        app.set_status(note);
+    }
+    app.donate.enabled = true;
+    if std::env::var_os("CADADDY_NO_UPDATES").is_none() {
+        app.updater = Some(Box::new(updater::DesktopUpdater::default()));
+    }
+    if let Some(ui) = first.restored {
+        app.ui = ui;
+    }
+    if let Some(error) = first.workspace_error {
+        eprintln!("CADaddy workspace: {error}");
+        app.set_status(error);
+    }
+    app.system_languages = std::env::var("CADADDY_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
+    // The user profile (Options): drafting settings, selection sizes, drawing-area colours.
+    if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::options::PROFILE_KEY)) {
+        app.load_profile(&profile);
+    }
+    if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::PREFS_KEY)) {
+        app.load_prefs(&prefs);
+    }
+    if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::autosave::PREFS_KEY)) {
+        cadaddy_ui_egui::autosave::load_prefs(&prefs);
+    }
+    // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
+    if let Some(dir) = config_dir() {
+        app.enable_autosave(&dir.join("autosave"));
+        // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
+        // folder is made so it is there to put them in.
+        let support = dir.join("support");
+        if let Err(e) = std::fs::create_dir_all(&support) {
+            log::warn!("no LISP support folder {}: {e}", support.display());
+        }
+        app.session.set_lisp_support_dir(Some(support));
+        // Action macros (ACTSTOP) are kept in `<settings>/actions`.
+        app.session.set_action_dir(Some(dir.join("actions")));
+    }
+    app.integrated_titlebar = cfg!(target_os = "macos");
+    if first.surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
+        app.frame_cap = Some(cadaddy_ui_egui::gpu::FrameCap::new(240));
+    }
+    if let Some(rs) = &cc.wgpu_render_state {
+        app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
+    }
+    // An explicit --control port, and the agent port unless the user turned that off in
+    // Options: both serve the same window.
+    let ports: Vec<u16> = first.control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
+    if !ports.is_empty() {
+        // A fresh token each start unless the user turned it off (Options ▸ System).
+        let token = app.ui.control_token.then(control_server::new_token);
+        if token == Some(None) {
+            log::error!("control server: no system randomness for a token; the control channel stays closed");
+        } else {
+            let (rx, unbound) = control_server::start_ports(&ports, first.waker, token.flatten(), config_dir().as_deref());
+            app = app.with_control(rx, first.control_port.is_some());
+            if unbound.contains(&cadaddy_engine::AGENT_PORT) {
+                app.set_agent_port_held();
+            }
+        }
+    }
+    if first.sample {
+        let _ = app.run("ui.sample", serde_json::json!({}));
+    }
+    for f in first.files {
+        app.open_path(f);
+    }
+    if app.session.docs.is_empty() {
+        // In the units the profile asks for (MEASUREINIT, restored above).
+        let metric = app.session.settings.measureinit;
+        app.session.new_drawing_with_viewports(metric);
+    }
+    cadaddy_ui_egui::startup::mark("drawings opened");
+    app
+}
+
 fn main() -> eframe::Result {
     // A copy of this program started to read or write a DWG file does only that.
     if let Some(code) = cadaddy_io::dwg_worker::serve_if_asked() {
@@ -606,74 +768,64 @@ fn main() -> eframe::Result {
         graphics::apply(&mut options, attempt);
         options
     };
-    // The window's graphics: the default, then the fallbacks (graphics.rs) when it can't start.
-    let attempts = graphics::attempts(eframe::wgpu::Backends::from_env());
+    // The app's own event loop: every window runs on it under `graphics::Guarded`, so a panic in
+    // a window's drawing closes that window instead of ending the app.
+    let mut event_loop = event_loop()?;
+    // The window's graphics: the default, then the fallbacks (graphics.rs) when it can't start; a
+    // window whose device is lost is made again with the same app (`Carry`).
+    let mut restarts = graphics::Restarts::new(graphics::attempts(eframe::wgpu::Backends::from_env()));
+    let carry = Carry::default();
+    let waker = control_server::Waker::default();
+    // Why the last window closed (a panic's message), for the next one's notice.
+    let mut why: Option<String> = None;
     let mut result = Ok(());
-    for (n, attempt) in attempts.iter().copied().enumerate() {
+    while let Some(attempt) = restarts.current() {
         let options = make_options(attempt);
         let files = files.clone();
         let inbox = inbox.clone();
         let log_dir = log_dir.clone();
         let fallback = graphics::note(attempt);
-        result = eframe::run_native(
+        let (carried, waker, why_now) = (carry.clone(), waker.clone(), why.take());
+        let created = std::rc::Rc::new(std::cell::Cell::new(false));
+        let made = std::rc::Rc::clone(&created);
+        let opened = std::time::Instant::now();
+        let window = eframe::create_native(
             "CADaddy",
             options,
             Box::new(move |cc| {
+                made.set(true);
                 cadaddy_ui_egui::startup::mark("window and graphics");
                 inbox.wake(cc.egui_ctx.clone());
-                let mut app = CadApp::new(Session::for_app(), services());
-                // The first DWG save returns once written; its "not kept" check follows.
-                app.session.background_checks = true;
-                app.debug_overlay = debug;
-                cadaddy_ui_egui::startup::mark("app state");
-                if let Some(note) = fallback {
-                    log::warn!("{note}");
-                    app.set_status(note);
-                }
-                app.donate.enabled = true;
-                if std::env::var_os("CADADDY_NO_UPDATES").is_none() {
-                    app.updater = Some(Box::new(updater::DesktopUpdater::default()));
-                }
+                waker.set(cc.egui_ctx.clone());
                 let (workspace, restored, workspace_error) = workspace::Workspace::load();
                 cadaddy_ui_egui::startup::mark("workspace");
-                if let Some(ui) = restored {
-                    app.ui = ui;
-                }
-                if let Some(error) = &workspace_error {
-                    eprintln!("CADaddy workspace: {error}");
-                    app.set_status(error);
-                }
-                app.system_languages = std::env::var("CADADDY_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
-                // The user profile (Options): drafting settings, selection sizes, drawing-area colours.
-                if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::options::PROFILE_KEY)) {
-                    app.load_profile(&profile);
-                }
-                if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::PREFS_KEY)) {
-                    app.load_prefs(&prefs);
-                }
-                if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadaddy_ui_egui::autosave::PREFS_KEY)) {
-                    cadaddy_ui_egui::autosave::load_prefs(&prefs);
-                }
-                // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
-                if let Some(dir) = config_dir() {
-                    app.enable_autosave(&dir.join("autosave"));
-                    // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
-                    // folder is made so it is there to put them in.
-                    let support = dir.join("support");
-                    if let Err(e) = std::fs::create_dir_all(&support) {
-                        log::warn!("no LISP support folder {}: {e}", support.display());
+                let app = match carried.take() {
+                    // Made again after the graphics device was lost: the same app, on the new device.
+                    Some(mut app) => {
+                        if let Some(rs) = &cc.wgpu_render_state {
+                            app.restart_graphics(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS), why_now.as_deref());
+                        }
+                        if let Some(note) = fallback {
+                            log::warn!("{note}");
+                            app.set_status(note);
+                        }
+                        *app
                     }
-                    app.session.set_lisp_support_dir(Some(support));
-                    // Action macros (ACTSTOP) are kept in `<settings>/actions`.
-                    app.session.set_action_dir(Some(dir.join("actions")));
-                }
-                app.integrated_titlebar = cfg!(target_os = "macos");
-                if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
-                    app.frame_cap = Some(cadaddy_ui_egui::gpu::FrameCap::new(240));
-                }
-                if let Some(rs) = &cc.wgpu_render_state {
-                    app.set_wgpu(rs, eframe::egui_wgpu::depth_format_from_bits(0, STENCIL_BITS));
-                }
+                    None => first_app(
+                        cc,
+                        First {
+                            debug,
+                            fallback,
+                            surface,
+                            restored,
+                            workspace_error: workspace_error.as_deref(),
+                            sample,
+                            files: &files,
+                            control_port,
+                            waker,
+                        },
+                    ),
+                };
                 // Help ▸ Report a Problem: what the bundle says about this computer, and the watchdog
                 // that logs UI stalls.
                 let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
@@ -686,34 +838,6 @@ fn main() -> eframe::Result {
                     log_dir: log_dir.or_else(|| config_dir().map(|d| d.join(logging::LOG_DIR))),
                 });
                 cadaddy_ui_egui::diag::start_watchdog();
-                // An explicit --control port, and the agent port unless the user turned that off in
-                // Options: both serve the same window.
-                let ports: Vec<u16> = control_port.into_iter().chain(app.ui.agent_control.then_some(cadaddy_engine::AGENT_PORT)).collect();
-                if !ports.is_empty() {
-                    // A fresh token each start unless the user turned it off (Options ▸ System).
-                    let token = app.ui.control_token.then(control_server::new_token);
-                    if token == Some(None) {
-                        log::error!("control server: no system randomness for a token; the control channel stays closed");
-                    } else {
-                        let (rx, unbound) = control_server::start_ports(&ports, cc.egui_ctx.clone(), token.flatten(), config_dir().as_deref());
-                        app = app.with_control(rx, control_port.is_some());
-                        if unbound.contains(&cadaddy_engine::AGENT_PORT) {
-                            app.set_agent_port_held();
-                        }
-                    }
-                }
-                if sample {
-                    let _ = app.run("ui.sample", serde_json::json!({}));
-                }
-                for f in &files {
-                    app.open_path(f);
-                }
-                if app.session.docs.is_empty() {
-                    // In the units the profile asks for (MEASUREINIT, restored above).
-                    let metric = app.session.settings.measureinit;
-                    app.session.new_drawing_with_viewports(metric);
-                }
-                cadaddy_ui_egui::startup::mark("drawings opened");
                 let ctx = cc.egui_ctx.clone();
                 let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
                 let ctx = cc.egui_ctx.clone();
@@ -730,12 +854,71 @@ fn main() -> eframe::Result {
                     fit_frames: 30,
                     #[cfg(target_os = "macos")]
                     native_menu: None,
+                    carry: carried,
+                    handing_over: false,
+                    exited: false,
                 }))
             }),
+            &event_loop,
         );
-        match &result {
-            Err(e) if n + 1 < attempts.len() => log::warn!("graphics didn't start ({e}); trying {:?}", attempts.get(n + 1)),
-            _ => break,
+        let mut window = graphics::Guarded::new(window);
+        {
+            use winit::platform::run_on_demand::EventLoopExtRunOnDemand as _;
+            if let Err(e) = event_loop.run_app_on_demand(&mut window) {
+                result = Err(eframe::Error::WinitEventLoop(e));
+            }
+        }
+        let panicked = window.panicked().map(str::to_string);
+        // The window and its app, if a panic didn't drop them already: an app that didn't exit
+        // normally is in `carry` after this.
+        drop(window);
+        let Some(app) = carry.take() else {
+            if created.get() {
+                // A normal exit, or a panic before the app was made (logged).
+                if let Some(p) = panicked {
+                    result = Err(eframe::Error::AppCreation(p.into()));
+                }
+                break;
+            }
+            // eframe logged why the graphics didn't start.
+            let next = restarts.failed_to_start();
+            log::warn!("graphics didn't start; trying {next:?}");
+            if next.is_none() {
+                result = Err(eframe::Error::AppCreation("the window's graphics didn't start (see the log)".into()));
+            }
+            continue;
+        };
+        if !created.get() {
+            // The window to show the app again didn't start.
+            carry.put(app);
+            log::warn!("graphics didn't start again; trying {:?}", restarts.failed_to_start());
+            continue;
+        }
+        if panicked.is_none() && !app.graphics_lost() {
+            // Closed without a normal exit, but not for its graphics: the app ends here.
+            let mut app = app;
+            app.shutdown_autosave();
+            break;
+        }
+        why = panicked;
+        carry.put(app);
+        let next = restarts.lost(opened.elapsed());
+        log::warn!("the window closed for its graphics; making it again with {next:?}");
+    }
+    // No window could be made again for the app: its unsaved drawings are autosaved and the person
+    // is told why before it closes.
+    if let Some(mut app) = carry.take() {
+        let saved = app.autosave_before_exit();
+        let text = graphics::gave_up(saved, why.as_deref());
+        log::error!("{text}");
+        eprintln!("CADaddy: {text}");
+        if control_port.is_none() {
+            let _ = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("CADaddy")
+                .set_description(&text)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
         }
     }
     // The counts of repeated messages not written yet (logging.rs).

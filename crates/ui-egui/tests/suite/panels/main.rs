@@ -32,6 +32,7 @@ mod file_tab_close;
 mod file_tab_titles;
 mod filter_dialog;
 mod firstrun_friction;
+mod gpu_device_lost;
 mod gpu_limits;
 mod gpu_viewport_stencil;
 mod hidden_command_line;

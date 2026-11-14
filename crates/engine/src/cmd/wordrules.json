@@ -4202,6 +4202,60 @@
     "T"
    ]
   },
+  "sheets.not_storey_plan_disciplines": {
+   "source": "(drafting convention, Q6582: the sheet-number disciplines whose plans are never a storey's floor plan the building is built from: general (cover, code, project information) and structural (foundation and framing plans, drawn over the floor plans); a plan of theirs with no scale is left out with a finding, never asked for its scale)",
+   "words": [
+    "G",
+    "S"
+   ]
+  },
+  "sheets.structural_plan_title_words": {
+   "source": "(drafting convention, Q6582: the words of a structural plan's title (a foundation, framing or truss plan): drawn over a storey's floor plan for its structure, never the plan the storey is built from)",
+   "words": [
+    "FRAMING",
+    "TRUSS",
+    "TRUSSES",
+    "JOIST",
+    "JOISTS",
+    "FOUNDATION",
+    "FOOTING",
+    "FOOTINGS",
+    "REBAR"
+   ]
+  },
+  "sheets.address_words": {
+   "source": "(postal convention, Q6582: the street-type words of a street address (123 MAIN ST, SUITE 200): a title-block line that is an address is the firm's or the project's, never a sheet title)",
+   "words": [
+    "STREET",
+    "ST",
+    "AVENUE",
+    "AVE",
+    "ROAD",
+    "RD",
+    "BOULEVARD",
+    "BLVD",
+    "DRIVE",
+    "DR",
+    "LANE",
+    "LN",
+    "PARKWAY",
+    "PKWY",
+    "HIGHWAY",
+    "HWY",
+    "FREEWAY",
+    "FWY",
+    "COURT",
+    "CT",
+    "PLACE",
+    "PL",
+    "CIRCLE",
+    "CIR",
+    "TRAIL",
+    "WAY",
+    "SUITE",
+    "STE"
+   ]
+  },
   "sheets.not_plan_view_words": {
    "source": "View-title words that never name a plan. (drafting convention; moved from printlinks.rs `NOT_PLAN_WORDS`)",
    "words": [

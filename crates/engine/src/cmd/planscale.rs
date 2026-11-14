@@ -95,7 +95,15 @@ pub struct Rules {
     /// ...and its building and the plan's span the same within this share across and up (the
     /// smaller over the larger): the whole floor, not a small plan of a part of the site.
     pub min_outline_share: f64,
+    /// A sheet lettered in strokes whose OCR reading is less sure than this (its mean, 0..1) is
+    /// never filed as a storey's floor plan by its number and title (Q6582).
+    #[serde(default = "default_filing_confidence")]
+    pub min_filing_confidence: f64,
     pub print_scales: Vec<PrintScale>,
+}
+
+fn default_filing_confidence() -> f64 {
+    0.8
 }
 
 impl Default for Rules {
@@ -109,6 +117,7 @@ impl Default for Rules {
             min_fit_f1: 0.85,
             min_fit_lead: 0.05,
             min_outline_share: 0.6,
+            min_filing_confidence: default_filing_confidence(),
             print_scales: Vec::new(),
         }
     }
@@ -754,6 +763,51 @@ pub fn small_levels(regions: &[SheetRegion], k_in: f64) -> Vec<(String, String, 
 /// A built wall: its level, its length along the floor and its plan box `[x0, y0, x1, y1]`
 /// (drawing units).
 pub type BuiltWall = (String, f64, [f64; 4]);
+
+/// What a plan sheet left out of the building with no scale says (its `not_built`, Q6582).
+pub const NOT_STOREY_PLAN: &str = "no storey's floor plan, no scale";
+
+/// Why a plan sheet nothing scaled is no storey's floor plan to ask a scale for (Q6582), or None
+/// when it may be one (then its scale is always asked). In this order:
+/// - its lettering is strokes the OCR read alone, less sure than the rules data's
+///   `min_filing_confidence`: its number and title (the level, the kind of sheet) may be
+///   misread, so they file it nowhere;
+/// - a cover sheet, a general or structural one (`sheets.not_storey_plan_disciplines`), a civil
+///   or site one ([`cadaddy_mepfix::sheet_facts::is_site_sheet`]);
+/// - a structural plan by its title (a foundation, framing or truss plan:
+///   `sheets.structural_plan_title_words`), drawn over a floor plan, never the one a storey is
+///   built from; it takes that plan's scale when their outlines agree ([`scale_from_same_floor`]);
+/// - its "title" is an address or phone line ([`cadaddy_mepfix::sheet_facts::is_address_line`]).
+pub fn not_a_storey_plan(discipline: &str, kind: &str, title: &str, lettering: Option<&cadaddy_mepfix::printset::Lettering>) -> Option<String> {
+    let up = title.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let structural = cadaddy_mepfix::wordrules::words("sheets.structural_plan_title_words");
+    let d = discipline.trim().to_ascii_uppercase();
+    if let Some(l) = lettering.filter(|l| l.in_strokes() && l.confidence.is_finite() && l.confidence < rules().min_filing_confidence) {
+        let what = if words.iter().any(|w| structural.contains(w)) { ", its title reading as a structural plan's" } else { "" };
+        return Some(format!(
+            "its number and title were read off strokes by the OCR alone, {:.0}% sure (under the {:.0}% that files a sheet by them){what}",
+            l.confidence * 100.0,
+            rules().min_filing_confidence * 100.0
+        ));
+    }
+    if kind.eq_ignore_ascii_case("cover") {
+        return Some("a cover sheet".into());
+    }
+    if cadaddy_mepfix::wordrules::words("sheets.not_storey_plan_disciplines").contains(&d.as_str()) {
+        return Some(if d.starts_with('S') { "a structural sheet".into() } else { "a general sheet".into() });
+    }
+    if cadaddy_mepfix::sheet_facts::is_site_sheet(discipline, title) {
+        return Some("a civil or site sheet".into());
+    }
+    if words.iter().any(|w| structural.contains(w)) {
+        return Some("a structural plan by its title (foundation, framing or trusses), drawn over a floor plan".into());
+    }
+    if cadaddy_mepfix::sheet_facts::is_address_line(title) {
+        return Some("its title read is an address or phone line, not a sheet title".into());
+    }
+    None
+}
 
 /// The levels whose built walls total less than the rules' minimum (feet) and all stand inside
 /// less than the minimum footprint: a plan at the wrong scale, not a building (a real level of a

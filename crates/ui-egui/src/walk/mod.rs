@@ -250,6 +250,12 @@ impl Walk {
         self.uploaded = false;
     }
 
+    /// The window was made again on a new device: its GPU parts and the old window's texture go.
+    pub(crate) fn forget_graphics(&mut self) {
+        self.reset_gpu();
+        self.cpu_texture = None;
+    }
+
     pub fn on_cpu(&self) -> bool {
         self.cpu_texture.is_some() && self.gpu.is_none()
     }

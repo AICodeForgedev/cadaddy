@@ -1055,6 +1055,23 @@ pub fn is_site_sheet(discipline: &str, title: &str) -> bool {
     words.iter().any(|w| crate::wordrules::words("sheets.site_title_words").contains(w))
 }
 
+/// Whether a line read as a sheet's title is a street address or a phone number (Q6582): a
+/// title block's firm or project address line (`1234 MAIN ST, SUITE 200`, `(555) 555-0100`)
+/// read where the title is. It is no sheet title: nothing files the sheet by it. An address: a
+/// street number (1 to 6 digits) first and a street-type word of the rules data
+/// (`sheets.address_words`) after the street's name; a phone: ten digits grouped 3, 3, 4.
+pub fn is_address_line(text: &str) -> bool {
+    let up = text.to_ascii_uppercase();
+    let digits: Vec<&str> = up.split(|c: char| !c.is_ascii_digit()).filter(|g| !g.is_empty()).collect();
+    if digits.windows(3).any(|w| matches!(w, [a, b, c] if a.len() == 3 && b.len() == 3 && c.len() == 4)) {
+        return true;
+    }
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let numbered = words.first().is_some_and(|w| w.len() <= 6 && w.chars().all(|c| c.is_ascii_digit()));
+    let street = crate::wordrules::words("sheets.address_words");
+    numbered && words.iter().skip(2).any(|w| street.contains(w))
+}
+
 /// Whether a view's title names a plan of some kind (`ROOF PLAN`, `FIRST FLOOR PLAN`, `RCP`): a
 /// word of the rules data's `sheets.plan_view_words`, and none of `sheets.not_plan_view_words`
 /// (`KEY PLAN`, `PLAN DETAIL`).
@@ -1207,6 +1224,28 @@ mod tests {
     use super::*;
     use cadaddy_doc::{Common, HAlign, Line, Space, Text, VAlign};
     use cadaddy_geom::Vec3;
+
+    /// Q6582: a title block's address or phone line read as the title is no sheet title; a
+    /// sheet title with numbers in it (a level, a building, a sheet count) is one.
+    #[test]
+    fn an_address_or_phone_line_is_no_sheet_title() {
+        for line in
+            ["1234 Sample Avenue, Suite 200", "88 N. Example Rd.", "(555) 555-0100", "TEL 555.555.0199  FAX 555.555.0198", "4500 W Made Up Blvd"]
+        {
+            assert!(is_address_line(line), "{line}");
+        }
+        for title in [
+            "FLOOR PLAN",
+            "2ND FLOOR PLAN",
+            "LEVEL 3 POWER PLAN",
+            "BUILDING 2 - ROOF PLAN",
+            "ROOF TRUSS FRAMING PLAN",
+            "100 SERIES DETAILS",
+            "1/4\" = 1'-0\"",
+        ] {
+            assert!(!is_address_line(title), "{title}");
+        }
+    }
 
     fn view(title: &str, scale: Option<&str>, area: f64) -> ViewTitle {
         ViewTitle {

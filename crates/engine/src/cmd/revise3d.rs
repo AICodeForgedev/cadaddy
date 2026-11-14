@@ -113,8 +113,9 @@ const MAX_STATES: usize = 4096;
 /// Undo and redo bring back drawing states as they are, so a state keeps the build it came from.
 #[derive(Clone, Debug, Default)]
 pub struct ModelRecords {
-    /// The records, oldest first, each with its id (ids start at 1).
-    records: Vec<(u64, ModelRecord)>,
+    /// The records, oldest first, each with its id (ids start at 1). Shared: a copy of the
+    /// session (a long command's, a dialog's read: Q6574) copied every record of a large build.
+    records: Vec<(u64, std::sync::Arc<ModelRecord>)>,
     next: u64,
     /// Drawing states and the record they come from (0: from no build: the model was undone).
     states: Vec<(std::sync::Weak<Drawing>, u64)>,
@@ -136,7 +137,7 @@ impl ModelRecords {
     /// (a drawing changed outside any command).
     pub fn for_state(&self, d: &std::sync::Arc<Drawing>) -> Option<&ModelRecord> {
         match self.state_id(d) {
-            Some(id) => self.index_of(id).and_then(|i| self.records.get(i)).map(|(_, r)| r),
+            Some(id) => self.index_of(id).and_then(|i| self.records.get(i)).map(|(_, r)| &**r),
             None => self.last(),
         }
     }
@@ -148,7 +149,7 @@ impl ModelRecords {
             return self.for_state(now);
         }
         if let Some(i) = self.fresh.and_then(|id| self.index_of(id)) {
-            return self.records.get(i).map(|(_, r)| r);
+            return self.records.get(i).map(|(_, r)| &**r);
         }
         self.for_state(before)
     }
@@ -157,11 +158,11 @@ impl ModelRecords {
             Some(id) => self.index_of(id)?,
             None => self.records.len().checked_sub(1)?,
         };
-        self.records.get_mut(i).map(|(_, r)| r)
+        self.records.get_mut(i).map(|(_, r)| std::sync::Arc::make_mut(r))
     }
     /// The last build's record.
     pub fn last(&self) -> Option<&ModelRecord> {
-        self.records.last().map(|(_, r)| r)
+        self.records.last().map(|(_, r)| &**r)
     }
     fn follow(&mut self, d: &std::sync::Arc<Drawing>, id: u64) {
         if let Some(e) = self.states.iter_mut().find(|(w, _)| std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(d))) {
@@ -180,7 +181,7 @@ impl ModelRecords {
     fn push(&mut self, rec: ModelRecord, d: &std::sync::Arc<Drawing>, fresh: bool) {
         self.next = self.next.saturating_add(1);
         let id = self.next;
-        self.records.push((id, rec));
+        self.records.push((id, std::sync::Arc::new(rec)));
         self.follow(d, id);
         // A rebuild while a command's build is still unsettled is part of that command's work.
         self.fresh = (fresh || self.fresh.is_some()).then_some(id);
@@ -222,13 +223,16 @@ impl std::fmt::Debug for BuiltDrawing {
     }
 }
 
-fn fnv(s: &str) -> u64 {
-    s.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
-}
-
-/// A generated object's fingerprint: its geometry, layer and colour.
+/// A generated object's fingerprint: its geometry, layer and colour. The text is hashed as it is
+/// written, never held whole: the same value as hashing it in one string (fingerprints saved with
+/// a drawing are compared with these when it is opened again), with no string per object (an
+/// opened model's every generated object is fingerprinted, Q6569).
 fn fingerprint(e: &Entity) -> u64 {
-    fnv(&format!("{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color))
+    use std::fmt::Write as _;
+    let mut h = super::buildrec::Fnv::new();
+    // Writing to a hasher can't fail.
+    let _ = write!(h, "{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color);
+    h.value()
 }
 
 /// Plan signatures round coordinates to this many drawing units.
@@ -342,7 +346,20 @@ pub(crate) fn record(s: &mut Session, g: &WallGen) {
 
 /// The generated objects of `d`: each one's fingerprint and tag.
 fn made_of(d: &Drawing) -> HashMap<Handle, (u64, Option<TagKey>)> {
-    d.model.iter().filter(|e| built_object(e)).map(|e| (e.handle, (fingerprint(e), twin_key(e)))).collect()
+    // Chunk by chunk on all cores: every build records it, and every opening of a built model (a
+    // large one holds hundreds of thousands of generated objects; one core took seconds, Q6569).
+    let one = |items: &[std::sync::Arc<Entity>]| -> Vec<(Handle, (u64, Option<TagKey>))> {
+        items.iter().filter(|e| built_object(e)).map(|e| (e.handle, (fingerprint(e), twin_key(e)))).collect()
+    };
+    let chunks: Vec<&[std::sync::Arc<Entity>]> = d.model.chunk_slices().map(|(_, items)| items).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let parts: Vec<_> = {
+        use rayon::prelude::*;
+        chunks.par_iter().map(|c| one(c)).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let parts: Vec<_> = chunks.iter().map(|c| one(c)).collect();
+    parts.into_iter().flatten().collect()
 }
 
 /// [`record`], with the plan's rooms when they were just read (`None`: read them); `fresh`: the
@@ -394,7 +411,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     if let Some(i) = st.model_records.index_of(id)
         && let Some((_, rec)) = st.model_records.records.get_mut(i)
     {
-        rec.made = made;
+        std::sync::Arc::make_mut(rec).made = made;
     }
     st.model_records.follow(&now, id);
 }
@@ -405,7 +422,7 @@ pub(crate) fn carry(st: &mut crate::DocState, from: &std::sync::Arc<Drawing>, to
     st.model_records.followed(from, to);
     for (_, r) in &mut st.model_records.records {
         if r.built.as_ref().is_some_and(|b| std::sync::Arc::ptr_eq(&b.0, from)) {
-            r.built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
+            std::sync::Arc::make_mut(r).built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
         }
     }
 }
@@ -717,6 +734,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     if let Ok(st) = s.state_mut()
         && let Some((_, rec)) = st.model_records.records.last_mut()
     {
+        let rec = std::sync::Arc::make_mut(rec);
         rec.hand_deleted = hand_deleted;
         rec.hand_edited = hand_edited;
     }
@@ -1030,6 +1048,22 @@ mod tests {
                 now.iter().filter(|h| s.doc().unwrap().entity(**h).is_some_and(|e| e.common.color == cadaddy_doc::color::Color::Index(1))).count();
             assert_eq!(red, 20, "rebuild {pass}: the recoloured walls stay recoloured");
         }
+    }
+
+    /// Q6569: a fingerprint is hashed as its text is written, with no string per object, and is
+    /// still the FNV-1a of that text in one string: the value drawings saved before carry, which an
+    /// opened model's objects are compared with.
+    #[test]
+    fn a_fingerprint_is_the_hash_of_its_text_as_before() {
+        let mut e = Entity::new(Handle(0x2a), EntityKind::Line(Line { a: Vec3 { x: 1.5, y: -2.0, z: 0.0 }, b: Vec3 { x: 120.25, y: 3.0, z: 9.0 } }));
+        e.common.layer = "A-WALL".into();
+        e.common.color = cadaddy_doc::color::Color::Index(3);
+        let text = format!("{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color);
+        let in_one_string = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+        assert_eq!(fingerprint(&e), in_one_string);
+        // Not a constant: another colour is another fingerprint.
+        e.common.color = cadaddy_doc::color::Color::Index(1);
+        assert_ne!(fingerprint(&e), in_one_string);
     }
 
     /// The timings for Q6463 (not run by default): `N` walls, `K` deleted and `K` recoloured by

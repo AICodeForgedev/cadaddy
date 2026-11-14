@@ -32,6 +32,8 @@ fn serial() -> MutexGuard<'static, ()> {
 }
 
 const MB: usize = 1 << 20;
+/// What an OPEN may take on top of reading its file, as a share of the read (Q6569).
+const MAX_ON_TOP: f64 = 0.5;
 
 /// As the apps install them.
 fn hooks() {
@@ -323,4 +325,91 @@ fn sheet_changes_with_a_model_breakdown() {
         println!("sheet.next #{i}: {step:.2?} ({after_step}); idle {:.2?} ({})", t.elapsed(), state(&s));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ─── A built model opens in the time of its objects (Q6569) ──────────────────────────────────
+
+/// `d` as a built model: its BIM elements carry the build's tag (as `model.build` tags the
+/// elements it makes) and the drawing a stored building spec, so opening it restores the model's
+/// associative state (`revise3d::after_open`).
+fn as_built(mut d: cadaddy_engine::doc::Drawing) -> cadaddy_engine::doc::Drawing {
+    use cadaddy_engine::doc::RawTag;
+    const PARTS: [&str; 4] = ["wall", "door", "duct", "fixture"];
+    let elements: Vec<_> = d.model.iter().filter(|e| e.common.layer.starts_with("Elements")).map(|e| e.handle).collect();
+    for (k, h) in elements.into_iter().enumerate() {
+        d.model.modify(h, |e| {
+            let tag = |v: String| RawTag { code: 1000, value: v };
+            let x: &mut Vec<RawTag> = &mut e.common.xdata;
+            x.push(RawTag { code: 1001, value: cadaddy_engine::cmd::wallgen::APP.into() });
+            x.extend([tag(PARTS[k % 4].into()), tag(format!("Level {}", k % 2 + 1)), tag(format!("{:X}", 0x100 + k % 5000))]);
+        });
+    }
+    let spec = r#"{"levels":[{"name":"Level 1","elevation_ft":0,"height_ft":10},{"name":"Level 2","elevation_ft":10,"height_ft":10}]}"#;
+    d.building_spec = Some(spec.to_string()).into();
+    d
+}
+
+/// An OPEN of `path` (the command, as the CLI and an agent open a file) in a session with a
+/// drawing of its own open, and the file's read alone (`read_file`: the file, its .cdy read and
+/// the match for incremental saves), each the fastest of `runs`, all on `pool`; and whether every
+/// drawing opened unchanged.
+fn open_time(path: &str, runs: usize, pool: &rayon::ThreadPool) -> (Duration, Duration, bool) {
+    let (mut open, mut read) = (Duration::MAX, Duration::MAX);
+    let mut clean = true;
+    for _ in 0..runs {
+        let t = Instant::now();
+        drop(pool.install(|| read_file(path).unwrap()));
+        read = read.min(t.elapsed());
+        let mut s = Session::new();
+        s.execute("line", &serde_json::json!({"points": [[0, 0], [10, 0]]})).unwrap();
+        let t = Instant::now();
+        pool.install(|| s.execute("open", &serde_json::json!({ "path": path })).unwrap());
+        open = open.min(t.elapsed());
+        clean &= !s.state().unwrap().is_dirty();
+    }
+    (open, read, clean)
+}
+
+/// The same objects saved as plan linework and as a built model (the elements tagged, a stored
+/// spec) open in the time of their file: the read is most of an OPEN, and what the session does
+/// once the drawing is read (its styles, view and fields, the associative model's record) is a
+/// small part on top, the same for both. Before, opening a built model fingerprinted every
+/// generated object on one core, each through a string of its own, and every OPEN compared the
+/// drawing it opened with the one open before it (another tab), object by object: the part on top
+/// was about as long as the read (Q6569).
+///
+/// On four cores, so the share doesn't depend on the machine's core count (`OPEN_N` objects,
+/// 200 000 by default).
+#[test]
+fn a_built_model_opens_in_the_time_of_its_file() {
+    let _g = serial();
+    hooks();
+    let n = std::env::var("OPEN_N").ok().and_then(|v| v.parse().ok()).unwrap_or(200_000usize);
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    let dir = std::env::temp_dir().join(format!("cadaddy-open-built-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, d: &cadaddy_engine::doc::Drawing| {
+        let path = dir.join(name);
+        std::fs::write(&path, cadaddy_io::cdy::write_cdy_checkpoint(d).unwrap()).unwrap();
+        (path.to_string_lossy().into_owned(), std::fs::metadata(&path).unwrap().len())
+    };
+    let (plain, plain_bytes) = write("Plain Model.cdy", &synthetic_model::model(n));
+    let (built, built_bytes) = write("Built Model.cdy", &as_built(synthetic_model::model(n)));
+    let (p, p_read, p_clean) = open_time(&plain, 3, &pool);
+    let (b, b_read, b_clean) = open_time(&built, 3, &pool);
+    let _ = std::fs::remove_dir_all(&dir);
+    let on_top = |open: Duration, read: Duration| open.saturating_sub(read).as_secs_f64() / read.as_secs_f64();
+    let (p_top, b_top) = (on_top(p, p_read), on_top(b, b_read));
+    println!(
+        "OPEN of {n} objects on 4 cores: plain {p:.2?} ({} KB, read {p_read:.2?}, +{:.0} %), built model {b:.2?} ({} KB, read {b_read:.2?}, +{:.0} %)",
+        plain_bytes / 1024,
+        p_top * 100.0,
+        built_bytes / 1024,
+        b_top * 100.0
+    );
+    assert!(p_clean && b_clean, "an opened drawing has no unsaved change");
+    for (what, top, open, read) in [("plain", p_top, p, p_read), ("built model", b_top, b, b_read)] {
+        assert!(top <= MAX_ON_TOP, "{what}: OPEN took {open:.2?}, its read {read:.2?}: +{:.0} % on top", top * 100.0);
+    }
 }
