@@ -1,0 +1,10 @@
+{
+ "words": {
+  "source": "drafting convention: dimension and plan-note abbreviations lettered short and capitalised like a device tag, never one (equal spacing, typical, similar, not in contract, unless noted otherwise, not to scale, verify in field, above finished floor, clear, minimum, maximum, on centre, centre line, opposite). The PDF import's symbol detector anchors on none of them (Q6607).",
+  "words": ["EQ", "TYP", "SIM", "NIC", "UNO", "NTS", "VIF", "AFF", "CLR", "MIN", "MAX", "OC", "CL", "OPP"]
+ },
+ "units": {
+  "source": "units of measure a dimension or size is lettered in after its number (12IN, 300MM, 45DEG, 120V): a number in these units is a dimension, never a device tag (Q6607). Amperes and watts are left out: a luminaire type is often a number and a letter (2A, 4W).",
+  "words": ["IN", "INCH", "FT", "MM", "CM", "LF", "SF", "SY", "CY", "DEG", "CFM", "GPM", "PSI", "MBH", "KVA", "KW", "HP", "V", "VA", "AMP", "AMPS"]
+ }
+}

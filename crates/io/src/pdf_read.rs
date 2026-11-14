@@ -5628,6 +5628,41 @@ fn is_ocr_device_tag(v: &str) -> bool {
     (1..=3).contains(&letters) && t.len() - letters <= 2 && t.bytes().skip(letters).all(|b| b.is_ascii_digit()) && !matches!(t, "I" | "O" | "X")
 }
 
+/// The words that are never a device tag, as rule data (`pdf_annotation_words.json`): dimension
+/// and note words (`words`) and the units a number is dimensioned in (`units`), each list with
+/// its `source`.
+#[derive(serde::Deserialize, Default)]
+struct AnnotationWords {
+    words: WordList,
+    units: WordList,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct WordList {
+    words: Vec<String>,
+}
+
+fn annotation_words() -> &'static AnnotationWords {
+    static WORDS: std::sync::OnceLock<AnnotationWords> = std::sync::OnceLock::new();
+    // the shipped data is checked by a test; unreadable data anchors on every tag, as before
+    WORDS.get_or_init(|| serde_json::from_str(include_str!("pdf_annotation_words.json")).unwrap_or_default())
+}
+
+/// Dimension and note lettering that looks like a tag but never is one: a note word (`EQ`, `TYP`,
+/// `NIC`) or a number in a unit of measure (`12IN`, `300MM`). The symbol detector anchors on none
+/// of it: the strokes round a dimension's `EQ` are its witness lines and the wall it measures,
+/// which stay loose where printed (Q6607).
+fn is_annotation_word(v: &str) -> bool {
+    let t = v.trim();
+    let w = annotation_words();
+    if w.words.words.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+        return true;
+    }
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    let unit = t.get(digits..).unwrap_or_default();
+    digits > 0 && w.units.words.iter().any(|x| x.eq_ignore_ascii_case(unit))
+}
+
 /// A closed loop: a symbol's circle, box or triangle.
 fn is_outline(s: &Stroke) -> bool {
     s.closed
@@ -6314,7 +6349,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let anchors: Vec<TagAnchor> = texts
             .iter()
             .enumerate()
-            .filter(|(i, t)| is_device_tag(&t.value) && Some(*i) != sheet_no && t.height <= tall)
+            .filter(|(i, t)| is_device_tag(&t.value) && !is_annotation_word(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
         let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes);
@@ -6412,8 +6447,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     .iter()
                     .enumerate()
                     .filter(|(i, rt)| {
-                        (is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
-                            || (stroke_page && !rt.in_cell && rt.confidence.unwrap_or(0.0) >= OCR_TAG_CONFIDENCE && is_device_tag(&rt.value))
+                        !is_annotation_word(&rt.value)
+                            && ((is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                                || (stroke_page && !rt.in_cell && rt.confidence.unwrap_or(0.0) >= OCR_TAG_CONFIDENCE && is_device_tag(&rt.value)))
                     })
                     .filter(|(_, rt)| !instances.iter().any(|inst| (inst.center.0 - rt.at.0).hypot(inst.center.1 - rt.at.1) < max_size))
                     .map(|(i, rt)| TagAnchor { value: &rt.value, at: rt.at, height: rt.height, text_idx: None, ocr_idx: Some(base + i) })
@@ -8442,6 +8478,23 @@ mod tests {
     fn hostile_input_is_an_error_not_a_crash() {
         assert!(read(b"%PDF-1.4 garbage", &PdfOptions::default()).is_err());
         assert!(read(&sample_pdf(), &PdfOptions { page: 7, ..PdfOptions::default() }).is_err());
+    }
+
+    #[test]
+    fn dimension_and_note_words_are_never_tags() {
+        // the shipped rule data reads, and each list says where its words come from
+        let data: serde_json::Value = serde_json::from_str(include_str!("pdf_annotation_words.json")).unwrap_or_default();
+        for list in ["words", "units"] {
+            assert!(data[list]["source"].as_str().is_some_and(|s| !s.is_empty()), "{list} has a source");
+            assert!(data[list]["words"].as_array().is_some_and(|w| !w.is_empty()), "{list} has words");
+        }
+        for t in ["EQ", "eq", " TYP ", "SIM", "NIC", "UNO", "12IN", "300mm", "45DEG", "120V"] {
+            assert!(is_annotation_word(t), "{t}");
+        }
+        // device and type tags, a number with no unit, a unit with no number
+        for t in ["A", "EQ1", "W2", "L4", "XA", "2A", "4W", "IN", "V", "12", "1A2"] {
+            assert!(!is_annotation_word(t), "{t}");
+        }
     }
 
     #[test]
