@@ -2178,6 +2178,19 @@ pub struct EquipmentElectrical {
     /// light): built as objects where the drawings have none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_circuits: Vec<ExtraCircuit>,
+    /// What its submittal's notes ask of the wiring and the connections around it: copper
+    /// conductors only, the least conductor size (`4` for `4 AWG Wire Min.`), a disconnect that
+    /// comes with the unit (on or in it), a service receptacle and a data connection of its own.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub copper_only: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub min_wire: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unit_disconnect: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_receptacle: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_data: bool,
     /// Built instead of the drawings' where its submittal differs (`drawing_ocpd` and the feeder
     /// stay beside it): its protection, conductors and conduit, why, and the rule.
     #[serde(skip_serializing_if = "String::is_empty")]

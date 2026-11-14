@@ -94,6 +94,25 @@ pub(crate) struct CodeRule {
     pub disconnect_sizes_a: Vec<f64>,
     pub disconnect_cite: String,
     pub unit_disconnect_words: Vec<String>,
+    /// Equipment against its submittal's notes (Q6646): the protection's least size and its
+    /// article, the standard sizes; the words that ask for copper only and that give the least
+    /// conductor size, and their article; more words that say the unit brings its own disconnect;
+    /// how far its disconnect may stand (within sight) and its article; the words that ask for a
+    /// service receptacle and a data connection, how far they may stand and their article; the
+    /// words a submittal's file name has for each kind of equipment.
+    pub min_ocpd_cite: String,
+    pub standard_ocpd_a: Vec<f64>,
+    pub copper_only_words: Vec<String>,
+    pub min_wire_words: Vec<String>,
+    pub conductor_cite: String,
+    pub unit_disconnect_more_words: Vec<String>,
+    pub sight_reach_ft: Option<f64>,
+    pub sight_cite: String,
+    pub receptacle_need_words: Vec<String>,
+    pub data_need_words: Vec<String>,
+    pub aux_reach_ft: Option<f64>,
+    pub aux_cite: String,
+    pub submittal_kind_words: BTreeMap<String, Vec<String>>,
 }
 
 /// A place by the words its name has (all of them), and the rule's article.
