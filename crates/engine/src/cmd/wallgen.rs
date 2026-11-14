@@ -1549,11 +1549,18 @@ pub fn model_behind(s: &Session) -> bool {
 
 /// After a command: when the drawing has an associative model and an object on its rules'
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
-pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
-    // First the copies a person made of generated elements, recorded as theirs (Q6620): what
-    // follows takes them for no build's.
-    super::overrides::after_command(s, before);
-    behind_after_command(s, before);
+/// `uid` (when known) is the drawing the command started in: one that left another drawing
+/// current (`open`, a new drawing, a switch) edited no model, so nothing compares the drawing
+/// before with this one (it took a whole opened model for added: a step "open" in its build
+/// record and a second on a large model, Q6567); a build the command made is still recorded.
+pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, uid: Option<u64>) {
+    let switched = uid.is_some_and(|u| s.state().is_ok_and(|st| st.uid != u));
+    if !switched {
+        // First the copies a person made of generated elements, recorded as theirs (Q6620): what
+        // follows takes them for no build's.
+        super::overrides::after_command(s, before);
+        behind_after_command(s, before);
+    }
     // The outermost command is over: the sheet changes it made are forgotten (they hold
     // drawing states, the sheets put out among them).
     if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
@@ -1563,11 +1570,11 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     }
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
-    super::revise3d::after_command(s, before);
+    super::revise3d::after_command(s, before, switched);
     // Last, the saved model's record (Q6403): the spec it is written into is no edit of the
     // model or its plan, so the state it makes is the one the command left, behind or built.
     let left = s.state().ok().map(|st| Arc::clone(&st.doc));
-    super::buildrec::after_command(s, before);
+    super::buildrec::after_command(s, before, switched);
     if let Some(left) = left
         && let Ok(st) = s.state_mut()
         && !Arc::ptr_eq(&left, &st.doc)
