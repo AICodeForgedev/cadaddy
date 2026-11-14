@@ -440,18 +440,46 @@ pub(crate) fn of_element(e: &Entity) -> Option<Built> {
     })
 }
 
+/// The trade rules' slab on grade where the documents give none (post-tensioned where they
+/// name post-tensioning): its inches, what it is and its basis.
+fn grade_default(rules: &super::tradeatoms::Rules) -> Option<(f64, String, String)> {
+    let (key, name) = if rules.fact("concrete.pt").is_some() {
+        ("concrete.pt_slab_in", "post-tensioned slab on grade (default)")
+    } else {
+        ("concrete.slab_on_grade_in", "slab on grade (default)")
+    };
+    let v = rules.get(key).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0)?;
+    Some((v, name.to_string(), rules.source_text(key)))
+}
+
+/// A slab floor element's thickness (inches) and how it is known, from its build tags: the one
+/// thickness its slab's pour, mesh and vapor barrier take. None for a framed floor or one built
+/// without its assembly.
+pub(crate) fn slab_of(e: &Entity) -> Option<(f64, Source)> {
+    let tag = |k: &str| super::bimlook::made_tag(e, k).filter(|v| !v.is_empty());
+    if !tag("floor")?.eq_ignore_ascii_case("slab") {
+        return None;
+    }
+    let t = tag("thick_in")?.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+    Some((t, source(status_word(tag("thick_from")), tag("thick_basis").unwrap_or_default())))
+}
+
+/// How a floor element's thickness is known, from its `thick_from` tag.
+fn status_word(w: Option<&str>) -> Status {
+    match w {
+        Some("documented") => Status::Documented,
+        Some("derived") => Status::Derived,
+        _ => Status::Default,
+    }
+}
+
 /// A floor element's properties from its build tags: `type` (`slab`, `framed floor`),
 /// `assembly` and `thickness` (inches), each sourced as the build knew it.
 pub(crate) fn props_of(e: &Entity) -> Vec<(&'static str, cadaddy_doc::props::Prop)> {
     use cadaddy_doc::props::Prop;
     let tag = |k: &str| super::bimlook::made_tag(e, k).filter(|v| !v.is_empty());
     let Some(kind) = tag("floor") else { return Vec::new() };
-    let status = match tag("thick_from") {
-        Some("documented") => Status::Documented,
-        Some("derived") => Status::Derived,
-        _ => Status::Default,
-    };
-    let src = source(status, tag("thick_basis").unwrap_or_default());
+    let src = source(status_word(tag("thick_from")), tag("thick_basis").unwrap_or_default());
     let mut out = vec![("type", Prop::new(if kind.eq_ignore_ascii_case("framed") { "framed floor" } else { "slab" }, src.clone()))];
     if let Some(a) = tag("assembly") {
         out.push(("assembly", Prop::new(a, src.clone())));
@@ -510,6 +538,10 @@ pub(crate) struct Context<'a> {
     pub rules: &'a super::tradeatoms::Rules,
     /// The build's slab where nothing gives the floor, inches.
     pub default_in: f64,
+    /// Whether that slab is the lowest storey's too (a person gave it, `slabThickness`, or a
+    /// plain WALLGEN builds no trades); else the storey on grade nothing gives is the trade
+    /// rules' slab on grade, the one its pour takes.
+    pub slab_everywhere: bool,
 }
 
 /// A fact for `level` (one kept to it, else one for the whole building): its number and source.
@@ -649,6 +681,12 @@ pub(crate) fn resolve(level: &Level, lowest: bool, plan: &[(String, String)], cx
         lowest.then(|| fact_for(cx.rules, "concrete.slab_thickness_in", &name)).flatten().filter(|(v, _)| within(&w.slab_in, *v))
     {
         layers.push(Layer { kind: Kind::Slab, name: "slab on grade".into(), inches: v, status: Status::Documented, source: src });
+    } else if let Some((v, name, src)) =
+        (lowest && !cx.slab_everywhere && cx.default_in > 0.0).then(|| grade_default(cx.rules)).flatten().filter(|(v, _, _)| within(&w.slab_in, *v))
+    {
+        // The lowest storey's slab is on grade: the trade's slab on grade where nothing gives it,
+        // the one thickness its floor and its pour share (fix-takeoff-ceiling-board-sheets-27x).
+        layers.push(Layer { kind: Kind::Slab, name, inches: v, status: Status::Default, source: src });
     } else if cx.default_in > 0.0 && cx.default_in.is_finite() {
         layers.push(Layer {
             kind: Kind::Slab,
@@ -726,7 +764,7 @@ mod tests {
     #[test]
     fn each_level_resolves_its_own_floor() {
         let rules = super::super::tradeatoms::Rules::default();
-        let cx = Context { spec: None, rules: &rules, default_in: 6.0 };
+        let cx = Context { spec: None, rules: &rules, default_in: 6.0, slab_everywhere: false };
         let l1 = level("1", 0.0, None);
         let a = resolve(&l1, true, &[("4\" THICK SLAB ON GRADE".into(), "1 plan".into())], &cx);
         assert!(!a.framed);
@@ -747,6 +785,24 @@ mod tests {
     }
 
     #[test]
+    fn the_storey_on_grade_nothing_gives_is_the_trades_slab_on_grade() {
+        let rules = super::super::tradeatoms::Rules::default();
+        let cx = Context { spec: None, rules: &rules, default_in: 6.0, slab_everywhere: false };
+        let l1 = level("1", 0.0, None);
+        // The lowest storey: the trade rules' slab on grade, marked a default with its basis.
+        let a = resolve(&l1, true, &[], &cx);
+        assert_eq!((a.framed, a.thickness_in(), a.status()), (false, 4.0, Status::Default));
+        assert!(a.basis().contains("slab on grade"), "{}", a.basis());
+        // A storey above: the build's slab.
+        assert_eq!(resolve(&level("2", 10.0, None), false, &[], &cx).thickness_in(), 6.0);
+        // A slab a person gave the build is every storey's.
+        let given = Context { slab_everywhere: true, ..cx };
+        assert_eq!(resolve(&l1, true, &[], &given).thickness_in(), 6.0);
+        // A note still wins.
+        assert_eq!(resolve(&l1, true, &[("5\" SLAB ON GRADE".into(), "1 plan".into())], &cx).thickness_in(), 5.0);
+    }
+
+    #[test]
     fn a_framed_level_ignores_a_slab_note_and_takes_its_framing() {
         let rules = super::super::tradeatoms::Rules::default();
         let sp: BuildingSpec = serde_json::from_value(json!({
@@ -756,7 +812,7 @@ mod tests {
             "floor_notes": [{"level": "L1", "text": "5\" CONCRETE SLAB ON GRADE", "source": "S-1"}]
         }))
         .unwrap();
-        let cx = Context { spec: Some(&sp), rules: &rules, default_in: 6.0 };
+        let cx = Context { spec: Some(&sp), rules: &rules, default_in: 6.0, slab_everywhere: false };
         let a = resolve(&level("L2", 10.0, None), false, &[("4\" CONCRETE SLAB AT PAD".into(), "L2 plan".into())], &cx);
         assert!(a.framed && a.notes.len() == 1, "{a:?}");
         assert_eq!((a.thickness_in(), a.status()), (0.75, Status::Derived));

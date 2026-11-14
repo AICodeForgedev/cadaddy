@@ -46,7 +46,7 @@ mod construction;
 pub(crate) mod framing;
 mod issues;
 mod priced;
-mod takeoff;
+pub(crate) mod takeoff;
 
 /// The embedded file the work state is kept in.
 pub const STATE_FILE: &str = "bimwork.json";

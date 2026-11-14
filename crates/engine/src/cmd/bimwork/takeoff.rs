@@ -508,6 +508,16 @@ fn built_wall_lines(d: &cadaddy_doc::Drawing, els: &[super::El], bom: &[Value], 
         .collect()
 }
 
+/// A line's product as it splits lines (its type mark, maker, catalog number, dimming), in words.
+pub(crate) fn product_of(l: &Value) -> String {
+    PRODUCT_FIELDS
+        .iter()
+        .filter(|k| **k != "product_source")
+        .filter_map(|k| l[*k].as_str().map(str::trim).filter(|v| !v.is_empty()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn qty_map(lines: &[Value]) -> BTreeMap<String, f64> {
     lines.iter().filter_map(|l| Some((l["key"].as_str()?.to_string(), l["qty"].as_f64()?))).collect()
 }
@@ -580,7 +590,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let revision = st[&last_key]["revision"].as_u64().unwrap_or(0) + u64::from(before.as_ref().is_none_or(|b| *b != now));
     // By circuit, the circuit is a column after the level.
     let by_circuit = group_by == "circuit";
-    let mut head = ["level", "trade", "system", "category", "item", "size", "unit", "qty", "elements"].map(String::from).to_vec();
+    // Every row one line: what splits two lines of one level, trade, item and size (what they
+    // are by the documents, their product) is written too, so no two rows read the same.
+    let mut head = ["level", "trade", "system", "category", "item", "size", "unit", "qty", "elements", "made", "mark"].map(String::from).to_vec();
     if by_circuit {
         head.insert(1, "circuit".into());
     }
@@ -599,6 +611,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 f("unit"),
                 r3(l["qty"].as_f64().unwrap_or(0.0)).to_string(),
                 l["element_count"].to_string(),
+                f("made"),
+                product_of(l),
             ];
             if by_circuit {
                 row.insert(1, f("circuit"));
