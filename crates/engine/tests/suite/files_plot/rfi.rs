@@ -103,10 +103,18 @@ fn list_has_the_readers_items_and_the_specs_own_gaps() {
     ] {
         assert!(k.iter().any(|x| x == want), "{want} in {k:?}");
     }
-    // Most severe first; the readers' items keep their sheets.
-    let sev: Vec<&str> = r["items"].as_array().unwrap().iter().map(|i| i["severity"].as_str().unwrap()).collect();
-    let rank = |s: &str| ["high", "medium", "low"].iter().position(|x| *x == s).unwrap();
-    assert!(sev.windows(2).all(|w| rank(w[0]) <= rank(w[1])), "{sev:?}");
+    // By the build step they must be answered before (Q6619), the most severe first within a
+    // step; the readers' items keep their sheets.
+    let order: Vec<(usize, usize)> = r["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            let step = ["underground", "rough_in", "trim"].iter().position(|x| *x == i["before"]).unwrap_or_else(|| panic!("{i}"));
+            (step, ["high", "medium", "low"].iter().position(|x| *x == i["severity"]).unwrap())
+        })
+        .collect();
+    assert!(order.windows(2).all(|w| w[0] <= w[1]), "{order:?}");
     let tag = r["items"].as_array().unwrap().iter().find(|i| i["kind"] == "unknown_tag").unwrap();
     assert_eq!(tag["sheets"], json!(["A-101", "A-501"]));
     assert!(tag["id"].as_str().unwrap().starts_with("RFI-"));

@@ -2,7 +2,9 @@
 //! spec, from the print readers' items in the spec (`rfis`, with the sheets involved) and the
 //! spec's own gaps ([`cadaddy_walk3d::rfi::check`]).
 //!
-//! - `rfi.list {level?, kind?, severity?, status?}`: the items, most severe first;
+//! - `rfi.list {level?, kind?, severity?, status?}`: the items by the build step they must be
+//!   answered before (underground and slab, rough-in, trim: [`super::requirements`]), the most
+//!   severe first within a step;
 //! - `rfi.zoom {id}`: the plan view on an item;
 //! - `rfi.set {id, status?, answer?, severity?}`: track an item (kept in the spec);
 //! - `rfi.export {path, format?, pictures?}`: the list as CSV, XLSX or PDF; XLSX and PDF carry a
@@ -27,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rfi.list", "RFI List", run_list)
             .params(
-                "{level?: name, kind?: untagged_wall|unknown_tag|sheet_conflict|height_vs_ceiling|rated_to_ceiling|double_ceiling_short_wall|head_unspecified|ceiling_unspecified|soffit_no_detail|detail_missing|detail_unused|sleeve_no_route|sleeve_no_fit|room_unnumbered, severity?: high|medium|low, status?: open|sent|answered|closed|approved|rejected} → {items: [{id, kind, title, severity, level, at, extent?, sheets, about, issue, assumed, proposed?, status, answer?}], total, bySeverity, byKind, csv}: where the prints are silent or disagree and what was assumed meanwhile — the readers' items in the spec (with their sheets) and the spec's own gaps (guessed wall and ceiling types, rated walls stopping at a ceiling, heads of wall not given…)",
+                "{level?: name, kind?: untagged_wall|unknown_tag|sheet_conflict|height_vs_ceiling|rated_to_ceiling|double_ceiling_short_wall|head_unspecified|ceiling_unspecified|soffit_no_detail|detail_missing|detail_unused|sleeve_no_route|sleeve_no_fit|room_unnumbered|requirement (an object the documents leave incomplete), severity?: high|medium|low, status?: open|sent|answered|closed|approved|rejected} → {items: [{id, kind, title, severity, before (the build step it must be answered before: underground, rough_in, trim), before_label, level, at, extent?, sheets, about, issue, assumed, proposed?, status, answer?}], total, bySeverity, byKind, byStep, csv}: where the prints are silent or disagree and what was assumed meanwhile, ordered by the build step it blocks then severity — the readers' items in the spec (with their sheets), the objects the build could not complete by their requirements, and the spec's own gaps (guessed wall and ceiling types, rated walls stopping at a ceiling, heads of wall not given…)",
             )
             .noundo(),
         CommandSpec::new("rfi.zoom", "Zoom to RFI", run_zoom).params("{id} → {id, level, window}: the plan view on the item (its extent, or 20' round it)").noundo(),
@@ -64,15 +66,12 @@ fn items(s: &Session, cmd: &str, p: &Value) -> Result<(BuildingSpec, Vec<Rfi>)> 
             && status.is_none_or(|k| r.status == k)
             && level.is_none_or(|l| r.level.eq_ignore_ascii_case(l))
     });
-    list.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.id.cmp(&b.id)));
+    super::requirements::sort_by_step(&mut list);
     Ok((sp, list))
 }
 
 fn item_json(r: &Rfi) -> Value {
-    let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
-    v["kind"] = json!(r.kind_name());
-    v["title"] = json!(r.kind.map_or("Other", RfiKind::title));
-    v
+    super::requirements::item_json(r)
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -83,11 +82,15 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         by_kind.insert(r.kind_name().into(), json!(n));
     }
     let count = |k: Severity| list.iter().filter(|r| r.severity == k).count();
+    let rules = super::requirements::rules();
+    let by_step: serde_json::Map<String, Value> =
+        rules.steps.iter().map(|st| (st.id.clone(), json!(list.iter().filter(|r| rules.step_of(r) == st.id).count()))).collect();
     Ok(json!({
         "items": list.iter().map(item_json).collect::<Vec<_>>(),
         "total": list.len(),
         "bySeverity": {"high": count(Severity::High), "medium": count(Severity::Medium), "low": count(Severity::Low)},
         "byKind": by_kind,
+        "byStep": by_step,
         "csv": cadaddy_walk3d::rfi::csv(&list),
     }))
 }

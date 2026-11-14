@@ -43,7 +43,7 @@ mod bid_tests;
 mod clash;
 mod clashkeep;
 mod construction;
-mod framing;
+pub(crate) mod framing;
 mod issues;
 mod priced;
 mod takeoff;
