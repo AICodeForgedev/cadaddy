@@ -213,6 +213,11 @@ pub fn decode(c: &StoredChunk) -> Result<(Vec<Entity>, Vec<String>), String> {
 pub fn encode(items: &[Arc<Entity>], order: u32) -> Result<StoredChunk, String> {
     let (version, raw) = model::entities(items)?;
     let p = container::pack(&raw, true);
+    // The compressor's buffer is sized for the worst case (half the input): a stored chunk is
+    // held as long as its sheet is out of memory, so it keeps only its bytes (Q6577: the hotel's
+    // parked sheets held 571 MB of spare buffer, more than their objects took in memory).
+    let mut stored = p.stored;
+    stored.shrink_to_fit();
     let max_handle = items.iter().map(|e| e.handle.0).max().unwrap_or(0);
-    Ok(StoredChunk { version, raw_len: raw.len() as u64, deflated: p.deflated, stored: p.stored, objects: items.len(), max_handle, order })
+    Ok(StoredChunk { version, raw_len: raw.len() as u64, deflated: p.deflated, stored, objects: items.len(), max_handle, order })
 }

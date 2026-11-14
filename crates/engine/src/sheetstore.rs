@@ -73,6 +73,13 @@ pub const CACHE: usize = 3;
 /// further change counts as an edit of the plan (the model is built again, never left stale).
 const MAX_SHEET_MOVES: usize = 64;
 
+/// Chunks encoded at once when sheets go out of memory ([`park`]). Encoding one takes several times
+/// its objects' bytes for a moment (a hotel-sized set's largest, 15 MB of objects, about 100 MB):
+/// on every core at once it added about 0.8 GB at the moment a guided job is at its largest, its
+/// build just done (Q6577). On two, the hotel's million objects go out in about the same time
+/// the job's other steps take.
+const ENCODE_THREADS: usize = 2;
+
 /// How many of the latest whole-set loads a session remembers the command of ([`Session::whole_set_loads`]).
 pub const LOADS_KEPT: usize = 32;
 
@@ -435,10 +442,14 @@ fn park_with(d: &mut Drawing, sheets: &[SheetRect], keep: &[SheetRect], encoded:
             },
         }
     };
+    // On a few cores only: encoding a chunk takes several times its objects' bytes for a moment.
     #[cfg(not(target_arch = "wasm32"))]
     let stored: Vec<_> = {
         use rayon::prelude::*;
-        jobs.par_iter().map(one).collect()
+        match rayon::ThreadPoolBuilder::new().num_threads(ENCODE_THREADS).build() {
+            Ok(pool) => pool.install(|| jobs.par_iter().map(one).collect()),
+            Err(_) => jobs.iter().map(one).collect(),
+        }
     };
     #[cfg(target_arch = "wasm32")]
     let stored: Vec<_> = jobs.iter().map(one).collect();
@@ -850,7 +861,7 @@ mod tests {
         assert_eq!(d.model.chunk_refs().len(), 2, "the sheet's last objects and the elements share a chunk");
         let order = |d: &Drawing| d.model.iter().map(|e| e.handle).collect::<Vec<_>>();
         let before = order(&d);
-        let sheets = vec![SheetRect { number: "S-1".into(), rect: Bounds2::new(Vec2::new(-10.0, -10.0), Vec2::new(100.0, 100.0)) }];
+        let sheets = vec![SheetRect { number: "Z-901".into(), rect: Bounds2::new(Vec2::new(-10.0, -10.0), Vec2::new(100.0, 100.0)) }];
         assert_eq!(park(&mut d, &sheets, &[]).unwrap(), 1064);
         assert_eq!(d.model.len(), 5, "the elements stay in memory");
         assert!(load(&mut d, |_| true).is_empty());
