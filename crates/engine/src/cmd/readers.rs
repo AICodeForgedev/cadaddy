@@ -329,7 +329,7 @@ fn run_gear_read(s: &mut Session, p: &Value) -> Result<Value> {
         let (t, refs) = super::printmep::load_project_plans(&pr, &|r| wanted.contains(r.number.as_str()))?;
         let mut texts: Vec<(&str, Vec<cadaddy_mepfix::sheet_facts::TextItem>)> = Vec::new();
         for r in &refs {
-            texts.push((r.number.as_str(), cadaddy_mepfix::sheet_facts::texts(&super::printmep::sheet_drawing(t.doc()?, r))));
+            texts.push((r.number.as_str(), super::panelsched::sheet_texts(&super::printmep::sheet_drawing(t.doc()?, r))));
         }
         let set: Vec<(&str, &[cadaddy_mepfix::sheet_facts::TextItem])> = texts.iter().map(|(n, x)| (*n, x.as_slice())).collect();
         let schedules = super::panelsched::read_set(&set);
