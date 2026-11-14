@@ -58,12 +58,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?, level?, id?: an item id (that item, open or not)} → {item: {id, kind, level, title, detail, candidates, documents, how}, remaining}: the most important open item and how to answer it")
             .noundo(),
         CommandSpec::new("review.resolve", "Resolve Review Item", run_resolve).params(
-            "{id, answer, citation?: {kind: drawing|schedule|spec|submittal|rfi, document, ref?}, author?: agent|user (agent), concern?: text} → {resolved, changed}: items the documents speak to need a citation; a concern from code knowledge alone becomes a review item",
+            "{id, answer: text | object (a candidate's answer from review.next: its text, or the values it sets, as {size_in, bottom_ft}), citation?: {kind: drawing|schedule|spec|submittal|rfi, document, ref?}, author?: agent|user (agent), concern?: text} → {resolved, changed}: items the documents speak to need a citation; a concern from code knowledge alone becomes a review item",
         ),
         CommandSpec::new("review.defer", "Defer Review Item", run_defer).params("{id, reason} → {deferred, changed}: left for a field decision"),
         CommandSpec::new("review.rfi_draft", "Draft RFI", run_rfi_draft).params("{id, question} → {rfi, changed}: the item onto the RFI list (rfi.list), with its sheets"),
         CommandSpec::new("review.batch", "Batch Resolve", run_batch).params(
-            "{kind, level?, system?, answer, citation, author?, confirm?: token} → without confirm {preview: {count, ids}, token}; with the preview's token {applied}: one answer for many identical items",
+            "{kind, level?, system?, answer: text | object (as review.resolve takes it), citation: {kind: drawing|schedule|spec|submittal|rfi, document, ref?}, author?, confirm?: token} → without confirm {preview: {count, ids}, token}; with the preview's token {applied}: one answer for many identical items",
         ),
         CommandSpec::new("review.approve", "Approve Agent Work", run_approve).params("{ids?: [item ids], all?: bool} → {approved}: a person accepts what agents decided"),
         CommandSpec::new("review.log", "Agent Work", run_log)

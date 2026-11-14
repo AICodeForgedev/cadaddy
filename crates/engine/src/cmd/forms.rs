@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(PROMOTE, "Promote Object Form to Template", run_promote)
             .params("{kind, folder? (default: the settings folder's forms/)} → {path, kind, fields}: the project form written as that kind's template (it replaces the shipped one on this machine)"),
         CommandSpec::new(COMPLETENESS, "Object Completeness", run_completeness)
-            .params("{kind?, field?, level?, room?, baseline?: an earlier bim.completeness answer, tolerance_pct? (default 0)} → {elements, overall: {required, filled, documented, pct, documented_pct}, kinds: {kind: {count, form, required, filled, required_fill_pct, documented_pct, fields: {key: {required, filled, documented, derived, default, conflict, missing, na, pct, documented_pct, by_level: {level: pct}}}}}, next_work: [text], gate?: {pass, drops: [{kind, before, after}]}}: fill rates (documented + derived; defaults unfilled, n/a not required)")
+            .params("{kind?, field?, level?, room?, baseline?: object (an earlier bim.completeness answer), tolerance_pct? (default 0)} → {elements, overall: {required, filled, documented, pct, documented_pct}, kinds: {kind: {count, form, required, filled, required_fill_pct, documented_pct, fields: {key: {required, filled, documented, derived, default, conflict, missing, na, pct, documented_pct, by_level: {level: pct}}}}}, next_work: [text], gate?: {pass, drops: [{kind, before, after}]}}: fill rates (documented + derived; defaults unfilled, n/a not required)")
             .noundo(),
     ]
 }
