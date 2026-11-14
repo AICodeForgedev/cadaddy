@@ -807,12 +807,10 @@ impl Session {
                 old.push(std::mem::replace(&mut st.saved, now));
             }
         }
-        for built in st.model_records.built_mut() {
+        old.extend(st.model_records.replace_built(|built| {
             let now = park_shared(built, rects, keep, encoded, &mut done);
-            if !Arc::ptr_eq(&now, built) {
-                old.push(std::mem::replace(built, now));
-            }
-        }
+            (!Arc::ptr_eq(&now, built)).then_some(now)
+        }));
         for was in &old {
             if let Some(now) = done.get(&(Arc::as_ptr(was) as usize)).cloned() {
                 crate::cmd::wallgen::carry_state(st, was, &now);
