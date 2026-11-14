@@ -21091,6 +21091,11 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let mut writes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
     let joined = |v: &[String]| v.iter().take(60).cloned().collect::<Vec<_>>().join(", ");
     let ctrl_hexes: BTreeSet<&String> = ctrls.iter().map(|c| &c.h).collect();
+    // What the specification's lighting control section says powers its sensors (a separate
+    // power pack, Q6352): on each sensor, for the power pack rule.
+    let spec_pack = super::powerpacks::spec_says(&super::powerpacks::rule(), &control_lines);
+    let sensor_hexes: BTreeSet<&String> =
+        ctrls.iter().filter(|c| matches!(c.kind.as_str(), "occupancy_sensor" | "vacancy_sensor")).map(|c| &c.h).collect();
     let linked: BTreeSet<&String> =
         links.control.keys().chain(links.controls.keys()).chain(links.three_way_with.keys()).chain(ctrl_hexes.iter().copied()).collect();
     for hex in linked {
@@ -21130,6 +21135,9 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         }
         if let Some(why) = links.emergency.get(hex) {
             put(&mut st, "emergency", "yes".into(), Source::from_doc(SourceKind::Schedule, why));
+        }
+        if let Some(line) = spec_pack.as_ref().filter(|_| sensor_hexes.contains(hex)) {
+            put(&mut st, super::powerpacks::CONTROL_POWER, "power pack".into(), Source::from_doc(SourceKind::Spec, line));
         }
         if st != before {
             writes.push((*h, st));

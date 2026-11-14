@@ -18,6 +18,10 @@
 //!   from its elements as they stand (`devid:`): once per element, by its handle, its level and
 //!   a person's edits to it, so an erase, copy, move or `bim.props.set` is on the line the same
 //!   as `bim.count` sees it; a tag never built is counted as read.
+//! - **Sensor power packs** (Q6352): each low-voltage occupancy sensor zone (a room, or each
+//!   switched leg in it) a switching or 0-10V dimming pack, the box it sits on beside the
+//!   controlled load and its sensors' low-voltage cable, inferred by trade practice
+//!   `E-SENSOR-POWER-PACK` (`powerpacks.rs`); a wall-box sensor none; listed by zone.
 //! - **Mechanical and plumbing** from `mep.qty` (Q269): duct by size and gauge (ft, sq ft, lb),
 //!   pipe by system and size, fittings, terminals, equipment, hangers.
 //! - **Drywall** from `drywall.takeoff` (Q294) where the walls have assemblies.
@@ -108,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run).long()
             .alias(&["bom"])
             .params(
-                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for), measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), field_work?: [{trade, category, kind, item, size, unit, net, status: field work, level, circuit, made, elements, rule}] (the model's field bends and offsets: the crew's labor, nothing bought, never on a line), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements (the object handles of what it counts), element_count, sources? (the ids it was counted by that are not handles: a spec device, a run, a build name), elements_unresolved? (of those, how many the model has no object for), measures?: {pieces, length_ft, area_sf, volume_cy, weight_lb} (a trade piece line's count and measures beside its quantity)}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), field_work?: [{trade, category, kind, item, size, unit, net, status: field work, level, circuit, made, elements, rule}] (the model's field bends and offsets: the crew's labor, nothing bought, never on a line), power_packs?: [{level, room, leg, pack, sensors, beside, at_ft, cable_ft, made: inferred, basis}] (each low-voltage occupancy sensor zone's power pack, its box and cable on the lines: trade practice E-SENSOR-POWER-PACK), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -1330,6 +1334,64 @@ fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
             },
         );
     }
+}
+
+/// The power packs the job's low-voltage occupancy sensors need (Q6352, trade practice
+/// `E-SENSOR-POWER-PACK`): per zone a pack, the box it sits on and its sensors' low-voltage
+/// cable, each line inferred with the rule's basis; and the packs by zone.
+fn power_packs(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
+    use super::powerpacks as pp;
+    let r = pp::rule();
+    if r.id.is_empty() || r.switching_item.is_empty() {
+        return Vec::new();
+    }
+    let (mut sensors, mut loads, mut drawn) = s.doc().map(pp::from_model).unwrap_or_default();
+    if sensors.is_empty()
+        && let Ok((sp, _)) = current(s, "bim.bom")
+    {
+        (sensors, loads, drawn) = pp::from_tags(&sp);
+    }
+    let zones = pp::zones(&r, &sensors, &loads, &drawn);
+    let mut report = Vec::new();
+    for z in zones.iter().take(MAX_LINES) {
+        let item = z.item(&r).to_string();
+        let basis = format!("{RULE}: {why}; one per sensor zone ({place})", RULE = r.id, why = z.why, place = z.place());
+        let elements: Vec<String> = z.sensors.iter().take(MAX_LINE_ELEMENTS).cloned().collect();
+        let mut parts: Vec<(&str, String, String, &'static str, f64)> = vec![("devices", item.clone(), String::new(), "each", 1.0)];
+        if !r.box_item.is_empty() {
+            parts.push(("boxes", r.box_item.clone(), r.box_size.clone(), "each", 1.0));
+        }
+        if !r.cable_item.is_empty() && z.cable_ft > 0.0 {
+            parts.push(("wire", r.cable_item.clone(), r.cable_size.clone(), "ft", (z.cable_ft * 10.0).round() / 10.0));
+        }
+        for (category, it, size, unit, net) in parts {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: category.into(),
+                    item: it,
+                    size,
+                    unit,
+                    net,
+                    status: "rule",
+                    rule: Some(format!("{basis}: {}", r.basis)),
+                    level: z.level.clone(),
+                    elements: elements.clone(),
+                    circuit: String::new(),
+                    waste_qty: None,
+                    product: Product::default(),
+                    made: "inferred",
+                    measures: None,
+                },
+            );
+        }
+        report.push(json!({
+            "level": z.level, "room": z.room, "leg": z.leg, "pack": item, "sensors": elements, "beside": z.beside,
+            "at_ft": z.at, "cable_ft": (z.cable_ft * 10.0).round() / 10.0, "made": "inferred", "basis": basis,
+        }));
+    }
+    report
 }
 
 /// The plan (XY) area of the mesh entities named by `handles`, sq units: sum of each face's
@@ -3626,6 +3688,7 @@ pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     let mut field = Vec::new();
     electrical(s, &mut lines, &mut others, &mut field)?;
     zero_ten_pairs(s, &mut lines);
+    power_packs(s, &mut lines);
     mechanical(s, &mut lines, &mut others);
     Ok(lines
         .into_iter()
@@ -3660,6 +3723,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut field_work: Vec<Value> = Vec::new();
     electrical(s, &mut lines, &mut others, &mut field_work)?;
     zero_ten_pairs(s, &mut lines);
+    let packs = power_packs(s, &mut lines);
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
     if !lines.iter().any(|l| l.category == "devices") {
@@ -3825,6 +3889,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({ "lines": out_lines, "by_others": by_others, "required": req, "spec_check": check, "complete": is_complete });
     if !field_work.is_empty() {
         out["field_work"] = json!(field_work);
+    }
+    if !packs.is_empty() {
+        out["power_packs"] = json!(packs);
     }
     if !framing_bits.is_empty() {
         out["bits"] =
@@ -4105,6 +4172,76 @@ mod tests {
                 cadaddy_doc::EntityKind::Mesh(m),
             )
             .unwrap();
+    }
+
+    /// Low-voltage occupancy sensors take a power pack per zone (Q6352): the BOM had the sensors and
+    /// no pack, box or sensor cable. Two ceiling sensors of one room are one zone; a wall-box sensor
+    /// takes none; a room whose pack the plans draw takes no second one.
+    #[test]
+    fn low_voltage_sensor_zones_take_a_power_pack_each() {
+        let mut s = Session::new();
+        job(&mut s);
+        let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+        let tag = |id: &str, kind: &str, room: &str, at: [f64; 2], words: &str| json!({"id": id, "kind": kind, "level": "1", "at_ft": at, "fields": {"room": {"value": room, "source": "plan"}, "device_type": {"value": words, "source": "legend"}}});
+        let tags = spec["tags"].as_array_mut().unwrap();
+        tags.push(tag("S1", "occupancy_sensor", "101", [10.0, 10.0], "ceiling mounted occupancy sensor"));
+        tags.push(tag("S2", "occupancy_sensor", "101", [20.0, 10.0], "ceiling mounted occupancy sensor"));
+        tags.push(tag("S3", "occupancy_sensor", "102", [40.0, 10.0], "wall switch occupancy sensor"));
+        tags.push(tag("S4", "occupancy_sensor", "103", [60.0, 10.0], "ceiling mounted occupancy sensor, 0-10V dimming"));
+        tags.push(tag("S5", "occupancy_sensor", "104", [80.0, 10.0], "ceiling mounted occupancy sensor"));
+        tags.push(tag("PP5", "low_voltage_device", "104", [81.0, 10.0], "power pack"));
+        tags.push(tag("L9", "luminaire", "101", [14.0, 12.0], ""));
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        let r = s.execute("bim.bom", &json!({})).unwrap();
+        let rule = super::super::powerpacks::rule();
+        let pack = line(&r, &rule.switching_item);
+        assert_eq!(pack["net"], json!(1.0), "one switching pack (room 101): {r}");
+        assert_eq!(pack["made"], json!("inferred"), "{pack}");
+        assert!(pack["rule"].as_str().is_some_and(|t| t.contains(super::super::powerpacks::RULE)), "{pack}");
+        assert_eq!(line(&r, &rule.dimming_item)["net"], json!(1.0), "the dimming sensor's room takes a dimming pack: {r}");
+        assert!(line(&r, &rule.cable_item)["net"].as_f64().is_some_and(|f| f > 0.0), "{r}");
+        let zones = r["power_packs"].as_array().cloned().unwrap_or_default();
+        assert_eq!(zones.len(), 2, "rooms 101 and 103; none for the wall-box sensor or the drawn pack's room: {zones:?}");
+        let z101 = zones.iter().find(|z| z["room"] == json!("101")).cloned().unwrap_or_default();
+        assert_eq!(z101["sensors"], json!(["S1", "S2"]));
+        assert_eq!(z101["beside"], json!("L9"), "beside its room's luminaire: {z101}");
+    }
+
+    /// A built sensor (its element's mounting, room and what it controls) zones the same way.
+    #[test]
+    fn a_built_ceiling_sensor_takes_its_pack_from_the_model() {
+        use cadaddy_doc::props::SourceKind::{Legend, Print};
+        use cadaddy_walk3d::Part::Device;
+        let mut s = Session::new();
+        job(&mut s);
+        built(
+            &mut s,
+            "device:1:9,9",
+            Device,
+            &[
+                ("kind", "occupancy_sensor", Print, "plan"),
+                ("type", "occupancy sensor", Legend, "legend"),
+                ("mounting", "ceiling", Print, "plan"),
+                ("room", "201", Print, "plan"),
+                ("location", "9.00, 9.00, 9.00", Print, "plan"),
+            ],
+        );
+        built(
+            &mut s,
+            "device:1:30,9",
+            Device,
+            &[
+                ("kind", "occupancy_sensor", Print, "plan"),
+                ("type", "occupancy sensor", Legend, "legend"),
+                ("mounting", "wall", Print, "plan"),
+                ("room", "202", Print, "plan"),
+            ],
+        );
+        let r = s.execute("bim.bom", &json!({})).unwrap();
+        let rule = super::super::powerpacks::rule();
+        assert_eq!(line(&r, &rule.switching_item)["net"], json!(1.0), "the ceiling sensor's pack, none for the wall one: {r}");
+        assert_eq!(r["power_packs"].as_array().map(Vec::len), Some(1), "{}", r["power_packs"]);
+        assert_eq!(r["power_packs"][0]["room"], json!("201"));
     }
 
     #[test]
