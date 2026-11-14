@@ -50,6 +50,11 @@ const MAX_SHEET_OVER_PLAN: f64 = 1.2;
 const MAX_OFF_SCALE: f64 = 0.07;
 const OFF_SCALE_F1: f64 = 0.85;
 const OFF_SCALE_MARGIN: f64 = 0.06;
+/// The most a fit's polish (3" steps and a tenth of a percent of scale about where its 1'
+/// refinement left it) is taken to add to its score: a sheet whose rough weighing at every scale
+/// tried is this far under [`OFF_SCALE_F1`] is not weighed in full (Q6566). Measured on two sets'
+/// sheets: <MEASURED>.
+const OFF_SCALE_POLISH: f64 = 0.15;
 /// A fit at the ratio whose best scale is this far off it is weighed against the off-scale fit.
 const OFF_SCALE_SUSPECT: f64 = 0.015;
 /// Scales whose fit is this close to the best one's are among the best.
@@ -330,12 +335,24 @@ impl SheetLines {
     fn off_scale(&self, plan: &super::grids::PlanLines, src: &[Vec2], r: f64, stats: &mut super::grids::FitStats) -> Result<LineworkFit, String> {
         let steps = (2.0 * MAX_OFF_SCALE / 0.01).round() as i32;
         let scales: Vec<f64> = (0..=steps).map(|k| r * (1.0 - MAX_OFF_SCALE + 0.01 * f64::from(k))).collect();
-        let profile: Vec<(f64, f64, f64)> = scales
-            .iter()
-            .zip(plan.fit_part_each(src, &scales, stats))
-            .filter_map(|(&sk, f)| f.map(|(_, _, score, margin)| (sk, score, margin)))
-            .collect();
-        let weighed = || profile.iter().map(|(k, f, m)| format!("{:.2}: {:.0}%/{:.0}", k / r, f * 100.0, m * 100.0)).collect::<Vec<_>>().join(", ");
+        let profile = |polished: bool, stats: &mut super::grids::FitStats| -> Vec<(f64, f64, f64)> {
+            scales
+                .iter()
+                .zip(plan.fit_part_each(src, &scales, polished, stats))
+                .filter_map(|(&sk, f)| f.map(|(_, _, score, margin)| (sk, score, margin)))
+                .collect()
+        };
+        let listed = |p: &[(f64, f64, f64)]| {
+            p.iter().map(|(k, f, m)| format!("{:.2}: {:.0}%/{:.0}", k / r, f * 100.0, m * 100.0)).collect::<Vec<_>>().join(", ")
+        };
+        // Weighed roughly first (a fifth of the work; each score the polished one's at most): a
+        // sheet nowhere near a decisive fit at any scale is not weighed in full.
+        let rough = profile(false, stats);
+        if rough.iter().map(|p| p.1).fold(0.0, f64::max) < OFF_SCALE_F1 - OFF_SCALE_POLISH {
+            return Err(format!("drawn off its scale: none fits well enough, weighed roughly ({})", listed(&rough)));
+        }
+        let profile = profile(true, stats);
+        let weighed = || listed(&profile);
         let best = profile.iter().map(|p| p.1).fold(0.0, f64::max);
         if best < OFF_SCALE_F1 {
             return Err(format!("drawn off its scale: none fits well enough ({})", weighed()));
@@ -564,7 +581,8 @@ mod tests {
     /// Q6566: a sheet that fits nowhere is weighed once. The placer's fits say why (the best
     /// placement at the ratio, what the off-scale trial lacked), on the plan's linework made ready
     /// once: the log's "why" used to weigh it all a second time (32 fits, the plan made ready for
-    /// each, where one pass runs at most 18), and the job's sheets that fit nowhere took minutes.
+    /// each), and the job's sheets that fit nowhere took minutes. One nowhere near a fit at any
+    /// scale is weighed roughly there (no 3" polish).
     #[test]
     fn a_sheet_that_fits_nowhere_is_weighed_once_and_says_why() {
         let plan = floor(1.0, [100.0, 50.0]);
@@ -578,10 +596,13 @@ mod tests {
         let why = lines.fit_why(1, &plan, 1.0, &mut stats).err().unwrap_or_default();
         assert!(why.starts_with("best scale ") && why.contains("; drawn off its scale: "), "{why}");
         assert_eq!(stats.plans, 1, "the plan made ready once: {stats:?}");
-        // At the ratio (and one to one, when its best scale is off it), each off-scale trial, and
-        // the scale it is drawn at.
-        let most = 2 + (2.0 * MAX_OFF_SCALE / 0.01).round() as usize + 1;
+        // At the ratio (and one to one, when its best scale is off it), each off-scale trial
+        // roughly and (when near a fit) in full, and the scale it is drawn at.
+        let most = 2 + 2 * ((2.0 * MAX_OFF_SCALE / 0.01).round() as usize + 1) + 1;
         assert!(stats.fits <= most, "{stats:?}");
+        // Drawn far off the scales tried, it is nowhere near a fit: weighed roughly only.
+        assert!(why.contains("drawn off its scale: none fits well enough, weighed roughly ("), "{why}");
+        assert!(stats.fits <= 2 + 15, "{stats:?}");
         assert!(lines.fit(1, &plan, 1.0).is_none());
         // A sheet that fits: on the plan made ready once too (its best scale a tie off the ratio,
         // it is weighed against the off-scale trial).
