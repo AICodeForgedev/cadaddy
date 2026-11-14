@@ -1,0 +1,113 @@
+{
+  "about": "The documents checked against each other (doccheck.rs, Q6648): what one document says against what another gives for the same space, member, level or object. Each check reads the words and numbers below (rules data, never job values) and raises a conflict RFI that cites both documents, with the corrected value the field would build and the rule behind it.",
+  "max_findings": 400,
+  "abbreviations": ["MIN", "MAX", "TYP", "NO", "EA", "APPROX", "REF", "SIM", "EQ", "DIA", "GA", "FIN", "NOM", "ADJ", "VERT", "HORIZ", "MECH", "ELEC", "PLUMB", "ARCH", "STRUCT", "EXT", "INT", "BLDG", "FLR", "CLG", "AFF", "SPEC", "DWG", "DWGS"],
+  "_abbreviations": "Words a period follows that end no sentence (`24\" MIN. O.C.`).",
+  "max_texts": 600000,
+  "max_blocks": 20000,
+  "severity": "high",
+  "before": "rough_in",
+  "read_again": {
+    "_what": "The pages the job reads again from its PDFs for these checks (sections, details, notes and schedules are not in the job's drawing), the set's own first, then the fire protection shop drawings among the submittals.",
+    "kinds": ["section", "detail", "elevation", "notes", "general", "schedule", "cover", "code"],
+    "title_words": ["SECTION", "DETAIL", "ASSEMBL", "NOTES", "ELEVATION", "TYPICAL"],
+    "max_pages": 40,
+    "max_shop_drawing_pages": 30
+  },
+  "ceiling_space": {
+    "_what": "Work a note routes above a space's ceiling (`MAINS ABOVE THE CORRIDOR CEILING`) against the free depth over that ceiling: under the lid or second ceiling over it, else under the floor structure above (the level above less its framing and deck). The work needs its size (else the item's usual depth), its insulation and its hanger.",
+    "_basis": "Trade practice: piping and duct run above a ceiling need their own depth plus hangers and insulation (MSS SP-58 hangers; ASHRAE 90.1 6.8.3 pipe insulation); a drainage line also needs its fall over its run (IPC 704.1). A means of egress keeps at least 7'-6\" of ceiling height (IBC 1003.2).",
+    "above_words": ["ABOVE", "OVER"],
+    "ceiling_words": ["CEILING", "CEILINGS", "CLG", "CLG."],
+    "filler_words": ["THE", "A", "AN", "HARD", "SOFT", "RATED", "ALL", "EACH", "EVERY", "TYP", "TYPICAL", "NEW", "FINISHED", "SUSPENDED", "GYP", "GYPSUM", "ACOUSTICAL", "ACT"],
+    "space_max_words": 3,
+    "lid_words": ["LID", "HARD LID", "RATED CEILING", "SECOND CEILING", "UPPER CEILING"],
+    "space_aliases": [
+      ["CORRIDOR", "CORRIDORS", "CORR", "CORR.", "HALL", "HALLS", "HALLWAY", "HALLWAYS"],
+      ["VESTIBULE", "VEST", "VEST."],
+      ["LOBBY", "LOBBIES"],
+      ["BATHROOM", "BATH", "BATHROOMS", "TOILET", "RESTROOM"],
+      ["UNIT", "UNITS", "GUEST ROOM", "GUESTROOM", "ROOM", "ROOMS"]
+    ],
+    "items": [
+      {"id": "manifold", "words": ["MANIFOLD", "MANIFOLDS"], "depth_in": 8.0, "insulation_in": 0.0, "slope_in_per_ft": 0.0, "basis": "a water distribution manifold with its isolation valves and outlets: about 8 in deep with its fittings (trade practice)"},
+      {"id": "main", "words": ["MAIN", "MAINS", "MAIN LINES", "WATER MAIN", "WATER MAINS"], "depth_in": 2.0, "insulation_in": 1.0, "slope_in_per_ft": 0.0, "basis": "a water main: its size, 1 in of insulation (ASHRAE 90.1 Table 6.8.3) and its hanger"},
+      {"id": "duct", "words": ["DUCT", "DUCTS", "DUCTWORK", "EXHAUST DUCT", "SUPPLY DUCT"], "depth_in": 8.0, "insulation_in": 1.5, "slope_in_per_ft": 0.0, "basis": "a duct: its size (the second of a rectangular one), its wrap and its hanger (SMACNA)"},
+      {"id": "drain", "words": ["SANITARY", "WASTE", "DRAIN", "DRAINS", "CONDENSATE", "STORM"], "depth_in": 3.0, "insulation_in": 0.0, "slope_in_per_ft": 0.125, "basis": "a drainage line: its size, its hanger and its fall over the run (IPC 704.1: 1/8 in per ft for 3 in and larger, 1/4 in for smaller)"},
+      {"id": "piping", "words": ["PIPING", "PIPE", "PIPES", "SUPPLY LINES", "LINES", "HOMERUNS", "HOT WATER", "COLD WATER", "SPRINKLER PIPING", "BRANCH LINES"], "depth_in": 1.0, "insulation_in": 1.0, "slope_in_per_ft": 0.0, "basis": "small piping: its size, its insulation and its hanger"},
+      {"id": "conduit", "words": ["CONDUIT", "CONDUITS", "RACEWAY", "CABLE TRAY"], "depth_in": 1.0, "insulation_in": 0.0, "slope_in_per_ft": 0.0, "basis": "conduit or tray: its size and its support (NEC 300.11)"}
+    ],
+    "hanger_in": 1.5,
+    "default_deck_in": 0.75,
+    "min_ceiling_ft": 7.5,
+    "min_ceiling_basis": "IBC 1003.2: a means of egress keeps a ceiling height of at least 7'-6\"",
+    "tolerance_in": 0.25
+  },
+  "levels": {
+    "_what": "Each document's level marks (`3RD FLOOR F.F.` over `121'-4 1/2\"`, `LEVEL 2 = 10'-6\"`) against the levels the model is built on (the architectural ones, from the set's sections): a discipline that sets its work from other numbers puts it at the wrong height.",
+    "_basis": "The architectural sections fix the floor elevations every trade builds to (the documents' order of authority); a trade's own elevations must agree with them, or its work lands off the real bearing and floors.",
+    "authority": ["A", "S"],
+    "datums_ft": [0.0, 100.0],
+    "tolerance_in": 1.0,
+    "max_difference_ft": 2.0,
+    "reach_heights": 3.0
+  },
+  "conditions": [
+    {
+      "id": "cavity_fully_insulated",
+      "words": ["FULLY INSULATED", "FILLED WITH INSULATION", "FILLED WITH NONCOMBUSTIBLE INSULATION", "COMPLETELY FILLED", "FULL OF INSULATION", "FULLY FILLED"],
+      "needs": "full",
+      "what": "the cavity filled with insulation",
+      "basis": "NFPA 13 9.2.1: a concealed combustible space may be left unsprinklered only where it is filled entirely with noncombustible insulation (or another listed exception); a partly insulated cavity needs sprinklers",
+      "correction": "the cavity filled full depth with noncombustible insulation (the takeoff carries the added insulation)",
+      "alternative": "sprinkler the cavity and keep the assembly's insulation"
+    }
+  ],
+  "assembly": {
+    "_what": "Where a condition's space is (`TRUSS SPACE` and `JOIST SPACE` are a floor's, `ATTIC` a roof's), and how an assembly's cavity and insulation are read: the members' depth (a floor's framing as the model holds it, else the notes' `16\" FLOOR TRUSS`, `11 7/8\" I-JOIST`, `2X12 JOISTS`), the insulation's thickness (`3 1/2\" BATT`, `R-19`).",
+    "space_kinds": [
+      {"kind": "roof", "words": ["ATTIC", "ROOF CAVITY", "ROOF SPACE", "RAFTER SPACE", "ROOF TRUSS"]},
+      {"kind": "floor", "words": ["TRUSS SPACE", "JOIST SPACE", "FLOOR CAVITY", "FLOOR CAVITIES", "FLOOR/CEILING", "FLOOR CEILING", "INTERSTITIAL", "CONCEALED SPACE", "CONCEALED SPACES", "CAVITY", "CAVITIES"]}
+    ],
+    "floor_words": ["FLOOR", "FLR", "FLOOR/CEILING"],
+    "roof_words": ["ROOF", "ATTIC", "CEILING/ROOF"],
+    "member_words": ["TRUSS", "TRUSSES", "JOIST", "JOISTS", "I-JOIST", "I-JOISTS", "TJI", "TJIS", "RAFTER", "RAFTERS"],
+    "insulation_words": ["BATT", "BATTS", "INSULATION", "INSUL", "INSUL.", "BLOWN"],
+    "insulation_skip_words": ["SOUND", "ATTENUATION", "ACOUSTICAL", "FIBERGLASS", "FIBERGLAS", "MINERAL", "WOOL", "UNFACED", "FACED", "KRAFT", "THERMAL", "RIGID", "SPRAY", "FOAM", "BATT", "OF", "MIN", "MIN."],
+    "nominal_depth_in": {"2X4": 3.5, "2X6": 5.5, "2X8": 7.25, "2X10": 9.25, "2X12": 11.25, "2X14": 13.25},
+    "r_value_in": {"11": 3.5, "13": 3.5, "15": 3.5, "19": 6.25, "21": 5.5, "25": 8.0, "30": 9.5, "38": 12.0, "49": 16.0},
+    "r_per_in": 3.2,
+    "max_member_in": 60.0,
+    "tolerance_in": 0.5
+  },
+  "penetrations": {
+    "_what": "Runs side by side through one member: the risers of a level standing in one wall (its plate) closer than the documents' hole rule allows, or too large for the plate. The documents' own rule first (`HOLES IN PLATES ... 12\" MIN. APART`), else the code's and the trade's.",
+    "_basis": "IRC R602.6.1 / IBC 2308.5.8: a top plate bored or notched over 50% of its width needs a steel tie across the opening; manufacturers' and engineers' hole rules keep holes in one member apart (trade practice: at least two of the larger hole's diameters clear).",
+    "hole_words": ["HOLE", "HOLES", "PENETRATION", "PENETRATIONS", "BORED"],
+    "member_words": ["PLATE", "PLATES", "STUD", "STUDS", "JOIST", "JOISTS", "MEMBER", "MEMBERS", "TRUSS", "TRUSSES"],
+    "spacing_words": ["APART", "O.C.", "OC", "SPACING", "SPACED", "BETWEEN", "MIN", "MIN.", "MINIMUM"],
+    "default_clear_diameters": 2.0,
+    "default_basis": "trade practice: holes in one framing member at least two of the larger hole's diameters apart, clear",
+    "max_plate_fraction": 0.5,
+    "plate_basis": "IRC R602.6.1 / IBC 2308.5.8: a plate bored over 50% of its width needs a 1-1/2 in x 0.054 in steel tie across the opening",
+    "group_reach_in": 24.0,
+    "min_group": 3,
+    "wall_reach_in": 3.0,
+    "max_runs": 50000
+  },
+  "site": {
+    "_what": "Site objects two disciplines draw (the electrical site plan's transformer pad, the civil plan's meter, vault and water line) against each other: one inside another's clearance, with neither document showing it.",
+    "_basis": "Utilities' pad-mounted transformer clearances (trade practice: 10 ft clear in front of the doors, 3 ft at the sides and back, kept free of other structures, valve boxes and vaults) and NEC 110.26 working space at electrical equipment; pressure water and buried electrical kept 12 in apart (trade practice, NESC 320B for supply lines).",
+    "pairs": [
+      {"a": ["TRANSFORMER", "XFMR", "PAD MOUNT", "PADMOUNT"], "b": ["METER", "BACKFLOW", "VAULT", "RPZ", "DDCV", "VALVE", "HYDRANT", "FDC"], "clear_ft": 3.0, "what": "a transformer pad's side and back clearance"},
+      {"a": ["TRANSFORMER", "XFMR", "PAD MOUNT", "PADMOUNT"], "b": ["WATER", "W.L.", "DOM", "FIRE LINE", "FIRE SERVICE"], "clear_ft": 3.0, "what": "a transformer pad's clearance over buried water"},
+      {"a": ["SWITCHBOARD", "SWITCHGEAR", "GENERATOR"], "b": ["METER", "BACKFLOW", "VAULT", "RPZ", "VALVE", "WATER"], "clear_ft": 3.0, "what": "NEC 110.26 working space at electrical equipment"}
+    ],
+    "site_source": "site",
+    "_site_source": "Equipment the site work built outside the building carries this key in its sources.",
+    "run_disciplines": ["C", "L"],
+    "run_system_prefixes": ["C-"],
+    "_runs": "Runs on the site: drawn on a civil or landscape sheet, or of a site contractor's system.",
+    "max_objects": 20000
+  }
+}

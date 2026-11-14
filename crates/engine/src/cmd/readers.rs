@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool (complete the objects the documents leave open with the build's proposals, marked unsure, and keep the RFIs in the spec)} → {built, counts: {by_kind: {}, by_severity: {}, by_step: {}}, items: first 20 (by the build step they block, then severity), total, headline (N things to ask before you build: X high), requirements: {requirements, ran, did_not_run, objects_checked, open_objects, findings, checks: [{id, object, ran, status, objects, met_by_documents, completed_by_rule, missing, findings, basis}]}, applied?, message?}: the inconsistencies of the model built from the set: the RFIs the build and the readers raised, and each object kind's requirements (a luminaire's circuit, type and control, a receptacle's circuit, a switch's load, equipment's circuit, a panel's feeder) measured over the model; with no model built yet it says so (the RFIs are what the build raises)")
+            .params("{apply?: bool (complete the objects the documents leave open with the build's proposals, marked unsure, and keep the RFIs in the spec)} → {built, counts: {by_kind: {}, by_severity: {}, by_step: {}}, items: first 20 (by the build step they block, then severity), total, headline (N things to ask before you build: X high), requirements: {requirements, ran, did_not_run, objects_checked, open_objects, findings, checks: [{id, object, ran, status, objects, met_by_documents, completed_by_rule, missing, findings, basis}]}, documents: {pages, checks, ran, findings, by_check: [{check (ceiling space, level datums, design conditions, penetration groups, site objects), status, compared, raised, not_compared}]}, applied?, applied_documents?, message?}: the inconsistencies of the model built from the set: the RFIs the build and the readers raised, and each object kind's requirements (a luminaire's circuit, type and control, a receptacle's circuit, a switch's load, equipment's circuit, a panel's feeder) measured over the model, and the documents checked against each other (the work a note routes above a ceiling against the space over it, each discipline's level marks against the model's levels, a design condition against the assembly another document gives, risers through one plate against the hole rule, site objects of two disciplines against their clearance); with no model built yet it says so (the RFIs are what the build raises)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -990,16 +990,20 @@ fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let ev = super::requirements::evaluate(s.doc()?, Some(&sp));
     let measured = super::requirements::summary(&ev);
+    // The documents against each other (Q6648): the sheets the drawing holds against the model.
+    let docs = super::doccheck::check(&super::doccheck::drawing_pages(s.doc()?, &sp), &super::doccheck::model_rooms(s.doc()?, &sp), &sp);
     let mut out = json!({"built": true, "apply": apply});
     let sp = if apply {
         out["applied"] = json!(super::requirements::apply(s, &ev)?);
+        out["applied_documents"] = json!(super::doccheck::apply(s, &docs)?);
         super::bspec::current(s, "rfi.read")?.0
     } else {
         sp
     };
-    // The spec's items, and (read only) the requirement items the build would raise now.
+    // The spec's items, and (read only) the requirement and document items the build would raise
+    // now.
     let mut list = cadaddy_walk3d::rfi::list(&sp);
-    for r in &ev.rfis {
+    for r in ev.rfis.iter().chain(docs.rfis.iter()) {
         if !list.iter().any(|x| x.id == r.id) {
             list.push(r.clone());
         }
@@ -1022,6 +1026,7 @@ fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     out["open"] = json!(open.len());
     out["headline"] = json!(super::requirements::headline(open.len(), high));
     out["requirements"] = measured;
+    out["documents"] = docs.json();
     Ok(out)
 }
 
