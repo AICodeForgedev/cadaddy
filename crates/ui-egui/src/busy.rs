@@ -72,6 +72,13 @@ fn spawn_worker() -> Option<(Sender<(Session, Work)>, Receiver<Finished>)> {
 /// the UI thread. Refused (an error to `then`) while other work runs; run in place when there are
 /// no threads.
 pub fn start(app: &mut CadApp, command: &str, work: Work, then: Then) {
+    start_waiting(app, command, work, then, GRACE);
+}
+
+/// [`start`], waiting up to `wait` for the work before the frame goes on (a palette opening
+/// waits a frame or two, [`crate::asked::worked_out`]). The card shows only once the work has run
+/// [`GRACE`], however long the frame waited.
+pub fn start_waiting(app: &mut CadApp, command: &str, work: Work, then: Then, wait: Duration) {
     if let Some(msg) = refusal(app) {
         then(app, Err(msg));
         return;
@@ -93,7 +100,7 @@ pub fn start(app: &mut CadApp, command: &str, work: Work, then: Then) {
     }
     // The copy keeps the agent flag of the caller; the caller puts back its own when it returns.
     app.busy = Some(Busy { command: command.to_string(), started: Instant::now(), rx, then: Some(then), cancel: None });
-    wait(app, GRACE);
+    self::wait(app, wait);
 }
 
 /// Wait up to `timeout` for the running work to end (finishing it when it does). True when no
@@ -231,6 +238,11 @@ fn clock(d: Duration) -> String {
 /// taken, and Cancel. It holds the window's input (the drawings are read-only meanwhile).
 pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     let Some(b) = &app.busy else { return };
+    // Work this young may still end as if it had run in place: no card yet.
+    if let Some(left) = GRACE.checked_sub(b.started.elapsed()).filter(|d| !d.is_zero()) {
+        ctx.request_repaint_after(left);
+        return;
+    }
     let t = Tokens::get();
     let progress = job_progress();
     let command = b.command.clone();

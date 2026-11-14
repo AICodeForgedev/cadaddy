@@ -263,7 +263,7 @@ pub(crate) fn height_note(t: &str) -> Option<(f64, bool)> {
 fn deck_over(sp: &BuildingSpec, level: &str) -> Option<f64> {
     let lv = sp.level(level)?;
     let rules = super::tradeatoms::Rules::default();
-    let cx = super::floorasm::Context { spec: Some(sp), rules: &rules, default_in: 0.0 };
+    let cx = super::floorasm::Context { spec: Some(sp), rules: &rules, default_in: 0.0, slab_everywhere: false };
     let a = super::floorasm::resolve(lv, false, &[], &cx);
     let read = a.layers.iter().any(|l| l.status == super::floorasm::Status::Documented);
     (a.framed && read).then(|| a.thickness_in()).filter(|t| t.is_finite() && *t > 0.0)
