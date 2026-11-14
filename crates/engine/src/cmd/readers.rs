@@ -1278,11 +1278,14 @@ fn run_elec_devices(s: &mut Session, p: &Value) -> Result<Value> {
     let rows: Vec<String> = spec.as_ref().map(|sp| sp.schedule.rows.iter().map(|r| r.mark.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
     let claimed = |t: &str| rows.contains(&t.trim().to_ascii_uppercase());
     let mut found: Vec<Found> = Vec::new();
+    // A symbol block holding its lettering beside the symbol: the device is where its shape is
+    // drawn, not at the block's insert point (Q6604).
+    let mut shapes = super::symbolshape::BlockShapes::new(d);
     for e in &ents {
         let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else { continue };
         let Some(tag) = ins.attribs.iter().find(|a| a.tag.eq_ignore_ascii_case("TAG")).map(|a| a.text.value.trim().to_string()) else { continue };
         if type_tag(&tag) && found.len() < MAX_DEVICES {
-            found.push((tag, ins.insert.xy(), e.handle, "symbol"));
+            found.push((tag, shapes.spot(ins).unwrap_or_else(|| ins.insert.xy()), e.handle, "symbol"));
         }
     }
     // A mark beside a symbol carrying it is that symbol's.

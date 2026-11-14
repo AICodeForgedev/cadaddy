@@ -3746,6 +3746,10 @@ fn device_census(
     // Each symbol: its tag, where it is, its handle, and where its tag is printed (and how tall).
     type Symbol = (String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>);
     let mut symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups];
+    // A symbol block holding its lettering (and a leader to it) beside the symbol: the device is
+    // where its shape is drawn, not at the block's insert point (Q6604).
+    let mut shapes = super::symbolshape::BlockShapes::new(d);
+    let mut on_shape: BTreeSet<u64> = BTreeSet::new();
     for e in store.iter() {
         let g = group_of(e.handle.0);
         if let Some(v) = objects.get_mut(g)
@@ -3761,8 +3765,15 @@ fn device_census(
                 let tag_at = attr
                     .map(|a| (a.text.insert.xy(), a.text.height))
                     .filter(|(p, h)| p.x.is_finite() && p.y.is_finite() && (p.x != 0.0 || p.y != 0.0) && h.is_finite() && *h > 0.0);
+                let at = match shapes.spot(ins) {
+                    Some(p) => {
+                        on_shape.insert(e.handle.0);
+                        p
+                    }
+                    None => ins.insert.xy(),
+                };
                 if let Some(v) = symbols.get_mut(g) {
-                    v.push((tag, ins.insert.xy(), e.handle, tag_at));
+                    v.push((tag, at, e.handle, tag_at));
                 }
             }
             cadaddy_doc::EntityKind::Text(t) => {
@@ -4677,6 +4688,12 @@ fn device_census(
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
         *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
+    }
+    // A device on its symbol's drawn shape off the block's insert point says so (Q6604).
+    for dv in c.placed.iter_mut().filter(|dv| dv.spot.is_empty()) {
+        if cadaddy_doc::Handle::parse_hex(&dv.handle).is_some_and(|h| on_shape.contains(&h.0)) {
+            dv.spot = super::symbolshape::SHAPE_SPOT_BASIS.to_string();
+        }
     }
     // Replicate devices on typical-floor sheets: a sheet covering levels [2,3,4] places its
     // devices on each of those levels (the primary is already placed; clone for the rest).
@@ -35944,6 +35961,81 @@ mod tests {
         let hp = on("Q-1").into_iter().find(|d| d.tag == "HP").unwrap_or_else(|| panic!("the heat pump's connection: {:?}", job.devices));
         assert_eq!((hp.kind.as_str(), hp.equipment.as_str()), ("equipment connection", "HP-3"), "{hp:?}");
         assert_eq!(r["device_types"]["unlisted_repeated"]["A"], json!(3), "the mechanical As are a question: {:#}", r["device_types"]);
+    }
+
+    /// Q6604: a symbol block the import made with its lettering in it (a downlight's circle and
+    /// the circuit number drawn as strokes beside it, the insert point between them): the device
+    /// stands on the circle, never on the lettering, and says why; a block with no lettering
+    /// beside its shape keeps its insert point.
+    #[test]
+    fn a_symbol_block_holding_its_lettering_places_its_device_on_the_shape() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}]}));
+        job.sheets_loaded = true;
+        let texts = [
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[("A", 100.0, 300.0), ("A", 140.0, 300.0)]);
+        {
+            let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+            // The circle 6 left of the block's base point, two stroke letters to its right.
+            let mut b = Block::new("PDF-SYM-2");
+            let mut kinds = vec![EntityKind::Circle(Circle { center: Vec3::new(-6.0, 0.0, 0.0), radius: 4.0 })];
+            for x in [1.0, 3.7] {
+                kinds.push(EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x, -1.5, 0.0), b: Vec3::new(x + 0.9, 1.5, 0.0) }));
+                kinds.push(EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x + 0.9, 1.5, 0.0), b: Vec3::new(x + 1.8, -1.5, 0.0) }));
+            }
+            for k in kinds {
+                b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: Common::default(), kind: k });
+            }
+            d.blocks.insert("PDF-SYM-2".into(), std::sync::Arc::new(b));
+            for x in [300.0, 400.0] {
+                let ins = Insert {
+                    block: "PDF-SYM-2".into(),
+                    insert: Vec3::new(x, 300.0, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: vec![Attrib {
+                        tag: "TAG".into(),
+                        text: text("B", x - 6.0, 306.0, 2.0),
+                        invisible: false,
+                        constant: false,
+                        prompt: String::new(),
+                        props: AttribProps::default(),
+                        multiline: None,
+                        modes: AttribModes::default(),
+                    }],
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                    clip: None,
+                };
+                d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Insert(ins)).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 2000.0, 1000.0], ..region("Q-1", "1", "E", "plan", 0.0) });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let of = |tag: &str| job.devices.iter().filter(|d| d.sheet == "Q-1" && d.tag == tag).collect::<Vec<_>>();
+        let b = of("B");
+        assert_eq!(b.len(), 2, "{:?}", job.devices);
+        for (dv, x) in b.iter().zip([294.0, 394.0]) {
+            assert!((dv.at[0] - x).abs() < 1e-6 && (dv.at[1] - 300.0).abs() < 1e-6, "on the circle, not the lettering: {dv:?}");
+            assert_eq!(dv.spot, super::super::symbolshape::SHAPE_SPOT_BASIS, "{dv:?}");
+        }
+        let a = of("A");
+        assert_eq!(a.len(), 2, "{:?}", job.devices);
+        assert!(a.iter().any(|d| d.at == [100.0, 300.0]) && a.iter().all(|d| d.spot.is_empty()), "a plain symbol keeps its point: {a:?}");
     }
 
     /// fix-grid-bubble-as-fixture: an electrical plan showing one lettered grid, D, past the
