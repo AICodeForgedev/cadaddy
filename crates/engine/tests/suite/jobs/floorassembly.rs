@@ -146,9 +146,12 @@ fn each_level_is_built_as_its_floor_notes_give_it() {
 fn a_floor_nothing_gives_is_the_builds_default_slab_marked_a_default() {
     let (mut s, _) = building(false, None);
     for (level, h, lo, hi) in floors(&s) {
-        assert!(near(hi - lo, 6.0), "level {level}: the default 6\" slab: {}", hi - lo);
+        // The storey on grade: the trade rules' slab on grade (4"), the one its pour takes
+        // (fix-takeoff-ceiling-board-sheets-27x); the storeys above: the build's 6".
+        let want = if level == "1" { 4.0 } else { 6.0 };
+        assert!(near(hi - lo, want), "level {level}: the default {want}\" slab: {}", hi - lo);
         let p = props(&mut s, h);
-        assert_eq!(p["thickness"]["value"], json!(6.0), "{p}");
+        assert_eq!(p["thickness"]["value"], json!(want), "{p}");
         assert_eq!(p["thickness"]["source"]["kind"], json!("default"), "marked a default: {p}");
     }
     // The build's slab thickness is the default; it never overrides a documented floor.

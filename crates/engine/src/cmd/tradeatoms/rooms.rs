@@ -262,9 +262,9 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
             for (li, (material, th, src)) in layers.iter().enumerate() {
                 let ty = super::walls::board_type(r, material);
                 let zl = z - th / 12.0 * upf * (li as f64 + 1.0);
-                for poly in &polys {
-                    sheets_n += ceiling_sheets(poly, material, &ty, *th, src, &level, &room, e.handle, zl, sw, sl, upf, li + 1, r, batch);
-                }
+                // One layout over the whole ceiling: its faces (a triangulated panel) are one
+                // surface, never each its own.
+                sheets_n += ceiling_sheets(&polys, material, &ty, *th, src, &level, &room, e.handle, zl, sw, sl, upf, li + 1, r, batch);
             }
             // Its face's tape, compound and screws (the joints its layout makes: 4' and the
             // sheet length apart).
@@ -400,10 +400,12 @@ pub(super) fn rated_membrane<'a>(
     Some((t, text))
 }
 
-/// A ceiling polygon's sheets (each where it lands); how many.
+/// A ceiling's sheets laid over all its faces at once (one grid from the corner of their
+/// extents, each sheet where it lands, its area what it covers of them, a sheet at an edge or
+/// round a corner cut): the count is the sheets bought. How many.
 #[allow(clippy::too_many_arguments)]
 fn ceiling_sheets(
-    poly: &[Vec2],
+    polys: &[Vec<Vec2>],
     material: &str,
     ty: &str,
     th: f64,
@@ -419,8 +421,8 @@ fn ceiling_sheets(
     r: &Rules,
     batch: &mut Batch,
 ) -> usize {
-    let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
-    if b.is_empty() {
+    let b = cadaddy_geom::Bounds2::from_points(polys.iter().flatten().copied());
+    if b.is_empty() || !(sw > 0.0 && sl > 0.0 && upf > 0.0) {
         return 0;
     }
     let (lo, hi) = (b.min, b.max);
@@ -432,7 +434,8 @@ fn ceiling_sheets(
         let mut x = lo.x;
         while x < hi.x - 1e-6 && n < 20_000 {
             let (a, c) = (Vec2::new(x, y), Vec2::new((x + dx).min(hi.x), (y + dy).min(hi.y)));
-            let land = cadaddy_geom::shoelace(&super::floors::clip_box(poly, a, c)).abs();
+            // Faces drawn twice cover the sheet once.
+            let land = polys.iter().map(|poly| cadaddy_geom::shoelace(&super::floors::clip_box(poly, a, c)).abs()).sum::<f64>().min(dx * dy);
             if land > 0.01 * upf * upf {
                 let mut p = Piece::new("drywall", "sheet", format!("{material}, {}x{}", num_text(sw), num_text(sl)), level, src.clone());
                 p.host = Some(host);

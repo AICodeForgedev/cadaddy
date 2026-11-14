@@ -215,6 +215,26 @@ pub(super) fn outline_runs(polys: &[Vec<Vec2>], tol: f64) -> Vec<(Vec2, Vec2)> {
     runs
 }
 
+/// The bands of strips `width` wide laid side by side from `a0` to `a1`, each lapped `lap` on
+/// the one before, the last cut to `a1`: (from, to) across.
+pub(super) fn strip_bands(a0: f64, a1: f64, width: f64, lap: f64) -> Vec<(f64, f64)> {
+    let pitch = width - lap.max(0.0);
+    if !(a0.is_finite() && a1.is_finite() && a1 > a0 && width.is_finite() && pitch > width * 0.05) || (a1 - a0) / pitch > MAX_PER_ELEMENT as f64 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut b0 = a0;
+    loop {
+        let b1 = (b0 + width).min(a1);
+        out.push((b0, b1));
+        if b1 >= a1 - 1e-9 || out.len() >= MAX_PER_ELEMENT {
+            break;
+        }
+        b0 += pitch;
+    }
+    out
+}
+
 /// A run of `len` feet cut into stock pieces lapped `lap` feet: the pieces' lengths.
 pub(super) fn lapped_pieces(len: f64, stock: f64, lap: f64) -> Vec<f64> {
     if !(len.is_finite() && len > 1e-6 && stock.is_finite() && stock > lap + 0.5 && lap >= 0.0) || len > (stock - lap) * 1_000.0 {
@@ -278,10 +298,15 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
     let mut floors: Vec<(String, Handle, Vec<Vec<Vec2>>, f64)> = Vec::new();
     // Each floor element's build-up as the build made it (Q6408): its topping and deck.
     let mut built: HashMap<Handle, super::super::floorasm::Built> = HashMap::new();
+    // Each slab floor's thickness as it was built: its pour's.
+    let mut slabs: HashMap<Handle, (f64, Source)> = HashMap::new();
     for e in d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("floor")).take(MAX_ELEMENTS) {
         let EntityKind::Mesh(m) = &e.kind else { continue };
         if let Some((polys, z)) = floor_top(m) {
             floors.push((super::super::bspec::made_level(e).unwrap_or_default(), e.handle, polys, z));
+        }
+        if let Some(t) = super::super::floorasm::slab_of(e) {
+            slabs.insert(e.handle, t);
         }
         if let Some(b) = super::super::floorasm::of_element(e).filter(|b| b.framed) {
             built.insert(e.handle, b);
@@ -316,7 +341,7 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
         let covered = ce.iter().any(|x| x.e.kind == "slab" && x.e.level.eq_ignore_ascii_case(&lowest));
         if !covered {
             match floors.iter().find(|f| f.0.eq_ignore_ascii_case(&lowest)) {
-                Some((level, h, polys, z)) => slab_on_grade(level, *h, polys, *z, r, &cr, upf, batch, &crossers),
+                Some((level, h, polys, z)) => slab_on_grade(level, *h, polys, *z, slabs.get(h).cloned(), r, &cr, upf, batch, &crossers),
                 None => {
                     batch.missing.insert("concrete".into(), "no slab: the spec has no concrete and the lowest level has no built floor".into());
                 }
@@ -689,6 +714,7 @@ fn slab_on_grade(
     host: Handle,
     polys: &[Vec<Vec2>],
     top: f64,
+    built: Option<(f64, Source)>,
     r: &Rules,
     cr: &super::super::concrete::Rules,
     upf: f64,
@@ -697,7 +723,17 @@ fn slab_on_grade(
 ) {
     let pt = r.fact("concrete.pt").is_some();
     let thick_fact = r.fact("concrete.slab_thickness_in");
-    let (thick, t_src) = match thick_fact.and_then(|f| f.number.map(|n| (n, f.source_of()))) {
+    // One slab, one thickness: the built floor's (its documents', else its default, as the
+    // build resolved it). Only a floor built as a default where the trade documents read since
+    // give the slab (its thickness, or post-tensioning) takes theirs, the floor's kept beside it;
+    // a floor built without one, the trade's.
+    let documents_since = thick_fact.is_some() || pt;
+    let (from_floor, stale) = match &built {
+        Some((_, src)) if src.kind == SourceKind::Default && documents_since => (false, built.clone()),
+        Some(_) => (true, None),
+        None => (false, None),
+    };
+    let (thick, t_src) = match built.filter(|_| from_floor).or_else(|| thick_fact.and_then(|f| f.number.map(|n| (n, f.source_of())))) {
         Some(x) => x,
         None if pt => (r.num("concrete.pt_slab_in", 5.0), r.source("concrete.pt_slab_in")),
         None => (r.num("concrete.slab_on_grade_in", 4.0), r.source("concrete.slab_on_grade_in")),
@@ -714,6 +750,14 @@ fn slab_on_grade(
     p.area_sf = area / (upf * upf);
     p.volume_cf = p.area_sf * thick / 12.0;
     p = p.computed("placement", kind).with("thickness_in", num_text(thick), t_src.clone());
+    if from_floor {
+        p = p.computed("thickness_of", "the built floor element");
+    }
+    if let Some((was, _)) = stale.filter(|(was, _)| (was - thick).abs() > 1e-6) {
+        p = p
+            .computed("floor_built_in", num_text(was))
+            .computed("differs", "the floor element was built to a default before the documents gave the slab: build the model again to match it");
+    }
     if !mix.is_empty() {
         p = p.with("mix", mix.clone(), mix_src.clone());
     }
@@ -825,10 +869,20 @@ fn slab_on_grade(
     let mil = r.fact("concrete.vapor_mil").and_then(|f| f.number).unwrap_or_else(|| r.num("concrete.vapor_barrier_mil", 10.0));
     let v_src = r.fact("concrete.vapor_mil").map_or_else(|| r.source("concrete.vapor_barrier_mil"), |f| f.source_of());
     let dir = if long_x { Vec2::new(1.0, 0.0) } else { Vec2::new(0.0, 1.0) };
-    for line in lines_across(polys, dir, (rw - lap).max(1.0) * upf, (rw / 2.0) * upf) {
-        for (a, b) in line {
+    let across = Vec2::new(-dir.y, dir.x);
+    let (a0, a1) = polys.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), p| (l.min(p.dot(across)), h.max(p.dot(across))));
+    let d0 = polys.iter().flatten().map(|p| p.dot(dir)).fold(f64::INFINITY, f64::min);
+    // Strips side by side across the whole slab, each lapped on the one before; the last cut to
+    // the slab's edge. A strip runs as far as the slab does anywhere under it.
+    for (b0, b1) in strip_bands(a0, a1, rw * upf, lap * upf) {
+        let wide = b1 - b0;
+        let mid = (b0 + b1) / 2.0;
+        let probes = [b0 + wide * 0.01, mid, b1 - wide * 0.01];
+        let runs = geo::merge(probes.iter().flat_map(|a| spans(polys, across * *a + dir * d0, dir)).collect());
+        for (t0, t1) in runs {
+            let a = across * mid + dir * (d0 + t0);
             let mut at = a;
-            let total = a.dist(b);
+            let total = (t1 - t0).max(0.0);
             let mut done = 0.0;
             let mut n = 0;
             while done < total - 1e-6 && n < 1000 {
@@ -837,10 +891,13 @@ fn slab_on_grade(
                 let mut v = Piece::new("concrete", "vapor_barrier", format!("{} mil vapor barrier", num_text(mil)), level, v_src.clone());
                 v.host = Some(host);
                 v.size = format!("{} mil", num_text(mil));
-                v.area_sf = len * rw * upf / (upf * upf);
+                v.area_sf = len * wide / (upf * upf);
                 v.length_ft = len / upf;
                 v = v.with("roll_ft", format!("{}x{}", num_text(rw), num_text(rl)), r.source("concrete.vapor_roll_ft"));
-                v.blocks.push(Block::new(at, end, rw * upf, top - t - 0.1 / 12.0 * upf, top - t));
+                if wide < rw * upf * 0.999 {
+                    v = v.computed("cut_width_ft", num_text(wide / upf));
+                }
+                v.blocks.push(Block::new(at, end, wide, top - t - 0.1 / 12.0 * upf, top - t));
                 let vi = batch.push(v);
                 batch.link(vi, pi);
                 at = end;
