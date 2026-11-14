@@ -26,7 +26,7 @@ use super::Limits;
 /// The argument that makes the app a worker.
 pub const WORKER_ARG: &str = "--dwg-worker";
 /// Bumped when the messages change: an app updated while running may start a newer copy.
-const PROTOCOL: u8 = 1;
+const PROTOCOL: u8 = 2;
 const DECODE: u8 = 1;
 /// Write a DWG from a DXF from outside, held to [`Limits::DEFAULT`] (what apps before Q6280 sent;
 /// still served for one that starts this copy after an update).
@@ -82,16 +82,22 @@ pub fn serve_if_asked() -> Option<i32> {
 
 /// [`super::dwg_to_dxf_noted`] in the worker, when there is one.
 pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
+    decode_capped(bytes, limits, usize::MAX)
+}
+
+/// [`super::dwg_to_dxf_capped`] in the worker, when there is one: the conversion stops once the
+/// DXF holds more than `max_groups` group codes.
+pub fn decode_capped(bytes: &[u8], limits: Limits, max_groups: usize) -> Result<(Vec<u8>, Vec<String>), String> {
     // Before starting a process, and so the same limit holds with or without one.
     if bytes.len() > limits.max_dwg_bytes {
-        return super::dwg_to_dxf_noted(bytes, limits);
+        return super::dwg_to_dxf_capped(bytes, limits, max_groups);
     }
     let reply_limit = (limits.max_dxf_bytes as u64).saturating_add(MAX_NOTES_BYTES);
     let too_big =
         format!("DWG: converting this {} file produced more than {} {}", super::mb(bytes.len() as u64), super::mb(reply_limit), super::OVER_LIMIT);
-    match call(&request(DECODE, limits, ""), bytes, reply_limit, "reading this file", &too_big) {
+    match call(&decode_request(limits, max_groups), bytes, reply_limit, "reading this file", &too_big) {
         Some(reply) => reply?,
-        None => super::dwg_to_dxf_noted(bytes, limits),
+        None => super::dwg_to_dxf_capped(bytes, limits, max_groups),
     }
 }
 
@@ -133,6 +139,13 @@ pub fn encode_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<V
 #[doc(hidden)]
 pub fn crash_worker_for_test() -> Result<(), String> {
     call(&request(CRASH, Limits::DEFAULT, ""), &[], 1024, "testing", "too much").ok_or("no worker")??.map(|_| ())
+}
+
+/// A decode request: the limits, then the group limit.
+fn decode_request(limits: Limits, max_groups: usize) -> Vec<u8> {
+    let mut r = request(DECODE, limits, "");
+    r.extend((max_groups as u64).to_le_bytes());
+    r
 }
 
 fn request(op: u8, limits: Limits, version: &str) -> Vec<u8> {
@@ -280,7 +293,10 @@ fn handle(mut b: &[u8]) -> Reply {
     let version_len = take(&mut b, 1).and_then(<[u8]>::first).copied().ok_or_else(bad)?;
     let version = take(&mut b, usize::from(version_len)).and_then(|v| std::str::from_utf8(v).ok()).ok_or_else(bad)?;
     match op {
-        DECODE => super::dwg_to_dxf_noted(b, Limits { max_dwg_bytes, max_dxf_bytes }),
+        DECODE => {
+            let max_groups = take_u64(&mut b).ok_or_else(bad).map(|n| usize::try_from(n).unwrap_or(usize::MAX))?;
+            super::dwg_to_dxf_capped(b, Limits { max_dwg_bytes, max_dxf_bytes }, max_groups)
+        }
         ENCODE | ENCODE_OWN => {
             let count = take_u32(&mut b).filter(|n| *n <= MAX_LINETYPES).ok_or_else(bad)?;
             let mut linetypes = Vec::new();
@@ -394,7 +410,7 @@ mod tests {
 
     #[test]
     fn serving_reports_a_decode_failure_as_a_reply() {
-        let mut request = self::request(DECODE, Limits::DEFAULT, "");
+        let mut request = decode_request(Limits::DEFAULT, usize::MAX);
         request.extend(b"AC1032 not really a drawing");
         let mut out = Vec::new();
         assert_eq!(serve(&request[..], &mut out), 0);
