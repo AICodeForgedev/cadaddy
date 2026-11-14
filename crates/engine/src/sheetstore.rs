@@ -13,8 +13,10 @@
 //! first ([`Session::needs_whole_set`]; the app loads them on a worker thread with progress before
 //! it runs the command). Saving to .cdy writes the parked sheets back byte for byte; saving to
 //! any other format writes the whole set from a combined copy ([`combined`]), never loading it
-//! into the drawing. Headless sessions (the CLI, the job pipeline, MCP servers) never park: a
-//! drawing there holds everything, as it always did.
+//! into the drawing. Headless sessions (the CLI, the job pipeline, MCP servers) never park between
+//! commands: a drawing there holds everything, as it always did. Inside one command, work done
+//! reading the sheets may put them out for its rest ([`Session::put_out_sheets`]: a guided job
+//! after its build, Q6577); they are back when the command ends.
 
 use std::sync::Arc;
 
@@ -337,17 +339,34 @@ fn to_park(d: &Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Vec<(ChunkR
             .get(k)
             .is_none_or(|s| keep.iter().any(|x| x.number.eq_ignore_ascii_case(&s.number) && cadaddy_doc::sheetstore::same_rect(&x.rect, &s.rect)))
     };
+    // The draw-order places taken: by the chunks in memory and the ones out already.
+    let orders: Vec<u32> = refs.iter().map(ChunkRef::order).collect();
+    let parked: std::collections::HashSet<u32> = d.sheet_store.parked.iter().flat_map(|p| p.chunks.iter().map(|c| c.order)).collect();
     refs.into_iter()
         .zip(filed)
-        .filter_map(|(c, runs)| {
+        .enumerate()
+        .filter_map(|(i, (c, runs))| {
             let whole = runs.len() == 1;
+            let at = c.order();
             // Each run goes back after what is left of its chunk: at the chunk's place, plus one
-            // and its own place among the runs (fewer than a chunk step).
+            // and its own place among the runs (fewer than a chunk step). The runs before the
+            // chunk's first object that stays go back just before it instead, when those places
+            // are free, so the objects come back in the order they had (Q6577: a sheet's last
+            // run and the first elements built after it shared a chunk, and came back the other
+            // way round; what reads the plan in order read it otherwise).
+            let lead = runs.iter().position(|(k, _, _)| k.is_none_or(|k| kept(k as usize))).unwrap_or(0);
+            let lead_at = u32::try_from(lead).ok().and_then(|n| at.checked_sub(n)).filter(|lo| {
+                lead > 0 && i.checked_sub(1).and_then(|p| orders.get(p)).is_none_or(|p| p < lo) && !(*lo..at).any(|x| parked.contains(&x))
+            });
             let out: Vec<(usize, usize, usize, u32)> = runs
                 .into_iter()
                 .enumerate()
                 .filter_map(|(j, (k, from, to))| {
-                    let order = if whole { c.order() } else { c.order().saturating_add(1).saturating_add(u32::try_from(j).ok()?) };
+                    let order = match lead_at {
+                        _ if whole => at,
+                        Some(lo) if j < lead => lo.saturating_add(u32::try_from(j).ok()?),
+                        _ => at.saturating_add(1).saturating_add(u32::try_from(j).ok()?),
+                    };
                     Some((k? as usize, from, to, order))
                 })
                 .filter(|(k, _, _, _)| !kept(*k))
@@ -461,6 +480,20 @@ impl Session {
     /// Whether the active drawing has sheets out of memory.
     pub fn has_parked_sheets(&self) -> bool {
         self.state().is_ok_and(|st| st.doc.sheet_store.has_parked())
+    }
+
+    /// The outermost command is over: sheets its work held out of memory
+    /// ([`Session::sheets_stay_out`]) are held out no longer, and a headless session has them back
+    /// in memory (its drawings hold everything between commands: what reads them there, an export
+    /// or an agent's selection, never asks for a sheet).
+    pub(crate) fn sheets_back_after_command(&mut self) {
+        self.sheets_stay_out = false;
+        if self.sheets_on_demand || !self.has_parked_sheets() {
+            return;
+        }
+        if let Err(e) = self.load_all_sheets() {
+            self.echo(format!("the print sheets couldn't be loaded back: {e}"));
+        }
     }
 
     /// Whether running command `id` must load the sheets out of memory first: it may read the
@@ -786,5 +819,41 @@ impl Session {
             self.echo(n);
         }
         Ok((rects, keep))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, RawTag, Space};
+    use cadaddy_geom::{Bounds2, Vec2, Vec3};
+
+    /// Q6577: a sheet's last objects and the first elements built after them share a chunk; put
+    /// out of memory and loaded again, every object comes back in the order it had (the sheet's
+    /// run went back after the elements, and what reads the plan in order read it otherwise).
+    #[test]
+    fn objects_put_out_and_loaded_again_keep_their_order() {
+        let mut d = Drawing::default();
+        let line = |x: f64| EntityKind::Line(Line { a: Vec3::new(x, 1.0, 0.0), b: Vec3::new(x + 0.5, 2.0, 0.0) });
+        // The sheet's first objects fill a chunk of their own; its last ones start the next.
+        for i in 0..1064 {
+            d.add(&Space::Model, Common::default(), line(f64::from(i % 90))).unwrap();
+        }
+        // Built elements (they carry extended data: never a sheet's) right after, on the sheet.
+        let element = Common {
+            xdata: vec![RawTag { code: 1001, value: "CADADDY_PROPS".into() }, RawTag { code: 1000, value: "{}".into() }].into(),
+            ..Default::default()
+        };
+        for i in 0..5 {
+            d.add(&Space::Model, element.clone(), line(f64::from(i) + 0.25)).unwrap();
+        }
+        assert_eq!(d.model.chunk_refs().len(), 2, "the sheet's last objects and the elements share a chunk");
+        let order = |d: &Drawing| d.model.iter().map(|e| e.handle).collect::<Vec<_>>();
+        let before = order(&d);
+        let sheets = vec![SheetRect { number: "S-1".into(), rect: Bounds2::new(Vec2::new(-10.0, -10.0), Vec2::new(100.0, 100.0)) }];
+        assert_eq!(park(&mut d, &sheets, &[]).unwrap(), 1064);
+        assert_eq!(d.model.len(), 5, "the elements stay in memory");
+        assert!(load(&mut d, |_| true).is_empty());
+        assert_eq!(order(&d), before, "the objects came back in another order");
     }
 }

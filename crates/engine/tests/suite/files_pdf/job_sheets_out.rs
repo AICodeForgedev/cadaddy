@@ -4,9 +4,9 @@
 //! every imported sheet in memory to its end (about 1.1 GB on a four-storey set).
 //!
 //! Nothing the job keeps holds them either (undo, the drawing as saved, the build's record of the
-//! drawing it left), the job's results are what they are with the sheets in memory, a save
-//! writes them, and the build's record still knows the plan as a whole: a build after the job
-//! keeps the model.
+//! drawing it left), the job's results are what they are with the sheets in memory, a headless
+//! session has them back when the job's command ends, a save writes them, and the build's record
+//! still knows the plan as a whole: a build after the job keeps the model.
 
 use crate::helper::{run, scratch, serial};
 use cadaddy_engine::Session;
@@ -51,24 +51,26 @@ fn plain(d: &Drawing) -> usize {
     d.model.iter().filter(|e| e.common.xdata.is_empty()).count()
 }
 
+/// What the job's audit says it put out of memory once its build had read the sheets.
+fn put_out(s: &Session) -> u64 {
+    let agent: Value = s.doc().ok().and_then(|d| d.agent.as_deref().and_then(|t| serde_json::from_str(t).ok())).unwrap_or_default();
+    let audit = agent["guided_job"]["audit"].as_array().cloned().unwrap_or_default();
+    audit.iter().filter(|a| a["event"] == "sheets_out").filter_map(|a| a["details"]["objects"].as_u64()).sum()
+}
+
 #[test]
 fn a_jobs_later_stages_hold_the_sheets_out_of_memory() {
     let _g = serial();
     real_pdf_reader();
     let (mut s, dir) = job("clash");
 
-    // The sheets are out of memory, as stored; what is left in model space is the model.
-    let (parked, in_memory, total) = {
-        let d = s.doc().expect("doc");
-        (d.sheet_store.parked_objects(), plain(d), d.model.len() + d.sheet_store.parked_objects())
-    };
-    assert!(s.has_parked_sheets() && parked > 1000, "the job left its sheets in memory ({parked} objects out)");
-    assert!(in_memory < parked / 10, "{in_memory} plan objects still in memory beside {parked} out");
-    // No later stage (takeoff, estimate, clash) loaded them again.
+    // Once the build had read them, the sheets went out of memory, and no later stage (takeoff,
+    // estimate, clash) loaded them again.
+    let out = put_out(&s);
+    assert!(out > 1000, "the job kept its sheets in memory after its build ({out} objects out)");
     assert_eq!(s.whole_set_loads.0, 0, "loaded again by {:?}", s.whole_set_loads.1);
-
-    // Nothing the session keeps holds them: the drawing as saved, its undo and redo steps, the
-    // drawing the build's record keeps.
+    // Nothing the session keeps held them meanwhile: the drawing as saved, its undo and redo
+    // steps, the drawing the build's record keeps.
     {
         let st = s.state().expect("state");
         let mut kept: Vec<(String, std::sync::Arc<Drawing>)> = vec![("the drawing as saved".into(), st.saved.clone())];
@@ -77,21 +79,24 @@ fn a_jobs_later_stages_hold_the_sheets_out_of_memory() {
         assert!(built.is_some(), "the job's build is recorded with the drawing it left");
         kept.extend(built.map(|b| ("the build's record".to_string(), b)));
         for (what, d) in kept {
-            assert!(plain(&d) <= in_memory + 64, "{what} holds the sheets: {} plan objects (the drawing holds {in_memory})", plain(&d));
+            assert!((plain(&d) as u64) < out / 10, "{what} holds the sheets: {} plan objects ({out} went out)", plain(&d));
         }
     }
+    // The job's command over, a headless session holds everything again (an export, an agent's
+    // selection read the drawing as it is).
+    assert!(!s.has_parked_sheets(), "the sheets are still out of memory after the job");
+    let total = s.doc().expect("doc").model.len();
+    assert!(plain(s.doc().expect("doc")) as u64 >= out, "the sheets' objects are back");
 
     // Saved, the sheets are in the file: opened again, every object is there.
     let path = dir.join("built.cdy");
     run(&mut s, "saveas", json!({"path": path.display().to_string()}));
-    assert_eq!(s.whole_set_loads.0, 0, "a .cdy save writes the sheets as stored");
     let mut again = Session::empty();
     run(&mut again, "open", json!({"path": path.display().to_string()}));
     assert_eq!(again.doc().expect("doc").model.len(), total, "the saved model holds every object");
 
     // The takeoff the job made with the sheets out is the takeoff with them in.
     let stage = run(&mut s, "job.explain", json!({"stage": "takeoff"}));
-    assert!(!s.has_parked_sheets(), "a command that may read the whole set loads it");
     let now = run(&mut s, "bim.takeoff", json!({"group_by": "level", "keep": false}));
     let lines = |v: &Value| v["lines"].as_array().cloned().unwrap_or_default();
     assert!(!lines(&now).is_empty(), "{now}");

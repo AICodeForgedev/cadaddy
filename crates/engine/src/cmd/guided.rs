@@ -31602,10 +31602,12 @@ fn reads_the_model_only(stage: StageName) -> bool {
 }
 
 /// Once the build has read the print sheets, they go out of memory, parked as the .cdy file stores
-/// them ([`Session::put_out_sheets`]): the stages after it read the model's elements, and the job
-/// held every sheet to its end (about 1.1 GB on a four-storey set, Q6577). A step that reads them
-/// again loads them ([`ensure_sheets_loaded`]); a save or checkpoint writes them as stored.
-fn sheets_out_after_build(s: &mut Session, job: &GuidedJob) {
+/// them ([`Session::put_out_sheets`]), for the rest of the job's command: the stages after it read
+/// the model's elements, and the job held every sheet to its end (about 1.1 GB on a four-storey
+/// set, Q6577). The build's checkpoint writes them as stored (not encoded again); a step that
+/// reads them again loads them ([`ensure_sheets_loaded`]); and a headless session has them back
+/// when the command ends ([`Session::sheets_back_after_command`]).
+fn sheets_out_after_build(s: &mut Session, job: &mut GuidedJob) {
     if !job.sheets_loaded || s.has_parked_sheets() {
         return;
     }
@@ -31615,8 +31617,13 @@ fn sheets_out_after_build(s: &mut Session, job: &GuidedJob) {
     match out {
         Ok(0) => {}
         Ok(n) => {
+            // Nothing the job runs between its stages loads them again.
+            s.sheets_stay_out = true;
+            let secs = started.elapsed().as_secs_f64();
             let memory = super::memstat::process_mb().map_or_else(String::new, |(now, peak)| format!(" (memory {now} MB, peak {peak} MB)"));
-            progress_line(&format!("  print sheets out of memory: {n} objects in {:.1} s{memory}", started.elapsed().as_secs_f64()));
+            progress_line(&format!("  print sheets out of memory: {n} objects in {secs:.1} s{memory}"));
+            let stage = job.current_stage().map(|st| st.name);
+            job.audit("sheets_out", "pipeline", None, stage, Some(json!({"objects": n, "seconds": secs})));
         }
         Err(e) => progress_line(&format!("  the print sheets stay in memory: {e}")),
     }
@@ -31713,10 +31720,14 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Estimate => run_estimate(s, job),
             StageName::Clash => run_clash(s, job),
         };
-        s.sheets_stay_out = false;
+        // Held out until the next stage says otherwise (what the job runs between them).
+        if !model_only {
+            s.sheets_stay_out = false;
+        }
         super::perceive::geometry::settle_rooms(s, None);
         release_stage_caches();
-        // The build has read the sheets: out of memory before its checkpoint is written.
+        // The build has read the sheets: out of memory before its checkpoint is written, for
+        // the rest of the job's command.
         if stage_name == StageName::BimBuild && result.is_ok() {
             sheets_out_after_build(s, job);
         }

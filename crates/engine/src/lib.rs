@@ -2748,10 +2748,10 @@ impl Session {
                 Err(EngineError::Internal(id.into(), msg))
             }
         };
-        // Sheets held out of memory by the command's work (a job's later stages) are held out no
-        // longer: the next command that may read the whole set loads it, even after a panic.
+        // Sheets held out of memory by the command's work (a job's stages after its build) are
+        // held out no longer, even after a panic; a headless session has them back.
         if outer {
-            self.sheets_stay_out = false;
+            self.sheets_back_after_command();
         }
         r
     }
