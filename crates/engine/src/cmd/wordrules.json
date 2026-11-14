@@ -3020,6 +3020,48 @@
     "LOADS"
    ]
   },
+  "rooms.note_lead_words": {
+   "source": "drafting convention: the words a keynote's or a general note's line starts with, a joining word continuing the line above (WITH, AND, TO) or an instruction to the trades (PROVIDE, COORDINATE, SEE): a note's line, never a room's name (perceive/geometry.rs `sentence_line`, Q6298). OR, IN, ON, ALL, THE, NEW, EXISTING left out: room names start with them (OR 1, ON CALL, ALL GENDER, THE MARKET).",
+   "words": [
+    "WITH",
+    "AND",
+    "TO",
+    "OF",
+    "FOR",
+    "BY",
+    "FROM",
+    "PER",
+    "INTO",
+    "VIA",
+    "THRU",
+    "THROUGH",
+    "WHERE",
+    "WHICH",
+    "THAT",
+    "PROVIDE",
+    "PROVIDED",
+    "COORDINATE",
+    "VERIFY",
+    "INSTALL",
+    "INSTALLED",
+    "CONNECT",
+    "REFER",
+    "SEE",
+    "EXTEND",
+    "ROUTE",
+    "FURNISH",
+    "FURNISHED",
+    "RELOCATE",
+    "REMOVE",
+    "PATCH",
+    "ALIGN",
+    "MATCH",
+    "CONTRACTOR",
+    "DO",
+    "NOTE",
+    "NOTES"
+   ]
+  },
   "rooms.corridor_words": {
    "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
    "words": [
