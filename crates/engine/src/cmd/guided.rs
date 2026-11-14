@@ -12944,7 +12944,7 @@ fn restore_typical_symbols(d: &cadaddy_doc::Drawing, job: &mut GuidedJob) -> usi
 }
 
 /// The set's sheet numbers, upper case: the sheet map's and the sheet list's.
-fn job_sheet_numbers(job: &GuidedJob) -> BTreeSet<String> {
+pub(crate) fn job_sheet_numbers(job: &GuidedJob) -> BTreeSet<String> {
     job.sheet_regions
         .iter()
         .map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase())

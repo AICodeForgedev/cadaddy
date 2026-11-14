@@ -2941,9 +2941,22 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     // The plans a name may be on (its trace looks across the largest holding it): the trace's
     // regions, the job's sheets, the spec's level plans.
     let mut footprints: Vec<[f64; 4]> = regions.map(<[_]>::to_vec).unwrap_or_default();
+    // Every sheet of the set (the sheet list's too, not only the plans read): a callout's mark.
+    let mut set_sheets = sheet_numbers.clone();
     if let Ok(Some(job)) = crate::cmd::guided::load_job(s) {
         sheet_numbers.extend(job.sheet_regions.iter().map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase()));
         footprints.extend(job.sheet_regions.iter().map(crate::cmd::guided::SheetRegion::plan_rect));
+        set_sheets.extend(crate::cmd::guided::job_sheet_numbers(&job));
+    }
+    set_sheets.extend(sheet_numbers.iter().cloned());
+    // A detail or section callout (a symbol marked with one of the set's sheets, `A321`) is a
+    // note on the plan, no room's boundary: the box it draws round what it details cuts no room
+    // in two (Q6351: a unit's trace closed on one, and the unit had no room).
+    for e in &ents {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        if i.attribs.iter().any(|a| set_sheets.contains(&a.text.value.trim().to_ascii_uppercase())) {
+            tag_blocks.insert(e.handle);
+        }
     }
     footprints.extend(spec.iter().flat_map(|sp| sp.levels.iter().filter_map(|l| l.region)));
     footprints.retain(|r| r.iter().all(|v| v.is_finite()));
@@ -3560,8 +3573,11 @@ fn split_shared_outlines(plan: &Session, out: &mut Vec<FoundRoom>, shared: &[(us
         let poly = room.outline.clone();
         // The room numbers in it printed at both tags' size.
         let sized = |qh: f64| [room.text_height, *height].iter().all(|th| qh >= TAG_SIZE_BAND.0 * th && qh <= TAG_SIZE_BAND.1 * th);
+        // In the loop, or printed with either name (a number over a tub the outline goes round).
+        let printed_with = |q: Vec2| q.dist(room.at) <= TAG_NUMBER_REACH * room.text_height || q.dist(*at) <= TAG_NUMBER_REACH * *height;
         let mut inside: Vec<(String, Vec2)> = Vec::new();
-        for (_, t, q, _, _) in numbers.iter().filter(|(_, _, q, qh, _)| sized(*qh) && cadaddy_geom::point_in_polygon(&poly, *q)) {
+        for (_, t, q, _, _) in numbers.iter().filter(|(_, _, q, qh, _)| sized(*qh) && (cadaddy_geom::point_in_polygon(&poly, *q) || printed_with(*q)))
+        {
             let t = t.trim().to_string();
             if !inside.iter().any(|(x, _)| *x == t) {
                 inside.push((t, *q));
@@ -3606,7 +3622,8 @@ fn split_shared_outlines(plan: &Session, out: &mut Vec<FoundRoom>, shared: &[(us
         if pa.len() < 3 || pb.len() < 3 || area(&pa) < least || area(&pb) < least {
             continue;
         }
-        if !cadaddy_geom::point_in_polygon(&pa, ca) || !cadaddy_geom::point_in_polygon(&pb, cb) {
+        let holds = |p: &[Vec2], c: Vec2, m: Vec2| cadaddy_geom::point_in_polygon(p, c) || cadaddy_geom::point_in_polygon(p, m);
+        if !holds(&pa, ca, ma) || !holds(&pb, cb, mb) {
             continue;
         }
         let how = if drawn { "along the wall drawn between their tags" } else { "midway between their tags (no wall line drawn between them)" };
@@ -4569,9 +4586,10 @@ mod tests {
 
     /// Two units side by side (12' × 30' each, inches) whose shared wall (two faces 6" apart,
     /// at `wall_x`) leaves a doorway between them with no leaf drawn (`door`: the gap's ends on the
-    /// wall, none: no wall at all), each tagged with its name over its number; and, `elsewhere`, a
-    /// room of its own off to the side tagged with the second unit's number too.
-    fn two_units(wall: bool, door: (f64, f64), elsewhere: bool) -> Session {
+    /// wall, none: no wall at all), each tagged with its name over its number; `tub`: the second
+    /// unit's number printed over a tub against its outer wall (the outline goes round it); and,
+    /// `elsewhere`, a room of its own off to the side tagged with the second unit's number too.
+    fn two_units(wall: bool, door: (f64, f64), tub: bool, elsewhere: bool) -> Session {
         let mut s = Session::empty();
         s.new_drawing(false);
         s.execute("pline", &json!({"vertices": [[0, 0], [294, 0], [294, 360], [0, 360]], "closed": true})).unwrap();
@@ -4582,6 +4600,9 @@ mod tests {
                     s.execute("line", &json!({"points": [[x, door.1], [x, 360.0]]})).unwrap();
                 }
             }
+        }
+        if tub {
+            s.execute("pline", &json!({"vertices": [[200, 0], [200, 175], [240, 175], [240, 0]]})).unwrap();
         }
         for (t, x, y) in [("DOUBLE Q", 45.0, 180.0), ("201", 60.0, 170.0), ("DOUBLE Q", 195.0, 180.0), ("203", 210.0, 170.0)] {
             s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
@@ -4603,7 +4624,7 @@ mod tests {
     /// tag of a room traced elsewhere cuts nothing.
     #[test]
     fn two_units_traced_as_one_loop_are_cut_apart_at_their_shared_wall() {
-        let mut s = two_units(true, (200.0, 236.0), false);
+        let mut s = two_units(true, (200.0, 236.0), false, false);
         let mut rooms = rooms_found(&mut s).unwrap();
         rooms.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
         assert_eq!(rooms.len(), 2, "{rooms:?}");
@@ -4624,26 +4645,111 @@ mod tests {
                 && rooms[1].outline_basis.as_deref().is_some_and(|b| b.contains("201"))
         );
         // No wall between them (one open floor, two tags): cut midway, and said so.
-        let mut s = two_units(false, (0.0, 0.0), false);
+        let mut s = two_units(false, (0.0, 0.0), false, false);
         let rooms = rooms_found(&mut s).unwrap();
         assert_eq!(rooms.len(), 2, "{rooms:?}");
         assert!(rooms.iter().all(|r| r.outline_basis.as_deref().is_some_and(|b| b.contains("midway"))), "{rooms:?}");
         // A closed wall: two loops, nothing cut.
-        let mut s = two_units(true, (360.0, 360.0), false);
+        let mut s = two_units(true, (360.0, 360.0), false, false);
         let rooms = rooms_found(&mut s).unwrap();
         assert_eq!(rooms.len(), 2, "{rooms:?}");
         assert!(rooms.iter().all(|r| r.outline_basis.is_none()), "{rooms:?}");
         // A tag whose number a room traced elsewhere has is that room's printed again (a
         // corridor's label where its loop leaks through a door): nothing cut.
-        let mut s = two_units(true, (200.0, 236.0), true);
+        let mut s = two_units(true, (200.0, 236.0), false, true);
         let rooms = rooms_found(&mut s).unwrap();
         assert_eq!(rooms.len(), 2, "{rooms:?}");
         assert!(rooms.iter().all(|r| r.outline_basis.is_none()), "{rooms:?}");
+        // The second unit's number over a tub the loop goes round (outside the outline, printed
+        // with its name): still its own room, with its own number.
+        let mut s = two_units(true, (200.0, 236.0), true, false);
+        let mut rooms = rooms_found(&mut s).unwrap();
+        rooms.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        assert_eq!(rooms.iter().map(|r| r.number.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["201", "203"], "{rooms:?}");
+        assert!(rooms.iter().all(|r| r.outline_basis.is_some()), "{rooms:?}");
         // One room's name and a second name by the same number (no number of its own): one room.
         let mut s = plan_of(&[([0.0, 0.0, 294.0, 360.0], &[("OFFICE", 45.0, 180.0), ("101", 60.0, 170.0), ("RECEPTION", 195.0, 180.0)])]);
         let rooms = rooms_found(&mut s).unwrap();
         assert_eq!(rooms.len(), 1, "{rooms:?}");
         assert!(rooms[0].outline_basis.is_none());
+    }
+
+    /// Q6351: a unit's trace closed on a detail callout's box (a symbol marked with one of the
+    /// set's sheets, the box it draws round what it details spanning the room), and took the
+    /// piece of the room round its tag for the room, or none. A callout bounds no room: the whole
+    /// room is traced. The same box marked with no sheet of the set (a symbol of something drawn)
+    /// still bounds it.
+    #[test]
+    fn a_detail_callouts_box_cuts_no_room() {
+        use cadaddy_doc::{Attrib, AttribModes, AttribProps, Block, Insert, LwPolyline, Space, Text};
+        use cadaddy_geom::{PolyVertex, Vec3};
+        let room = |mark: &str| {
+            let mut s = Session::empty();
+            s.new_drawing(false);
+            s.execute("pline", &json!({"vertices": [[0, 0], [144, 0], [144, 360], [0, 360]], "closed": true})).unwrap();
+            s.execute("text", &json!({"at": [40, 250], "text": "SINGLE Q", "height": 6})).unwrap();
+            s.execute("text", &json!({"at": [55, 240], "text": "109", "height": 6})).unwrap();
+            let d = s.doc_mut().unwrap();
+            d.building_spec = Some(json!({"version": 1, "units_per_foot": 12, "sheets": [{"number": "A321"}]}).to_string()).into();
+            // The callout's box from wall to wall (its block, as a print's import makes it).
+            let mut b = Block::new("PDF-SYM-9");
+            let corners = [(-72.0, -9.0), (72.0, -9.0), (72.0, 9.0), (-72.0, 9.0)];
+            b.entities.push(Entity {
+                handle: d.new_handle(),
+                common: Common::default(),
+                kind: EntityKind::LwPolyline(LwPolyline {
+                    vertices: corners.iter().map(|(x, y)| PolyVertex { p: Vec2::new(*x, *y), ..PolyVertex::default() }).collect(),
+                    closed: true,
+                    const_width: 0.0,
+                    elevation: 0.0,
+                    plinegen: false,
+                }),
+            });
+            d.blocks.insert("PDF-SYM-9".into(), std::sync::Arc::new(b));
+            let attrib = Attrib {
+                tag: "TAG".into(),
+                text: Text {
+                    insert: Vec3::new(100.0, 215.0, 0.0),
+                    align_pt: None,
+                    height: 4.0,
+                    value: mark.into(),
+                    rotation: 0.0,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: cadaddy_doc::HAlign::Left,
+                    valign: cadaddy_doc::VAlign::Baseline,
+                },
+                invisible: false,
+                constant: false,
+                prompt: String::new(),
+                props: AttribProps::default(),
+                multiline: None,
+                modes: AttribModes::default(),
+            };
+            let ins = Insert {
+                block: "PDF-SYM-9".into(),
+                insert: Vec3::new(72.0, 209.0, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: vec![attrib],
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+            s
+        };
+        let mut s = room("A321");
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 1, "{rooms:?}");
+        assert!((rooms[0].area - 144.0 * 360.0).abs() < 1.0, "the whole room, the callout's box no side of it: {}", rooms[0].area);
+        let mut s = room("WD");
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 1, "{rooms:?}");
+        assert!((rooms[0].area - 144.0 * (360.0 - 218.0)).abs() < 1.0, "a drawn thing's box still bounds it: {}", rooms[0].area);
     }
 
     /// A room `w` × `h` inches from the origin with its name at the centre, inside a sheet's
