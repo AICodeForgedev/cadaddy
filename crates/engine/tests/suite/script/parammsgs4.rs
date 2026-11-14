@@ -593,7 +593,7 @@ fn job_bim_and_mep_commands_take_only_their_documented_parameters() {
     // A field of a value isn't a parameter: `gauges?: [{max_in, gauge, lb_per_sqft}]`.
     let e = refusal(&mut s, "mep.qty", json!({"lb_per_sqft": "nan"}));
     assert!(e.contains("`lb_per_sqft` is not a parameter of mep.qty"), "{e}");
-    // A placeholder where a value goes (`rules?: walk rules (as in <drawing>.walk.json)`) leaves
+    // A placeholder where a value goes (`rules?: object (walk rules, as in <drawing>.walk.json)`) leaves
     // the parameters closed; the documented ones still go.
     assert!(!takes_open_params(find_command("wallgen").unwrap()));
     assert!(known("wallgen", "rulesFile") && known("mep.qty", "gauges") && known("plan.door", "position") && known("bim.bom", "file"));

@@ -225,8 +225,9 @@ fn newest_time(path: &Path, depth: u32, budget: &mut usize) -> Option<SystemTime
     newest
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::panic)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
