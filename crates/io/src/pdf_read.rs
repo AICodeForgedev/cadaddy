@@ -5717,7 +5717,8 @@ fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<
 /// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
 /// of them, if more) and more than [`FOREIGN_STROKE_OVER`] times the outline they share round
 /// the tag (its hexagon, circle or box: closed, about as wide as tall, no smaller than the tag's
-/// letters) is not the symbol's, and stays loose where printed. An instance sharing no such
+/// letters; beside it, a box drawn round the tag's own letters counts too, though its width
+/// follows them) is not the symbol's, and stays loose where printed. An instance sharing no such
 /// outline keeps all its strokes (a symbol drawn turned, a bare letter), and so does a stroke
 /// near the outline's size (a part of the symbol drawn its own way at one instance).
 fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
@@ -5735,25 +5736,28 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     }
     let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
     for (inst, of_inst) in group.iter_mut().zip(&keys) {
-        let Some(letters) = inst.nearby_text_at.map(|t| t.1).filter(|h| *h > 0.0) else { continue };
+        let Some((tag_at, letters)) = inst.nearby_text_at.filter(|t| t.1 > 0.0) else { continue };
         let shared: Vec<bool> = of_inst.iter().map(|k| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need)).collect();
-        let size = inst
-            .stroke_indices
-            .iter()
-            .zip(&shared)
-            .filter(|(_, sh)| **sh)
-            .filter_map(|(&si, _)| strokes.get(si))
-            .filter(|s| is_outline(s))
-            .filter_map(|s| bbox(std::slice::from_ref(&s.pts)))
-            .filter(|b| {
-                let (w, h) = (b[2] - b[0], b[3] - b[1]);
-                w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))
-            })
-            .map(extent)
-            .fold(0.0f64, f64::max);
+        // A box drawn round the tag's own letters is the outline round it even where no other
+        // instance draws it alike: its width follows its lettering (a short label, a long one).
+        let encloses_tag = |s: &Stroke| {
+            let poly: Vec<Vec2> = s.pts.iter().map(|p| Vec2::new(p.0, p.1)).collect();
+            [tag_at, (tag_at.0, tag_at.1 + letters / 2.0)].iter().any(|p| cadaddy_geom::point_in_polygon(&poly, Vec2::new(p.0, p.1)))
+        };
+        // The outlines round the tag (closed, about as wide as tall, no smaller than its letters),
+        // by whether the instances share them.
+        let outline = |(&si, sh): (&usize, &bool)| {
+            let s = strokes.get(si).filter(|s| is_outline(s))?;
+            let b = bbox(std::slice::from_ref(&s.pts))?;
+            let (w, h) = (b[2] - b[0], b[3] - b[1]);
+            (w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))).then_some((s, *sh, extent(b)))
+        };
+        let outlines: Vec<(&Stroke, bool, f64)> = inst.stroke_indices.iter().zip(&shared).filter_map(outline).collect();
+        let size = outlines.iter().filter(|o| o.1).map(|o| o.2).fold(0.0f64, f64::max);
         if size <= 0.0 {
             continue;
         }
+        let size = outlines.iter().filter(|o| !o.1 && encloses_tag(o.0)).map(|o| o.2).fold(size, f64::max);
         let kept: Vec<usize> = inst
             .stroke_indices
             .iter()
