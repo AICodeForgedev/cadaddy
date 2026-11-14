@@ -180,6 +180,7 @@ pub(crate) struct PenetrationRules {
     pub plate_basis: String,
     pub group_reach_in: f64,
     pub min_group: usize,
+    pub min_diameter_in: f64,
     pub wall_reach_in: f64,
     pub max_runs: usize,
 }
@@ -1474,12 +1475,13 @@ fn conditions(pages: &[Page], blocks: &[(usize, Vec<Block>)], sp: &BuildingSpec,
                 .map(String::as_str)
                 .chain([depth_src.as_str(), ins_src.as_str()].into_iter().filter_map(|s| s.split(':').next()).filter(|s| !s.contains(' '))),
         );
+        let ins_txt = if ins > 0.0 { format!("{} of insulation", inches(ins)) } else { "no insulation among its layers".to_string() };
         let issue = format!(
-            "{} leaves the {space} as \"{}\" ({}), but the {kind} assembly gives {} of insulation in {} deep framing: {} of the cavity is open, so it is not {}.",
+            "{} leaves the {space} as \"{}\" ({}), but the {kind} assembly as read ({}) gives {ins_txt} in {} deep framing: {} of the cavity is open, so it is not {}.",
             named(sheets),
             note.to_ascii_lowercase(),
             cond.basis.split(':').next().unwrap_or("").trim(),
-            if ins > 0.0 { inches(ins) } else { "no".to_string() },
+            ins_src.split(':').next().unwrap_or("").trim(),
             inches(*depth),
             inches(depth - ins),
             cond.what
@@ -1493,7 +1495,7 @@ fn conditions(pages: &[Page], blocks: &[(usize, Vec<Block>)], sp: &BuildingSpec,
         let proposed = format!("Fill the {space} full depth ({}) or sprinkler it: which? ({})", inches(*depth), cond.basis);
         let sides = vec![
             RfiSide { document: named(sheets), says: note.clone() },
-            RfiSide { document: ins_src.clone(), says: format!("{} of insulation", if ins > 0.0 { inches(ins) } else { "no".to_string() }) },
+            RfiSide { document: ins_src.clone(), says: ins_txt.clone() },
             RfiSide { document: depth_src.clone(), says: format!("{} deep {kind} framing", inches(*depth)) },
             RfiSide { document: cond.basis.split(':').next().unwrap_or("").trim().to_string(), says: cond.basis.clone() },
         ];
@@ -1579,13 +1581,25 @@ fn penetrations(pages: &[Page], blocks: &[(usize, Vec<Block>)], sp: &BuildingSpe
     for (i, r) in sp.mep.runs.iter().enumerate().take(pr.max_runs.max(1)) {
         let Some(p) = r.points.first() else { continue };
         let d = r.size_in.first().copied().unwrap_or(0.0);
-        if r.top_ft.is_none() || r.points.len() != 1 || !(d.is_finite() && d > 0.0) {
+        if r.top_ft.is_none() || r.points.len() != 1 || !(d.is_finite() && d >= pr.min_diameter_in) {
             continue;
         }
         by_level.entry(r.level.clone()).or_default().push((i, *p, d));
         for (lv, q) in &r.storey_points {
             by_level.entry(lv.clone()).or_default().push((i, *q, d));
         }
+    }
+    // Risers closer than their own size overlap: one penetration drawn twice (the larger kept).
+    for risers in by_level.values_mut() {
+        risers.sort_by(|a, b| b.2.total_cmp(&a.2));
+        let mut kept: Vec<(usize, [f64; 2], f64)> = Vec::new();
+        for r in risers.iter() {
+            let overlaps = kept.iter().any(|k| (k.1[0] - r.1[0]).hypot(k.1[1] - r.1[1]) / upf * 12.0 < k.2.max(r.2));
+            if !overlaps {
+                kept.push(*r);
+            }
+        }
+        *risers = kept;
     }
     let mut hits: BTreeMap<(String, String, i64), Hit> = BTreeMap::new();
     for (level, risers) in &by_level {
@@ -1955,6 +1969,9 @@ mod tests {
         let l3 = m.get("LEVEL 3").expect("level 3");
         assert!((l3.0 - (121.0 + 4.5 / 12.0)).abs() < 1e-9, "{m:?}");
         assert!((m.get("LEVEL 2").expect("level 2").0 - 10.5).abs() < 1e-9);
+        // An elevation set under the name and to its right, over three heights from its start.
+        let offset = vec![t("4TH FLOOR F.F.", 0.0, 10.0), t("131' - 2 1/2\"", 2.7, 8.2)];
+        assert!((level_marks(&offset, rules().levels.reach_heights).get("LEVEL 4").expect("level 4").0 - (131.0 + 2.5 / 12.0)).abs() < 1e-9);
         // Lettering read off strokes is no mark.
         let junk = vec![t("1 / 1'", 0.0, 0.0), t("/////1////1'////-/", 40.0, 0.0), t(":1'-------:.===/:.1", 80.0, 0.0)];
         assert!(level_marks(&junk, 3.0).is_empty(), "{:?}", level_marks(&junk, 3.0));
@@ -1991,6 +2008,9 @@ mod tests {
         assert_eq!(found.len(), 1, "{:?}", rep.rfis);
         let issue = &found[0].issue;
         assert!(issue.contains("6 EA risers") && issue.contains("1\" clear") && issue.contains("5 1/2\" plate"), "{issue}");
+        // One riser drawn twice and a bundle of cables are no group of holes.
+        let sp = riser_spec(&[(100.0, 4.0), (101.0, 4.0), (130.0, 4.0), (200.0, 0.25), (200.0, 0.25), (200.5, 0.25), (201.0, 0.25)]);
+        assert!(check(&[], &[], &sp).rfis.is_empty());
         // Three small pipes a foot apart: within the trade rule and the plate's half.
         let sp = riser_spec(&[(100.0, 1.5), (112.0, 1.5), (124.0, 1.5)]);
         let rep = check(&[], &[], &sp);
