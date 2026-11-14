@@ -89,6 +89,7 @@ pub mod activitypalette;
 pub mod agentdlg;
 pub mod agentpalette;
 pub mod authorpalette;
+pub mod bgread;
 pub mod bimpalette;
 pub mod busy;
 pub mod clashpalette;
@@ -804,9 +805,12 @@ impl CadApp {
     }
 
     /// Wait up to `timeout` for a long command running in the background to end (its follow-up
-    /// runs). True when none is left running.
+    /// runs), and the reads of the drawing dialogs asked for. True when none is left running.
     pub fn wait_for_work(&mut self, timeout: std::time::Duration) -> bool {
-        busy::wait(self, timeout)
+        // A dialog's read of the drawing too (`bgread`): the next frame shows its answer.
+        let started = web_time::Instant::now();
+        let done = busy::wait(self, timeout);
+        bgread::wait(timeout.saturating_sub(started.elapsed())) && done
     }
 
     /// The long command running in the background, if any.
