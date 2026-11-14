@@ -30,7 +30,7 @@ mod manifest;
 mod set;
 mod usdz;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 use cadaddy_geom::Vec2;
@@ -895,6 +895,29 @@ struct Dropped {
     not_mesh: usize,
     filtered: usize,
     capped_elements: usize,
+    /// Which of the scope's `trades` and `kinds` matched an element in it (Q6384), and the
+    /// trades and kinds there are.
+    trade_hit: Vec<bool>,
+    kind_hit: Vec<bool>,
+    trades_seen: BTreeSet<String>,
+    kinds_seen: BTreeSet<String>,
+}
+
+impl Dropped {
+    /// A `trades` or `kinds` word that matched nothing in the scope: refused, never read as "no
+    /// filter" (Q6384).
+    fn unmatched(&self, sc: &Scope) -> Option<String> {
+        let missed = |words: &[String], hit: &[bool]| -> Vec<String> {
+            words.iter().zip(hit.iter().chain(std::iter::repeat(&false))).filter(|(_, h)| !**h).map(|(w, _)| w.clone()).collect()
+        };
+        let list = |seen: &BTreeSet<String>| seen.iter().take(30).cloned().collect::<Vec<_>>().join(", ");
+        let t = missed(&sc.trades, &self.trade_hit);
+        if !t.is_empty() {
+            return Some(format!("`trades`: {} matches nothing in that scope (its trades and systems: {})", t.join(", "), list(&self.trades_seen)));
+        }
+        let k = missed(&sc.kinds, &self.kind_hit);
+        (!k.is_empty()).then(|| format!("`kinds`: {} matches nothing in that scope (its kinds: {})", k.join(", "), list(&self.kinds_seen)))
+    }
 }
 
 fn mep_piece(e: &Entity) -> Option<String> {
@@ -909,6 +932,22 @@ fn kind_of(e: &Entity, part: &str) -> String {
     }
     let base = super::elemprops::element_kind(e).unwrap_or_else(|| part.to_string());
     super::elemprops::reported_kind(e, base)
+}
+
+/// Mark which of `list`'s words `words` match, and keep the names `seen` (at most a few hundred).
+fn mark_hits(list: &[String], words: &[&str], hit: &mut Vec<bool>, seen: &mut BTreeSet<String>, names: [&str; 2]) {
+    if list.is_empty() {
+        return;
+    }
+    hit.resize(list.len(), false);
+    for (w, h) in list.iter().zip(hit.iter_mut()) {
+        *h = *h || matches_filter(std::slice::from_ref(w), words);
+    }
+    for n in names {
+        if !n.is_empty() && seen.len() < 300 {
+            seen.insert(n.to_string());
+        }
+    }
 }
 
 fn matches_filter(list: &[String], words: &[&str]) -> bool {
@@ -969,9 +1008,11 @@ fn collect<'a>(
         let kind = kind_of(e, &part);
         let context = Rules::is(&rules.context.parts, &part);
         let (trade, system) = rules.trade_of(&kind, &class);
-        if !matches_filter(&sc.trades, &[&trade, &system, class.group, class.key, &class.category])
-            || !matches_filter(&sc.kinds, &[&kind, &part, &class.category, &class.ty])
-        {
+        let trade_words = [trade.as_str(), system.as_str(), class.group, class.key, class.category.as_str()];
+        let kind_words = [kind.as_str(), part.as_str(), class.category.as_str(), class.ty.as_str()];
+        mark_hits(&sc.trades, &trade_words, &mut dropped.trade_hit, &mut dropped.trades_seen, [trade.as_str(), system.as_str()]);
+        mark_hits(&sc.kinds, &kind_words, &mut dropped.kind_hit, &mut dropped.kinds_seen, [kind.as_str(), part.as_str()]);
+        if !matches_filter(&sc.trades, &trade_words) || !matches_filter(&sc.kinds, &kind_words) {
             // The shell stays as context unless it is filtered out by name.
             if !(context && sc.kinds.is_empty() && mode != "off") {
                 dropped.filtered += 1;
@@ -1674,6 +1715,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let mut dropped = Dropped::default();
     let items = collect(d, &frame, &sp, &rules, &sc, &mode, small, &mut dropped);
+    if let Some(why) = dropped.unmatched(&sc) {
+        return Err(bad(CMD, why));
+    }
     if items.is_empty() {
         return Err(bad(CMD, format!("nothing built in that scope ({}): check the room, level, box and filters", scope_name)));
     }

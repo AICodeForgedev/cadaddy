@@ -221,3 +221,54 @@ fn other_programs_objects_written_back_are_kept_on_every_save() {
     let r = s.execute("checkexchange", &json!({"format": "dxf"})).unwrap();
     assert!(loss(&r, "xrecord objects of other programs").is_none(), "{r}");
 }
+
+/// A made-up 2010 drawing (AC1024) as another program saved it: two visual styles in the layout of
+/// AutoCAD 2013 and later (58 properties, each value and its 176 flag), a centred text and a
+/// top-left one without an alignment point, and a text in a tilted plane.
+fn read_as_saved() -> String {
+    let style = |h: &str, name: &str| -> String {
+        let mut s = format!("0\nVISUALSTYLE\n5\n{h}\n330\n2A\n100\nAcDbVisualStyle\n2\n{name}\n70\n2\n177\n3\n291\n0\n70\n58\n");
+        for (i, t) in "LLLLDDCLLCCLLDLCDLLLCLLLBLDLBBBBBBBBBLDDLCLLCBLLLBLCDLTBDD".chars().enumerate() {
+            s += &match t {
+                'L' => format!("90\n{}\n", i % 7),
+                'D' => format!("40\n{}.5\n", i % 4),
+                'C' => format!("62\n{}\n", 1 + i % 250),
+                'B' => format!("290\n{}\n", i % 2),
+                _ => "1\nstrokes.tif\n".to_string(),
+            };
+            s += "176\n1\n";
+        }
+        s
+    };
+    format!(
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1024\n9\n$HANDSEED\n5\n400\n0\nENDSEC\n\
+0\nSECTION\n2\nCLASSES\n0\nCLASS\n1\nVISUALSTYLE\n2\nAcDbVisualStyle\n3\nObjectDBX Classes\n90\n4095\n91\n2\n280\n0\n281\n0\n0\nENDSEC\n\
+0\nSECTION\n2\nENTITIES\n\
+0\nTEXT\n5\n101\n100\nAcDbEntity\n8\n0\n100\nAcDbText\n10\n40\n20\n30\n30\n0\n40\n2.5\n1\nCENTRED\n72\n1\n100\nAcDbText\n\
+0\nTEXT\n5\n102\n100\nAcDbEntity\n8\n0\n100\nAcDbText\n10\n-15\n20\n8\n30\n0\n40\n1.5\n1\nTOP LEFT\n100\nAcDbText\n73\n3\n\
+0\nTEXT\n5\n103\n100\nAcDbEntity\n8\n0\n100\nAcDbText\n10\n1\n20\n2\n30\n3\n40\n2\n1\nTILTED\n210\n0.6\n220\n0\n230\n0.8\n100\nAcDbText\n\
+0\nENDSEC\n0\nSECTION\n2\nOBJECTS\n\
+0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n281\n1\n3\nACAD_VISUALSTYLE\n350\n2A\n\
+0\nDICTIONARY\n5\n2A\n330\nC\n100\nAcDbDictionary\n281\n1\n3\nStyle A\n350\n2B\n3\nStyle B\n350\n2C\n\
+{}{}0\nENDSEC\n0\nEOF\n",
+        style("2B", "Style A"),
+        style("2C", "Style B")
+    )
+}
+
+/// What another program saved, saved again as its own version of DWG or as DXF: nothing to tell.
+/// The visual styles were 'visualstyle objects of other programs changed' in a DWG of before
+/// 2013, the texts without an alignment point 'text insert changed' in a DWG, and the tilted text
+/// 'object extrusion changed' in both (test-coord-battle8).
+#[test]
+fn a_drawing_saved_again_as_it_came_has_nothing_to_tell() {
+    hooks();
+    let d = cadaddy_io::read(read_as_saved().as_bytes(), "saved.dxf").unwrap();
+    assert_eq!(d.foreign.objects.iter().filter(|o| o.kind.eq_ignore_ascii_case("VISUALSTYLE")).count(), 2);
+    let mut s = Session::new();
+    s.open_drawing(d, "saved", None);
+    for (f, version) in [("dwg", json!(null)), ("dwg", json!(2007)), ("dwg", json!(2018)), ("dxf", json!(null))] {
+        let r = s.execute("checkexchange", &json!({"format": f, "version": version})).unwrap();
+        assert_eq!(r["kept"], true, "{f} {version}: {r}");
+    }
+}

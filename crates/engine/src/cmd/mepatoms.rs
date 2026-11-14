@@ -1935,6 +1935,30 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
         None => (std::rc::Rc::new(Index::of(d)), "recount"),
     };
     let (total, groups) = ix.query(&f, group_by.as_deref());
+    // A kind no piece is (Q6384): elements of the model it doesn't count (walls, rooms, ducts)
+    // are refused with where they are counted; any other kind says the model has none.
+    let mut kind_note = None;
+    if let Some(k) = f.kind.as_deref().filter(|_| total.count == 0) {
+        let only = Filter { kind: Some(k.to_string()), ..Filter::default() };
+        if !ix.rows.keys().any(|key| only.matches(key)) {
+            if let Some((kind, n)) = uncounted_elements(d, k) {
+                return Err(bad(
+                    CMD,
+                    format!(
+                        "`{kind}` is not a kind of piece bim.count counts ({n} {kind} element(s) in the model): count them with bim.takeoff, bim.props.find {{kind: \"{kind}\"}} or bim.schedule"
+                    ),
+                ));
+            }
+            let mut kinds: Vec<&str> = ix.rows.keys().map(|key| key.kind.as_str()).collect();
+            kinds.dedup();
+            kinds.truncate(40);
+            kind_note = Some(if kinds.is_empty() {
+                format!("no piece of kind `{}` in the model", k.trim())
+            } else {
+                format!("no piece of kind `{}` in the model (its kinds: {})", k.trim(), kinds.join(", "))
+            });
+        }
+    }
     let ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut out = tally_json(&total);
     // Every total split by what it is by the documents (Q6216): drawn, derived, inferred.
@@ -1982,8 +2006,33 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if from == "recount" && total.count == 0 && ix.rows.is_empty() {
         out["note"] = json!("the model has no pieces to count: build it (model.build) first");
+    } else if let Some(n) = kind_note {
+        out["note"] = json!(n);
     }
     Ok(out)
+}
+
+/// The model's elements of kind `k` (as asked: `walls` is `wall`) that the count index does not
+/// count: their kind and how many, when there are any.
+fn uncounted_elements(d: &Drawing, k: &str) -> Option<(String, usize)> {
+    let want = norm_kind(k);
+    // A run the pieces are cut from is counted once its pieces are built.
+    if matches!(want.as_str(), "conduit" | "cable" | "wire") {
+        return None;
+    }
+    let is = |have: &str| {
+        let have = have.replace(' ', "_").to_ascii_lowercase();
+        want == have || want.strip_suffix("es").is_some_and(|x| x == have) || want.strip_suffix('s').is_some_and(|x| x == have)
+    };
+    let mut found: Option<(String, usize)> = None;
+    for e in d.model.iter().take(MAX_ELEMENTS) {
+        let Some(kind) = super::elemprops::element_kind(e).filter(|kind| is(kind)) else { continue };
+        if counted(e).is_some() {
+            return None;
+        }
+        found.get_or_insert((kind, 0)).1 += 1;
+    }
+    found
 }
 
 /// The atom property values an edit can change, before and after.

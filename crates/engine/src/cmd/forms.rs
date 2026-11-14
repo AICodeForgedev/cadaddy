@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(PROMOTE, "Promote Object Form to Template", run_promote)
             .params("{kind, folder? (default: the settings folder's forms/)} → {path, kind, fields}: the project form written as that kind's template (it replaces the shipped one on this machine)"),
         CommandSpec::new(COMPLETENESS, "Object Completeness", run_completeness)
-            .params("{kind?, field?, level?, room?, baseline?: an earlier bim.completeness answer, tolerance_pct? (default 0)} → {elements, overall: {required, filled, documented, pct, documented_pct}, kinds: {kind: {count, form, required, filled, required_fill_pct, documented_pct, fields: {key: {required, filled, documented, derived, default, conflict, missing, na, pct, documented_pct, by_level: {level: pct}}}}}, next_work: [text], gate?: {pass, drops: [{kind, before, after}]}}: fill rates (documented + derived; defaults unfilled, n/a not required)")
+            .params("{kind?, field?, level?, room?, baseline?: object (an earlier bim.completeness answer), tolerance_pct? (default 0)} → {elements, overall: {required, filled, documented, pct, documented_pct}, kinds: {kind: {count, form, required, filled, required_fill_pct, documented_pct, fields: {key: {required, filled, documented, derived, default, conflict, missing, na, pct, documented_pct, by_level: {level: pct}}}}}, next_work: [text], gate?: {pass, drops: [{kind, before, after}]}}: fill rates (documented + derived; defaults unfilled, n/a not required)")
             .noundo(),
     ]
 }
@@ -226,12 +226,89 @@ pub struct Field {
     /// Not applicable to this kind on this project: why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub na: Option<String>,
+    /// A number field that may be below zero (an elevation, an offset); the others are 0 or
+    /// more (Q6384).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signed: bool,
 }
+
+/// The largest number a number field takes, either way (Q6384): far past any building's
+/// measure, short of the values that only come from a slip (`-1e300`).
+pub const MAX_NUMBER: f64 = 1e8;
 
 impl Field {
     /// Whether property `key` is this field (its key or one of its aliases).
     fn names(&self, key: &str) -> bool {
         self.key.eq_ignore_ascii_case(key) || self.aliases.iter().any(|a| a.eq_ignore_ascii_case(key))
+    }
+
+    /// Why `value` cannot be this field's value, if it can't (Q6384): a number field takes a
+    /// finite number in its range (text that starts with one, as `18 in AFF`); an enum field one
+    /// of its allowed values. Null (clearing the value) always can.
+    pub fn refuses(&self, value: &Value) -> Option<String> {
+        let unit = self.unit.as_deref().map(|u| format!(" ({u})")).unwrap_or_default();
+        match self.ty.as_str() {
+            "number" => {
+                let n = match value {
+                    Value::Null => return None,
+                    Value::Number(n) => n.as_f64(),
+                    Value::String(t) if t.trim().is_empty() => return None,
+                    // Rust reads `nan`, `inf` and `1e999` as numbers: they are none.
+                    Value::String(t) => t.trim().parse::<f64>().ok().or_else(|| leading_number(t)),
+                    _ => None,
+                };
+                match n {
+                    None => Some(format!("`{}` is a number{unit}: {} is not one (words go in `note`)", self.key, short(value))),
+                    Some(v) if !v.is_finite() || v.abs() > MAX_NUMBER => {
+                        Some(format!("`{}` is a number{unit} up to {MAX_NUMBER:e}: {} is out of range", self.key, short(value)))
+                    }
+                    Some(v) if v < 0.0 && !self.signed => Some(format!("`{}` is 0 or more{unit}: {} is below zero", self.key, short(value))),
+                    Some(_) => None,
+                }
+            }
+            "enum" if !self.allowed.is_empty() => {
+                let t = match value {
+                    Value::Null => return None,
+                    Value::String(t) => t.trim().to_string(),
+                    other => other.to_string(),
+                };
+                (!self.allowed.iter().any(|a| a.trim().eq_ignore_ascii_case(&t)))
+                    .then(|| format!("`{}` is one of {}: {} is not", self.key, self.allowed.join(", "), short(value)))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A value as a message shows it: at most 40 characters.
+fn short(v: &Value) -> String {
+    let t = match v {
+        Value::String(t) => format!("`{t}`"),
+        other => other.to_string(),
+    };
+    if t.chars().count() > 40 { format!("{}…", t.chars().take(40).collect::<String>()) } else { t }
+}
+
+/// The forms that check values given for elements' properties (Q6384): the project's forms,
+/// else their templates'; read once for a call that sets many.
+pub struct ValueCheck {
+    store: Store,
+    templates: Vec<Template>,
+    made: BTreeMap<String, Form>,
+}
+
+impl ValueCheck {
+    pub fn of(d: &Drawing) -> Self {
+        ValueCheck { store: stored(d), templates: templates(), made: BTreeMap::new() }
+    }
+
+    /// Why `value` cannot be property `key` of element `e` (of kind `base`, as
+    /// [`super::elemprops::element_kind`] names it), by the field of its form that holds `key`:
+    /// `None` when it can, or when no field holds the key.
+    pub fn refuses(&mut self, e: &Entity, base: &str, key: &str, value: &Value) -> Option<String> {
+        let kind = form_kind(e, base.to_string());
+        let form = form_of(&self.store, &kind, &self.templates, &mut self.made);
+        form.field(key).and_then(|f| f.refuses(value)).map(|why| format!("{why} on {kind}'s form"))
     }
 }
 
@@ -1466,6 +1543,11 @@ fn run_record(s: &mut Session, p: &Value) -> Result<Value> {
         let vals = values(d, e, &base, &kind, upf);
         let form = st.forms.get(&kind).cloned().unwrap_or_default();
         let field = form.field(&field_key).cloned().unwrap_or_default();
+        // A value the field cannot take is refused, not recorded (Q6384): the form's type,
+        // range and allowed values.
+        if let Some(why) = field.refuses(&value) {
+            return Err(bad(RECORD, why));
+        }
         let now = vals.iter().find(|(k, _)| field.names(k)).map(|(k, p)| (k.clone(), p.clone()));
         let hex = h.hex();
         match now {

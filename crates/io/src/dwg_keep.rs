@@ -16,6 +16,15 @@
 //!
 //! Which records need it the DWG bridge says (`cadaddy_dwg::custom_records`); the drawing's DWG
 //! bridge DXF is binary ([`stash_tags`]), what the bridge reads from a DWG is ASCII ([`unstash`]).
+//!
+//! Other programs' objects that the bridge does write, but gives back otherwise than they were
+//! read, get a shadow ([`shadows`]): the object is written as the bridge writes it (so other
+//! programs see it), and an XRECORD keeps its groups as they were with a digest of what the bridge
+//! gives back for it. Reading the DWG back puts those groups in its place while the file still
+//! holds exactly that; an object another program has changed since stays as that program wrote
+//! it. A visual style read in the layout of AutoCAD 2013 and later, written into an older DWG,
+//! came back with 28 of its 58 properties (test-coord-battle8: 'visualstyle objects of other
+//! programs changed').
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -116,11 +125,134 @@ fn containers(pairs: &[(i32, String)], recs: &[std::ops::Range<usize>]) -> Vec<S
     out
 }
 
+/// Kinds of other programs' objects never given a shadow: dictionaries (CADaddy writes the ones it
+/// keeps, and their entries point at records that get new handles) and the records that are only
+/// data (an XRECORD's groups go through DWG as they are).
+const NOT_SHADOWED: [&str; 4] = ["DICTIONARY", "ACDBDICTIONARYWDFLT", "XRECORD", "ACDBPLACEHOLDER"];
+/// Other programs' objects checked for a shadow, at most.
+const MAX_SHADOW_CHECK: usize = 20_000;
+/// Groups of one object compared group by group, at most (a longer one is not given a shadow).
+const MAX_SHADOW_GROUPS: usize = 4096;
+
+/// Whether group `code` holds a handle (the record's own, a reference, or a `102` bracket around
+/// reactors and extension dictionaries): writers renumber handles, so these are not compared.
+fn is_handle_group(code: i32) -> bool {
+    matches!(code, 5 | 102 | 105 | 320..=369 | 390..=399 | 480 | 481 | 1005)
+}
+
+/// A record's groups as compared and digested: without its type and its [handles](is_handle_group).
+fn content(rec: &[(i32, String)]) -> Vec<(i32, &str)> {
+    rec.iter().filter(|(c, _)| *c != 0 && !is_handle_group(*c)).map(|(c, v)| (*c, v.trim())).collect()
+}
+
+/// A stable digest (64-bit FNV-1a) of a record's [`content`]: stored with a shadow when a DWG is
+/// written and checked when it is read, maybe by another build, so it can't be Rust's own hash.
+fn digest(rec: &[(i32, String)]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (c, v) in content(rec) {
+        for b in c.to_le_bytes().iter().chain(v.as_bytes()).chain(&[0xff]) {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// Whether value `a` of group `code` is `b`: numbers by value, as writers spell them differently
+/// (`30.0`, `30`, `  4`).
+fn same_value(code: i32, a: &str, b: &str) -> bool {
+    use cadaddy_dxf::Kind;
+    match cadaddy_dxf::kind_of(code) {
+        Kind::Real => match (a.parse::<f64>(), b.parse::<f64>()) {
+            (Ok(x), Ok(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()) || (x - y).abs() <= 1e-12,
+            _ => a == b,
+        },
+        Kind::Int16 | Kind::Int32 | Kind::Int64 | Kind::Bool => match (a.parse::<i64>(), b.parse::<i64>()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => a == b,
+        },
+        Kind::Str | Kind::Hex => a == b,
+    }
+}
+
+/// Whether `b` holds every group of `a`, as many times (in any order: the save notice compares
+/// other programs' objects so). `None` when either is too long to compare.
+fn holds(a: &[(i32, &str)], b: &[(i32, &str)]) -> Option<bool> {
+    if a.len() > MAX_SHADOW_GROUPS || b.len() > MAX_SHADOW_GROUPS {
+        return None;
+    }
+    let mut used = vec![false; b.len()];
+    Some(a.iter().all(|(c, v)| {
+        let found = b.iter().zip(used.iter_mut()).find(|((d, w), u)| !**u && d == c && same_value(*c, v, w));
+        found.map(|(_, u)| *u = true).is_some()
+    }))
+}
+
+/// Another program's object whose groups the DWG bridge wouldn't give back as they are
+/// ([`shadows`]): its type, its groups as kept, and the [`digest`] of what the bridge gives back.
+pub struct Shadow {
+    kind: String,
+    groups: Pairs,
+    rendition: u64,
+}
+
+/// The other programs' objects of `d` that the DWG bridge, writing a DWG of version `code`
+/// (`AC1024`…), would give back changed: each kept object (but [`NOT_SHADOWED`] kinds) is written
+/// in a DXF of their own, converted to that DWG and back, and compared with what was read. Empty
+/// when there are none, or the conversion fails (saving reports that itself).
+pub fn shadows(d: &cadaddy_doc::Drawing, code: &str) -> Vec<Shadow> {
+    let objects: Vec<&cadaddy_doc::foreign::ForeignObject> =
+        d.foreign.objects.iter().filter(|o| !NOT_SHADOWED.iter().any(|k| k.eq_ignore_ascii_case(o.kind.trim()))).take(MAX_SHADOW_CHECK).collect();
+    if objects.is_empty() {
+        return Vec::new();
+    }
+    let as_pairs = |kind: &str, tags: &[cadaddy_doc::RawTag]| -> Pairs {
+        std::iter::once((0, kind.trim().to_string())).chain(tags.iter().filter(|t| t.code != 0).map(|t| (t.code, t.value.clone()))).collect()
+    };
+    let seed = objects.iter().map(|o| o.handle.0).max().unwrap_or(0).saturating_add(1);
+    let mut mini: Pairs = vec![
+        (0, "SECTION".into()),
+        (2, "HEADER".into()),
+        (9, "$ACADVER".into()),
+        (1, code.to_string()),
+        (9, "$HANDSEED".into()),
+        (5, format!("{seed:X}")),
+        (0, "ENDSEC".into()),
+        (0, "SECTION".into()),
+        (2, "CLASSES".into()),
+    ];
+    for c in &d.foreign.classes {
+        mini.extend(as_pairs("CLASS", c));
+    }
+    mini.extend([(0, "ENDSEC".into()), (0, "SECTION".into()), (2, "OBJECTS".into())]);
+    let originals: Vec<Pairs> = objects.iter().map(|o| as_pairs(&o.kind, &o.tags)).collect();
+    mini.extend(originals.iter().flatten().cloned());
+    mini.extend([(0, "ENDSEC".into()), (0, "EOF".into())]);
+    let Ok(dwg) = cadaddy_dwg::encode_named(&write(&mini, false, false), code, &[]) else { return Vec::new() };
+    let Ok((back, _)) = cadaddy_dwg::decode(&dwg, cadaddy_dwg::Limits::DEFAULT) else { return Vec::new() };
+    let Some(back) = parse(&back) else { return Vec::new() };
+    let given: HashMap<u64, &[(i32, String)]> =
+        records(&back).into_iter().filter_map(|r| back.get(r)).filter_map(|r| handle_of(r).map(|h| (h, r))).collect();
+    objects
+        .iter()
+        .zip(originals)
+        .filter_map(|(o, groups)| {
+            let r = given.get(&o.handle.0)?;
+            (holds(&content(&groups), &content(r)) == Some(false)).then(|| Shadow {
+                kind: o.kind.trim().to_ascii_uppercase(),
+                groups,
+                rendition: digest(r),
+            })
+        })
+        .collect()
+}
+
 /// One XRECORD of the kept dictionary: what it holds, where it goes, and the groups.
 struct Kept {
     kind: &'static str,
     /// For `record` and `class`: the container ([`containers`]); for `entry` and `reactor`: the
-    /// record (its handle, hex) the groups go back into.
+    /// record (its handle, hex) the groups go back into; for `shadow`: the record's handle and the
+    /// digest of what the bridge gives back for it (both hex, `H:D`).
     place: String,
     index: usize,
     pairs: Pairs,
@@ -131,17 +263,18 @@ struct Kept {
 #[cfg(test)]
 pub fn stash(dxf: &[u8], take: &HashSet<u64>) -> Option<(Vec<u8>, usize)> {
     let crlf = dxf.windows(2).any(|w| w == b"\r\n");
-    let (out, n) = stash_pairs(&parse(dxf)?, take)?;
+    let (out, n) = stash_pairs(&parse(dxf)?, take, &[])?;
     Some((write(&out, crlf, code_page_text(dxf)), n))
 }
 
-/// [`stash`] on a DXF's tags (the DWG bridge's binary DXF).
-pub fn stash_tags(tags: &[cadaddy_dxf::Tag], take: &HashSet<u64>) -> Option<(Vec<cadaddy_dxf::Tag>, usize)> {
-    if take.is_empty() {
+/// [`stash`] on a DXF's tags (the DWG bridge's binary DXF), also keeping a shadow of the objects
+/// in `shadows` (matched by type and groups, as the writer may give them new handles).
+pub fn stash_tags(tags: &[cadaddy_dxf::Tag], take: &HashSet<u64>, shadows: &[Shadow]) -> Option<(Vec<cadaddy_dxf::Tag>, usize)> {
+    if take.is_empty() && shadows.is_empty() {
         return None;
     }
     let pairs: Pairs = tags.iter().map(|t| (t.code, t.str())).collect();
-    let (out, n) = stash_pairs(&pairs, take)?;
+    let (out, n) = stash_pairs(&pairs, take, shadows)?;
     Some((out.into_iter().map(|(c, v)| tag(c, v)).collect(), n))
 }
 
@@ -158,10 +291,11 @@ fn tag(code: i32, v: String) -> cadaddy_dxf::Tag {
     }
 }
 
-fn stash_pairs(pairs: &[(i32, String)], take: &HashSet<u64>) -> Option<(Pairs, usize)> {
-    if take.is_empty() {
+fn stash_pairs(pairs: &[(i32, String)], take: &HashSet<u64>, shadows: &[Shadow]) -> Option<(Pairs, usize)> {
+    if take.is_empty() && shadows.is_empty() {
         return None;
     }
+    let mut unshadowed = vec![true; shadows.len()];
     let recs = records(pairs);
     let places = containers(pairs, &recs);
     let mut kept: Vec<Kept> = Vec::new();
@@ -182,12 +316,26 @@ fn stash_pairs(pairs: &[(i32, String)], take: &HashSet<u64>) -> Option<(Pairs, u
             taken_types.insert(rec.first().map(|(_, v)| v.trim().to_string()).unwrap_or_default());
             kept.push(Kept { kind: "record", place: places[i].clone(), index: here, pairs: rec.to_vec() });
             gone[i] = true;
+        } else if places[i] == "OBJECTS"
+            && let Some(h) = handle_of(rec)
+            && let Some(kind) = rec.first().map(|(_, v)| v.trim().to_ascii_uppercase())
+        {
+            // The same object as one that needs a shadow: the same type, the same groups.
+            let ours = content(rec);
+            let same = |s: &Shadow| {
+                let theirs = content(&s.groups);
+                ours.len() == theirs.len() && holds(&ours, &theirs) == Some(true)
+            };
+            if let Some((s, free)) = shadows.iter().zip(unshadowed.iter_mut()).find(|(s, free)| **free && s.kind == kind && same(s)) {
+                *free = false;
+                kept.push(Kept { kind: "shadow", place: format!("{h:X}:{:X}", s.rendition), index: 0, pairs: rec.to_vec() });
+            }
         }
     }
     if kept.is_empty() {
         return None;
     }
-    let count = kept.len();
+    let count = kept.iter().filter(|k| k.kind == "record").count();
     // Their CLASS records.
     let mut class_index = 0;
     for (i, r) in recs.iter().enumerate() {
@@ -355,6 +503,7 @@ fn unstash_pairs(pairs: Pairs) -> Option<Pairs> {
             Some("class") => "class",
             Some("entry") => "entry",
             Some("reactor") => "reactor",
+            Some("shadow") => "shadow",
             _ => continue,
         };
         let place = rec.iter().find(|(c, _)| *c == 3).map(|(_, v)| v.clone()).unwrap_or_default();
@@ -387,6 +536,17 @@ fn unstash_pairs(pairs: Pairs) -> Option<Pairs> {
     }
     // Back into the records they were taken from: dictionary entries and reactors.
     let by_handle: HashMap<u64, usize> = base.iter().enumerate().filter_map(|(i, r)| handle_of(r).map(|h| (h, i))).collect();
+    // Shadows: the groups as they were, while the file holds the object as the bridge gave it.
+    for k in kept.iter().filter(|k| k.kind == "shadow") {
+        let Some((h, d)) = k.place.split_once(':') else { continue };
+        let (Ok(h), Ok(d)) = (u64::from_str_radix(h.trim(), 16), u64::from_str_radix(d.trim(), 16)) else { continue };
+        if let Some(rec) = by_handle.get(&h).and_then(|&i| base.get_mut(i))
+            && digest(rec) == d
+            && handle_of(&k.pairs) == Some(h)
+        {
+            *rec = k.pairs.clone();
+        }
+    }
     for k in kept.iter().filter(|k| matches!(k.kind, "entry" | "reactor")) {
         let Ok(owner) = u64::from_str_radix(k.place.trim(), 16) else { continue };
         let Some(rec) = by_handle.get(&owner).and_then(|&i| base.get_mut(i)) else { continue };
@@ -586,5 +746,79 @@ ACME_WIDGET\n5\n300\n102\n{ACAD_REACTORS\n330\n100\n102\n}\n330\nC\n100\nAcmeWid
         let body = p.iter().position(|(c, v)| *c == 0 && v == "ENDSEC").unwrap();
         let max = p[body..].iter().filter(|(c, _)| *c == 5).map(|(_, v)| u64::from_str_radix(v.trim(), 16).unwrap()).max().unwrap();
         assert!(seed > max && max >= 0x400, "seed {seed:X} max {max:X}");
+    }
+
+    /// A made-up drawing whose OBJECTS hold the named object dictionary and another program's
+    /// style object (handle 500); `style` is that object's record.
+    fn with_style(style: &[(i32, &str)]) -> Pairs {
+        let mut p: Pairs = [(0, "SECTION"), (2, "HEADER"), (9, "$HANDSEED"), (5, "600"), (0, "ENDSEC"), (0, "SECTION"), (2, "OBJECTS")]
+            .iter()
+            .chain(&[(0, "DICTIONARY"), (5, "C"), (330, "0"), (100, "AcDbDictionary"), (3, "ACME_STYLES"), (350, "500")])
+            .map(|(c, v)| (*c, v.to_string()))
+            .collect();
+        p.extend(style.iter().map(|(c, v)| (*c, v.to_string())));
+        p.extend([(0, "ENDSEC".to_string()), (0, "EOF".to_string())]);
+        p
+    }
+
+    /// The style as read, and as the bridge gives it back: the same properties in another layout,
+    /// some left out.
+    const READ: [(i32, &str); 9] =
+        [(0, "ACME_STYLE"), (5, "500"), (330, "C"), (100, "AcmeStyle"), (70, "3"), (90, "2"), (176, "1"), (40, "0.5"), (176, "1")];
+    const GIVEN: [(i32, &str); 6] = [(0, "ACME_STYLE"), (5, "500"), (330, "C"), (100, "AcmeStyle"), (71, "2"), (176, "1")];
+
+    /// The file the bridge reads back: `stashed` with the style as the bridge gives it (`given`).
+    fn as_given(stashed: &Pairs, given: &[(i32, &str)]) -> Pairs {
+        let recs = records(stashed);
+        let at = recs.iter().find(|r| handle_of(&stashed[(*r).clone()]) == Some(0x500)).unwrap().clone();
+        let mut out = stashed.clone();
+        out.splice(at, given.iter().map(|(c, v)| (*c, v.to_string())));
+        out
+    }
+
+    fn style_in(p: &Pairs) -> Pairs {
+        let recs = records(p);
+        recs.iter().map(|r| p[r.clone()].to_vec()).find(|r| handle_of(r) == Some(0x500)).unwrap()
+    }
+
+    #[test]
+    fn a_shadow_brings_the_groups_back_while_the_file_holds_what_the_bridge_gave() {
+        let given: Pairs = GIVEN.iter().map(|(c, v)| (*c, v.to_string())).collect();
+        // Kept as read; the writer spelled a number otherwise: the object is found by its type and
+        // groups, numbers by value.
+        let read: Pairs = READ.iter().map(|(c, v)| (*c, v.to_string())).collect();
+        let as_written = READ.map(|(c, v)| if c == 40 { (c, "0.50") } else { (c, v) });
+        let written = with_style(&as_written);
+        let shadow = Shadow { kind: "ACME_STYLE".into(), groups: read, rendition: digest(&given) };
+        let (stashed, n) = stash_pairs(&written, &HashSet::new(), &[shadow]).unwrap();
+        assert_eq!(n, 0, "nothing taken out");
+        assert_eq!(style_in(&stashed).len(), READ.len(), "the object stays for other programs");
+        assert!(stashed.iter().any(|(c, v)| *c == 2 && v == "shadow"));
+        // The bridge gives it back otherwise: the groups as written come back.
+        let back = unstash_pairs(as_given(&stashed, &GIVEN)).unwrap();
+        assert_eq!(style_in(&back), as_written.iter().map(|(c, v)| (*c, v.to_string())).collect::<Pairs>());
+        assert!(!back.iter().any(|(_, v)| v.trim() == KEY), "the kept dictionary goes");
+        // Another program changed it since: it stays as that program wrote it.
+        let edited = GIVEN.map(|(c, v)| if c == 71 { (c, "1") } else { (c, v) });
+        let back = unstash_pairs(as_given(&stashed, &edited)).unwrap();
+        assert_eq!(style_in(&back), edited.iter().map(|(c, v)| (*c, v.to_string())).collect::<Pairs>());
+        // An object of another type, or with other groups, gets no shadow.
+        let other = Shadow { kind: "ACME_OTHER".into(), groups: READ.iter().map(|(c, v)| (*c, v.to_string())).collect(), rendition: 1 };
+        assert!(stash_pairs(&written, &HashSet::new(), &[other]).is_none());
+    }
+
+    #[test]
+    fn groups_are_compared_by_value_and_without_handles() {
+        let a: Pairs = vec![(0, "X".into()), (5, "1A".into()), (330, "C".into()), (40, "30".into()), (70, "  4".into()), (1, "name".into())];
+        let b: Pairs = vec![(0, "X".into()), (5, "2B".into()), (330, "D".into()), (1, "name".into()), (70, "4".into()), (40, "30.0".into())];
+        assert_eq!(holds(&content(&a), &content(&b)), Some(true));
+        let c: Pairs = vec![(0, "X".into()), (40, "30.5".into()), (70, "4".into()), (1, "name".into())];
+        assert_eq!(holds(&content(&a), &content(&c)), Some(false));
+        // The digest is of the same groups, so a renumbered copy has the same one; another value doesn't.
+        assert_eq!(digest(&a), digest(&[(0, "X".into()), (5, "9".into()), (40, "30".into()), (70, "4".into()), (1, "name".into())]));
+        assert_ne!(digest(&a), digest(&c));
+        // Too long to compare: no answer, so no shadow.
+        let long: Vec<(i32, &str)> = (0..=MAX_SHADOW_GROUPS).map(|_| (70, "1")).collect();
+        assert_eq!(holds(&long, &long), None);
     }
 }
