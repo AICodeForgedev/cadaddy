@@ -25544,13 +25544,13 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         job.add_conflict(
             StageName::BimBuild,
             &format!(
-                "{over} device box(es) over their NEC 314.16 fill with the routed conductors: {fixed} built with the next larger box, {left} left"
+                "{over} box(es) over their NEC 314.16 fill (or short of NEC 314.28 for #4 and larger) with the conductors the pieces put in them: {fixed} built with a bigger box, {left} left"
             ),
             &format!(
                 "each corrected box keeps its design box beside the installed one (bim.provenance {{corrections: true}}); {}{}",
                 r["box_fill"]["rule"].as_str().unwrap_or_default(),
                 if left > 0 {
-                    "; the rest need a deeper box, an extension ring or a junction box above (conduit.route {section: \"box_fill\"})"
+                    "; nothing in the box rules holds the rest: fewer raceways into them, or a larger pull box (conduit.route {section: \"box_fill\"})"
                 } else {
                     ""
                 }
