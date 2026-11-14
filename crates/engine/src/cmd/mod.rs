@@ -313,6 +313,7 @@ pub use view::{navwheel, quickview};
 
 pub mod curves;
 pub mod helpers;
+pub(crate) mod jobtemp;
 pub mod machines;
 pub mod options;
 pub mod typed_ask;

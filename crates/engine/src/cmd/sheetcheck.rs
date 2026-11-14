@@ -1004,25 +1004,34 @@ pub fn flags(job: &GuidedJob) -> Vec<Flag> {
 
 /// Where the job's packet goes: beside its checkpoint, else in the temporary folder.
 pub fn packet_dir(job: &GuidedJob) -> PathBuf {
-    match &job.checkpoint {
+    packet_dir_for(&job.id, job.checkpoint.as_deref())
+}
+
+/// Where the packet of the job `id` with this checkpoint goes (see [`packet_dir`]).
+pub(crate) fn packet_dir_for(id: &str, checkpoint: Option<&str>) -> PathBuf {
+    match checkpoint {
         Some(c) => {
             let p = Path::new(c);
             let stem = p.file_stem().map_or_else(|| "job".to_string(), |s| s.to_string_lossy().to_string());
             p.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf).join(format!("{stem} sheet index"))
         }
         None => std::env::temp_dir()
-            .join(format!("cadaddy-job-{} sheet index", job.id.chars().filter(char::is_ascii_alphanumeric).take(40).collect::<String>())),
+            .join(format!("cadaddy-job-{} sheet index", id.chars().filter(char::is_ascii_alphanumeric).take(40).collect::<String>())),
     }
 }
 
 /// Removes the job's packet folder (its pictures, contact sheet and `sheet-index.json`), when
 /// it is one the job wrote.
 pub fn remove_packet(job: &GuidedJob) {
-    let dir = packet_dir(job);
+    remove_packet_dir(&packet_dir(job));
+}
+
+/// Removes the packet folder `dir`, when it is one a job wrote (see [`remove_packet`]).
+pub(crate) fn remove_packet_dir(dir: &Path) {
     let ours = dir.file_name().is_some_and(|n| n.to_string_lossy().ends_with(" sheet index"));
     #[cfg(not(target_arch = "wasm32"))]
     if ours && dir.join("sheet-index.json").is_file() {
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = ours;

@@ -370,7 +370,7 @@ pub(crate) fn table_questions(
     result: &mut Value,
 ) {
     let sheets: Vec<Value> = job.index.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
-    let dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("sheet-tables");
+    let dir = super::jobtemp::dir(&job.id).join("sheet-tables");
     let mut asked: Vec<Value> = Vec::new();
     for sh in &sheets {
         if asked.len() >= MAX_TABLE_QUESTIONS {
