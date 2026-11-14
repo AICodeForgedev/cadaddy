@@ -100,7 +100,7 @@ fn current(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingSpec, bool
 fn default_waste(category: &str) -> f64 {
     match category {
         "conduit" | "wire" | "duct" | "pipe" => 10.0,
-        "conduit fittings" | "fittings" | "boxes" | "hangers" => 5.0,
+        "conduit fittings" | "fittings" | "boxes" | "hangers" | "raceway supports" => 5.0,
         "drywall" => 12.0,
         "devices" | "fixtures" => 2.0,
         _ => 0.0,
@@ -1250,6 +1250,9 @@ fn atom_lines(
         let (category, unit) = match k.kind.as_str() {
             "conduit" => ("conduit", "ft"),
             "coupling" | "connector" | "elbow" | "offset" | "bend" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
+            // The strut, rods, anchors and clamps of raceways run together (Q6353).
+            "strut" | "rod" => ("raceway supports", "ft"),
+            "strut_strap" | "support_anchor" | "strut_nut" | "riser_clamp" => ("raceway supports", "each"),
             "box" | "ring" => ("boxes", "each"),
             "cable" | "wire" => ("wire", "ft"),
             _ => continue,
