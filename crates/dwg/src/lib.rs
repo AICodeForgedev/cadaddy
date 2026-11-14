@@ -69,6 +69,93 @@ pub fn is_over_limit(error: &str) -> bool {
     error.contains(OVER_LIMIT)
 }
 
+/// What every error for a DWG whose DXF rendition runs past the group limit says
+/// ([`decode_capped`]).
+const OVER_GROUPS: &str = "DXF group codes (the group limit)";
+
+/// Whether `error`, from reading a DWG with a group limit ([`decode_capped`]), is its DXF
+/// rendition holding more group codes than the limit: the conversion stopped there.
+pub fn is_over_group_limit(error: &str) -> bool {
+    error.contains(OVER_GROUPS)
+}
+
+/// Records whose groups the group limit doesn't count ([`decode_capped`]): the reader's later
+/// steps may shorten them (CADaddy's kept records come back from XRECORDs of a dictionary; an
+/// MTEXT's text is split again), and every other record only gains groups after the conversion,
+/// so a rendition over the limit on the rest is over it whatever comes after.
+const UNCOUNTED_RECORDS: [&[u8]; 3] = [b"XRECORD", b"DICTIONARY", b"MTEXT"];
+
+/// Counts the groups of DXF text as it is written (codes and values on lines of their own),
+/// leaving out those of [`UNCOUNTED_RECORDS`], and notes when they pass `max`.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct GroupCount {
+    max: usize,
+    counted: usize,
+    /// The next line ends a code (else a value).
+    code_line: bool,
+    /// The value being read is a record's type (it follows a code 0).
+    after_zero: bool,
+    /// The current record's groups aren't counted.
+    skip: bool,
+    /// The current code line, or record type, so far (a few bytes: longer is neither).
+    pending: Vec<u8>,
+    exceeded: bool,
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+impl GroupCount {
+    /// Longest code line or record type kept to compare (longer can't be "0" or a type above).
+    const KEEP: usize = 32;
+
+    fn new(max: usize) -> Self {
+        GroupCount { max, counted: 0, code_line: true, after_zero: false, skip: false, pending: Vec::new(), exceeded: false }
+    }
+
+    /// Count the groups `text` completes; `false` once the count is over `max`.
+    fn feed(&mut self, text: &[u8]) -> bool {
+        let mut rest = text;
+        while !self.exceeded {
+            match rest.iter().position(|&c| c == b'\n') {
+                Some(i) => {
+                    self.part(rest.get(..i).unwrap_or_default());
+                    self.line_end();
+                    rest = rest.get(i + 1..).unwrap_or_default();
+                }
+                None => {
+                    self.part(rest);
+                    break;
+                }
+            }
+        }
+        !self.exceeded
+    }
+
+    fn part(&mut self, bytes: &[u8]) {
+        if (self.code_line || self.after_zero) && self.pending.len() < Self::KEEP {
+            let room = Self::KEEP - self.pending.len();
+            self.pending.extend_from_slice(bytes.get(..room.min(bytes.len())).unwrap_or_default());
+        }
+    }
+
+    fn line_end(&mut self) {
+        if self.code_line {
+            self.after_zero = self.pending.trim_ascii() == b"0";
+        } else {
+            if self.after_zero {
+                let kind = self.pending.trim_ascii();
+                self.skip = UNCOUNTED_RECORDS.contains(&kind);
+            }
+            if !self.skip {
+                self.counted = self.counted.saturating_add(1);
+                self.exceeded = self.counted > self.max;
+            }
+            self.after_zero = false;
+        }
+        self.code_line = !self.code_line;
+        self.pending.clear();
+    }
+}
+
 /// A byte count in megabytes for messages ("9.9 MB", "1024 MB").
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn mb(n: u64) -> String {
@@ -119,6 +206,15 @@ mod native {
     /// file, and the notes say how many were skipped and of which types, so a partial read never
     /// passes for a complete one.
     pub fn dwg_to_dxf_noted(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
+        dwg_to_dxf_capped(bytes, limits, usize::MAX)
+    }
+
+    /// [`dwg_to_dxf_noted`] for a reader that reads at most `max_groups` group codes: the DXF is
+    /// counted as it is written, and the conversion stops as soon as it is over (the error says
+    /// so, [`super::is_over_group_limit`]), instead of a refusal after the whole file is written
+    /// (Q6364). The groups of [`super::UNCOUNTED_RECORDS`] aren't counted, so what stops here is
+    /// over the limit whatever the reader does after.
+    pub fn dwg_to_dxf_capped(bytes: &[u8], limits: Limits, max_groups: usize) -> Result<(Vec<u8>, Vec<String>), String> {
         if bytes.len() > limits.max_dwg_bytes {
             return Err(format!("DWG: the file is {}, larger than the {} CADaddy opens", mb(bytes.len() as u64), mb(limits.max_dwg_bytes as u64)));
         }
@@ -176,12 +272,24 @@ mod native {
             let (s, were) = if orphans == 1 { ("", "was") } else { ("s", "were") };
             notes.push(format!("DWG: {orphans} DGN line style component{s} that no line style definition uses {were} left out"));
         }
-        let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
+        let groups = (max_groups < usize::MAX).then(|| super::GroupCount::new(max_groups));
+        let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false, groups };
         let written = std::panic::catch_unwind(AssertUnwindSafe(|| {
             acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)?;
+            // Counted: the MTEXT pass rewrites the text, which isn't counted again.
+            out.groups = None;
             mtext_contents(&doc, &mut out)
         }))
         .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
+        #[cfg(test)]
+        LAST_DXF_BYTES.set(out.buf.len());
+        if out.groups.as_ref().is_some_and(|g| g.exceeded) {
+            return Err(format!(
+                "DWG: converting this {} file produced more than {max_groups} {}; CADaddy stopped there",
+                mb(bytes.len() as u64),
+                super::OVER_GROUPS
+            ));
+        }
         if out.exceeded {
             return Err(format!(
                 "DWG: converting this {} file produced more than {} {}; \
@@ -272,11 +380,11 @@ mod native {
             let prefix = b"  0\r\nMTEXT\r\n  5\r\n10\r\n  8\r\n0\r\n";
             let suffix = b"101\r\nEmbedded Object\r\n  1\r\n^ embedded\r\n  3\r\n^ tail\r\n  0\r\nTEXT\r\n  1\r\n^ plain\r\n";
             let raw = [prefix.as_slice(), b"  3\r\nold\r\n  1\r\ntext\r\n", suffix.as_slice()].concat();
-            let mut out = CappedWriter { buf: raw.clone(), limit: 4096, exceeded: false };
+            let mut out = CappedWriter { buf: raw.clone(), limit: 4096, exceeded: false, groups: None };
             mtext_contents(&doc, &mut out)?;
             let value: &[u8] = if version == acadrust::DxfVersion::AC1015 { b"\xe9 ^  C" } else { "é ^  C".as_bytes() };
             assert_eq!(out.buf, [prefix.as_slice(), b"  1\r\n", value, b"\r\n", suffix.as_slice()].concat());
-            let mut limited = CappedWriter { buf: raw, limit: 1, exceeded: false };
+            let mut limited = CappedWriter { buf: raw, limit: 1, exceeded: false, groups: None };
             assert!(mtext_contents(&doc, &mut limited).is_err());
             assert!(limited.exceeded);
         }
@@ -960,11 +1068,19 @@ mod native {
         }
     }
 
-    /// Collects the DXF text and fails the write once it would grow past `limit`.
+    // Test-only: how many bytes of DXF the last conversion on this thread wrote (where it stopped).
+    #[cfg(test)]
+    thread_local! {
+        pub(crate) static LAST_DXF_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Collects the DXF text and fails the write once it would grow past `limit`, or once its
+    /// groups pass the group limit (`groups`, when there is one).
     struct CappedWriter {
         buf: Vec<u8>,
         limit: usize,
         exceeded: bool,
+        groups: Option<super::GroupCount>,
     }
 
     impl Write for CappedWriter {
@@ -973,6 +1089,11 @@ mod native {
             if self.exceeded || self.buf.len().saturating_add(b.len()) > self.limit {
                 self.exceeded = true;
                 return Err(std::io::Error::other("DXF size limit reached"));
+            }
+            if let Some(g) = self.groups.as_mut()
+                && (g.exceeded || !g.feed(b))
+            {
+                return Err(std::io::Error::other("DXF group limit reached"));
             }
             self.buf.extend_from_slice(b);
             Ok(b.len())
@@ -1274,8 +1395,8 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named, dxf_to_dwg_named_noted,
-    dxf_to_dwg_noted, own_dxf_to_dwg, own_dxf_to_dwg_noted,
+    custom_records, dwg_to_dxf, dwg_to_dxf_capped, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named,
+    dxf_to_dwg_named_noted, dxf_to_dwg_noted, own_dxf_to_dwg, own_dxf_to_dwg_noted,
 };
 
 /// What saving as DWG left out: how many records of each DXF type (upper case) the DWG writer
@@ -1286,7 +1407,7 @@ pub type Unwritten = std::collections::BTreeMap<String, usize>;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod worker;
 #[cfg(not(target_arch = "wasm32"))]
-pub use worker::{WORKER_ARG, crash_worker_for_test, decode, encode_named, serve_if_asked, use_own_worker, use_worker};
+pub use worker::{WORKER_ARG, crash_worker_for_test, decode, decode_capped, encode_named, serve_if_asked, use_own_worker, use_worker};
 
 /// There's no worker in the web build.
 #[cfg(target_arch = "wasm32")]
@@ -1299,6 +1420,10 @@ pub fn serve_if_asked() -> Option<i32> {
 pub fn use_own_worker() {}
 #[cfg(target_arch = "wasm32")]
 pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
+    dwg_to_dxf_noted(bytes, limits)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn decode_capped(bytes: &[u8], limits: Limits, _max_groups: usize) -> Result<(Vec<u8>, Vec<String>), String> {
     dwg_to_dxf_noted(bytes, limits)
 }
 #[cfg(target_arch = "wasm32")]
@@ -1379,6 +1504,50 @@ pub fn dxf_to_dwg_noted(_dxf: &[u8], _version: &str) -> Result<(Vec<u8>, Unwritt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6364: the group count reads lines however the text is cut into writes, and leaves out the
+    /// records the reader may shorten after the conversion (kept XRECORDs, their dictionary, MTEXT).
+    #[test]
+    fn the_group_count_reads_lines_cut_anywhere_and_leaves_out_records_shortened_later() {
+        let text: &[u8] = b"  0\r\nLINE\r\n  8\r\n0\r\n  0\r\nXRECORD\r\n  1\r\nx\r\n  1\r\ny\r\n  0\r\nDICTIONARY\r\n  3\r\nk\r\n  0\r\nMTEXT\r\n  1\r\n0\r\n  0\r\nCIRCLE\r\n 40\r\n1\r\n  0\r\nEOF\r\n";
+        // LINE 2, CIRCLE 2, EOF 1; XRECORD 3, DICTIONARY 2, MTEXT 2 left out.
+        for cut in 0..=text.len() {
+            let (a, b) = text.split_at(cut);
+            let mut g = GroupCount::new(usize::MAX);
+            assert!(g.feed(a) && g.feed(b));
+            assert_eq!(g.counted, 5, "cut at {cut}");
+        }
+        let mut g = GroupCount::new(5);
+        assert!(text.iter().all(|c| g.feed(&[*c])));
+        let mut g = GroupCount::new(4);
+        assert!(!text.iter().all(|c| g.feed(&[*c])) && g.exceeded);
+        // A runaway line is never held whole.
+        let mut g = GroupCount::new(usize::MAX);
+        assert!(g.feed(&vec![b'7'; 1 << 16]) && g.pending.len() <= GroupCount::KEEP);
+    }
+
+    /// Q6364: a DWG whose DXF rendition is over a reader's group limit is refused as soon as the
+    /// conversion passes it, not after the whole file is written; within the limit the DXF is the
+    /// same as without one.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_conversion_over_the_group_limit_stops_there() {
+        let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+        for i in 0..3000 {
+            dxf.push_str(&format!("0\nLINE\n8\n0\n10\n{i}\n20\n0\n11\n{}\n21\n5\n", i + 1));
+        }
+        dxf.push_str("0\nENDSEC\n0\nEOF\n");
+        let dwg = dxf_to_dwg(dxf.as_bytes()).unwrap();
+        let (full, _) = dwg_to_dxf_noted(&dwg, Limits::DEFAULT).unwrap();
+        let written = native::LAST_DXF_BYTES.get();
+        let groups = full.iter().filter(|&&c| c == b'\n').count() / 2;
+        assert!(groups > 3000 * 10, "{groups}");
+        assert_eq!(dwg_to_dxf_capped(&dwg, Limits::DEFAULT, groups).unwrap().0, full);
+        let e = dwg_to_dxf_capped(&dwg, Limits::DEFAULT, groups / 4).unwrap_err();
+        assert!(is_over_group_limit(&e) && !is_over_limit(&e) && e.contains(&format!("more than {}", groups / 4)), "{e}");
+        let stopped = native::LAST_DXF_BYTES.get();
+        assert!(stopped < written / 2, "stopped after {stopped} of {written} bytes");
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

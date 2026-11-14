@@ -149,6 +149,108 @@ struct Summary {
     class_counts: bool,
     sections: Sections,
     table: AppidTable,
+    /// For the DWG bridge's DXF: the least the DXF the DWG converts back to holds.
+    reopen: Option<ReopenFloor>,
+}
+
+/// The least the DXF a DWG written through the bridge converts back to holds, from the bridge's
+/// own records (Q6364). Opening the DWG reads that DXF, which isn't the bridge's: the converter
+/// writes groups the bridge leaves out and leaves out others, so a save counted on the bridge's
+/// groups alone passed a drawing that then failed the reopen check only after the whole
+/// conversion. Measured on the converter (both directions, every record type CADaddy writes, and a
+/// 1.28 M-object model, where 99.7 % of the difference was the first rule):
+/// - a lightweight polyline gets each vertex's start width, end width and bulge (40, 41, 42),
+///   which the bridge writes only when they aren't zero;
+/// - a record of [`SHRINKING`] loses at most the groups listed (twice the most measured: defaults
+///   the converter leaves out);
+/// - a record of [`KEPT_WHOLE`] loses none (most gain some, which isn't counted);
+/// - any other record, and every record's extended data (codes 1000-1071), may be lost whole.
+#[derive(Default)]
+struct ReopenFloor {
+    gained: usize,
+    lost: usize,
+}
+
+/// Record types the converter writes back with at least the groups the bridge wrote (sorted).
+const KEPT_WHOLE: &[&str] = &[
+    "ACDBPLACEHOLDER",
+    "APPID",
+    "ARC",
+    "ATTDEF",
+    "ATTRIB",
+    "BLOCK",
+    "BLOCK_RECORD",
+    "CIRCLE",
+    "CLASS",
+    "DIMASSOC",
+    "DIMENSION",
+    "ELLIPSE",
+    "ENDBLK",
+    "ENDSEC",
+    "ENDTAB",
+    "EOF",
+    "HELIX",
+    "LAYOUT",
+    "LEADER",
+    "LINE",
+    "LTYPE",
+    "LWPOLYLINE",
+    "MATERIAL",
+    "MESH",
+    "MLINE",
+    "MTEXT",
+    "POINT",
+    "POLYLINE",
+    "RAY",
+    "SECTION",
+    "SEQEND",
+    "SOLID",
+    "SPLINE",
+    "STYLE",
+    "TABLE",
+    "TABLESTYLE",
+    "TEXT",
+    "TOLERANCE",
+    "TRACE",
+    "VERTEX",
+    "VPORT",
+    "WIPEOUT",
+    "XLINE",
+];
+
+/// Record types the converter writes back with fewer groups, and the most a record may lose.
+const SHRINKING: &[(&str, usize)] = &[
+    ("3DFACE", 2),
+    ("ACDBDICTIONARYWDFLT", 6),
+    ("DIMSTYLE", 4),
+    ("HATCH", 6),
+    ("INSERT", 8),
+    ("LAYER", 2),
+    ("MLEADERSTYLE", 14),
+    ("MLINESTYLE", 6),
+    ("SCALE", 6),
+];
+
+impl ReopenFloor {
+    /// Note one record of the bridge's DXF, of type `kind` (upper case).
+    fn note(&mut self, kind: &str, rec: &[Tag]) {
+        let xdata = rec.iter().filter(|t| (1000..=1071).contains(&t.code)).count();
+        self.lost = self.lost.saturating_add(xdata);
+        if kind == "LWPOLYLINE" {
+            let vertices = rec.iter().filter(|t| t.code == 10).count();
+            let written = rec.iter().filter(|t| matches!(t.code, 40..=42)).count();
+            self.gained = self.gained.saturating_add(vertices.saturating_mul(3).saturating_sub(written));
+        } else if let Some((_, most)) = SHRINKING.iter().find(|(k, _)| *k == kind) {
+            self.lost = self.lost.saturating_add(*most);
+        } else if KEPT_WHOLE.binary_search(&kind).is_err() {
+            self.lost = self.lost.saturating_add(rec.len().saturating_sub(xdata));
+        }
+    }
+
+    /// The least the converted DXF holds, for a bridge DXF of `groups`.
+    fn of(&self, groups: usize) -> usize {
+        groups.saturating_add(self.gained).saturating_sub(self.lost)
+    }
 }
 
 impl Summary {
@@ -158,6 +260,9 @@ impl Summary {
         let kind = zero.str();
         let sec = self.sections.next(&kind, body);
         self.groups += rec.len();
+        if let Some(r) = self.reopen.as_mut() {
+            r.note(&kind.to_ascii_uppercase(), rec);
+        }
         if kind != "CLASS" {
             *self.kinds.entry(kind.to_ascii_uppercase()).or_default() += 1;
         } else if !self.class_counts {
@@ -193,6 +298,9 @@ pub(crate) struct Plan<'d> {
     fin: Option<Finisher<'d>>,
     /// Groups of the finished file.
     groups: usize,
+    /// For the DWG bridge's DXF: the least the DXF the DWG converts back to holds
+    /// ([`ReopenFloor`]); for any other file, [`Self::groups`].
+    reopen_floor: usize,
     /// Records by type, for the classes' instance counts.
     kinds: HashMap<String, i64>,
     /// The header's `$HANDSEED`.
@@ -216,7 +324,8 @@ impl<'d> Plan<'d> {
             // writer, which keeps SAT-text solids.
             Finisher::new(scan, made.seed, job.version >= Version::R2013 && !job.bridge, made.reactors)
         });
-        let mut sum = Summary { class_counts: job.target >= Version::R2004, ..Summary::default() };
+        let reopen = job.bridge.then(ReopenFloor::default);
+        let mut sum = Summary { class_counts: job.target >= Version::R2004, reopen, ..Summary::default() };
         let mut data = DataStore::of(d, job.target >= Version::R2013);
         let raw_seed = finished(views, job, fin.as_mut(), &mut |rec: &[Tag]| {
             if rec.first().is_some_and(|z| z.code == 0 && z.str() == "EOF")
@@ -259,12 +368,20 @@ impl<'d> Plan<'d> {
         if added > 0 {
             *sum.kinds.entry("APPID".into()).or_default() += added;
         }
-        Plan { views, job, fin, groups: sum.groups + appids.len() + sum.classes_without_count, kinds: sum.kinds, seed, added_appids: added, appids }
+        let groups = sum.groups + appids.len() + sum.classes_without_count;
+        let reopen_floor = sum.reopen.as_ref().map_or(groups, |r| r.of(groups));
+        Plan { views, job, fin, groups, reopen_floor, kinds: sum.kinds, seed, added_appids: added, appids }
     }
 
     /// Groups the finished file holds (as reading it counts them).
     pub(crate) fn groups(&self) -> usize {
         self.groups
+    }
+
+    /// For the DWG bridge's DXF: the fewest groups the DXF the DWG converts back to (what
+    /// opening the DWG reads) can hold ([`ReopenFloor`]). For any other file, [`Self::groups`].
+    pub(crate) fn reopen_floor(&self) -> usize {
+        self.reopen_floor
     }
 
     /// Write the file: each finished group to `out` in order (`false` stops). `false` when it
@@ -404,4 +521,16 @@ pub(crate) fn tags(views: &Views, job: Job) -> Vec<Tag> {
         true
     });
     out
+}
+
+#[cfg(test)]
+mod reopen_tests {
+    use super::*;
+
+    /// The kept-whole list is searched by halves: it must stay sorted, and no type is in both lists.
+    #[test]
+    fn the_reopen_lists_are_sorted_and_apart() {
+        assert!(KEPT_WHOLE.windows(2).all(|w| w.first() < w.get(1)));
+        assert!(SHRINKING.iter().all(|(k, _)| KEPT_WHOLE.binary_search(k).is_err()));
+    }
 }
