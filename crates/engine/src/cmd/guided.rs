@@ -32384,8 +32384,15 @@ pub fn parse_elevation(text: &str) -> Option<f64> {
     // "0" is an elevation (parse_feet takes heights only).
     let zero = t.trim_end_matches(['\'', '"', ' ', '-']).trim_end_matches("ft").trim().trim_end_matches(['0', '.']).is_empty();
     let feet = if zero { 0.0 } else { parse_feet_any(t)? };
-    Some(sign * feet).filter(|f| f.is_finite() && f.abs() <= 10_000.0)
+    Some(sign * feet).filter(|f| f.is_finite() && f.abs() <= MAX_ELEVATION_FT)
 }
+
+/// Farthest a level's elevation may be from the datum, up or down, in feet: a datum's height
+/// above sea level (`EL. 112'-0"`) is an elevation the documents give.
+const MAX_ELEVATION_FT: f64 = 10_000.0;
+
+/// Longest level name an answer may give.
+const MAX_LEVEL_NAME: usize = 40;
 
 /// [`parse_feet`] without its floor-to-floor range.
 fn parse_feet_any(t: &str) -> Option<f64> {
@@ -32409,11 +32416,11 @@ fn parse_feet_any(t: &str) -> Option<f64> {
 fn level_answer(answer: &Value) -> Option<LevelAnswer> {
     let clean = |n: &str| -> Option<String> {
         let n = n.trim().trim_matches('"').trim();
-        (!n.is_empty() && n.chars().count() <= 40).then(|| n.to_string())
+        (!n.is_empty() && n.chars().count() <= MAX_LEVEL_NAME).then(|| n.to_string())
     };
     if let Some(o) = answer.as_object() {
         let elevation = o.get("elevation_ft").or_else(|| o.get("elevation")).and_then(|v| match v {
-            Value::Number(n) => n.as_f64().filter(|f| f.is_finite() && f.abs() <= 10_000.0),
+            Value::Number(n) => n.as_f64().filter(|f| f.is_finite() && f.abs() <= MAX_ELEVATION_FT),
             Value::String(t) => parse_elevation(t),
             _ => None,
         });
@@ -32450,23 +32457,29 @@ fn level_answer(answer: &Value) -> Option<LevelAnswer> {
 
 /// What an answer changes in the job: the rule or setting it adds (or the sheet facts it
 /// corrects), and the first stage that has to run again for it. `None` when the answer keeps
-/// what the job had, or when nothing in the job reads it.
-fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, String) {
-    let Some(answer) = &q.answer else { return (None, String::new()) };
+/// what the job had, or when nothing in the job reads it. `Err` with the reason for an answer
+/// that is neither one of the question's choices nor a value of its kind (Q6383): it is refused,
+/// nothing in the job changed, and the question stays open. A choice the job has nothing to do
+/// with is recorded.
+fn answer_effect(job: &mut GuidedJob, q: &Question) -> std::result::Result<(Option<StageName>, String), String> {
+    let Some(answer) = &q.answer else { return Ok((None, String::new())) };
     // A pull request's answer is taken with the session (job.answer: the import and its re-run).
     if super::docsource::is_pull_question(q) {
-        return (None, String::new());
+        return Ok((None, String::new()));
     }
     let text = answer.as_str().map(str::trim).unwrap_or("");
+    let chosen = !text.is_empty() && (q.default.as_deref() == Some(text) || q.choices.iter().any(|c| c == text));
+    // An answer the question can't read: a choice is recorded, anything else refused.
+    let unread = |why: &str| if chosen { Ok((None, format!("recorded; {why}"))) } else { Err(why.to_string()) };
     // The levels the drawings didn't give: the levels stage makes them.
     if q.stage == StageName::Levels && q.question.starts_with("No levels detected") {
         return match parse_level_list(text) {
             Some(names) => {
                 let said = names.join(", ");
                 job.levels_given = names;
-                (Some(StageName::Levels), format!("levels {said}"))
+                Ok((Some(StageName::Levels), format!("levels {said}")))
             }
-            None => (None, "recorded; name the levels bottom up, like \"1, 2, 3, R\"".into()),
+            None => unread("name the levels bottom up, like \"1, 2, 3, R\""),
         };
     }
     // The sheet index's corrections (Q6517): learned as rules over the readers; the levels
@@ -32478,9 +32491,9 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
                 if job.sheets_loaded {
                     job.reimport = true;
                 }
-                (Some(StageName::Levels), effect)
+                Ok((Some(StageName::Levels), effect))
             }
-            Err(e) => (None, format!("recorded; not taken: {e}")),
+            Err(e) => unread(&format!("not taken: {e}")),
         };
     }
     // A plan's scale, that it is no plan, or a small level kept as read (Q6360): the sheet's
@@ -32489,66 +32502,73 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
         use super::planscale::ScaleAnswer;
         let number = q.evidence.as_ref().and_then(|e| e.sheet.clone()).unwrap_or_default();
         let c = match super::planscale::read_answer(answer) {
-            ScaleAnswer::Keep => return (None, format!("kept: sheet {number} as read")),
+            ScaleAnswer::Keep => return Ok((None, format!("kept: sheet {number} as read"))),
             ScaleAnswer::LeaveOut => super::sheetcheck::SheetCorrection { not_built: Some(true), ..Default::default() },
             ScaleAnswer::Scale(k, t) => super::sheetcheck::SheetCorrection { scale: Some(k), scale_text: Some(t), ..Default::default() },
-            ScaleAnswer::Bad(e) => return (None, format!("recorded; not taken: {e}")),
+            ScaleAnswer::Bad(e) => return unread(&format!("not a scale: {e}")),
         };
         if number.is_empty() {
-            return (None, "recorded; not taken: the question names no sheet".into());
+            return Ok((None, "recorded; not taken: the question names no sheet".into()));
         }
         let effect = super::sheetcheck::learn(job, vec![(number, c)], &q.id);
         if job.sheets_loaded {
             job.reimport = true;
         }
-        return (Some(StageName::Levels), effect);
+        return Ok((Some(StageName::Levels), effect));
     }
     // The project manual's path, or "none" (Q6168).
     if q.stage == StageName::Classify && q.question.starts_with(NO_SPEC_QUESTION) {
         if text.eq_ignore_ascii_case("none") {
             job.specs_declined = true;
             no_spec_finding(job, "answered 'none'");
-            return (None, "the job goes on without a specification".into());
+            return Ok((None, "the job goes on without a specification".into()));
         }
         job.specs = vec![text.to_string()];
         job.specs_how = vec![format!("given in answer: {text}")];
-        return (None, format!("the build reads the specification at {text}"));
+        return Ok((None, format!("the build reads the specification at {text}")));
     }
     // A level's elevation or name (or "Correct"), over what the job read.
     if q.stage == StageName::Levels
         && let Some(level) = question_level(q)
     {
+        if let Some(why) = unread_level_fields(answer) {
+            return Err(why);
+        }
         if let Some(a) = level_answer(answer) {
             return level_effect(job, &level, a);
         }
         if text == "Not a level" {
-            return (None, "recorded".into());
+            return Ok((None, "recorded".into()));
         }
-        return (None, format!("recorded; answer with an elevation (\"12'-6\\\"\") or {{\"name\": \"…\"}} to change level {level}"));
+        return unread(&format!(
+            "answer with an elevation (\"12'-6\\\"\", within {MAX_ELEVATION_FT} ft of the datum) or {{\"name\": \"…\"}} to change level {level}"
+        ));
     }
     if let Some(effect) = confirm_plan_level(job, q, text) {
-        return (Some(StageName::Rooms), effect);
+        return Ok((Some(StageName::Rooms), effect));
     }
     if !text.is_empty() && q.default.as_deref() == Some(text) {
-        return (None, "kept what the job read".into());
+        return Ok((None, "kept what the job read".into()));
     }
     if q.stage == StageName::BimBuild
         && q.question.starts_with(SYMBOL_QUESTION)
         && !answer.as_str().is_some_and(|a| a.trim().eq_ignore_ascii_case("skip"))
     {
-        return (Some(StageName::BimBuild), "the build finds every copy of the drawing on the set as that object".into());
+        return Ok((Some(StageName::BimBuild), "the build finds every copy of the drawing on the set as that object".into()));
     }
     if q.stage == StageName::BimBuild && q.question.starts_with(EQUIP_QUESTION) && answer.is_object() {
-        return (Some(StageName::BimBuild), "the build checks the drawings against the submittal's data".into());
+        return Ok((Some(StageName::BimBuild), "the build checks the drawings against the submittal's data".into()));
     }
     if q.stage == StageName::BimBuild
         && let Some(effect) = super::strokesheets::answer_effect(q, answer)
     {
-        let rerun = super::strokesheets::learned(q, answer).map(|_| StageName::BimBuild);
-        return (rerun, effect);
+        return match super::strokesheets::learned(q, answer) {
+            Some(_) => Ok((Some(StageName::BimBuild), effect)),
+            None => unread(effect.trim_start_matches("recorded; ")),
+        };
     }
     if q.stage == StageName::BimBuild && q.question.starts_with(GEAR_QUESTION) && answer.get("height_in").is_some() {
-        return (Some(StageName::BimBuild), "the build lays the gear out with its size".into());
+        return Ok((Some(StageName::BimBuild), "the build lays the gear out with its size".into()));
     }
     let values = q.evidence.as_ref().and_then(|e| e.values.clone()).unwrap_or(Value::Null);
     let value = |k: &str| values.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -32559,54 +32579,60 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
             if q.question.contains("discipline") {
                 // "E (Electrical)", "Yes, E" → E.
                 let letter: String = text.trim_start_matches("Yes,").trim().chars().take_while(char::is_ascii_alphabetic).collect();
-                if letter.is_empty() || letter.eq_ignore_ascii_case("Other") || letter.len() > 2 {
-                    return (None, "recorded; the sheet keeps no discipline".into());
+                if letter.eq_ignore_ascii_case("Other") {
+                    return Ok((None, "recorded; the sheet keeps no discipline".into()));
+                }
+                if letter.is_empty() || letter.len() > 2 {
+                    return unread("answer with the sheet's discipline letter, like \"E\" (or \"Other\")");
                 }
                 let letter = letter.to_ascii_uppercase();
                 set_sheet_fact(job, &number, "discipline", &letter);
-                return (Some(StageName::Rooms), format!("sheet {number} is discipline {letter}"));
+                return Ok((Some(StageName::Rooms), format!("sheet {number} is discipline {letter}")));
             }
             if q.question.contains("names no level") {
                 if text == "Not a level plan" {
                     set_sheet_fact(job, &number, "type", "other");
-                    return (Some(StageName::Rooms), format!("sheet {number} is not read as a level plan"));
+                    return Ok((Some(StageName::Rooms), format!("sheet {number} is not read as a level plan")));
                 }
                 let level = text.trim_start_matches("Level").trim().to_string();
                 // A level the sheet didn't have: typed, or one of the set's levels offered.
-                let named = text != "Another level" && !level.is_empty() && level.len() <= 8;
+                let named = text != "Another level" && is_level_code(&level);
                 if named && (other || text.starts_with("Level")) && !cadaddy_walk3d::levels::is_datum_name(&level) {
                     set_sheet_fact(job, &number, "level", &level);
-                    return (Some(StageName::Rooms), format!("sheet {number} is level {level}"));
+                    return Ok((Some(StageName::Rooms), format!("sheet {number} is level {level}")));
                 }
-                return (None, "recorded; answer with the level (\"Level 3\") to move the sheet".into());
+                return unread("answer with the level (\"Level 3\") to move the sheet");
             }
             if q.question.starts_with(FLOOR_PLAN_FILED_QUESTION) {
                 if text != FLOOR_PLAN_FILED_YES {
-                    return (None, format!("recorded; sheet {number} keeps its type"));
+                    if !chosen {
+                        return Err(format!("answer \"{FLOOR_PLAN_FILED_YES}\" or keep the sheet's type with the other choice"));
+                    }
+                    return Ok((None, format!("recorded; sheet {number} keeps its type")));
                 }
                 set_sheet_fact(job, &number, "type", "plan");
                 let level = value("level");
                 if !level.is_empty() && !cadaddy_walk3d::levels::is_datum_name(&level) {
                     set_sheet_fact(job, &number, "level", &level);
                 }
-                return (Some(StageName::Rooms), format!("sheet {number} is the floor plan"));
+                return Ok((Some(StageName::Rooms), format!("sheet {number} is the floor plan")));
             }
-            (None, "recorded".into())
+            Ok((None, "recorded".into()))
         }
         StageName::Levels if q.question.contains("floor-to-floor") => match parse_feet(text) {
             Some(ft) => {
                 job.storey_ft = Some(ft);
-                (Some(StageName::BimBuild), format!("floor to floor {ft:.2} ft"))
+                Ok((Some(StageName::BimBuild), format!("floor to floor {ft:.2} ft")))
             }
-            None => (None, "recorded; give a height like 12'-0\" to build with it".into()),
+            None => unread("give a height like 12'-0\" (over 0, up to 100 ft) to build with it"),
         },
         StageName::Rooms => {
             if job.always_ask.contains(&q.id) || q.question.starts_with("No rooms") {
-                return if text.starts_with("There should be") {
+                return Ok(if text.starts_with("There should be") {
                     (Some(StageName::Rooms), "rooms read again".into())
                 } else {
                     (None, "the plans have no room tags".into())
-                };
+                });
             }
             let (number, name) = match q.kind {
                 QuestionKind::Verify => (value("number"), value("room")),
@@ -32615,46 +32641,84 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
             let key = room_key(&number, &name);
             if text.starts_with("Not a room") {
                 job.learn_rule(&key, "remove", &q.id, q.stage);
-                (Some(StageName::Rooms), format!("room {number} '{name}' is not a room"))
-            } else if other && text.len() <= 80 {
+                Ok((Some(StageName::Rooms), format!("room {number} '{name}' is not a room")))
+            } else if other && text.len() <= MAX_NAME_ANSWER && !text.chars().any(char::is_control) {
                 job.learn_rule(&key, &format!("name:{text}"), &q.id, q.stage);
-                (Some(StageName::Rooms), format!("room {number} is named '{text}'"))
+                Ok((Some(StageName::Rooms), format!("room {number} is named '{text}'")))
             } else {
-                (None, "recorded; answer with the room's name to rename it".into())
+                unread(&format!("answer with the room's name (up to {MAX_NAME_ANSWER} characters) to rename it"))
             }
         }
         StageName::Devices => {
             if job.always_ask.contains(&q.id) || q.question.starts_with("No device") {
-                return if text.starts_with("There should be") {
+                return Ok(if text.starts_with("There should be") {
                     (Some(StageName::Devices), "devices counted again".into())
                 } else {
                     (None, "the sheets have no devices".into())
-                };
+                });
             }
             if q.question.contains("Unknown symbol") {
                 let tag = value("description");
-                let kind = answer
-                    .get("device_type")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| (other && text != "skip").then(|| text.to_string()));
-                return match kind.filter(|k| !k.trim().is_empty() && k.len() <= 80) {
-                    Some(k) => {
+                // A kind given (as `device_type` or typed) must be one: a short name.
+                let kind = match answer.get("device_type") {
+                    Some(v) => Some(v.as_str().unwrap_or("").to_string()),
+                    None => (other && text != "skip").then(|| text.to_string()),
+                };
+                return match kind {
+                    Some(k) if !k.trim().is_empty() && k.len() <= MAX_NAME_ANSWER && !k.chars().any(char::is_control) => {
                         job.learn_rule(&format!("symbol:{tag}"), &format!("device:{k}"), &q.id, q.stage);
-                        (Some(StageName::Devices), format!("symbols tagged '{tag}' count as {k}"))
+                        Ok((Some(StageName::Devices), format!("symbols tagged '{tag}' count as {k}")))
                     }
-                    None => (None, format!("symbols tagged '{tag}' stay uncounted")),
+                    Some(_) => {
+                        unread(&format!("name the kind of device symbols tagged '{tag}' are (up to {MAX_NAME_ANSWER} characters), or \"skip\""))
+                    }
+                    None => Ok((None, format!("symbols tagged '{tag}' stay uncounted"))),
                 };
             }
             if q.kind == QuestionKind::Verify && text == "Not a device" {
                 let tag = value("tag");
                 job.learn_rule(&format!("tag:{tag}"), "not_device", &q.id, q.stage);
-                return (Some(StageName::Devices), format!("symbols tagged '{tag}' are not devices"));
+                return Ok((Some(StageName::Devices), format!("symbols tagged '{tag}' are not devices")));
             }
-            (None, "recorded".into())
+            Ok((None, "recorded".into()))
         }
-        _ => (None, "recorded; nothing in the job reads this answer yet".into()),
+        _ => Ok((None, "recorded; nothing in the job reads this answer yet".into())),
     }
+}
+
+/// Longest name an answer may give (a room's, a device kind's).
+const MAX_NAME_ANSWER: usize = 80;
+
+/// Whether `code` (what follows "Level" in an answer) can be a level: short, letters, digits and
+/// `-_.` or spaces, and no measurement (`-9 ft`, `12'-6"` is an elevation, not a level).
+fn is_level_code(code: &str) -> bool {
+    let code = code.trim();
+    let measure = parse_elevation(code).is_some() && code.chars().any(|c| !c.is_alphanumeric() && c != '.');
+    !code.is_empty() && code.len() <= 8 && code.chars().all(|c| c.is_alphanumeric() || " -_.".contains(c)) && !measure
+}
+
+/// What a level answer's fields give that is no level fact: an elevation out of range or not a
+/// number, a name that is empty, too long or not text (Q6383: `{elevation_ft: -1e9}` was dropped
+/// and the question closed).
+fn unread_level_fields(answer: &Value) -> Option<String> {
+    let o = answer.as_object()?;
+    if let Some(v) = o.get("elevation_ft").or_else(|| o.get("elevation")) {
+        let ok = match v {
+            Value::Number(n) => n.as_f64().is_some_and(|f| f.is_finite() && f.abs() <= MAX_ELEVATION_FT),
+            Value::String(t) => parse_elevation(t).is_some(),
+            _ => false,
+        };
+        if !ok {
+            return Some(format!("{v} is not an elevation: give feet within {MAX_ELEVATION_FT} ft of the datum, like 12.5 or \"12'-6\\\"\""));
+        }
+    }
+    if let Some(v) = o.get("name").or_else(|| o.get("rename")) {
+        let n = v.as_str().map(|t| t.trim().trim_matches('"').trim()).unwrap_or("");
+        if n.is_empty() || n.chars().count() > MAX_LEVEL_NAME || n.chars().any(char::is_control) {
+            return Some(format!("the level's name must be text of 1 to {MAX_LEVEL_NAME} characters"));
+        }
+    }
+    None
 }
 
 /// The level a levels-stage question is about (its evidence's `level`).
@@ -32677,11 +32741,11 @@ fn answered_level<'a>(job: &'a GuidedJob, code: &str) -> Option<&'a LevelAnswer>
 /// A level answer into the job: an elevation builds the model again with it; a name renames the
 /// model's level (now when the model is built, else when it is); "Correct" marks the level the
 /// user's.
-fn level_effect(job: &mut GuidedJob, level: &str, a: LevelAnswer) -> (Option<StageName>, String) {
+fn level_effect(job: &mut GuidedJob, level: &str, a: LevelAnswer) -> std::result::Result<(Option<StageName>, String), String> {
     // "2" and "Level 2" are one level.
     let key = level_name(level.trim()).to_ascii_uppercase();
     if job.level_answers.len() >= MAX_QUESTIONS_PER_STAGE && !job.level_answers.contains_key(&key) {
-        return (None, "recorded; too many level answers".into());
+        return Err(format!("too many level answers (at most {MAX_QUESTIONS_PER_STAGE})"));
     }
     let entry = job.level_answers.entry(key).or_default();
     entry.confirmed = true;
@@ -32693,12 +32757,12 @@ fn level_effect(job: &mut GuidedJob, level: &str, a: LevelAnswer) -> (Option<Sta
     if let Some(e) = a.elevation_ft {
         entry.elevation_ft = Some(e);
         said.push(format!("level {level} is at {}", cadaddy_walk3d::feet(e)));
-        return (Some(StageName::BimBuild), said.join("; "));
+        return Ok((Some(StageName::BimBuild), said.join("; ")));
     }
     if said.is_empty() {
-        return (None, format!("level {level} confirmed by you (source user)"));
+        return Ok((None, format!("level {level} confirmed by you (source user)")));
     }
-    (None, said.join("; "))
+    Ok((None, said.join("; ")))
 }
 
 /// The level answers onto the built model's levels: their names, and the user as their source.
@@ -33653,16 +33717,25 @@ fn apply_answer(job: &mut GuidedJob, qid: &str, answer: Value) -> std::result::R
         super::docsource::check_answer(job, q, &answer)?;
     }
     let question = {
-        let Some(q) = question_mut(job, loc) else { return Err(unknown_question(job, qid)) };
+        let Some(q) = question_at(job, loc) else { return Err(unknown_question(job, qid)) };
         check_answer(q, &answer)?;
+        let mut q = q.clone();
         q.answer = Some(answer.clone());
         q.answered_by = Some("agent".into());
         q.answered_at = Some(now_iso());
-        q.clone()
+        q
     };
+    // What it changes first: an answer the question can't take is refused before anything is
+    // recorded, and the question stays open (Q6383).
+    let (rerun_from, effect) = answer_effect(job, &question)
+        .map_err(|why| format!("question {}: {why}; the question stays open", qid.chars().take(60).collect::<String>()))?;
+    if let Some(q) = question_mut(job, loc) {
+        q.answer = question.answer.clone();
+        q.answered_by = question.answered_by.clone();
+        q.answered_at = question.answered_at.clone();
+    }
     let stage = job.stages.get(loc.0).map(|s| s.name);
     learn_from_answer(job, &question);
-    let (rerun_from, effect) = answer_effect(job, &question);
     job.audit("answer", "agent", Some(qid), stage, Some(json!({"answer": answer, "effect": effect})));
     // MUST 5 REFRAME: Sync worklist — mark this item resolved.
     if let Some(wi) = job.worklist.iter_mut().find(|w| w.id == *qid) {
@@ -44765,12 +44838,12 @@ mod tests {
         // Auto mode keeps it as filed: the question stays in the report, nothing moves.
         assert_eq!(q.default.as_deref(), Some("Keep it as schedule"));
         q.answer = Some(json!("Keep it as schedule"));
-        let (rerun, _) = answer_effect(&mut job, &q);
+        let (rerun, _) = answer_effect(&mut job, &q).unwrap();
         assert_eq!(rerun, None);
         assert_eq!(job.sheet_regions[0].kind, "schedule");
         // The answer that it is the floor plan files it so, on its floor, and runs the build again.
         q.answer = Some(json!(FLOOR_PLAN_FILED_YES));
-        let (rerun, said) = answer_effect(&mut job, &q);
+        let (rerun, said) = answer_effect(&mut job, &q).unwrap();
         assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet A1.1 is the floor plan"));
         assert_eq!((job.sheet_regions[0].kind.as_str(), job.sheet_regions[0].level.as_str()), ("plan", "1"));
         assert_eq!(job.index.as_ref().and_then(|i| i.pointer("/sheets/0/type")).and_then(Value::as_str), Some("plan"));
@@ -44794,16 +44867,16 @@ mod tests {
         assert_eq!(q.default.as_deref(), Some("Not a level plan"), "auto mode keeps it off every level");
         // Auto mode takes the default: the sheet stays a reference sheet, read as nothing.
         q.answer = Some(json!("Not a level plan"));
-        answer_effect(&mut job, &q);
+        answer_effect(&mut job, &q).unwrap();
         assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("", "no level"));
         assert!(job_sheet_refs(&job).iter().all(|r| !r.builds()));
         // The site is no level a plan can be put on.
         q.answer = Some(json!("Level SITE"));
-        answer_effect(&mut job, &q);
+        assert!(answer_effect(&mut job, &q).is_err(), "no level a plan is put on: refused");
         assert_eq!(job.sheet_regions[0].level, "");
         // An answer puts it on that level, and it is built.
         q.answer = Some(json!("Level 2"));
-        let (rerun, said) = answer_effect(&mut job, &q);
+        let (rerun, said) = answer_effect(&mut job, &q).unwrap();
         assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet P-201 is level 2"));
         assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("2", ""));
         assert_eq!(job.index.as_ref().and_then(|i| i.pointer("/sheets/0/level_source")).and_then(Value::as_str), Some("answer"));
@@ -44828,7 +44901,7 @@ mod tests {
                 assert_eq!(auto_answer(&mut job, StageName::Classify), 1);
             } else {
                 q.answer = Some(json!("Level 1"));
-                let (rerun, said) = answer_effect(&mut job, &q);
+                let (rerun, said) = answer_effect(&mut job, &q).unwrap();
                 assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet P-101 is level 1"));
             }
             assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("1", ""), "auto {auto}");
@@ -46243,7 +46316,7 @@ mod tests {
                 leftovers: Vec::new(),
             }));
             q.answer = Some(answer);
-            answer_effect(&mut job, &q)
+            answer_effect(&mut job, &q).unwrap()
         };
         let (rerun, _) =
             q(StageName::Rooms, QuestionKind::Verify, "Room 101 'STAIR' right?", json!({"number": "101", "room": "STAIR"}), json!("Not a room"));
@@ -46329,7 +46402,7 @@ mod tests {
             vec![region("A-101", "1", "A", "plan", 0.0), region("A-102", "2", "A", "plan", 200.0), region("A-103", "3", "A", "plan", 400.0)];
         let mut q = level_question(&mut job, "2", Some(10.0));
         q.answer = Some(json!("Wrong elevation: 14'-0\""));
-        let (rerun, effect) = answer_effect(&mut job, &q);
+        let (rerun, effect) = answer_effect(&mut job, &q).unwrap();
         assert_eq!(rerun, Some(StageName::BimBuild), "{effect}");
         assert!(effect.contains("14'"), "{effect}");
         let levels = building_levels(&job);
@@ -46339,31 +46412,117 @@ mod tests {
         assert_eq!(levels.first().and_then(|l| l["height_ft"].as_f64()), Some(14.0), "{levels:?}");
         let mut q = level_question(&mut job, "Level 1", None);
         q.answer = Some(json!("-2'-0\""));
-        assert_eq!(answer_effect(&mut job, &q).0, Some(StageName::BimBuild));
+        assert_eq!(answer_effect(&mut job, &q).unwrap().0, Some(StageName::BimBuild));
         let first = building_levels(&job).first().cloned().unwrap_or_default();
         assert_eq!((first["elevation_ft"].as_f64(), first["height_ft"].as_f64()), (Some(-2.0), Some(16.0)));
 
         let mut q = level_question(&mut job, "Level 3", Some(20.0));
         q.answer = Some(json!("Correct"));
-        let (rerun, effect) = answer_effect(&mut job, &q);
+        let (rerun, effect) = answer_effect(&mut job, &q).unwrap();
         assert_eq!((rerun, effect.as_str()), (None, "level Level 3 confirmed by you (source user)"));
         assert!(job.level_answers.get("LEVEL 3").is_some_and(|a| a.confirmed));
 
         let mut q = level_question(&mut job, "1", None);
         q.answer = Some(json!({"name": "Ground Floor"}));
         // "1" and "Level 1" are the same level: one answer, the elevation kept.
-        let (rerun, effect) = answer_effect(&mut job, &q);
+        let (rerun, effect) = answer_effect(&mut job, &q).unwrap();
         assert_eq!((rerun, effect.as_str()), (None, "level 1 is named Ground Floor"));
         assert_eq!(
             job.level_answers.get("LEVEL 1"),
             Some(&LevelAnswer { elevation_ft: Some(-2.0), name: Some("Ground Floor".into()), confirmed: true })
         );
         assert_eq!(building_levels(&job).first().and_then(|l| l["elevation_ft"].as_f64()), Some(-2.0));
-        // A level answer that says nothing usable says how to answer.
+        // A level answer that says nothing usable says how to answer: refused, or recorded when
+        // it is one of the question's choices.
         let mut q = level_question(&mut job, "1", None);
         q.answer = Some(json!("Wrong elevation"));
-        let (rerun, effect) = answer_effect(&mut job, &q);
+        let why = answer_effect(&mut job, &q).unwrap_err();
+        assert!(why.contains("answer with an elevation"), "{why}");
+        q.choices = vec!["Correct".into(), "Wrong name".into(), "Wrong elevation".into()];
+        let (rerun, effect) = answer_effect(&mut job, &q).unwrap();
         assert!(rerun.is_none() && effect.contains("answer with an elevation"), "{effect}");
+    }
+
+    /// Q6383: an answer that is neither one of its question's choices nor a value of the
+    /// question's kind (a level, an elevation in range, a height, a discipline, a name) is refused
+    /// with the reason; the question stays open and nothing in the job changes.
+    #[test]
+    fn a_junk_answer_is_refused_and_its_question_stays_open() {
+        let mut s = Session::new();
+        let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+        let sheet = json!({"number": "P-201", "title": "PLUMBING PLAN", "level": "", "level_source": "ask"});
+        job.index = Some(json!({"sheets": [sheet.clone()]}));
+        job.sheets = Some(json!({"sheets": [sheet.clone()]}));
+        job.sheet_regions = vec![region("P-201", "", "P", "plan", 0.0)];
+        let codes: Vec<String> = ["1", "2", "R"].iter().map(|c| c.to_string()).collect();
+        let plan = plan_level_question(&mut job, &sheet, &codes);
+        let plan_id = plan.id.clone();
+        let discipline = ask(&mut job, StageName::Classify, QuestionKind::Doubt, "Sheet P-201: which discipline is it?", None);
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(plan);
+        }
+        let level = level_question(&mut job, "2", Some(10.0)).id;
+        let storey = ask(&mut job, StageName::Levels, QuestionKind::Doubt, "What is the floor-to-floor height for levels 1, 2?", None);
+        let room = ask(&mut job, StageName::Rooms, QuestionKind::Verify, "Room 101 'OFFICE' right?", Some("Correct"));
+        let symbol = ask(&mut job, StageName::Devices, QuestionKind::Completeness, "Unknown symbol tag 'XQ' printed by 4 symbols", None);
+        for st in &mut job.stages {
+            st.status = StageStatus::Paused;
+            for q in st.questions.iter_mut().chain(st.verify.iter_mut()).filter(|q| q.id == level) {
+                q.choices = vec!["Correct".into(), "Wrong name".into(), "Wrong elevation".into()];
+            }
+        }
+        save_job(&mut s, &job).unwrap();
+        let long = "\u{e9}".repeat(500);
+        let junk = [
+            (&plan_id, json!("-99999 ft"), "level"),
+            (&plan_id, json!("-9 ft"), "level"),
+            (&plan_id, json!(long), "level"),
+            (&level, json!({"elevation_ft": -1e9, "name": ""}), "elevation"),
+            (&level, json!({"elevation_ft": -1e9, "name": "Mezzanine"}), "elevation"),
+            (&level, json!("Wrong elevation: -99999 ft"), "elevation"),
+            (&storey, json!("tall"), "height"),
+            (&storey, json!("-5 ft"), "height"),
+            (&discipline, json!("Electrical engineering"), "discipline"),
+            (&room, json!(long), "name"),
+            (&symbol, json!({"device_type": long}), "symbol"),
+        ];
+        for (id, answer, why) in junk {
+            let r = cmd_answer(&mut s, &json!({"id": id, "answer": answer}));
+            let Err(e) = r else { panic!("{id} {answer} taken: {r:?}") };
+            let e = e.to_string();
+            assert!(e.contains(why) && e.contains("stays open"), "{id} {answer}: {e}");
+            // Refused within a batch too: a warning, the question open.
+            let r = cmd_answer(&mut s, &json!({"answers": [{"id": id, "answer": answer}]}));
+            assert!(r.is_err(), "{id} {answer}: {r:?}");
+        }
+        let saved = load_job(&s).unwrap().unwrap();
+        let answered: Vec<&str> = saved
+            .stages
+            .iter()
+            .flat_map(|st| st.questions.iter().chain(&st.verify).chain(&st.completeness))
+            .filter(|q| q.answer.is_some())
+            .map(|q| q.id.as_str())
+            .collect();
+        assert!(answered.is_empty(), "{answered:?}");
+        assert!(saved.level_answers.is_empty() && saved.storey_ft.is_none() && saved.rules.is_empty(), "{:?}", saved.rules);
+        assert_eq!(saved.sheet_regions[0].level, "");
+        assert!(!saved.audit.iter().any(|a| a.event == "answer"), "nothing recorded");
+
+        // A choice is always taken, and a value of the question's kind is (the level a typed
+        // name, an elevation in range, a height).
+        let take = |job: &mut GuidedJob, id: &str, answer: Value| {
+            let mut q =
+                job.stages.iter().flat_map(|st| st.questions.iter().chain(&st.verify).chain(&st.completeness)).find(|q| q.id == id).cloned().unwrap();
+            q.answer = Some(answer);
+            answer_effect(job, &q)
+        };
+        assert!(take(&mut job, &level, json!("Wrong elevation")).is_ok());
+        assert_eq!(take(&mut job, &plan_id, json!("Not a level plan")).map(|e| e.0), Ok(None));
+        assert_eq!(take(&mut job, &plan_id, json!("B1")).map(|e| e.0), Ok(Some(StageName::Rooms)));
+        assert_eq!(take(&mut job, &level, json!({"elevation_ft": 14})).map(|e| e.0), Ok(Some(StageName::BimBuild)));
+        assert_eq!(take(&mut job, &storey, json!("12'-0\"")).map(|e| e.0), Ok(Some(StageName::BimBuild)));
+        assert_eq!(take(&mut job, &discipline, json!("E")).map(|e| e.0), Ok(Some(StageName::Rooms)));
+        assert_eq!(take(&mut job, &room, json!("Not a room")).map(|e| e.0), Ok(Some(StageName::Rooms)));
     }
 
     /// One unknown id among good answers is a warning: the good ones are set and saved.
