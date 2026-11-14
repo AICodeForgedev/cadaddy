@@ -256,6 +256,7 @@ pub(crate) mod validate_docs;
 pub mod validate_equip;
 pub(crate) mod validate_fixtures;
 pub mod validate_gear;
+pub(crate) mod validate_govern;
 pub mod validate_height;
 pub mod validate_keynote;
 pub mod validate_kind;
