@@ -2784,8 +2784,8 @@ mod tests {
         let vertices = corners.iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
         let outline = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
         p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), outline).expect("unit");
-        p.text(false, "TEXT", "AHU", [322.0, 322.0], 4.0);
-        p.text(false, "TEXT", "1", [325.0, 315.0], 4.0);
+        p.text(false, "TEXT", "AHU", [326.0, 318.0], 4.0);
+        p.text(false, "TEXT", "1", [329.0, 311.0], 4.0);
         let got: Vec<(String, String)> = detect_equipment(&p.d, true, false).iter().map(|e| (e.kind.clone(), e.tag.clone())).collect();
         assert_eq!(got, [("ahu".to_string(), "AHU-1".to_string())]);
     }
