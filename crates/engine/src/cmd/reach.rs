@@ -592,11 +592,12 @@ fn recorded_xdata(d: &Drawing, m: &Measured) -> Option<Vec<cadaddy_doc::RawTag>>
     let mut ps = props::read(&e.common.xdata);
     let old = ps.get("mount_height").cloned()?;
     let (rule, reason) = said.split_once(": ").unwrap_or((said.as_str(), ""));
-    let new = r2(at);
+    let h = to_top(&mut ps, m, h);
+    let new = r2(if m.equipment.is_some() { m.top_in } else { at });
     ps.set("mount_height", Prop { value: json!(new), ..old.clone() });
     let c = Correction {
         key: "mount_height".into(),
-        design: old.text(),
+        design: format!("{}", r2(h)),
         corrected: format!("{new}"),
         reason: reason.to_string(),
         rule: rule.to_string(),
@@ -604,6 +605,19 @@ fn recorded_xdata(d: &Drawing, m: &Measured) -> Option<Vec<cadaddy_doc::RawTag>>
     provenance::correct(&mut ps, &c, old.source.clone());
     keep_design_number(&mut ps, &c, h, &old);
     Some(props::write(&e.common.xdata, &ps))
+}
+
+/// A piece of equipment's height to its top (a panel's notes and the reach both measure it
+/// there): its properties' height `h`, measured to its middle or bottom, turned to its top on its
+/// box as built, its datum said so. Any other control's height stays as measured.
+fn to_top(ps: &mut props::Props, m: &Measured, h: f64) -> f64 {
+    let datum = ps.get("mount_datum").map(Prop::text).map_or(Datum::Centre, |t| Datum::parse(&t));
+    if m.equipment.is_none() || datum == Datum::Top {
+        return h;
+    }
+    let tall = (m.top_in - m.bottom_in).max(0.0);
+    ps.set("mount_datum", Prop::new(Datum::Top.name(), Source::computed()));
+    h + if datum == Datum::Bottom { tall } else { tall / 2.0 }
 }
 
 /// The design height a first correction kept, as the number it was.
@@ -662,9 +676,11 @@ fn corrected_xdata(e: &Entity, m: &Measured, dz_in: f64, rule: &Rule) -> Vec<cad
             (p, m.top_in)
         }
     };
+    let h = to_top(&mut ps, m, h);
     let new = r2(h + dz_in);
     ps.set("mount_height", Prop { value: json!(new), ..old.clone() });
-    let c = Correction { key: "mount_height".into(), design: old.text(), corrected: format!("{new}"), reason: why, rule: rule_name.clone() };
+    let c =
+        Correction { key: "mount_height".into(), design: format!("{}", r2(h)), corrected: format!("{new}"), reason: why, rule: rule_name.clone() };
     provenance::correct(&mut ps, &c, old.source.clone());
     keep_design_number(&mut ps, &c, h, &old);
     let src = Source::from_doc(SourceKind::Rule, &rule_name);
@@ -793,12 +809,20 @@ mod tests {
         let remade = panel(&mut d, "LP-7", 24.0, 48.0, &[said], &ps);
         // A distribution panel 50" tall whose service face is in the room.
         let tall = panel(&mut d, "DP-7", 28.0, 78.0, &[], &ps);
+        // A panel built at the note's height (54"-78"), its height filled to its middle.
+        let at_note = panel(&mut d, "LP-8", 54.0, 78.0, &[], &ps);
         let k = keep_within(&mut d, &sp, None, &[]);
-        assert_eq!((k.checked, k.moved(), k.recorded, k.too_tall), (2, 0, 1, 1), "{:?}", k.to_json());
+        assert_eq!((k.checked, k.moved(), k.recorded, k.too_tall), (3, 1, 1, 1), "{:?}", k.to_json());
         let read = |h: Handle| props::read(&d.model.get(h).unwrap().common.xdata);
+        let n = read(at_note);
+        assert_eq!(n.get("mount_height").and_then(|p| p.value.as_f64()), Some(48.0), "{n:?}");
+        assert_eq!(n.get("design:mount_height").and_then(|p| p.value.as_f64()), Some(78.0), "the note's height to its top: {n:?}");
+        assert_eq!(k.record_moves.first().map(|r| (r.0.as_str(), r.2)), Some(("LP-8", -30.0)), "its record follows");
         let r = read(remade);
-        assert_eq!(r.get("mount_height").and_then(|p| p.value.as_f64()), Some(36.0), "its height as it stands: {r:?}");
-        assert_eq!(r.get("design:mount_height").and_then(|p| p.value.as_f64()), Some(66.0), "the note's kept beside: {r:?}");
+        // A panel's height to its top, as the note gives it: 48" where the note says 78".
+        assert_eq!(r.get("mount_height").and_then(|p| p.value.as_f64()), Some(48.0), "its height as it stands: {r:?}");
+        assert_eq!(r.get("design:mount_height").and_then(|p| p.value.as_f64()), Some(78.0), "the note's kept beside: {r:?}");
+        assert_eq!(r.get("mount_datum").map(Prop::text).as_deref(), Some("top"), "{r:?}");
         assert!(r.get("correction:mount_height").is_some_and(|p| p.text().starts_with("A-REACH")), "{r:?}");
         let t = read(tall);
         assert!(t.get(TOO_TALL_KEY).is_some_and(|p| p.text().starts_with("not moved")), "{t:?}");
