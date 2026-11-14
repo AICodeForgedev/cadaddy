@@ -922,6 +922,41 @@ fn a_symbol_block_draws_only_what_its_copies_share_and_no_stroke_is_erased_or_in
 }
 
 #[test]
+fn copies_of_one_tag_drawn_two_ways_are_two_blocks() {
+    // Six copies tagged alike: three crossed diamonds and three crossed squares. Before Q6636
+    // the first copy's diamond was drawn at all six and the squares were erased. Each way of
+    // drawing it is a block of its own, and the sheet draws the same strokes as without the
+    // symbol step.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
+        let s = 6;
+        let sides: [((i32, i32), (i32, i32)); 4] = if i % 2 == 0 {
+            [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s))]
+        } else {
+            [((-s, -s), (s, -s)), ((s, -s), (s, s)), ((s, s), (-s, s)), ((-s, s), (-s, -s))]
+        };
+        for (a, b) in sides.into_iter().chain([((-3, -3), (3, 3)), ((-3, 3), (3, -3))]) {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R2) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let mut per_block: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let EntityKind::Insert(i) = &e.kind {
+            *per_block.entry(i.block.as_str()).or_default() += 1;
+        }
+    }
+    assert_eq!(per_block.values().copied().collect::<Vec<_>>(), vec![3, 3], "two blocks of three: {per_block:?}");
+}
+
+#[test]
 fn dimension_words_never_anchor_a_symbol() {
     // Six windows across a wall, each drawn as a frame rectangle and a pane line, and under each a
     // dimension: a short line with a tick at each end and "EQ" lettered over its middle (equal

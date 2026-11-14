@@ -5846,8 +5846,9 @@ fn match_pieces(reference: &[Piece], other: &[Piece]) -> Option<((f64, f64), Vec
 /// Split one device type's instances into blocks of copies drawn alike, each holding only the
 /// pieces all its copies share (Q6636). A block drawn from one copy and stamped at every copy
 /// erased each copy's own strokes (a leader, a tick) and invented the first copy's extras at all
-/// the others. Here the reference copy is the one whose shapes most copies draw; a copy joins its
-/// block while they still share at least half the reference's pieces, laid the same way; each
+/// the others. Here the reference copy is the one whose shapes most other copies draw; a copy
+/// joins its block when it draws the reference's outline (its biggest piece another copy draws
+/// too) and while they still share at least half the reference's pieces, laid the same way; each
 /// copy's pieces outside what the block's copies all share leave its cluster and stay loose where
 /// printed. Copies that join no block start the next, up to [`MAX_SYMBOL_VARIANTS`]; the rest
 /// are blocks of their own. Each copy's centre is the centre of the block's drawing where that
@@ -5882,12 +5883,37 @@ fn split_by_shared_drawing(group: Vec<SymbolInstance>, strokes: &[Stroke], fills
         }
         let score = |pieces: &[Piece]| -> usize {
             let mut seen: HashSet<(bool, &StrokeKey)> = HashSet::new();
-            pieces.iter().filter(|p| seen.insert((p.fill, &p.key))).map(|p| count.get(&(p.fill, &p.key)).copied().unwrap_or(0)).sum()
+            // a shape only this copy draws counts nothing: a copy's extras never make it the reference
+            pieces
+                .iter()
+                .filter(|p| seen.insert((p.fill, &p.key)))
+                .map(|p| count.get(&(p.fill, &p.key)).copied().unwrap_or(0).saturating_sub(1))
+                .sum()
         };
         let ri = left.iter().enumerate().fold((0usize, 0usize), |best, (i, (_, p))| {
             let s = score(p);
             if s > best.1 { (i, s) } else { best }
         });
+        // its outline: the biggest piece another copy also draws (else its biggest)
+        let size_of = |p: &Piece| -> f64 {
+            let b = if p.fill {
+                fills.get(p.idx).and_then(|f| bbox(&f.loops))
+            } else {
+                strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts)))
+            };
+            b.map_or(0.0, |b| (b[2] - b[0]).max(b[3] - b[1]))
+        };
+        let biggest = |shared_only: bool| {
+            left.get(ri.0)
+                .map(|l| l.1.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !shared_only || count.get(&(p.fill, &p.key)).copied().unwrap_or(0) >= 2)
+                .max_by(|a, b| size_of(a.1).total_cmp(&size_of(b.1)))
+                .map(|(k, _)| k)
+        };
+        let outline = biggest(true).or_else(|| biggest(false));
         drop(count);
         let (reference, ref_pieces) = left.remove(ri.0);
         let need = ref_pieces.len().div_ceil(2).max(1);
@@ -5898,6 +5924,10 @@ fn split_by_shared_drawing(group: Vec<SymbolInstance>, strokes: &[Stroke], fills
         let mut core: Vec<bool> = vec![true; ref_pieces.len()];
         let mut members: Vec<(usize, (f64, f64), Vec<Option<usize>>)> = Vec::new();
         for (i, mv, lands) in matched {
+            // a copy that doesn't draw the reference's outline is drawn another way
+            if outline.is_some_and(|k| lands.get(k).is_none_or(Option::is_none)) {
+                continue;
+            }
             let trial: Vec<bool> = core.iter().zip(&lands).map(|(c, l)| *c && l.is_some()).collect();
             if trial.iter().filter(|c| **c).count() >= need {
                 core = trial;
