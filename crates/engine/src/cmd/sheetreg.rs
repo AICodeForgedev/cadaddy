@@ -53,7 +53,7 @@ const OFF_SCALE_MARGIN: f64 = 0.06;
 /// The most a fit's polish (3" steps and a tenth of a percent of scale about where its 1'
 /// refinement left it) is taken to add to its score: a sheet whose rough weighing at every scale
 /// tried is this far under [`OFF_SCALE_F1`] is not weighed in full (Q6566). Measured on a print set's
-/// 21 sheets that fit nowhere (315 scales): the polish added at most 0.066 to a scale's score
+/// 21 sheets weighed off their scale (315 scales): the polish added at most 0.066 to a scale's score
 /// (median 0.01), 0.026 to a sheet's best.
 const OFF_SCALE_POLISH: f64 = 0.15;
 /// A fit at the ratio whose best scale is this far off it is weighed against the off-scale fit.
