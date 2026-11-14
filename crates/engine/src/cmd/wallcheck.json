@@ -1,10 +1,13 @@
 {
-  "about": "Walls read off a plan that aren't walls (Q6583): what is casework rather than a wall, and the plausibility gate after the build (how much wall a storey can hold, how much board its walls take). Rule data, not job values.",
+  "about": "Walls read off a plan that aren't walls (Q6583, Q6637): what is casework rather than a wall, and the plausibility gate after the build (how much wall a storey can hold, how much board its walls take). Rule data, not job values.",
   "casework_depth_max_in": 48,
-  "min_room_side_ft": 5,
+  "min_room_side_ft": 8,
   "max_over_ratio": 0.0,
   "wall_faces": 2,
   "board_over_ratio": 1.25,
   "min_level_walls_ft": 40,
-  "min_room_share": 0.5
+  "min_room_share": 0.5,
+  "free_standing_max_ft": 16,
+  "free_standing_shell_clear_ft": 2,
+  "free_standing_room_min_ft": 3
 }
