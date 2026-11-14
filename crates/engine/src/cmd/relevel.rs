@@ -190,10 +190,11 @@ fn identity(e: &Entity) -> Option<Vec<&str>> {
 /// The pass after every command: each built element the command moved up or down, and each copy
 /// of a built element (the original still in the drawing) at another height than its original,
 /// is filed under the level it reached. A build's own elements are left as the build filed them.
-pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
+/// `uid` (when known): the drawing the command started in (another one current now: nothing moved).
+pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, uid: Option<u64>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
-    if Arc::ptr_eq(before, &st.doc) || before.model.unchanged_from(&st.doc.model) {
+    if uid.is_some_and(|u| u != st.uid) || Arc::ptr_eq(before, &st.doc) || before.model.unchanged_from(&st.doc.model) {
         return;
     }
     let now = Arc::clone(&st.doc);

@@ -366,7 +366,8 @@ fn record_with(s: &mut Session, g: &WallGen, rooms: Option<Vec<PlanItem>>, fresh
 /// build `before` came from; and at the end of the outermost command, a build the command made
 /// takes the model as the command left it (its later steps replaced conduits and equipment the
 /// build had made: taken for deleted by hand, the next rebuild dropped 71 of 99 conduits).
-pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Drawing>>) {
+/// `switched`: the command started in another drawing (nothing to compare with it).
+pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Drawing>>, switched: bool) {
     let outermost = s.journal.at_top();
     let Ok(st) = s.state_mut() else { return };
     let now = std::sync::Arc::clone(&st.doc);
@@ -377,7 +378,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
         return;
     }
     let Some(id) = st.model_records.fresh.take() else {
-        if let Some(before) = before {
+        if let Some(before) = before.filter(|_| !switched) {
             absorb_generated(st, before, &now);
         }
         return;

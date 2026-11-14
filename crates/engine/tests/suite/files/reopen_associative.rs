@@ -111,6 +111,30 @@ fn an_associative_model_follows_its_plan_after_reopening() {
     }
 }
 
+/// Q6567: opening a saved model is no edit of it. Its build record keeps the steps and counts it
+/// was saved with (the passes after a command compared the opened model with the drawing current
+/// before it: every element read as added, a step "open" doubling every count, and on a large
+/// model a second of work on every open).
+#[test]
+fn opening_a_saved_model_adds_no_step_to_its_build_record() {
+    let _turn = serial();
+    let d = scratch("reopen-record");
+    let mut s = plan(json!({}));
+    let wall = s.doc().unwrap().model.iter().find(|e| made_as(e).as_deref() == Some("wall")).map(|e| e.handle.hex()).unwrap();
+    s.execute("erase", &json!({"handles": [wall]})).unwrap();
+    let record =
+        |s: &Session| -> Value { serde_json::from_str::<Value>(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap()["build_record"].clone() };
+    let saved = record(&s);
+    assert_eq!(saved["steps"].as_array().map(Vec::len), Some(1), "{saved}");
+    let path = d.join("m.cdy").to_string_lossy().into_owned();
+    s.execute("saveas", &json!({ "path": path })).unwrap();
+    drop(s);
+    let s = reopen(&path);
+    let opened = record(&s);
+    assert_eq!(opened["steps"], saved["steps"]);
+    assert_eq!(opened["now"], saved["now"]);
+}
+
 #[test]
 fn a_model_that_does_not_follow_its_plan_stays_so_and_revise_works() {
     let _turn = serial();
