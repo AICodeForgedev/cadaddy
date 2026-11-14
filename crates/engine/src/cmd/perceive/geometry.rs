@@ -2949,7 +2949,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
         set_sheets.extend(crate::cmd::guided::job_sheet_numbers(&job));
     }
     set_sheets.extend(sheet_numbers.iter().cloned());
-    // A detail or section callout (a symbol marked with one of the set's sheets, `A321`) is a
+    // A detail or section callout (a symbol marked with one of the set's sheets, `D-901`) is a
     // note on the plan, no room's boundary: the box it draws round what it details cuts no room
     // in two (Q6351: a unit's trace closed on one, and the unit had no room).
     for e in &ents {
@@ -4604,12 +4604,12 @@ mod tests {
         if tub {
             s.execute("pline", &json!({"vertices": [[200, 0], [200, 175], [240, 175], [240, 0]]})).unwrap();
         }
-        for (t, x, y) in [("DOUBLE Q", 45.0, 180.0), ("201", 60.0, 170.0), ("DOUBLE Q", 195.0, 180.0), ("203", 210.0, 170.0)] {
+        for (t, x, y) in [("KING", 45.0, 180.0), ("501", 60.0, 170.0), ("KING", 195.0, 180.0), ("503", 210.0, 170.0)] {
             s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
         }
         if elsewhere {
             s.execute("pline", &json!({"vertices": [[400, 0], [700, 0], [700, 360], [400, 360]], "closed": true})).unwrap();
-            for (t, x, y) in [("DOUBLE Q", 520.0, 180.0), ("203", 535.0, 170.0)] {
+            for (t, x, y) in [("KING", 520.0, 180.0), ("503", 535.0, 170.0)] {
                 s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
             }
         }
@@ -4628,7 +4628,7 @@ mod tests {
         let mut rooms = rooms_found(&mut s).unwrap();
         rooms.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
         assert_eq!(rooms.len(), 2, "{rooms:?}");
-        assert_eq!(rooms.iter().map(|r| r.number.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["201", "203"]);
+        assert_eq!(rooms.iter().map(|r| r.number.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["501", "503"]);
         for (r, (lo, hi)) in rooms.iter().zip([(0.0, 147.0), (147.0, 294.0)]) {
             let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().copied());
             assert!(
@@ -4641,8 +4641,8 @@ mod tests {
             assert!(basis.contains("along the wall drawn between their tags"), "{basis}");
         }
         assert!(
-            rooms[0].outline_basis.as_deref().is_some_and(|b| b.contains("203"))
-                && rooms[1].outline_basis.as_deref().is_some_and(|b| b.contains("201"))
+            rooms[0].outline_basis.as_deref().is_some_and(|b| b.contains("503"))
+                && rooms[1].outline_basis.as_deref().is_some_and(|b| b.contains("501"))
         );
         // No wall between them (one open floor, two tags): cut midway, and said so.
         let mut s = two_units(false, (0.0, 0.0), false, false);
@@ -4665,10 +4665,10 @@ mod tests {
         let mut s = two_units(true, (200.0, 236.0), true, false);
         let mut rooms = rooms_found(&mut s).unwrap();
         rooms.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
-        assert_eq!(rooms.iter().map(|r| r.number.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["201", "203"], "{rooms:?}");
+        assert_eq!(rooms.iter().map(|r| r.number.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["501", "503"], "{rooms:?}");
         assert!(rooms.iter().all(|r| r.outline_basis.is_some()), "{rooms:?}");
         // One room's name and a second name by the same number (no number of its own): one room.
-        let mut s = plan_of(&[([0.0, 0.0, 294.0, 360.0], &[("OFFICE", 45.0, 180.0), ("101", 60.0, 170.0), ("RECEPTION", 195.0, 180.0)])]);
+        let mut s = plan_of(&[([0.0, 0.0, 294.0, 360.0], &[("OFFICE", 45.0, 180.0), ("701", 60.0, 170.0), ("RECEPTION", 195.0, 180.0)])]);
         let rooms = rooms_found(&mut s).unwrap();
         assert_eq!(rooms.len(), 1, "{rooms:?}");
         assert!(rooms[0].outline_basis.is_none());
@@ -4687,10 +4687,10 @@ mod tests {
             let mut s = Session::empty();
             s.new_drawing(false);
             s.execute("pline", &json!({"vertices": [[0, 0], [144, 0], [144, 360], [0, 360]], "closed": true})).unwrap();
-            s.execute("text", &json!({"at": [40, 250], "text": "SINGLE Q", "height": 6})).unwrap();
-            s.execute("text", &json!({"at": [55, 240], "text": "109", "height": 6})).unwrap();
+            s.execute("text", &json!({"at": [40, 250], "text": "KING", "height": 6})).unwrap();
+            s.execute("text", &json!({"at": [55, 240], "text": "507", "height": 6})).unwrap();
             let d = s.doc_mut().unwrap();
-            d.building_spec = Some(json!({"version": 1, "units_per_foot": 12, "sheets": [{"number": "A321"}]}).to_string()).into();
+            d.building_spec = Some(json!({"version": 1, "units_per_foot": 12, "sheets": [{"number": "D-901"}]}).to_string()).into();
             // The callout's box from wall to wall (its block, as a print's import makes it).
             let mut b = Block::new("PDF-SYM-9");
             let corners = [(-72.0, -9.0), (72.0, -9.0), (72.0, 9.0), (-72.0, 9.0)];
@@ -4742,7 +4742,7 @@ mod tests {
             d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
             s
         };
-        let mut s = room("A321");
+        let mut s = room("D-901");
         let rooms = rooms_found(&mut s).unwrap();
         assert_eq!(rooms.len(), 1, "{rooms:?}");
         assert!((rooms[0].area - 144.0 * 360.0).abs() < 1.0, "the whole room, the callout's box no side of it: {}", rooms[0].area);

@@ -5890,8 +5890,8 @@ fn unit_panel_findings(job: &mut GuidedJob, check: &Value) {
 }
 
 /// Whether a room named `name` is a guest room varying the typical room type `words`: its type's
-/// words are all of the type's and more (`DOUBLE Q WIDE` of `DOUBLE Q`; not `SINGLE Q` of
-/// `DOUBLE Q`, nor an `OFFICE`).
+/// words are all of the type's and more (`KING CORNER` of `KING`; not `STUDIO` of `KING`, nor an
+/// `OFFICE`).
 fn variant_of(name: &str, words: &BTreeSet<String>) -> bool {
     let mine = type_words(name, None);
     !words.is_empty() && mine.len() > words.len() && words.is_subset(&mine) && guest_room_name(name)
@@ -38252,7 +38252,7 @@ mod tests {
     }
 
     /// A two-storey set of guest rooms (inches): two of a type a typical-room view is drawn for
-    /// (`DOUBLE Q`, 12' × 24') and two of a wider variant of it no view is drawn for (named `wide`,
+    /// (`KING`, 12' × 24') and two of a wider variant of it no view is drawn for (named `wide`,
     /// 16' × 24'), and a corridor; the view (`title`) letters the unit's panel (`PNLBD 'U'`) and
     /// draws three devices. The session, the job, the view's devices.
     fn variant_rooms_set(title: &str, wide: &str) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>) {
@@ -38285,17 +38285,17 @@ mod tests {
         s.execute("text", &json!({"at": [v[0] + 110.0, v[1] + 150.0], "text": "PNLBD 'U'", "height": 3.0})).unwrap();
         let hi = s.doc().unwrap().handseed;
         let rooms = [
-            ("DOUBLE Q", "201", "2", 10_000.0, 144.0),
-            ("DOUBLE Q", "301", "3", 10_400.0, 144.0),
-            (wide, "203", "2", 10_800.0, 192.0),
-            (wide, "303", "3", 11_200.0, 192.0),
+            ("KING", "501", "5", 10_000.0, 144.0),
+            ("KING", "601", "6", 10_400.0, 144.0),
+            (wide, "503", "5", 10_800.0, 192.0),
+            (wide, "603", "6", 11_200.0, 192.0),
         ];
         for (_, _, _, x, w) in rooms {
             room_lines(&mut s, [x, 0.0], w);
         }
         job.sheet_regions = vec![SheetRegion {
-            number: "E-7".into(),
-            level: "2".into(),
+            number: "E-907".into(),
+            level: "5".into(),
             discipline: "E".into(),
             kind: "enlarged_plan".into(),
             rect: [x0, 0.0, x0 + 2000.0, 1400.0],
@@ -38305,13 +38305,13 @@ mod tests {
             levels: Vec::new(),
             view: None,
         }];
-        job.sheet_spans = vec![SheetSpan { sheet: "E-7".into(), lo, hi }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-907".into(), lo, hi }];
         let mut list: Vec<Value> = rooms
             .iter()
             .map(|(name, n, level, x, w)| json!({"name": name, "number": n, "level": level, "outline": [[x, 0], [x + w, 0], [x + w, 288], [x, 288]]}))
             .collect();
         list.push(
-            json!({"name": "CORRIDOR", "number": "200", "level": "2", "outline": [[10_000, 300], [11_400, 300], [11_400, 360], [10_000, 360]]}),
+            json!({"name": "CORRIDOR", "number": "500", "level": "5", "outline": [[10_000, 300], [11_400, 300], [11_400, 360], [10_000, 360]]}),
         );
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(json!({"rooms": list, "keys": {"stated": 5}}));
@@ -38321,8 +38321,8 @@ mod tests {
             kind: kind.into(),
             circuit: circuit.into(),
             at: [v[0] + at[0], v[1] + at[1]],
-            sheet: "E-7".into(),
-            level: "Level 2".into(),
+            sheet: "E-907".into(),
+            level: "Level 5".into(),
             ..Default::default()
         };
         let read = vec![
@@ -38340,16 +38340,16 @@ mod tests {
     /// (not a variant) takes nothing, and the unit-panel check lists it.
     #[test]
     fn a_guest_room_of_a_variant_type_takes_its_types_unit_panel() {
-        let (s, job, read) = variant_rooms_set("UNIT ELECTRICAL PLAN - DOUBLE QUEEN", "DOUBLE Q WIDE");
+        let (s, job, read) = variant_rooms_set("UNIT POWER PLAN - KING", "KING CORNER");
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
         let devices: BTreeSet<&str> = stamped.devices.iter().map(|d| d.room.as_str()).collect();
-        assert_eq!(devices, BTreeSet::from(["201", "301"]), "the view's devices only in its own type's rooms: {:?}", stamped.report);
+        assert_eq!(devices, BTreeSet::from(["501", "601"]), "the view's devices only in its own type's rooms: {:?}", stamped.report);
         let panelled: Vec<&str> = stamped.panels.iter().filter(|(_, at)| !at.is_empty()).map(|(r, _)| r.as_str()).collect();
-        assert_eq!(panelled, ["201", "203", "301", "303"], "{:?}", stamped.panels);
-        assert!(["203", "303"].iter().all(|r| stamped.rooms.get(*r).is_some_and(|(_, _, typical)| *typical)), "{:?}", stamped.rooms.keys());
-        assert_eq!(stamped.derived_panels.keys().map(String::as_str).collect::<Vec<_>>(), ["203", "303"]);
-        assert!(stamped.derived_panels.values().all(|b| b.starts_with("derived") && b.contains("E-7 UNIT ELECTRICAL PLAN - DOUBLE QUEEN")));
+        assert_eq!(panelled, ["501", "503", "601", "603"], "{:?}", stamped.panels);
+        assert!(["503", "603"].iter().all(|r| stamped.rooms.get(*r).is_some_and(|(_, _, typical)| *typical)), "{:?}", stamped.rooms.keys());
+        assert_eq!(stamped.derived_panels.keys().map(String::as_str).collect::<Vec<_>>(), ["503", "603"]);
+        assert!(stamped.derived_panels.values().all(|b| b.starts_with("derived") && b.contains("E-907 UNIT POWER PLAN - KING")));
         // Each in its own room.
         for (room, at) in &stamped.panels {
             let (_, outline, _) = stamped.rooms.get(room).unwrap();
@@ -38365,24 +38365,24 @@ mod tests {
         let status = |room: &str| {
             gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some(room)).and_then(|g| g.properties.get("STATUS").cloned())
         };
-        assert_eq!((status("201"), status("203").as_deref()), (None, Some("derived")));
-        assert_eq!(gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some("303")).map(|g| g.tag.as_str()), Some("U-303"));
+        assert_eq!((status("501"), status("503").as_deref()), (None, Some("derived")));
+        assert_eq!(gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some("603")).map(|g| g.tag.as_str()), Some("U-603"));
         let check = unit_panel_check(&job, &gear, &stamped.rooms);
         assert_eq!((check["units"].as_u64(), check["units_with_panel"].as_u64()), (Some(4), Some(4)), "{check:#}");
-        assert_eq!(check["by_level"]["Level 2"], json!({"units": 2, "with_panel": 2}), "{check:#}");
+        assert_eq!(check["by_level"]["Level 5"], json!({"units": 2, "with_panel": 2}), "{check:#}");
         // A type of its own no plan is drawn for (not a variant of one): no panel, and listed.
-        let (s, mut job, read) = variant_rooms_set("UNIT ELECTRICAL PLAN - DOUBLE QUEEN", "KING SUITE");
+        let (s, mut job, read) = variant_rooms_set("UNIT POWER PLAN - KING", "STUDIO");
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
-        assert!(stamped.derived_panels.is_empty() && !stamped.panels.contains_key("203"), "{:?}", stamped.panels);
+        assert!(stamped.derived_panels.is_empty() && !stamped.panels.contains_key("503"), "{:?}", stamped.panels);
         let (gear, _) = super::super::printcond::room_panel_equipment(&stamped.panels, &stamped.rooms, 12.0);
         let check = unit_panel_check(&job, &gear, &stamped.rooms);
         let missing: Vec<&str> = check["units_without_panel"].as_array().unwrap().iter().filter_map(|v| v["room"].as_str()).collect();
-        assert_eq!(missing, ["203", "303"], "{check:#}");
+        assert_eq!(missing, ["503", "603"], "{check:#}");
         assert_eq!(check["stated_keys"].as_u64(), Some(5));
         unit_panel_findings(&mut job, &check);
         let said: Vec<&str> = job.findings.iter().map(|f| f.description.as_str()).collect();
-        assert!(said.iter().any(|d| d.starts_with("2 guest unit(s) without a unit panel: 203, 303")), "{said:?}");
+        assert!(said.iter().any(|d| d.starts_with("2 guest unit(s) without a unit panel: 503, 603")), "{said:?}");
         assert!(said.iter().any(|d| d.contains("5 keys stated, 4 units read")), "{said:?}");
     }
 
