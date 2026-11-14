@@ -662,6 +662,68 @@ fn a_symbols_tag_stays_where_it_was_printed() {
 }
 
 #[test]
+fn dimension_words_never_anchor_a_symbol() {
+    // Six windows across a wall, each drawn as a frame rectangle and a pane line, and under each a
+    // dimension: a short line with a tick at each end and "EQ" lettered over its middle (equal
+    // spacing). EQ is a dimension word, never a device tag: no symbol is made round it, and the
+    // window frames, pane lines and the dimensions' lines stay loose where printed (before Q6607
+    // every EQ became a symbol drawn from the first one's strokes, and the other five windows were
+    // erased). The same with the lettering in other note words and a number in its unit.
+    for word in ["EQ", "TYP", "12IN"] {
+        let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+        for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+            content.extend_from_slice(
+                format!(
+                    "{} {} m {} {} l {} {} l {} {} l h S {} {} m {} {} l S ",
+                    cx - 2,
+                    cy - 10,
+                    cx + 2,
+                    cy - 10,
+                    cx + 2,
+                    cy + 10,
+                    cx - 2,
+                    cy + 10,
+                    cx,
+                    cy - 10,
+                    cx,
+                    cy + 10
+                )
+                .as_bytes(),
+            );
+            let y = cy - 16;
+            content.extend_from_slice(
+                format!(
+                    "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                    cx - 8,
+                    y,
+                    cx + 8,
+                    y,
+                    cx - 9,
+                    y - 1,
+                    cx - 7,
+                    y + 1,
+                    cx + 7,
+                    y - 1,
+                    cx + 9,
+                    y + 1
+                )
+                .as_bytes(),
+            );
+            content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td ({word}) Tj ET ", cx - 4, y + 2).as_bytes());
+        }
+        content.extend_from_slice(b"Q");
+        let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+        let d = &r.drawing;
+        assert!(symbol_tags(d).is_empty(), "{word}: symbols tagged {:?}", symbol_tags(d));
+        assert!(!d.model.iter().any(|e| matches!(e.kind, EntityKind::Insert(_))), "{word}: nothing goes into a block");
+        // every window frame is printed once, where it stands, as loose linework
+        let frames = d.model.iter().filter(|e| matches!(&e.kind, EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4)).count();
+        assert_eq!(frames, 6, "{word}: loose window frames");
+        assert_eq!(text_values(&r).iter().filter(|v| v.as_str() == word).count(), 6, "{word}: the dimension words stay text");
+    }
+}
+
+#[test]
 fn the_sheets_own_number_is_never_a_symbols_tag() {
     // Tagged diamonds as a plan prints them, and in the title block corner the sheet's number
     // in 36 pt type with the same small mark beside it: the number stays a text (the sheet is
