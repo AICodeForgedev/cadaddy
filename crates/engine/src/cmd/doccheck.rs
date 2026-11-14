@@ -1935,12 +1935,12 @@ mod tests {
     fn a_note_set_one_line_per_text_is_one_block() {
         let texts = vec![
             t("1.", 0.0, 10.0),
-            t("RUN PEX FROM THE MANIFOLD LOCATED ABOVE", 2.0, 10.0),
-            t("THE CORRIDOR CEILING TO EACH OUTLET.", 2.0, 8.5),
+            t("SET EACH WATER MANIFOLD ABOVE", 2.0, 10.0),
+            t("THE CORRIDOR CEILING NEAR ITS UNIT.", 2.0, 8.5),
             t("FAR AWAY TEXT", 200.0, 8.5),
         ];
         let b = blocks(&texts);
-        assert!(b.iter().any(|b| b.text.contains("MANIFOLD LOCATED ABOVE THE CORRIDOR CEILING")), "{b:?}");
+        assert!(b.iter().any(|b| b.text.contains("MANIFOLD ABOVE THE CORRIDOR CEILING NEAR")), "{b:?}");
     }
 
     #[test]
