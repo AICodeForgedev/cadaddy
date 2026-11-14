@@ -3693,8 +3693,8 @@ impl Session {
         fields::after_command(self, before);
         // Built elements moved to another storey are filed under it (before the model's own
         // record of the command, which takes the drawing as this leaves it).
-        cmd::relevel::after_command(self, before);
-        cmd::wallgen::after_command(self, before);
+        cmd::relevel::after_command(self, before, uid);
+        cmd::wallgen::after_command(self, before, uid);
         // After the live rebuild: the model's count index follows every change to its pieces.
         cmd::mepatoms::after_command(self, before, uid);
         script_tools::monitor_after(self);
