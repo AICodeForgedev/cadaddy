@@ -841,9 +841,10 @@ pub(crate) fn merge_tag_variants(equipment: &mut Vec<MepEquipment>, upf: f64) ->
     merged
 }
 
-/// Equipment whose box is far bigger than it can be (Q6579): a box more than [`SIZE_RATIO`]
-/// times its schedule row's size (by its tag), else its kind's usual size (rules data), along
-/// either side is the box of something else its tag was read by (a room's, a building's); it
+/// Equipment whose box is far bigger than it can be (Q6579): a box longer than [`SIZE_RATIO`]
+/// times its schedule row's size (by its tag), else its kind's usual size (rules data), or
+/// bigger than that in area by its square, is the box of something else its tag was read by (a
+/// room's, a building's); it
 /// takes that size at the box's centre, said so (`sources.outline`, `STATUS` inferred or
 /// derived). Units the scheduled-equipment step placed (their outline already sized against
 /// the schedule) and kinds with no usual size (electrical gear) are left. Returns how many.
@@ -870,7 +871,9 @@ pub(crate) fn fit_oversized(rows: &[Scheduled], equipment: &mut [MepEquipment], 
             continue;
         }
         let (long, short) = (want[0].max(want[1]), want[0].min(want[1]));
-        if w.max(d) <= SIZE_RATIO * long && w.min(d) <= SIZE_RATIO * short {
+        // Far bigger: longer than twice the unit, or more than twice it each way in area (a
+        // box squarer than the unit, its tag's, is no error).
+        if w.max(d) <= SIZE_RATIO * long && w * d <= SIZE_RATIO * SIZE_RATIO * long * short {
             continue;
         }
         let c = [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
@@ -1685,13 +1688,16 @@ mod tests {
             unit("AHU-1", "ahu", [0.0, 0.0], [ft(40.0), ft(20.0)], "A-1"),
             unit("AHU-2", "ahu", [0.0, 0.0], [ft(30.0), ft(20.0)], "A-1"),
             unit("AHU-4", "ahu", [0.0, 0.0], [ft(9.0), ft(6.0)], "A-1"),
+            // A box squarer than its unit (its tag's box), no bigger than twice it each way.
+            unit("FCU-9", "fan_coil_unit", [0.0, 0.0], [ft(4.3), ft(4.3)], "M-1"),
             placed,
             unit("P1", "panel", [0.0, 0.0], [ft(40.0), ft(20.0)], "E-1"),
         ];
         assert_eq!(fit_oversized(&[sized], &mut eq, upf), 2);
         let size = |e: &MepEquipment| [(e.max[0] - e.min[0]) / upf, (e.max[1] - e.min[1]) / upf];
         let got: Vec<[f64; 2]> = eq.iter().map(size).collect();
-        assert_eq!(got, [[10.0, 6.0], [8.0, 5.0], [9.0, 6.0], [40.0, 20.0], [40.0, 20.0]]);
+        let got: Vec<[f64; 2]> = got.iter().map(|g| g.map(|v| (v * 10.0).round() / 10.0)).collect();
+        assert_eq!(got, [[10.0, 6.0], [8.0, 5.0], [9.0, 6.0], [4.3, 4.3], [40.0, 20.0], [40.0, 20.0]]);
         let first = eq.first().expect("AHU-1");
         assert_eq!(first.min, [ft(15.0), ft(7.0)], "at the box's centre");
         assert!(first.sources.get("outline").is_some_and(|o| o.contains("schedule's size")), "{:?}", first.sources);
