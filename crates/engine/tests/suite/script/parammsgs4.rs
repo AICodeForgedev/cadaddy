@@ -2,7 +2,7 @@
 //! the parameter lists the refusals offer are the command's own.
 
 use cadaddy_engine::{
-    Session, command_specs, documented_params, find_command, in_job_lane, offered_params, param_words, params_doc, takes_open_params, unknown_params,
+    Session, command_specs, documented_params, find_command, offered_params, param_words, params_doc, takes_open_params, unknown_params,
 };
 use serde_json::{Value, json};
 
@@ -568,13 +568,37 @@ fn values_results_and_fields_given_as_parameters_are_refused() {
 }
 
 #[test]
-fn the_job_lane_keeps_its_looser_reading() {
-    // The job, BIM and MEP commands' callers are checked in that lane: the guard takes what it
-    // took before for them (a value word, an open doc), and checks no types of theirs here.
-    assert!(in_job_lane("bim.bom") && in_job_lane("mep.qty") && in_job_lane("rooms.build") && !in_job_lane("plot"));
-    assert!(known("bim.bom", "path"));
-    assert!(takes_open_params(find_command("wallgen").unwrap()));
-    assert!(unknown_params(find_command("mep.qty").unwrap(), &json!({"lb_per_sqft": "nan"})).is_empty());
+fn job_bim_and_mep_commands_take_only_their_documented_parameters() {
+    // Battle test 8 B7-019: the job, BIM and MEP commands kept an older, looser reading (a value
+    // word, a field of a value or anything at all for `{} → {…}` passed as a parameter, and no
+    // type checks), so `{"a": [1]}` for a single value and result keys ran silently.
+    let mut s = Session::new();
+    // An object where the doc shows a single value is refused, naming the parameter.
+    for (cmd, key) in
+        [("rules.score", "trade"), ("schedule.list", "trade"), ("rfi.list", "kind"), ("validate.areas", "level"), ("bim.props.find", "kind")]
+    {
+        let e = refusal(&mut s, cmd, json!({ key: {"a": [1]} }));
+        assert!(e.contains(&format!("`{key}` must be")), "{cmd} {key}: {e}");
+    }
+    // A key of the result is not a parameter, nor anything given to a command that takes none.
+    let e = refusal(&mut s, "model.counts", json!({"model": {"a": [1]}}));
+    assert!(e.contains("model.counts takes no parameters (got `model`)"), "{e}");
+    let e = refusal(&mut s, "estimate.status", json!({"material": 1}));
+    assert!(e.contains("estimate.status takes no parameters (got `material`)"), "{e}");
+    for (cmd, key) in
+        [("plan.door", "station"), ("override.add", "user"), ("levels.isolate", "none"), ("walls.legend", "x1"), ("model.build", "seconds")]
+    {
+        assert!(!known(cmd, key), "`{key}` is a value in {cmd}'s doc, not a parameter");
+    }
+    // A field of a value isn't a parameter: `gauges?: [{max_in, gauge, lb_per_sqft}]`.
+    let e = refusal(&mut s, "mep.qty", json!({"lb_per_sqft": "nan"}));
+    assert!(e.contains("`lb_per_sqft` is not a parameter of mep.qty"), "{e}");
+    // A placeholder where a value goes (`rules?: walk rules (as in <drawing>.walk.json)`) leaves
+    // the parameters closed; the documented ones still go.
+    assert!(!takes_open_params(find_command("wallgen").unwrap()));
+    assert!(known("wallgen", "rulesFile") && known("mep.qty", "gauges") && known("plan.door", "position") && known("bim.bom", "file"));
+    // A choice word of the result (`→ {answered: id | [ids]}`) doesn't hide a parameter of that name.
+    assert!(known("job.answer", "id") && known("progress.hours", "rows"));
 }
 
 #[test]
