@@ -5628,6 +5628,41 @@ fn is_ocr_device_tag(v: &str) -> bool {
     (1..=3).contains(&letters) && t.len() - letters <= 2 && t.bytes().skip(letters).all(|b| b.is_ascii_digit()) && !matches!(t, "I" | "O" | "X")
 }
 
+/// The words that are never a device tag, as rule data (`pdf_annotation_words.json`): dimension
+/// and note words (`words`) and the units a number is dimensioned in (`units`), each list with
+/// its `source`.
+#[derive(serde::Deserialize, Default)]
+struct AnnotationWords {
+    words: WordList,
+    units: WordList,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct WordList {
+    words: Vec<String>,
+}
+
+fn annotation_words() -> &'static AnnotationWords {
+    static WORDS: std::sync::OnceLock<AnnotationWords> = std::sync::OnceLock::new();
+    // the shipped data is checked by a test; unreadable data anchors on every tag, as before
+    WORDS.get_or_init(|| serde_json::from_str(include_str!("pdf_annotation_words.json")).unwrap_or_default())
+}
+
+/// Dimension and note lettering that looks like a tag but never is one: a note word (`EQ`, `TYP`,
+/// `NIC`) or a number in a unit of measure (`12IN`, `300MM`). The symbol detector anchors on none
+/// of it: the strokes round a dimension's `EQ` are its witness lines and the wall it measures,
+/// which stay loose where printed (Q6607).
+fn is_annotation_word(v: &str) -> bool {
+    let t = v.trim();
+    let w = annotation_words();
+    if w.words.words.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+        return true;
+    }
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    let unit = t.get(digits..).unwrap_or_default();
+    digits > 0 && w.units.words.iter().any(|x| x.eq_ignore_ascii_case(unit))
+}
+
 /// A closed loop: a symbol's circle, box or triangle.
 fn is_outline(s: &Stroke) -> bool {
     s.closed
@@ -5660,14 +5695,109 @@ fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
 }
 
 /// Group symbol instances by device type (in tag order); each type with ≥2 instances becomes
-/// a block.  Within a group, instances keep their order (the first one draws the block).
-fn group_symbols(instances: Vec<SymbolInstance>) -> Vec<Vec<SymbolInstance>> {
+/// a block.  Within a group, instances keep their order (the first one draws the block), each
+/// rid of the drawing round it its cluster took ([`release_unshared_strokes`]).
+fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<SymbolInstance>> {
     let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
     for inst in instances {
         let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
         groups.entry(key).or_default().push(inst);
     }
-    groups.into_values().filter(|g| g.len() >= 2).collect()
+    let mut out: Vec<Vec<SymbolInstance>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    for group in &mut out {
+        release_unshared_strokes(group, strokes);
+    }
+    out
+}
+
+/// A tag's cluster can take the drawing round it: the frame and glazing of the window a window
+/// tag marks. A block draws its first instance's strokes at every instance, so that window would
+/// be drawn at every tag of its type, and lost where it is when its tag is not the first (Q6435).
+/// The symbol is what its instances share: a stroke drawn alike (same shape, wherever it stands)
+/// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
+/// of them, if more) and more than [`FOREIGN_STROKE_OVER`] times the outline they share round
+/// the tag (its hexagon, circle or box: closed, about as wide as tall, no smaller than the tag's
+/// letters) is not the symbol's, and stays loose where printed. An instance sharing no such
+/// outline keeps all its strokes (a symbol drawn turned, a bare letter), and so does a stroke
+/// near the outline's size (a part of the symbol drawn its own way at one instance).
+fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
+    let need = SHARED_STROKE_MIN.max(group.len().div_ceil(SHARED_STROKE_SHARE));
+    let keys: Vec<Vec<Option<StrokeKey>>> =
+        group.iter().map(|inst| inst.stroke_indices.iter().map(|&si| strokes.get(si).map(stroke_key)).collect()).collect();
+    let mut count: HashMap<&StrokeKey, usize> = HashMap::new();
+    for of_inst in &keys {
+        let mut seen: HashSet<&StrokeKey> = HashSet::new();
+        for k in of_inst.iter().flatten() {
+            if seen.insert(k) {
+                *count.entry(k).or_default() += 1;
+            }
+        }
+    }
+    let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
+    for (inst, of_inst) in group.iter_mut().zip(&keys) {
+        let Some(letters) = inst.nearby_text_at.map(|t| t.1).filter(|h| *h > 0.0) else { continue };
+        let shared: Vec<bool> = of_inst.iter().map(|k| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need)).collect();
+        let size = inst
+            .stroke_indices
+            .iter()
+            .zip(&shared)
+            .filter(|(_, sh)| **sh)
+            .filter_map(|(&si, _)| strokes.get(si))
+            .filter(|s| is_outline(s))
+            .filter_map(|s| bbox(std::slice::from_ref(&s.pts)))
+            .filter(|b| {
+                let (w, h) = (b[2] - b[0], b[3] - b[1]);
+                w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))
+            })
+            .map(extent)
+            .fold(0.0f64, f64::max);
+        if size <= 0.0 {
+            continue;
+        }
+        let kept: Vec<usize> = inst
+            .stroke_indices
+            .iter()
+            .zip(&shared)
+            .filter(|(si, sh)| {
+                **sh || strokes.get(**si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size)
+            })
+            .map(|(&si, _)| si)
+            .collect();
+        // The symbol stays where it was found (its centre is where the readers place the device).
+        inst.stroke_indices = kept;
+    }
+}
+
+/// A stroke kept in a symbol is drawn alike in at least this many of its type's instances …
+const SHARED_STROKE_MIN: usize = 2;
+/// … and in one in this many of them (rounded up), if more.
+const SHARED_STROKE_SHARE: usize = 4;
+/// A stroke more than this many times the shared outline round the tag is not the symbol's.
+const FOREIGN_STROKE_OVER: f64 = 2.0;
+/// The outline round a tag is at least this wide for its height (and the other way round).
+const OUTLINE_MIN_ASPECT: f64 = 0.5;
+/// Most points of a stroke its shape is told by.
+const MAX_KEY_POINTS: usize = 64;
+/// Strokes drawn alike match to this (points).
+const KEY_TOL_PT: f64 = 0.5;
+
+/// A stroke's shape wherever it stands: closed or not, its point count, and each point's offset
+/// from its first, to [`KEY_TOL_PT`] (whichever way round reads first).
+type StrokeKey = (bool, usize, Vec<(i64, i64)>);
+
+fn stroke_key(s: &Stroke) -> StrokeKey {
+    let offsets = |pts: &mut dyn Iterator<Item = &(f64, f64)>| -> Vec<(i64, i64)> {
+        let mut first: Option<(f64, f64)> = None;
+        pts.take(MAX_KEY_POINTS)
+            .map(|p| {
+                let o = *first.get_or_insert(*p);
+                (((p.0 - o.0) / KEY_TOL_PT).round() as i64, ((p.1 - o.1) / KEY_TOL_PT).round() as i64)
+            })
+            .collect()
+    };
+    let fwd = offsets(&mut s.pts.iter());
+    let back = offsets(&mut s.pts.iter().rev());
+    (s.closed, s.pts.len(), fwd.min(back))
 }
 
 /// Find device symbols: for each tag anchor, the compact cluster of short strokes around it
@@ -6233,10 +6363,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let anchors: Vec<TagAnchor> = texts
             .iter()
             .enumerate()
-            .filter(|(i, t)| is_device_tag(&t.value) && Some(*i) != sheet_no && t.height <= tall)
+            .filter(|(i, t)| is_device_tag(&t.value) && !is_annotation_word(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
-        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false));
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes);
         let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
         let mut taken: HashSet<usize> = shx_stroke_indices.clone();
         for inst in &instances {
@@ -6331,8 +6461,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     .iter()
                     .enumerate()
                     .filter(|(i, rt)| {
-                        (is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
-                            || (stroke_page && !rt.in_cell && rt.confidence.unwrap_or(0.0) >= OCR_TAG_CONFIDENCE && is_device_tag(&rt.value))
+                        !is_annotation_word(&rt.value)
+                            && ((is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                                || (stroke_page && !rt.in_cell && rt.confidence.unwrap_or(0.0) >= OCR_TAG_CONFIDENCE && is_device_tag(&rt.value)))
                     })
                     .filter(|(_, rt)| !instances.iter().any(|inst| (inst.center.0 - rt.at.0).hypot(inst.center.1 - rt.at.1) < max_size))
                     .map(|(i, rt)| TagAnchor { value: &rt.value, at: rt.at, height: rt.height, text_idx: None, ocr_idx: Some(base + i) })
@@ -6434,7 +6565,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
         }
 
-        let symbol_groups = group_symbols(instances);
+        let symbol_groups = group_symbols(instances, &strokes);
         let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
         let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
         let mut symbol_text_indices: HashSet<usize> = HashSet::new();
@@ -8361,6 +8492,23 @@ mod tests {
     fn hostile_input_is_an_error_not_a_crash() {
         assert!(read(b"%PDF-1.4 garbage", &PdfOptions::default()).is_err());
         assert!(read(&sample_pdf(), &PdfOptions { page: 7, ..PdfOptions::default() }).is_err());
+    }
+
+    #[test]
+    fn dimension_and_note_words_are_never_tags() {
+        // the shipped rule data reads, and each list says where its words come from
+        let data: serde_json::Value = serde_json::from_str(include_str!("pdf_annotation_words.json")).unwrap_or_default();
+        for list in ["words", "units"] {
+            assert!(data[list]["source"].as_str().is_some_and(|s| !s.is_empty()), "{list} has a source");
+            assert!(data[list]["words"].as_array().is_some_and(|w| !w.is_empty()), "{list} has words");
+        }
+        for t in ["EQ", "eq", " TYP ", "SIM", "NIC", "UNO", "12IN", "300mm", "45DEG", "120V"] {
+            assert!(is_annotation_word(t), "{t}");
+        }
+        // device and type tags, a number with no unit, a unit with no number
+        for t in ["A", "EQ1", "W2", "L4", "XA", "2A", "4W", "IN", "V", "12", "1A2"] {
+            assert!(!is_annotation_word(t), "{t}");
+        }
     }
 
     #[test]

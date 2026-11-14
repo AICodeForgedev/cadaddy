@@ -1561,6 +1561,7 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             sources.insert(MARK.to_string(), sheet.to_string());
             sources.insert("position".into(), format!("drawn: {placed_by}"));
             sources.insert("height".into(), format!("rule: {}", r.equipment_source));
+            sources.insert("circuit".into(), format!("drawn: the circuit tag by its symbol on {sheet}"));
             if let Some(x) = light_equip.get_mut(i) {
                 *x = Some(out.equipment.len());
             }
@@ -2147,6 +2148,13 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
             && let Some(e) = out.equipment.iter_mut().find(|e| e.tag.eq_ignore_ascii_case(tag))
         {
             e.properties.insert("CIRCUIT".into(), found.join(", "));
+            // Where its circuits come from (Q6321): the element's circuit property cites it.
+            let from = if by_name {
+                format!("schedule: the panel schedules' circuits for its load ({})", q.label.chars().take(60).collect::<String>())
+            } else {
+                format!("drawn: the circuit tags by its symbol on {sheet}")
+            };
+            e.sources.insert("circuit".into(), from);
         }
         equip_circuits.push((qi, found));
     }
@@ -3469,6 +3477,97 @@ mod tests {
         }
         let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
         assert!(site_loads(&sp, &carried).is_empty(), "{carried:?}");
+    }
+
+    /// Q6321: the site equipment a site plan's circuit tags feed (a monument sign on two circuits,
+    /// an EV charger on one) carries them on its element once built: a find by each circuit and the
+    /// equipment schedule see it, its panel and feed beside, cited to the plan.
+    #[test]
+    fn built_site_equipment_carries_its_circuits_on_its_element() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "-BASEC-BUILD", &[[10_000.0, 2_000.0], [10_960.0, 2_000.0], [10_960.0, 2_600.0], [10_000.0, 2_600.0]], true);
+        pline(&mut d, "E-SITE", &square([11_200.0, 3_400.0], 25.0), true);
+        text(&mut d, "SP-9", 11_235.0, 3_390.0, h);
+        pline(&mut d, "E-SITE", &square([11_600.0, 3_000.0], 40.0), true);
+        text(&mut d, "MONUMENT", 11_660.0, 3_010.0, h);
+        text(&mut d, "SIGN", 11_660.0, 2_980.0, h);
+        text(&mut d, "SP-11", 11_520.0, 3_060.0, h);
+        pline(&mut d, "E-SITE", &square([11_600.0, 3_250.0], 12.0), true);
+        text(&mut d, "SP-13", 11_640.0, 3_245.0, h);
+        let mut sp = spec_with_slab();
+        let circuit =
+            |n: &str, d: &str| cadaddy_walk3d::PanelCircuit { number: n.into(), description: d.into(), source: "E-601".into(), ..Default::default() };
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
+            panel: "SP".into(),
+            source: "E-601".into(),
+            circuits: vec![circuit("9", "EV CHARGER"), circuit("11", "MONUMENT SIGN"), circuit("13", "MONUMENT SIGN")],
+            ..Default::default()
+        });
+        let mut s = crate::Session::new();
+        if let Ok(doc) = s.doc_mut() {
+            for e in d.model.iter() {
+                let _ = doc.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            doc.building_spec = Some(sp.to_json()).into();
+        }
+        let area = [9_000.0, 1_000.0, 14_000.0, 5_000.0];
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("bim.props.fill", &serde_json::json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let tags_on = |s: &mut crate::Session, c: &str| -> Vec<String> {
+            let found =
+                s.execute("bim.props.find", &serde_json::json!({"kind": "equipment", "where": {"circuit": c}})).unwrap_or_else(|e| panic!("{e}"));
+            let hs: Vec<String> = found["handles"].as_array().into_iter().flatten().filter_map(|h| h.as_str().map(str::to_string)).collect();
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            hs.iter()
+                .filter_map(|h| Handle::parse_hex(h))
+                .filter_map(|h| d.model.get(h))
+                .filter_map(|e| super::super::bimlook::made_tag(e, "tag").map(str::to_string))
+                .collect()
+        };
+        for c in ["SP-11", "SP-13"] {
+            let on = tags_on(&mut s, c);
+            assert!(on.len() == 1 && on.iter().all(|t| t.starts_with("SITE-SIGN-")), "{c}: {on:?} {:#}", result["site_work"]);
+        }
+        let on = tags_on(&mut s, "SP-9");
+        assert!(on.len() == 1 && on.iter().all(|t| t.starts_with("SITE-EV-CHARGER-")), "SP-9: {on:?}");
+        let sched = s.execute("bim.schedule", &serde_json::json!({"kind": "equipment"})).unwrap_or_else(|e| panic!("{e}"));
+        let sign = sched["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|r| r["tag"].as_str().is_some_and(|t| t.starts_with("SITE-SIGN-")))
+            .cloned()
+            .unwrap_or_else(|| panic!("{sched:#}"));
+        assert_eq!(sign["circuit"], serde_json::json!("SP-11,13"), "{sign:#}");
+        assert_eq!(sign["fed_from"], serde_json::json!("panel SP, circuit SP-11,13"), "{sign:#}");
+        // Cited to the plan's tags, not made up.
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let el = d
+            .model
+            .iter()
+            .find(|e| super::super::bimlook::made_tag(e, "tag").is_some_and(|t| t.starts_with("SITE-SIGN-")))
+            .unwrap_or_else(|| panic!("no sign built"));
+        let ps = cadaddy_doc::props::read(&el.common.xdata);
+        let c = ps.get("circuit").unwrap_or_else(|| panic!("no circuit"));
+        assert_eq!(c.source.kind, cadaddy_doc::props::SourceKind::Print, "{c:?}");
+        assert!(c.source.doc.as_deref().is_some_and(|x| x.contains("E-001")), "{c:?}");
+        assert_eq!(ps.get("circuits").map(cadaddy_doc::props::Prop::text).as_deref(), Some("SP-11, SP-13"));
     }
 
     /// A note calling conduits from site equipment with no line drawn: each conduit runs from the

@@ -128,7 +128,6 @@ fn dimregen_puts_associative_dimensions_back_on_their_objects() {
     // Nothing to do the second time; one undo puts it back.
     assert_eq!(s.execute("dimregen", &json!({})).unwrap()["updated"], 0);
     s.execute("undo", &json!({})).unwrap();
-    s.execute("undo", &json!({})).unwrap();
     assert_eq!(dim(&s, &d).p14.x, 10.0);
 }
 

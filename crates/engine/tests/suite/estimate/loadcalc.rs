@@ -467,3 +467,63 @@ fn the_occupancy_the_job_kept_with_the_spec_is_used_when_none_is_given() {
     let dp = find(&v, "E-LOAD-SCHEDULE", "DP", "");
     assert!(dp.iter().any(|f| f["message"].as_str().unwrap().contains("the difference is in the panels it feeds: U")), "{dp:?}");
 }
+
+/// A piece of equipment as the build makes it (`mep`, `part:equipment:<kind>`), its property store.
+fn equipment(d: &mut Drawing, x: f64, kind: &str, tag: &str, ps: &[(&str, Value)]) -> Handle {
+    let h = dev(d, x, ps);
+    let tags = vec![
+        RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
+        RawTag { code: 1000, value: "mep".into() },
+        RawTag { code: 1000, value: "L1".into() },
+        RawTag { code: 1000, value: "0".into() },
+        RawTag { code: 1000, value: "kind:equipment".into() },
+        RawTag { code: 1000, value: format!("part:equipment:{kind}") },
+        RawTag { code: 1000, value: format!("tag:{tag}") },
+    ];
+    let _ = d.modify_entity(h, |e| {
+        let store = props::read(&e.common.xdata);
+        e.common.xdata = props::write(&tags, &store).into();
+    });
+    h
+}
+
+/// Q6321: a site sign fed by three single-pole circuits and a charger by two two-pole circuits
+/// are on each of their circuits: the sign at NEC 220.14(F)'s 1200 VA per circuit, the charger at
+/// its circuits' schedule loads; no circuit left with a device of no load.
+#[test]
+fn equipment_on_several_circuits_counts_on_each_of_them() {
+    let spec = json!({
+        "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12}],
+        "mep": {"panel_schedules": [{"panel": "SP", "source": "X-3", "header": {"volts/phase": "208Y/120V, 3PH, 4W", "bus amps": "100A"},
+            "circuits": [
+                ckt("11", "MONUMENT SIGN", "20", 1, Some(1_200.0)),
+                ckt("13", "MONUMENT SIGN", "20", 1, Some(1_200.0)),
+                ckt("15", "MONUMENT SIGN", "20", 1, Some(1_200.0)),
+                ckt("34", "EV CHARGER", "60", 2, Some(4_992.0)),
+                ckt("38", "EV CHARGER", "60", 2, Some(4_992.0))
+            ]}]}
+    });
+    let mut d = Drawing::new_imperial();
+    equipment(
+        &mut d,
+        0.0,
+        "sign",
+        "SITE-SIGN-1",
+        &[("panel", json!("SP")), ("circuit", json!("SP-11,13,15")), ("circuits", json!("SP-11, SP-13, SP-15"))],
+    );
+    equipment(
+        &mut d,
+        5.0,
+        "ev_charger",
+        "SITE-EV-CHARGER-2",
+        &[("panel", json!("SP")), ("circuit", json!("SP-34,36,38,40")), ("circuits", json!("SP-34,36, SP-38,40"))],
+    );
+    let mut s = session(spec, d);
+    let v = s.execute("bim.loadcalc", &json!({})).unwrap();
+    let p = &v["panels"][0];
+    assert_eq!(p["from_model"], json!(5), "{p:#}");
+    assert_eq!(p["connected_va"]["model"], json!(3.0 * 1_200.0 + 2.0 * 4_992.0), "{p:#}");
+    let no_load = v["findings"].as_array().unwrap().iter().any(|f| f["message"].as_str().is_some_and(|m| m.contains("no load data")));
+    assert!(!no_load, "{:#}", v["findings"]);
+}

@@ -662,6 +662,186 @@ fn a_symbols_tag_stays_where_it_was_printed() {
 }
 
 #[test]
+fn a_tag_drawn_beside_its_window_keeps_the_window_and_lends_it_to_no_other_tag() {
+    // Six tagged crossed diamonds of one type (W); one of them also has the window it marks drawn
+    // just left of it (a frame rectangle across the wall and a pane line, each well over twice
+    // the diamond's size), close enough to fall in its symbol. That window is printed once: it is drawn once, where it is, as loose lines
+    // (the wall reader's), and the symbol is the diamond the tags share (before Q6435 every tag
+    // drew the first one's strokes: six windows when the windowed tag came first, none when it
+    // came later).
+    let diamond = |cx: i32, cy: i32, out: &mut Vec<u8>| {
+        let s = 6;
+        for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+            out.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+    };
+    let frames = |windowed: usize| -> Vec<(f64, f64, bool)> {
+        let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+        for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
+            diamond(cx, cy, &mut content);
+            let mark = if i == windowed {
+                content.extend_from_slice(
+                    format!(
+                        "{} {} m {} {} l {} {} l {} {} l h S {} {} m {} {} l S ",
+                        cx - 11,
+                        cy - 15,
+                        cx - 7,
+                        cy - 15,
+                        cx - 7,
+                        cy + 15,
+                        cx - 11,
+                        cy + 15,
+                        cx - 9,
+                        cy - 15,
+                        cx - 9,
+                        cy + 15
+                    )
+                    .as_bytes(),
+                );
+                "W2"
+            } else {
+                "W1"
+            };
+            content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td ({mark}) Tj ET ", cx + 10, cy).as_bytes());
+        }
+        content.extend_from_slice(b"Q");
+        let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+        let d = &r.drawing;
+        // Every window frame the sheet draws (a closed four-cornered outline three times as long
+        // as it is wide; the diamonds are as wide as long), where it stands and whether loose.
+        let mut out: Vec<(f64, f64, bool)> = Vec::new();
+        let mut take = |e: &Entity, at: (f64, f64), loose: bool| {
+            if let EntityKind::LwPolyline(p) = &e.kind
+                && p.closed
+                && p.vertices.len() == 4
+                && {
+                    let span = |f: fn(&cadaddy_geom::PolyVertex) -> f64| {
+                        p.vertices.iter().map(f).fold(f64::NEG_INFINITY, f64::max) - p.vertices.iter().map(f).fold(f64::INFINITY, f64::min)
+                    };
+                    let (w, h) = (span(|v| v.p.x), span(|v| v.p.y));
+                    w.max(h) >= 3.0 * w.min(h)
+                }
+            {
+                let n = p.vertices.len() as f64;
+                out.push((at.0 + p.vertices.iter().map(|v| v.p.x).sum::<f64>() / n, at.1 + p.vertices.iter().map(|v| v.p.y).sum::<f64>() / n, loose));
+            }
+        };
+        for e in d.model.iter() {
+            match &e.kind {
+                EntityKind::Insert(i) => {
+                    if let Some(b) = d.blocks.get(&i.block) {
+                        for x in b.entities.iter() {
+                            take(x, (i.insert.x, i.insert.y), false);
+                        }
+                    }
+                }
+                _ => take(e, (0.0, 0.0), true),
+            }
+        }
+        assert_eq!(symbol_tags(d).len(), 6, "every tag is still a symbol with its TAG");
+        out
+    };
+    for windowed in [0, 1] {
+        let got = frames(windowed);
+        assert!(got.len() == 1 && got.iter().all(|f| f.2), "the window tag at {windowed}: window frames drawn at {got:?}");
+    }
+}
+
+#[test]
+fn a_tags_symbol_keeps_a_stroke_near_its_size_or_with_no_outline_round_the_tag() {
+    // Six tagged symbols of one type with one odd stroke at a single instance, beside the tag
+    // (a leader, a stub of wall). The odd stroke is the symbol's own as before Q6435 when it is
+    // under twice the outline round the tag (a crossed diamond) or when the instances share no
+    // outline at least as big as their letters (a dot and a stroke): only a stroke far bigger than
+    // the outline round its tag is foreign to the symbol.
+    let draw = |outline: bool, odd: i32| -> usize {
+        let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+        for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
+            let s = if outline { 6 } else { 1 };
+            for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+                content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+            }
+            if i == 0 {
+                content.extend_from_slice(format!("{} {} m {} {} l S ", cx - 9, cy - odd / 2, cx - 9, cy + odd / 2).as_bytes());
+            }
+            content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (P1) Tj ET ", cx + 10, cy).as_bytes());
+        }
+        content.extend_from_slice(b"Q");
+        let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+        let d = &r.drawing;
+        assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+        // the odd stroke as loose linework (an upright line as long as it, in points or inches)
+        let long = |dy: f64| [f64::from(odd), f64::from(odd) / 72.0].iter().any(|n| (dy / n - 1.0).abs() < 0.05);
+        d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - l.b.x).abs() < 1e-3 && long((l.a.y - l.b.y).abs()))).count()
+    };
+    assert_eq!(draw(true, 18), 0, "a stroke 1.5 times the diamond stays the symbol's");
+    assert_eq!(draw(false, 18), 0, "no outline round the tag: the cluster is the symbol");
+    assert_eq!(draw(true, 30), 1, "a stroke 2.5 times the diamond is foreign: loose where printed");
+}
+
+#[test]
+fn dimension_words_never_anchor_a_symbol() {
+    // Six windows across a wall, each drawn as a frame rectangle and a pane line, and under each a
+    // dimension: a short line with a tick at each end and "EQ" lettered over its middle (equal
+    // spacing). EQ is a dimension word, never a device tag: no symbol is made round it, and the
+    // window frames, pane lines and the dimensions' lines stay loose where printed (before Q6607
+    // every EQ became a symbol drawn from the first one's strokes, and the other five windows were
+    // erased). The same with the lettering in other note words and a number in its unit.
+    for word in ["EQ", "TYP", "12IN"] {
+        let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+        for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+            content.extend_from_slice(
+                format!(
+                    "{} {} m {} {} l {} {} l {} {} l h S {} {} m {} {} l S ",
+                    cx - 2,
+                    cy - 10,
+                    cx + 2,
+                    cy - 10,
+                    cx + 2,
+                    cy + 10,
+                    cx - 2,
+                    cy + 10,
+                    cx,
+                    cy - 10,
+                    cx,
+                    cy + 10
+                )
+                .as_bytes(),
+            );
+            let y = cy - 16;
+            content.extend_from_slice(
+                format!(
+                    "{} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S ",
+                    cx - 8,
+                    y,
+                    cx + 8,
+                    y,
+                    cx - 9,
+                    y - 1,
+                    cx - 7,
+                    y + 1,
+                    cx + 7,
+                    y - 1,
+                    cx + 9,
+                    y + 1
+                )
+                .as_bytes(),
+            );
+            content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td ({word}) Tj ET ", cx - 4, y + 2).as_bytes());
+        }
+        content.extend_from_slice(b"Q");
+        let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+        let d = &r.drawing;
+        assert!(symbol_tags(d).is_empty(), "{word}: symbols tagged {:?}", symbol_tags(d));
+        assert!(!d.model.iter().any(|e| matches!(e.kind, EntityKind::Insert(_))), "{word}: nothing goes into a block");
+        // every window frame is printed once, where it stands, as loose linework
+        let frames = d.model.iter().filter(|e| matches!(&e.kind, EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4)).count();
+        assert_eq!(frames, 6, "{word}: loose window frames");
+        assert_eq!(text_values(&r).iter().filter(|v| v.as_str() == word).count(), 6, "{word}: the dimension words stay text");
+    }
+}
+
+#[test]
 fn the_sheets_own_number_is_never_a_symbols_tag() {
     // Tagged diamonds as a plan prints them, and in the title block corner the sheet's number
     // in 36 pt type with the same small mark beside it: the number stays a text (the sheet is
