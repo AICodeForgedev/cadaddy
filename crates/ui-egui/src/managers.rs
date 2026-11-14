@@ -942,7 +942,7 @@ pub fn plot_window_resume(app: &mut CadApp, ctx: &egui::Context) {
     }
     set_temp(ctx, PICKING_WINDOW, false);
     if let (Some(w), Some(mut st)) = (app.session.plot_window.take(), temp::<PlotState>(ctx, "plot_state")) {
-        st.window = [w.min.x, w.min.y, w.max.x, w.max.y];
+        st.window = Some([w.min.x, w.min.y, w.max.x, w.max.y]);
         st.page.plot_area = "window".into();
         set_temp(ctx, "plot_state", st);
     }
@@ -964,8 +964,10 @@ struct PlotState {
     /// "Model" or a layout name.
     target: String,
     page: cadaddy_doc::PageSetup,
-    /// Plot area "window" corners in drawing units: [x1, y1, x2, y2].
-    window: [f64; 4],
+    /// Plot area "window" corners in drawing units: [x1, y1, x2, y2]. `None`: the model's extents,
+    /// measured when the plot area becomes a window (measuring every object of a large drawing
+    /// held the dialog's first frame, Q6574).
+    window: Option<[f64; 4]>,
     /// Model-space placement; stays outside PageSetup so layouts keep their existing behavior.
     center: bool,
     offset_mm: [f64; 2],
@@ -1053,7 +1055,7 @@ fn plot_params(st: &PlotState, preview_dpi: Option<f64>) -> Value {
                 o.insert("scale".into(), json!(page.scale));
             }
             if page.plot_area == "window" {
-                let [x1, y1, x2, y2] = st.window;
+                let [x1, y1, x2, y2] = st.window.unwrap_or_default();
                 o.insert("window".into(), json!([[x1, y1], [x2, y2]]));
             }
         }
@@ -1076,15 +1078,11 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     let generation = PLOT_GEN.load(Ordering::Relaxed);
     let mut st = temp::<PlotState>(ctx, "plot_state").filter(|s| s.generation == generation && targets.contains(&s.target)).unwrap_or_else(|| {
         let target = app.session.layout_space().tab_name().to_string();
-        let mut ext = d.extents(&cadaddy_doc::Space::Model);
-        if ext.is_empty() {
-            ext = cadaddy_geom::Bounds2::new(cadaddy_geom::Vec2::ZERO, cadaddy_geom::Vec2::new(12.0, 9.0));
-        }
         PlotState {
             generation,
             page: plot_page(d, &target),
             target,
-            window: [ext.min.x, ext.min.y, ext.max.x, ext.max.y],
+            window: None,
             center: true,
             offset_mm: [0.0, 0.0],
             raster_dpi: None,
@@ -1157,13 +1155,17 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                     ui.end_row();
                 }
                 if model && st.page.plot_area == "window" {
+                    let window = st.window.get_or_insert_with(|| {
+                        let ext = d.extents(&cadaddy_doc::Space::Model);
+                        if ext.is_empty() { [0.0, 0.0, 12.0, 9.0] } else { [ext.min.x, ext.min.y, ext.max.x, ext.max.y] }
+                    });
                     for (i, label) in [(0, "First corner"), (2, "Opposite corner")] {
                         ui.label(label);
                         ui.horizontal(|ui| {
                             for (j, axis) in ["X", "Y"].iter().enumerate() {
                                 ui.label(*axis);
                                 let k = i + j;
-                                if let Some(slot) = st.window.get_mut(k)
+                                if let Some(slot) = window.get_mut(k)
                                     && let Some(v) = num_field(ui, ("plot_window", k), *slot)
                                 {
                                     *slot = v;
@@ -1404,7 +1406,7 @@ mod plot_dialog_tests {
             generation: 0,
             page: plot_page(&d, target),
             target: target.into(),
-            window: [0.0, 0.0, 10.0, 10.0],
+            window: Some([0.0, 0.0, 10.0, 10.0]),
             center: true,
             offset_mm: [0.0, 0.0],
             raster_dpi: None,
@@ -1514,7 +1516,7 @@ mod plot_dialog_tests {
         plot_window_resume(&mut app, &ctx);
         assert_eq!(app.ui.dialog.as_deref(), Some("plot"));
         let st = temp::<PlotState>(&ctx, "plot_state").unwrap();
-        assert_eq!((st.page.plot_area.as_str(), st.window), ("window", [2.0, 3.0, 12.0, 9.0]));
+        assert_eq!((st.page.plot_area.as_str(), st.window), ("window", Some([2.0, 3.0, 12.0, 9.0])));
         // A cancelled pick brings the dialog back unchanged.
         app.ui.dialog = None;
         set_temp(&ctx, PICKING_WINDOW, true);
@@ -1522,6 +1524,6 @@ mod plot_dialog_tests {
         app.session.input(cadaddy_engine::Input::Cancel).ok();
         plot_window_resume(&mut app, &ctx);
         assert_eq!(app.ui.dialog.as_deref(), Some("plot"));
-        assert_eq!(temp::<PlotState>(&ctx, "plot_state").unwrap().window, [2.0, 3.0, 12.0, 9.0]);
+        assert_eq!(temp::<PlotState>(&ctx, "plot_state").unwrap().window, Some([2.0, 3.0, 12.0, 9.0]));
     }
 }

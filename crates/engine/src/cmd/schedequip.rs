@@ -424,13 +424,92 @@ pub(crate) fn read(schedules: &[(String, Drawing)], plans: &[PlanIn], have: &[Me
     for (number, page) in schedules {
         tables.extend(equip_reader::read_tables(page, number));
     }
-    let sched: Vec<Scheduled> = equip_reader::scheduled(&tables).into_iter().take(MAX_SCHEDULED).collect();
+    let mut sched: Vec<Scheduled> = equip_reader::scheduled(&tables).into_iter().take(MAX_SCHEDULED).collect();
+    qualify_numbers(&mut sched, plans, have);
     let mut out = place(&sched, plans, have, levels);
     out.tables = tables.len();
     out.air_devices = air_device_types(&tables);
     out.unscheduled = unscheduled_tags(&sched, plans);
     out.rows = sched;
     out
+}
+
+/// A bare number, as a schedule's tag column may print a unit's (`1` in an air handling unit
+/// schedule): no equipment mark by itself.
+pub(crate) fn bare_number(t: &str) -> bool {
+    let t = t.trim();
+    !t.is_empty() && t.len() <= 4 && t.chars().all(|c| c.is_ascii_digit())
+}
+
+/// A tag with its separators out (`AHU-1`, `AHU 1`, `AHU1` → `AHU1`).
+fn squash(t: &str) -> String {
+    t.trim().to_ascii_uppercase().chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
+/// A tag's letters (`AHU-1` → `AHU`).
+fn letters_of(t: &str) -> String {
+    t.trim().to_ascii_uppercase().chars().take_while(char::is_ascii_alphabetic).collect()
+}
+
+/// Each row whose tag column prints a bare number (`1` in an AIR HANDLING UNIT SCHEDULE) given
+/// its kind's letters (Q6579), as the job finds them, in this order: a unit of its kind built
+/// already with those letters and that number (`AHU-1`); a plan printing them (`AHU-1`, `AHU1`,
+/// `AHU` with `1` by it); the one unit of its kind the plans tag with its letters alone (`AHU`),
+/// when the row is its schedule's only bare number of that kind. The letters are its kind's in
+/// the rules data (`equipment.kind_by_tag_prefix`) and those the built units of its kind use. A
+/// row none of these tells keeps its bare number, and no plan's bare number is taken for it
+/// ([`place`]: a `1` on a plan is a keynote, a grid or a detail as often as a unit).
+fn qualify_numbers(sched: &mut [Scheduled], plans: &[PlanIn], have: &[MepEquipment]) {
+    if !sched.iter().any(|x| bare_number(&x.tag)) {
+        return;
+    }
+    let texts: Vec<Vec<Txt>> = plans.iter().map(|p| plan_texts(p.drawing)).collect();
+    let prefixes = cadaddy_mepfix::wordrules::pairs("equipment.kind_by_tag_prefix");
+    let bare_of_kind = |kind: &str| sched.iter().filter(|x| x.kind == kind && bare_number(&x.tag)).count();
+    let counts: Vec<usize> = sched.iter().map(|x| bare_of_kind(&x.kind)).collect();
+    for (x, bare_rows) in sched.iter_mut().zip(counts) {
+        if !bare_number(&x.tag) {
+            continue;
+        }
+        let n = x.tag.trim().to_string();
+        let mut letters: Vec<String> = prefixes.iter().filter(|(_, k)| *k == x.kind).map(|(w, _)| w.to_ascii_uppercase()).collect();
+        for e in have.iter().filter(|e| e.kind == x.kind).take(MAX_ITEMS) {
+            let l = letters_of(&e.tag);
+            if !l.is_empty() && !letters.contains(&l) {
+                letters.push(l);
+            }
+        }
+        if letters.is_empty() {
+            continue;
+        }
+        let want: Vec<String> = letters.iter().map(|l| format!("{l}{n}")).collect();
+        let built = have.iter().filter(|e| e.kind == x.kind).take(MAX_ITEMS).find(|e| want.contains(&squash(&e.tag)));
+        let printed = || texts.iter().flatten().find(|t| want.contains(&squash(&t.value)));
+        let near = || letters.iter().find(|l| texts.iter().any(|ts| !find_tags(ts, &format!("{l}-{n}")).is_empty()));
+        // The units of its kind built with its letters alone.
+        let alone: BTreeSet<String> = have
+            .iter()
+            .filter(|e| e.kind == x.kind && !e.tag.trim().is_empty() && e.tag.trim().chars().all(|c| c.is_ascii_alphabetic()))
+            .map(|e| e.tag.trim().to_ascii_uppercase())
+            .collect();
+        let (tag, why) = if let Some(e) = built {
+            let t = e.tag.trim().to_ascii_uppercase();
+            (t.clone(), format!("the unit of its kind built as {t} is it"))
+        } else if let Some(t) = printed() {
+            (t.value.clone(), format!("a plan prints {}", t.value))
+        } else if let Some(l) = near() {
+            (format!("{l}-{n}"), format!("a plan prints {l} with {n} by it"))
+        } else if bare_rows == 1
+            && alone.len() == 1
+            && let Some(l) = alone.iter().next()
+        {
+            (format!("{l}-{n}"), format!("its only bare number, and the plans tag one {} as {l} alone", x.kind.replace('_', " ")))
+        } else {
+            continue;
+        };
+        x.tag_basis = format!("{} {} prints {n} in its tag column; {why}", x.sheet, x.title).trim().to_string();
+        x.tag = tag;
+    }
 }
 
 /// Most unscheduled tags listed.
@@ -527,6 +606,9 @@ fn put_row(e: &mut MepEquipment, x: &Scheduled) {
         e.properties.entry(k.clone()).or_insert_with(|| v.clone());
     }
     e.sources.entry("schedule".to_string()).or_insert_with(|| format!("{} {}", x.sheet, x.title).trim().to_string());
+    if !x.tag_basis.is_empty() {
+        e.sources.entry("tag".to_string()).or_insert_with(|| x.tag_basis.clone());
+    }
 }
 
 /// The words of a text, upper case, a plural's `S` off (`BATHROOMS` → `BATHROOM`).
@@ -633,6 +715,181 @@ pub(crate) fn type_built(rows: &[Scheduled], equipment: &mut [MepEquipment], roo
     out
 }
 
+/// Most units [`merge_tag_variants`] compares pairwise (hostile specs).
+const MAX_MERGE: usize = 5_000;
+/// How far apart two readings of one unit's tag may be, feet: a symbol's size, never the gap
+/// between two units back to back across a wall (two fans 2 ft apart are two).
+const MERGE_GAP_FT: f64 = 0.5;
+
+/// Whether two tags may be one unit's read twice: its letters alone beside its letters and number
+/// (`AHU`, `AHU-1`); `Some(true)` when the first is the fuller. The same tag twice is never one
+/// unit by its tag (`EF-1` is a type a dozen fans carry, back to back in two rooms).
+fn variant_pair(a: &str, b: &str) -> Option<bool> {
+    let (sa, sb) = (squash(a), squash(b));
+    let (la, lb) = (letters_of(a), letters_of(b));
+    if la.is_empty() || la != lb {
+        return None;
+    }
+    let numbered = |s: &str, l: &str| s.len() > l.len() && s.chars().skip(l.len()).any(|c| c.is_ascii_digit());
+    match (sa == la, sb == lb) {
+        // `AHU` and `AHU-1`: the numbered one is fuller.
+        (true, false) if numbered(&sb, &lb) => Some(false),
+        (false, true) if numbered(&sa, &la) => Some(true),
+        _ => None,
+    }
+}
+
+/// How well a box's size agrees with its kind's usual one (rules data), feet: the
+/// [`size_error`], none for a kind with no usual size or a box past [`SIZE_RATIO`].
+fn fit_error(e: &MepEquipment, upf: f64) -> Option<f64> {
+    let want = equip_reader::rule_size_of(&e.kind)?;
+    size_error((e.max[0] - e.min[0]) / upf, (e.max[1] - e.min[1]) / upf, [want[0], want[1]])
+}
+
+/// One unit read twice (Q6579): two pieces of equipment of one kind on one level, read off one
+/// sheet, whose tags are the same mark with and without its number (`AHU` and `AHU-1`) and
+/// whose boxes touch or overlap (within [`MERGE_GAP_FT`]), are one, unless they stand in two
+/// rooms (each its own `room`). The
+/// fuller tag stays; its footprint is the box whose size agrees best with its kind's usual one
+/// (the unit's outline, not a room's box its letters were read by), else the smaller; what
+/// the other carried that it has not is added. Each merge said on it (`sources.merged`).
+/// Returns what was merged (`AHU into AHU-1 (Level 1)`).
+pub(crate) fn merge_tag_variants(equipment: &mut Vec<MepEquipment>, upf: f64) -> Vec<String> {
+    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let mut merged: Vec<String> = Vec::new();
+    let mut gone: BTreeSet<usize> = BTreeSet::new();
+    let n = equipment.len().min(MAX_MERGE);
+    for i in 0..n {
+        for j in i + 1..n {
+            if gone.contains(&i) || gone.contains(&j) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (equipment.get(i), equipment.get(j)) else { continue };
+            let blank = |k: &str| k.is_empty() || k == "unknown";
+            if !a.level.eq_ignore_ascii_case(&b.level) || !(a.kind == b.kind || blank(&a.kind) || blank(&b.kind)) {
+                continue;
+            }
+            let Some(a_fuller) = variant_pair(&a.tag, &b.tag) else { continue };
+            // Off two sheets, or in two rooms: two readings of two units.
+            let differ = |x: Option<&String>, y: Option<&String>| match (x, y) {
+                (Some(x), Some(y)) => !x.trim().is_empty() && !y.trim().is_empty() && !x.trim().eq_ignore_ascii_case(y.trim()),
+                _ => false,
+            };
+            if differ(a.sources.get("sheet"), b.sources.get("sheet")) || differ(a.properties.get("room"), b.properties.get("room")) {
+                continue;
+            }
+            let reach = MERGE_GAP_FT * upf;
+            let gap_x = (a.min[0] - b.max[0]).max(b.min[0] - a.max[0]).max(0.0);
+            let gap_y = (a.min[1] - b.max[1]).max(b.min[1] - a.max[1]).max(0.0);
+            let gap = gap_x.hypot(gap_y);
+            if !gap.is_finite() || gap > reach {
+                continue;
+            }
+            let (keep, drop) = if a_fuller { (i, j) } else { (j, i) };
+            let Some(other) = equipment.get(drop).cloned() else { continue };
+            let Some(e) = equipment.get_mut(keep) else { continue };
+            if blank(&e.kind) {
+                e.kind = other.kind.clone();
+            }
+            // The footprint: the box that agrees with its kind's size, else the smaller.
+            let area = |x: &MepEquipment| (x.max[0] - x.min[0]) * (x.max[1] - x.min[1]);
+            let (fe, fo) = (fit_error(e, upf), fit_error(&other, upf));
+            let take_other = match (fe, fo) {
+                (Some(a), Some(b)) => b < a,
+                (None, Some(_)) => true,
+                (Some(_), None) => false,
+                (None, None) => area(&other) < area(e),
+            };
+            if take_other {
+                e.min = other.min;
+                e.max = other.max;
+                if let Some(o) = other.sources.get("outline").or_else(|| other.sources.get("sheet")) {
+                    e.sources.insert("outline".to_string(), format!("the box read with {} ({o})", other.tag.trim()));
+                }
+            }
+            for s in &other.systems {
+                if !e.systems.contains(s) {
+                    e.systems.push(s.clone());
+                }
+            }
+            for (k, v) in &other.properties {
+                e.properties.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            for (k, v) in &other.sources {
+                e.sources.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            e.confidence = e.confidence.max(other.confidence);
+            let note = format!(
+                "read twice as {} and {}, {:.1} ft apart: one unit, its fuller tag kept",
+                e.tag.trim(),
+                other.tag.trim(),
+                gap_x.hypot(gap_y) / upf
+            );
+            e.sources.insert("merged".to_string(), note);
+            merged.push(format!("{} into {} ({})", other.tag.trim(), e.tag.trim(), e.level));
+            gone.insert(drop);
+        }
+    }
+    if !gone.is_empty() {
+        let mut k = 0usize;
+        equipment.retain(|_| {
+            let keep = !gone.contains(&k);
+            k += 1;
+            keep
+        });
+    }
+    merged
+}
+
+/// Equipment whose box is far bigger than it can be (Q6579): a box longer than [`SIZE_RATIO`]
+/// times its schedule row's size (by its tag), else its kind's usual size (rules data), or
+/// bigger than that in area by its square, is the box of something else its tag was read by (a
+/// room's, a building's); it
+/// takes that size at the box's centre, said so (`sources.outline`, `STATUS` inferred or
+/// derived). Units the scheduled-equipment step placed (their outline already sized against
+/// the schedule) and kinds with no usual size (electrical gear) are left. Returns how many.
+pub(crate) fn fit_oversized(rows: &[Scheduled], equipment: &mut [MepEquipment], upf: f64) -> usize {
+    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let by_tag: BTreeMap<String, &Scheduled> = rows.iter().flat_map(|x| tag_variants(&x.tag).into_iter().map(move |t| (t, x))).collect();
+    let mut n = 0usize;
+    for e in equipment.iter_mut() {
+        if e.sources.contains_key("position") && e.sources.contains_key("outline") {
+            continue;
+        }
+        let row = by_tag.get(&e.tag.trim().to_ascii_uppercase()).copied();
+        let (want, from, made) = match row.and_then(|x| x.size_ft).filter(|s| s[0] > 0.0 && s[1] > 0.0) {
+            Some(s) => {
+                (s, format!("the schedule's size ({})", row.map(|x| format!("{} {}", x.sheet, x.title)).unwrap_or_default().trim()), Made::Derived)
+            }
+            None => match equip_reader::rule_size_of(&e.kind) {
+                Some(s) => (s, "the usual size of its kind (rules data)".to_string(), Made::Inferred),
+                None => continue,
+            },
+        };
+        let (w, d) = ((e.max[0] - e.min[0]) / upf, (e.max[1] - e.min[1]) / upf);
+        if !(w.is_finite() && d.is_finite()) {
+            continue;
+        }
+        let (long, short) = (want[0].max(want[1]), want[0].min(want[1]));
+        // Far bigger: longer than twice the unit, or more than twice it each way in area (a
+        // box squarer than the unit, its tag's, is no error).
+        if w.max(d) <= SIZE_RATIO * long && w * d <= SIZE_RATIO * SIZE_RATIO * long * short {
+            continue;
+        }
+        let c = [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
+        // Its long side along the box's.
+        let (hx, hy) = if w >= d { (long * upf / 2.0, short * upf / 2.0) } else { (short * upf / 2.0, long * upf / 2.0) };
+        e.min = [c[0] - hx, c[1] - hy];
+        e.max = [c[0] + hx, c[1] + hy];
+        let basis = format!("the box read for it ({w:.1} x {d:.1} ft) is more than {SIZE_RATIO} times {from}: that size at the box's centre");
+        e.sources.insert("outline".to_string(), basis.clone());
+        e.properties.insert("STATUS".to_string(), made.as_str().to_string());
+        e.properties.entry("BASIS".to_string()).or_insert(basis);
+        n += 1;
+    }
+    n
+}
+
 /// The air device schedule's rows (Q6318): each table whose title is an air device schedule's
 /// (`schedules.air_device_titles`), one type per row by its mark column (`MARK`, `TAG`, `TYPE`,
 /// `SYMBOL`), the rest of the row as printed. A mark listed twice keeps its first row.
@@ -687,9 +944,15 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
     let every = |x: &Scheduled| every_kinds.iter().any(|k| x.kind.eq_ignore_ascii_case(k));
     // (tag, its row) still to place.
     let mut todo: Vec<(String, &Scheduled)> = Vec::new();
+    // A row told by the one unit of its kind tagged with its letters alone ([`qualify_numbers`])
+    // is that unit, built already.
+    let alone = |t: &str, x: &Scheduled| {
+        !x.tag_basis.is_empty()
+            && have.iter().any(|e| e.kind == x.kind && e.tag.trim().eq_ignore_ascii_case(&letters_of(t)) && !e.tag.trim().is_empty())
+    };
     for x in sched {
         for t in tag_variants(&x.tag) {
-            if built.contains(&t) {
+            if built.contains(&t) || alone(&t, x) {
                 out.already += 1;
             } else if !todo.iter().any(|(o, _)| *o == t) {
                 todo.push((t, x));
@@ -715,6 +978,8 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
         let found: Vec<(usize, [f64; 2], f64)> = todo
             .iter()
             .enumerate()
+            // A bare number is no mark on a plan (a keynote, a grid, a detail prints one too).
+            .filter(|(_, (t, _))| !bare_number(t))
             .flat_map(|(i, (t, x))| {
                 let at: Vec<([f64; 2], f64)> = if every(x) { find_tags(&texts, t) } else { find_tag(&texts, t).into_iter().collect() };
                 at.into_iter().map(move |(at, h)| (i, at, h))
@@ -807,6 +1072,9 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
             let mut sources = BTreeMap::new();
             sources.insert("sheet".to_string(), plan.sheet.number.clone());
             sources.insert("schedule".to_string(), format!("{} {}", x.sheet, x.title).trim().to_string());
+            if !x.tag_basis.is_empty() {
+                sources.insert("tag".to_string(), x.tag_basis.clone());
+            }
             sources.insert("position".to_string(), format!("its tag {tag} on {}", plan.sheet.number));
             sources.insert("outline".to_string(), footprint.clone());
             sources.insert("height".to_string(), height_from);
@@ -892,7 +1160,17 @@ fn place(sched: &[Scheduled], plans: &[PlanIn], have: &[MepEquipment], levels: &
         .enumerate()
         .filter(|(i, (t, _))| !placed.contains(t) && !typed_found.contains(i))
         .map(|(_, tx)| tx)
-        .map(|(t, x)| (t.clone(), format!("{} {} lists it; no mechanical or plumbing plan of a level tags it", x.sheet, x.title).trim().to_string()))
+        .map(|(t, x)| {
+            let why = if bare_number(t) {
+                format!(
+                    "{} {} lists it by a bare number; no plan prints it with its kind's letters, and a bare number on a plan is no equipment mark",
+                    x.sheet, x.title
+                )
+            } else {
+                format!("{} {} lists it; no mechanical or plumbing plan of a level tags it", x.sheet, x.title)
+            };
+            (t.clone(), why.trim().to_string())
+        })
         .collect();
     out
 }
@@ -1245,6 +1523,186 @@ mod tests {
         assert!(r.equipment.is_empty());
         assert_eq!(r.unplaced.len(), 1);
         assert_eq!(r.unplaced.first().map(|u| u.0.as_str()), Some("WH-9"));
+    }
+
+    fn unit(tag: &str, kind: &str, lo: [f64; 2], hi: [f64; 2], sheet: &str) -> MepEquipment {
+        let mut sources = BTreeMap::new();
+        sources.insert("sheet".to_string(), sheet.to_string());
+        MepEquipment { tag: tag.into(), kind: kind.into(), level: "Level 1".into(), min: lo, max: hi, sources, confidence: 0.7, ..Default::default() }
+    }
+
+    /// Q6579: one air handler read twice off one sheet, by a room-sized box its letters alone
+    /// were read by (`AHU`, 40 x 20 ft) and by its whole tag (`AHU-1`, its own 6 x 4 ft box
+    /// inside it), is one unit `AHU-1` in its own box; a fan's `EF` touching `EF-1` is one. Two
+    /// units stay two: one type tag twice (back to back 2 ft apart), letters alone 2 ft from a
+    /// numbered tag, touching but off two sheets or in two rooms, another kind, another level,
+    /// two numbers.
+    #[test]
+    fn one_unit_read_by_its_tag_with_and_without_its_number_is_one() {
+        let upf = 12.0;
+        let ft = |x: f64| x * upf;
+        let mut eq = vec![
+            unit("AHU", "ahu", [ft(0.0), ft(0.0)], [ft(40.0), ft(20.0)], "A-1"),
+            unit("AHU-1", "ahu", [ft(10.0), ft(5.0)], [ft(16.0), ft(9.0)], "A-1"),
+            unit("EF-1", "exhaust_fan", [ft(100.0), ft(0.0)], [ft(102.0), ft(2.0)], "M-1"),
+            unit("EF", "exhaust_fan", [ft(102.2), ft(0.0)], [ft(104.0), ft(2.0)], "M-1"),
+            // A type tag two fans share, back to back 2 ft apart; letters alone and the type
+            // 2 ft apart (a typical room's stamped fan beside its neighbour's).
+            unit("EF-2", "exhaust_fan", [ft(110.0), ft(0.0)], [ft(112.0), ft(2.0)], "M-1"),
+            unit("EF-2", "exhaust_fan", [ft(114.0), ft(0.0)], [ft(116.0), ft(2.0)], "M-1"),
+            unit("EF", "exhaust_fan", [ft(118.0), ft(0.0)], [ft(120.0), ft(2.0)], "M-1"),
+            // Touching but off another sheet.
+            unit("EF-3", "exhaust_fan", [ft(130.0), ft(0.0)], [ft(132.0), ft(2.0)], "M-1"),
+            unit("EF", "exhaust_fan", [ft(132.0), ft(0.0)], [ft(134.0), ft(2.0)], "M-2"),
+            unit("RTU", "rtu", [ft(200.0), ft(0.0)], [ft(210.0), ft(6.0)], "M-1"),
+            unit("AHU-2", "ahu", [ft(200.0), ft(0.0)], [ft(208.0), ft(5.0)], "M-1"),
+            unit("VAV-1", "vav", [ft(300.0), ft(0.0)], [ft(302.0), ft(1.0)], "M-1"),
+            unit("VAV-2", "vav", [ft(302.5), ft(0.0)], [ft(305.0), ft(1.0)], "M-1"),
+        ];
+        let mut upper = unit("AHU", "ahu", [ft(10.0), ft(5.0)], [ft(16.0), ft(9.0)], "A-2");
+        upper.level = "Level 2".into();
+        eq.push(upper);
+        for (tag, x, room) in [("EF-4", 140.0, "103"), ("EF", 142.0, "105")] {
+            let mut e = unit(tag, "exhaust_fan", [ft(x), ft(50.0)], [ft(x + 2.0), ft(52.0)], "M-1");
+            e.properties.insert("room".into(), room.into());
+            eq.push(e);
+        }
+        let merged = merge_tag_variants(&mut eq, upf);
+        assert_eq!(merged, vec!["AHU into AHU-1 (Level 1)".to_string(), "EF into EF-1 (Level 1)".to_string()]);
+        let tags: Vec<&str> = eq.iter().map(|e| e.tag.as_str()).collect();
+        assert_eq!(tags, ["AHU-1", "EF-1", "EF-2", "EF-2", "EF", "EF-3", "EF", "RTU", "AHU-2", "VAV-1", "VAV-2", "AHU", "EF-4", "EF"]);
+        assert_eq!(eq.get(11).map(|e| e.level.as_str()), Some("Level 2"));
+        let ahu = eq.first().expect("AHU-1");
+        // Its own box, not the room-sized one.
+        assert_eq!((ahu.min, ahu.max), ([ft(10.0), ft(5.0)], [ft(16.0), ft(9.0)]));
+        assert!(ahu.sources.get("merged").is_some_and(|m| m.contains("AHU-1 and AHU")), "{:?}", ahu.sources);
+        // Two kinds' tags never merge, whatever their letters.
+        assert_eq!(variant_pair("AHU", "AHU-1"), Some(false));
+        assert_eq!(variant_pair("AHU-1", "AHU-1"), None);
+        assert_eq!(variant_pair("AHU-1", "AHU 1"), None);
+        assert_eq!(variant_pair("AHU-1", "AHU-2"), None);
+        assert_eq!(variant_pair("EF", "EF"), None);
+        assert_eq!(variant_pair("1", "1"), None);
+    }
+
+    fn ahu_schedule_row(tag: &str) -> Scheduled {
+        let mut properties = BTreeMap::new();
+        properties.insert("TAG".to_string(), tag.to_string());
+        properties.insert("MODEL".to_string(), "MODEL-X".to_string());
+        Scheduled {
+            tag: tag.into(),
+            kind: "ahu".into(),
+            kind_from: "title".into(),
+            sheet: "M-0".into(),
+            title: "AIR HANDLING UNIT SCHEDULE".into(),
+            properties,
+            ..Default::default()
+        }
+    }
+
+    /// Q6579: an air handling unit schedule printing a bare `1` in its tag column. Its row is the
+    /// unit the job built as `AHU-1` (by its kind's letters), never a stray `1` on a plan with an
+    /// outline by it; with no such unit and no plan printing `AHU-1`, the row is listed (a bare
+    /// number is no equipment mark), not built at the `1`; with only a unit tagged `AHU` alone,
+    /// it is that unit's row.
+    #[test]
+    fn a_bare_number_in_a_schedule_is_its_kinds_tag_and_no_stray_number_on_a_plan() {
+        let sheet = SheetRef {
+            number: "M-1".into(),
+            level: "1".into(),
+            discipline: "M".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 2000.0],
+            ..Default::default()
+        };
+        // A keynote `1` with an outline the size of an air handler beside it.
+        let mut d = Drawing::default();
+        text(&mut d, "1", 500.0, 500.0);
+        rect(&mut d, [520.0, 480.0], [616.0, 540.0]);
+        let plan = PlanIn { sheet: &sheet, drawing: &d, sheet_upf: 12.0, upf: 12.0 };
+        let plans = std::slice::from_ref(&plan);
+
+        // Built as AHU-1 (and read again as AHU) already.
+        let have = vec![unit("AHU", "ahu", [0.0, 0.0], [96.0, 60.0], "A-1"), unit("AHU-1", "ahu", [5.0, 5.0], [101.0, 65.0], "A-1")];
+        let mut rows = vec![ahu_schedule_row("1")];
+        qualify_numbers(&mut rows, plans, &have);
+        assert_eq!(rows.first().map(|x| x.tag.as_str()), Some("AHU-1"));
+        assert!(rows.first().is_some_and(|x| x.tag_basis.contains("prints 1 in its tag column")), "{:?}", rows.first());
+        let r = chosen(place(&rows, plans, &have, &[]));
+        assert!(r.equipment.is_empty(), "nothing is built at the stray 1: {:?}", r.equipment);
+        assert_eq!(r.already, 1);
+        let mut eq = have.clone();
+        merge_tag_variants(&mut eq, 12.0);
+        let typed = type_built(&rows, &mut eq, &|_, r| r.to_string());
+        assert_eq!(typed.by_tag, 1);
+        assert_eq!(eq.len(), 1);
+        let e = eq.first().expect("AHU-1");
+        assert_eq!((e.tag.as_str(), e.properties.get("MODEL").map(String::as_str)), ("AHU-1", Some("MODEL-X")));
+        assert!(e.sources.get("tag").is_some_and(|t| t.contains("built as AHU-1")), "{:?}", e.sources);
+
+        // Nothing of its kind built, no plan printing AHU-1: listed, not built at the `1`.
+        let mut rows = vec![ahu_schedule_row("1")];
+        qualify_numbers(&mut rows, plans, &[]);
+        assert_eq!(rows.first().map(|x| x.tag.as_str()), Some("1"));
+        let r = chosen(place(&rows, plans, &[], &[]));
+        assert!(r.equipment.is_empty(), "{:?}", r.equipment);
+        assert!(r.unplaced.first().is_some_and(|(t, why)| t == "1" && why.contains("bare number")), "{:?}", r.unplaced);
+
+        // A plan printing `AHU` with `1` by it: that is its tag, built there.
+        let mut d2 = Drawing::default();
+        text(&mut d2, "AHU", 1000.0, 1000.0);
+        text(&mut d2, "1", 1003.0, 985.0);
+        let plan2 = PlanIn { sheet: &sheet, drawing: &d2, sheet_upf: 12.0, upf: 12.0 };
+        let mut rows = vec![ahu_schedule_row("1")];
+        qualify_numbers(&mut rows, std::slice::from_ref(&plan2), &[]);
+        assert_eq!(rows.first().map(|x| x.tag.as_str()), Some("AHU-1"));
+        let r = chosen(place(&rows, std::slice::from_ref(&plan2), &[], &[]));
+        assert_eq!(r.equipment.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["AHU-1"]);
+
+        // Only a unit tagged `AHU` alone: the row is its.
+        let have = vec![unit("AHU", "ahu", [0.0, 0.0], [96.0, 60.0], "A-1")];
+        let mut rows = vec![ahu_schedule_row("1")];
+        qualify_numbers(&mut rows, plans, &have);
+        assert_eq!(rows.first().map(|x| x.tag.as_str()), Some("AHU-1"));
+        let r = chosen(place(&rows, plans, &have, &[]));
+        assert!(r.equipment.is_empty() && r.unplaced.is_empty(), "{:?} {:?}", r.equipment, r.unplaced);
+        let mut eq = have.clone();
+        let typed = type_built(&rows, &mut eq, &|_, r| r.to_string());
+        assert_eq!(typed.by_room, 1);
+        assert_eq!(eq.first().map(|e| (e.tag.as_str(), e.properties.get("MODEL").cloned())), Some(("AHU-1", Some("MODEL-X".to_string()))));
+    }
+
+    /// Q6579: a unit's box far bigger than it can be (a third of the building) takes its
+    /// schedule's size, else its kind's usual size, at its centre, said so; a box that agrees,
+    /// a unit placed from its schedule and a kind with no usual size (a panel) stay.
+    #[test]
+    fn an_equipment_box_far_bigger_than_the_unit_takes_its_size() {
+        let upf = 12.0;
+        let ft = |x: f64| x * upf;
+        let mut sized = ahu_schedule_row("AHU-1");
+        sized.size_ft = Some([10.0, 6.0, 5.0]);
+        let mut placed = unit("AHU-3", "ahu", [0.0, 0.0], [ft(40.0), ft(20.0)], "M-1");
+        placed.sources.insert("position".into(), "its tag".into());
+        placed.sources.insert("outline".into(), "outline".into());
+        let mut eq = vec![
+            unit("AHU-1", "ahu", [0.0, 0.0], [ft(40.0), ft(20.0)], "A-1"),
+            unit("AHU-2", "ahu", [0.0, 0.0], [ft(30.0), ft(20.0)], "A-1"),
+            unit("AHU-4", "ahu", [0.0, 0.0], [ft(9.0), ft(6.0)], "A-1"),
+            // A box squarer than its unit (its tag's box), no bigger than twice it each way.
+            unit("FCU-9", "fan_coil_unit", [0.0, 0.0], [ft(4.3), ft(4.3)], "M-1"),
+            placed,
+            unit("P1", "panel", [0.0, 0.0], [ft(40.0), ft(20.0)], "E-1"),
+        ];
+        assert_eq!(fit_oversized(&[sized], &mut eq, upf), 2);
+        let size = |e: &MepEquipment| [(e.max[0] - e.min[0]) / upf, (e.max[1] - e.min[1]) / upf];
+        let got: Vec<[f64; 2]> = eq.iter().map(size).collect();
+        let got: Vec<[f64; 2]> = got.iter().map(|g| g.map(|v| (v * 10.0).round() / 10.0)).collect();
+        assert_eq!(got, [[10.0, 6.0], [8.0, 5.0], [9.0, 6.0], [4.3, 4.3], [40.0, 20.0], [40.0, 20.0]]);
+        let first = eq.first().expect("AHU-1");
+        assert_eq!(first.min, [ft(15.0), ft(7.0)], "at the box's centre");
+        assert!(first.sources.get("outline").is_some_and(|o| o.contains("schedule's size")), "{:?}", first.sources);
+        assert_eq!(first.properties.get("STATUS").map(String::as_str), Some("derived"));
+        assert_eq!(eq.get(1).and_then(|e| e.properties.get("STATUS")).map(String::as_str), Some("inferred"));
     }
 
     #[test]
