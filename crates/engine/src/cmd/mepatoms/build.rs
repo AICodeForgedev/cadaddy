@@ -20,6 +20,8 @@ use super::{
 const MAX_RUNS: usize = 50_000;
 const MAX_DEVICES: usize = 100_000;
 const MAX_ATOMS: usize = 1_500_000;
+/// Most levels the supports pass looks at.
+const MAX_LEVELS_LOOKED: usize = 500;
 /// Sides of a stick's or a cable's tube.
 const SIDES: u32 = 8;
 
@@ -818,6 +820,16 @@ pub(crate) fn body(a: &Atom, upf: f64) -> Mesh {
             tube(&mut m, a.a - dir * half, a.a + dir * half, r, SIDES);
         }
         "strap" => block(&mut m, a.a, plan, 0.75 / 12.0 * upf, r * 2.4, r * 2.4),
+        // Raceway supports (Q6353): a strut channel from end to end, a rod, the small pieces.
+        "strut" => {
+            let s = a.body_in.max(0.5) / 12.0 * upf;
+            block(&mut m, (a.a + a.b) * 0.5, plan, dir3.len(), s, s);
+        }
+        "rod" => tube(&mut m, a.a, a.b, r, 6),
+        "strut_strap" | "riser_clamp" | "support_anchor" | "strut_nut" => {
+            let s = a.body_in.max(0.1) / 12.0 * upf;
+            block(&mut m, a.a, plan, s * 0.5, s, s);
+        }
         "elbow" | "offset" => tube(&mut m, a.a - dir * (r * 1.5), a.a + dir * (r * 1.5), r * 1.15, SIDES),
         // A field bend is part of its stick: a thin band marks it.
         "bend" => tube(&mut m, a.a - dir * (r * 0.3), a.a + dir * (r * 0.3), r * 1.05, SIDES),
@@ -2931,13 +2943,23 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // -- The splices in each box (Q6349) and the connectors they take. --
     let splice_report = splice_atoms(&mut atoms, &boxes, &bare, &external, &box_rule_at, &pigtails, upf);
 
+    // -- The raceways' supports beyond their straps (Q6353): banks on strut, risers clamped at
+    // each floor. --
+    let (support_report, dropped) = support_atoms(sp, &mut atoms, upf, tol);
+
     // -- Into the model: each atom an element; then what it connects to, by handle. --
     let mut handles: Vec<Option<Handle>> = Vec::with_capacity(atoms.len());
     // Each piece's body from its bottom to its top (Q6592): its elevation, read off its own
     // geometry as it is cut.
     let mut heights: Vec<Option<(f64, f64)>> = Vec::with_capacity(atoms.len());
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
-    for (a, ctx) in &atoms {
+    for (ai, (a, ctx)) in atoms.iter().enumerate() {
+        // A strap a strut support took the place of (Q6353).
+        if dropped.contains(&ai) {
+            handles.push(None);
+            heights.push(None);
+            continue;
+        }
         let mesh = match ctx.body {
             Some((c, along, w, t, h)) if !matches!(a.kind, "conduit" | "cable" | "wire") => {
                 let mut m = super::super::wallgen::empty_mesh();
@@ -3002,7 +3024,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if !a.size.is_empty() {
             ps.set("size", Prop::new(a.size.clone(), ctx.src.clone()));
         }
-        if matches!(a.kind, "conduit" | "cable" | "wire" | "offset") {
+        if matches!(a.kind, "conduit" | "cable" | "wire" | "offset" | "strut" | "rod") {
             ps.set(
                 "length_ft",
                 Prop::new(format!("{:.4}", a.length_ft).trim_end_matches('0').trim_end_matches('.').to_string(), computed()).with_unit("ft"),
@@ -3282,7 +3304,115 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomNotes": notes,
         "fireAlarm": fa_report,
         "splices": splice_report,
+        "supports": support_report,
     })
+}
+
+/// The raceways' supports beyond straps (Q6353, [`super::supports`]): the legs of every raceway
+/// stick above its floor, the straps on them, the floors over the lowest; the new pieces join
+/// `atoms`, and the straps they replace are returned so the build leaves them out.
+fn support_atoms(sp: &BuildingSpec, atoms: &mut Vec<(Atom, AtomCtx)>, upf: f64, tol: f64) -> (Value, BTreeSet<usize>) {
+    use super::supports::{Leg, Strap, plan};
+    let rl = rules();
+    let sr = &rl.supports;
+    let heights = super::super::ceilheight::Rule::load();
+    let mut floor_of: HashMap<String, (f64, Option<f64>)> = HashMap::new();
+    for l in sp.levels.iter().take(MAX_LEVELS_LOOKED) {
+        let top = super::super::ceilingseat::structure_under(sp, &l.name, &heights).map(|h| (l.elevation_ft + h) * upf);
+        floor_of.insert(l.name.to_ascii_lowercase(), (l.elevation_ft * upf, top));
+    }
+    let mut floors: Vec<f64> = sp.levels.iter().take(MAX_LEVELS_LOOKED).map(|l| l.elevation_ft * upf).filter(|z| z.is_finite()).collect();
+    floors.sort_by(f64::total_cmp);
+    floors.dedup_by(|a, b| (*a - *b).abs() <= tol);
+    let upper: Vec<f64> = floors.iter().skip(1).copied().collect();
+    let mut run_ids: HashMap<String, usize> = HashMap::new();
+    let mut legs: Vec<Leg> = Vec::new();
+    let mut straps: Vec<Strap> = Vec::new();
+    let mut straps_before = 0usize;
+    for (i, (a, ctx)) in atoms.iter().enumerate() {
+        match a.kind {
+            "conduit" => {
+                let Some(rw) = rl.raceways.get(&a.ty) else { continue };
+                let (floor, top) = floor_of.get(&ctx.level.to_ascii_lowercase()).copied().unwrap_or((f64::NEG_INFINITY, None));
+                let n = run_ids.len();
+                let run = if ctx.run.is_empty() { usize::MAX - i } else { *run_ids.entry(ctx.run.clone()).or_insert(n) };
+                let pts: Vec<Vec3> = if a.path.len() >= 2 { a.path.clone() } else { vec![a.a, a.b] };
+                for w in pts.windows(2).take(64) {
+                    let [p, q] = w else { continue };
+                    // In the ground or the slab: held by it, no hangers.
+                    if p.z.max(q.z) < floor - tol {
+                        continue;
+                    }
+                    legs.push(Leg {
+                        atom: i,
+                        run,
+                        a: *p,
+                        b: *q,
+                        dia_in: a.body_in,
+                        spacing_ft: rw.strap_spacing(a.body_in),
+                        size: a.size.clone(),
+                        ty: a.ty.clone(),
+                        top_z: top,
+                    });
+                }
+            }
+            "strap" => {
+                let Some(&held) = a.connects.first() else { continue };
+                if atoms.get(held).is_some_and(|h| h.0.kind == "conduit" && rl.raceways.contains_key(&h.0.ty)) {
+                    straps_before += 1;
+                    straps.push(Strap { atom: i, held, at: a.a });
+                }
+            }
+            _ => {}
+        }
+    }
+    let base = atoms.len();
+    let room = MAX_ATOMS.saturating_sub(base);
+    let planned = plan(&legs, &straps, &upper, sr, upf, base, room);
+    let basis = super::super::provenance::rule("E-RACEWAY-SUPPORTS").basis_for("");
+    let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut made: Vec<(Atom, AtomCtx)> = Vec::with_capacity(planned.pieces.len().min(room));
+    for p in planned.pieces.into_iter().take(room) {
+        let Some(mut ctx) = atoms.get(p.ctx_of).map(|x| x.1.clone()) else { continue };
+        if p.shared {
+            ctx.run = String::new();
+            ctx.circuit = String::new();
+            ctx.circuits = String::new();
+            ctx.source = Handle(0);
+        }
+        ctx.body = None;
+        ctx.src = rule_source(&format!("{} — {}", sr.bank_source, p.atom.source));
+        ctx.made = Made::Inferred;
+        ctx.basis = basis.clone();
+        *by_kind.entry(p.atom.kind).or_default() += 1;
+        made.push((p.atom, ctx));
+    }
+    let n = made.len();
+    atoms.extend(made);
+    for (old, new) in planned.back {
+        if new < base + n
+            && let Some(a) = atoms.get_mut(old)
+        {
+            a.0.connects.push(new);
+        }
+    }
+    let replaced = planned.dropped.len();
+    let r1 = |v: f64| (v * 10.0).round() / 10.0;
+    let mut after: BTreeMap<&'static str, usize> = by_kind.clone();
+    after.insert("strap", straps_before.saturating_sub(replaced));
+    let report = json!({
+        "byKind": after,
+        "strapsBefore": straps_before,
+        "strapsReplaced": replaced,
+        "banks": planned.banks,
+        "trapezes": planned.trapezes,
+        "wallStruts": planned.wall_struts,
+        "riserClamps": planned.riser_clamps,
+        "strutFt": r1(planned.strut_ft),
+        "rodFt": r1(planned.rod_ft),
+        "source": sr.bank_source,
+    });
+    (report, planned.dropped)
 }
 
 /// The splices in every box and every luminaire's own junction box (Q6349): from the

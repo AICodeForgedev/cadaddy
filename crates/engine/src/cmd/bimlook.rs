@@ -462,7 +462,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
                 "conduit" => noun.to_string(),
                 "box" | "ring" => "Boxes".into(),
                 "breaker" => "Breakers".into(),
-                "strap" => format!("{noun} Supports"),
+                "strap" | "strut" | "strut_strap" | "rod" | "support_anchor" | "strut_nut" | "riser_clamp" => format!("{noun} Supports"),
                 "cable" => "Cable".into(),
                 "wire" => "Wire".into(),
                 "bend" => format!("{noun} Bends"),
