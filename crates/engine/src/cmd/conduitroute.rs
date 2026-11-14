@@ -259,6 +259,29 @@ pub(crate) struct BoxFill {
     pub bigger: Vec<(String, String, f64)>,
     /// Where the next box (and past the largest, the extension ring) comes from.
     pub bigger_source: String,
+    /// Past the largest box and ring, and for conductors #4 and larger (Q6557).
+    pub pull: PullBoxes,
+}
+
+/// The boxes past the device boxes' ladder (Q6557): NEC 314.28's lengths for conductors #4 and
+/// larger, and the stock pull and junction boxes the field sets.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct PullBoxes {
+    pub source: String,
+    /// The smallest conductor 314.28 sizes the box for (`4`).
+    pub from_size: String,
+    /// A straight pull's length per inch of the largest raceway's trade size.
+    pub straight: f64,
+    /// An angle or U pull's length per inch of the largest raceway (plus the others).
+    pub angle: f64,
+    /// Stock boxes, smallest first: (name, inside length in, volume cu in).
+    pub boxes: Vec<(String, f64, f64)>,
+    /// Where their volumes come from.
+    pub boxes_source: String,
+    /// A device's box overfilled past the ladder: what the field does (the device kept in its own
+    /// box, fed from a junction box where the raceways meet).
+    pub device_source: String,
 }
 
 /// What a device's terminals take (Q6243): the largest conductor, and the pigtail a larger
@@ -6028,90 +6051,197 @@ fn r3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
 
-/// Box fill (NEC 314.16) at each device box the routing put conductors in, against the box its
-/// pieces gave it (its `cubic_in`): the report's `box_fill` filled in.
+/// A box's stick ends this close (inches) land in it (Validate's touch default).
+const BOX_TOUCH_IN: f64 = 1.0;
+
+/// A box the field installs bigger: what it was and becomes, and why.
+struct BoxFix {
+    h: Handle,
+    from: String,
+    to: String,
+    cu: f64,
+    v: f64,
+    /// Its inside length when a pull box (NEC 314.28), and the design box's.
+    length_in: Option<f64>,
+    design_len: Option<f64>,
+    why: String,
+}
+
+/// The box that holds what `fill` asks of a box of `size` (`cu` cu in), the device of `kind`
+/// in it if any: the next box or ring of the rules' ladder; past it, or for conductors #4 and
+/// larger (NEC 314.28), a stock pull or junction box (beside a device's box, the device fed from
+/// it). None when nothing in the rules holds it.
+fn box_fix(
+    h: Handle,
+    size: &str,
+    cu: f64,
+    design_len: Option<f64>,
+    kind: Option<&str>,
+    fill: &super::validate_conduit::FillNeed,
+    rl: &RouteRules,
+) -> Option<BoxFix> {
+    let bf = &rl.box_fill;
+    let need = fill.need_cu_in;
+    let mut why = format!("{need:.1} cu in of conductors and devices in a {size} of {cu} cu in");
+    if fill.pull_len_in.is_none()
+        && let Some((to, v)) =
+            bf.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v))
+    {
+        if to.contains("ring") && !bf.bigger_source.is_empty() {
+            why = format!("{why}: {}", bf.bigger_source);
+        }
+        return Some(BoxFix { h, from: size.to_string(), to, cu, v, length_in: None, design_len: None, why });
+    }
+    // A pull or junction box: long enough for 314.28, holding the rest by 314.16.
+    let len = fill.pull_len_in.unwrap_or(0.0);
+    let (name, l, v) = bf.pull.boxes.iter().find(|(_, l, v)| *l + 1e-9 >= len && *v + 1e-9 >= need)?.clone();
+    if let (Some(l_need), Some(big)) = (fill.pull_len_in, fill.large.as_deref()) {
+        why = format!("#{big} in it: {l_need:.1} in long ({}); {why}", bf.pull.source);
+    }
+    why = format!("{why}: {}", bf.pull.boxes_source);
+    let (to, v) = match kind {
+        Some(k) => {
+            why = format!("{why}; {}", bf.pull.device_source);
+            (
+                format!("{name} beside the {}'s {size}, the raceways landing in it and the {} fed from it", k.replace('_', " "), k.replace('_', " ")),
+                v + cu,
+            )
+        }
+        None => (name, v),
+    };
+    Some(BoxFix { h, from: size.to_string(), to, cu, v, length_in: Some(l), design_len, why })
+}
+
+/// Box fill (NEC 314.16, and 314.28 with conductors #4 and larger) at each box, against the box
+/// its pieces gave it (its `cubic_in`): the report's `box_fill` filled in, and each box the field
+/// would install bigger corrected (the design box kept beside it).
+///
+/// What a box holds is counted from the built pieces (Q6557), as Validate recounts it: every run
+/// whose stick ends land in the box, whatever device or circuit it serves (a raceway dropping
+/// through the box of a device above the one it feeds, a gang box, a junction where runs meet),
+/// each of its conductors once. A box the pieces don't measure (no body yet) takes what the
+/// routing put in its device's box.
 pub(crate) fn check_box_fill(d: &mut Drawing, report: &mut Value) {
     let rl = rules();
     let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
-    let mut boxes: HashMap<String, (String, f64, Handle)> = HashMap::new();
+    // The routing's view: what it brought into each device's box.
+    let routed: HashMap<String, &Value> = pending.iter().filter_map(|p| Some((p["device"].as_str()?.to_ascii_uppercase(), p))).collect();
+    // The pieces' view: what enters each box as built.
+    let sp = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok()).unwrap_or_default();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let net = super::validate_conduit::Net::raceways(d, &sp);
+    let entering = super::validate_conduit::boxes_in(&net, BOX_TOUCH_IN / 12.0 * upf);
+    let built: HashMap<Handle, (&super::validate_conduit::BoxEl, &super::validate_conduit::BoxIn)> =
+        net.boxes.iter().zip(&entering).map(|(b, i)| (b.handle, (b, i))).collect();
+    let dev_kind: HashMap<Handle, &str> = net.devs.iter().map(|v| (v.handle, v.kind.as_str())).collect();
+    // Every box: its device, and the box as designed (a box corrected before is checked as
+    // designed, so a second check finds and corrects it the same way).
+    struct DesignBox {
+        h: Handle,
+        of: Option<String>,
+        size: String,
+        cu: f64,
+        len: Option<f64>,
+    }
+    let mut boxes: Vec<DesignBox> = Vec::new();
     for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
         if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
             continue;
         }
-        let (Some(of), Some(cu)) = (ps.get("box_of").map(Prop::text), ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok())) else {
-            continue;
-        };
-        // A box corrected before is checked as designed (its design volume), so a second check
-        // finds and corrects it the same way.
+        let Some(cu) = ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok()) else { continue };
+        let of = ps.get("box_of").map(Prop::text).filter(|t| !t.is_empty());
         let (size, cu) = match (ps.get("design:size"), ps.get("design:cubic_in").and_then(|p| p.text().parse::<f64>().ok())) {
             (Some(s), Some(c)) => (s.text(), c),
             _ => (ps.get("size").map(Prop::text).unwrap_or_default(), cu),
         };
-        boxes.insert(of.to_ascii_uppercase(), (size, cu, e.handle));
+        let len = ps.get("design:length_in").and_then(|p| p.text().parse::<f64>().ok());
+        if boxes.len() < MAX_DEVICES {
+            boxes.push(DesignBox { h: e.handle, of, size, cu, len });
+        }
     }
     let (mut checked, mut over) = (0usize, Vec::new());
-    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, the next box that holds
-    // what enters it, and why.
-    let mut fixes: Vec<(Handle, String, String, f64, f64, f64)> = Vec::new();
-    for p in &pending {
-        let Some((size, cu, bh)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
-        checked += 1;
-        let conds: Vec<(u32, String)> = p["conductors"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
-            .collect();
-        let need = box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl);
-        if need > *cu + 1e-9 && over.len() < MAX_ITEMS {
-            let bigger =
-                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v));
-            if let Some((to, v)) = &bigger {
-                fixes.push((*bh, size.clone(), to.clone(), *cu, *v, need));
+    let mut from_pieces = 0usize;
+    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, what it becomes, why.
+    let mut fixes: Vec<BoxFix> = Vec::new();
+    for b in &boxes {
+        let p = b.of.as_deref().and_then(|h| routed.get(&h.to_ascii_uppercase()).copied());
+        let piece = built.get(&b.h).filter(|(_, i)| !i.conds.is_empty() || i.unknown_cable > 0);
+        let yoke = match b.of.as_deref().and_then(Handle::parse_hex).and_then(|h| dev_kind.get(&h)) {
+            Some(k) => super::validate_conduit::yoke_kind(k),
+            None => p.is_some_and(|p| p["yoke"].as_bool().unwrap_or(false)),
+        };
+        let (fill, runs, box_len) = match (piece, p) {
+            (Some((be, bin)), _) => {
+                let len = b.len.unwrap_or_else(|| {
+                    super::validate_conduit::box_length_in(&super::validate_conduit::BoxEl { length_in: None, ..(*be).clone() }, upf)
+                });
+                (super::validate_conduit::fill_need(&bin.conds, bin.unknown_cable, yoke, &bin.raceways_in, rl), bin.runs, Some(len))
             }
-            over.push(json!({
-                "kind": "box_fill", "device": p["device"], "device_kind": p["kind"], "level": p["level"], "circuit": p["circuit"],
-                "box": size, "cubic_in": cu, "needed_cu_in": r2(need),
-                "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
-                "fix": bigger.as_ref().map_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".to_string(), |b| b.0.clone()),
-                "corrected": bigger.is_some(),
-                "source": rl.box_fill.source,
-            }));
+            (None, Some(p)) => {
+                // Each conductor the routing brought in, the grounds as one of the largest.
+                let mut conds: Vec<(String, bool)> = Vec::new();
+                for c in p["conductors"].as_array().into_iter().flatten().take(200) {
+                    let (Some(n), Some(sz)) = (c.get(0).and_then(Value::as_u64), c.get(1).and_then(Value::as_str)) else { continue };
+                    conds.extend(std::iter::repeat_n((sz.to_string(), false), n.min(200) as usize));
+                }
+                let vol = |s: &str| rl.box_fill.cu_in.get(s).copied().unwrap_or(0.0);
+                if let Some(g) = conds.iter().map(|c| c.0.clone()).max_by(|a, b| vol(a).total_cmp(&vol(b))) {
+                    conds.push((g, true));
+                }
+                (super::validate_conduit::fill_need(&conds, 0, yoke, &[], rl), 0, None)
+            }
+            (None, None) => continue,
+        };
+        checked += 1;
+        from_pieces += usize::from(piece.is_some());
+        let fits = fill.need_cu_in <= b.cu + 1e-9;
+        let long = match (fill.pull_len_in, box_len) {
+            (Some(l), Some(have)) => have + 1e-6 >= l,
+            _ => true,
+        };
+        if fits && long || over.len() >= MAX_ITEMS {
+            continue;
         }
+        let kind = p
+            .and_then(|p| p["kind"].as_str())
+            .map(str::to_string)
+            .or_else(|| b.of.as_deref().and_then(Handle::parse_hex).and_then(|h| dev_kind.get(&h)).map(|k| (*k).to_string()));
+        let fix = box_fix(b.h, &b.size, b.cu, box_len, kind.as_deref().filter(|_| b.of.is_some()), &fill, rl);
+        let level = p.map(|p| p["level"].clone()).or_else(|| piece.map(|(be, _)| json!(be.level))).unwrap_or(Value::Null);
+        over.push(json!({
+            "kind": "box_fill", "box": b.h.hex(), "device": b.of, "device_kind": kind,
+            "level": level, "circuit": p.map_or(Value::Null, |p| p["circuit"].clone()),
+            "size": b.size, "cubic_in": b.cu, "needed_cu_in": r2(fill.need_cu_in),
+            "conductors": fill.list, "runs": runs, "counted_from": if piece.is_some() { "pieces" } else { "routing" },
+            "pull_length_in": fill.pull_len_in.map(r2), "box_length_in": box_len.map(r2),
+            "fix": fix.as_ref().map_or_else(|| "a bigger box, or fewer raceways into it (a junction box beside it)".to_string(), |f| f.to.clone()),
+            "corrected": fix.is_some(),
+            "source": if fill.pull_len_in.is_some() && !long { rl.box_fill.pull.source.clone() } else { rl.box_fill.source.clone() },
+        }));
+        fixes.extend(fix);
     }
-    // Each one the next box holds: built with it, the design box kept beside it.
+    // Each one a bigger box holds: built with it, the design box kept beside it.
     let rule = super::provenance::rule("E-BOX-FILL");
     let mut corrected = 0usize;
-    for (h, from, to, cu, v, need) in &fixes {
-        let mut why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
-        if to.contains("ring") && !rl.box_fill.bigger_source.is_empty() {
-            why = format!("{why}: {}", rl.box_fill.bigger_source);
+    for f in &fixes {
+        let mut changes = vec![("size", f.from.clone(), f.to.clone()), ("cubic_in", format!("{}", f.cu), format!("{}", f.v))];
+        if let Some(l) = f.length_in {
+            changes.push(("length_in", f.design_len.map_or_else(String::new, |x| format!("{}", r2(x))), format!("{l}")));
         }
-        let size = super::provenance::Correction {
-            key: "size".into(),
-            design: from.clone(),
-            corrected: to.clone(),
-            reason: why.clone(),
-            rule: rule.id.clone(),
-        };
-        let vol = super::provenance::Correction {
-            key: "cubic_in".into(),
-            design: format!("{cu}"),
-            corrected: format!("{v}"),
-            reason: why,
-            rule: rule.id.clone(),
-        };
-        let a = super::provenance::correct_element(d, *h, &size);
-        let b = super::provenance::correct_element(d, *h, &vol);
-        corrected += usize::from(a || b);
+        let mut any = false;
+        for (key, design, now) in changes {
+            let c = super::provenance::Correction { key: key.into(), design, corrected: now, reason: f.why.clone(), rule: rule.id.clone() };
+            any |= super::provenance::correct_element(d, f.h, &c);
+        }
+        corrected += usize::from(any);
     }
     // The raceway pieces the clash offsets moved (Q6216): each keeps its design height.
     let marked = mark_offsets(d, report);
     if corrected > 0 || marked > 0 {
         super::mepatoms::reindex(d);
     }
-    report["box_fill"] = json!({"checked": checked, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
+    report["box_fill"] = json!({"checked": checked, "from_pieces": from_pieces, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
     report["clash_pieces_corrected"] = json!(marked);
 }
 
