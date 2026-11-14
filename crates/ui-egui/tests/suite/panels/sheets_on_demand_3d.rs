@@ -51,6 +51,17 @@ fn on_demand() -> (Harness<'static, CadApp>, usize) {
     (h, held)
 }
 
+/// Frames until no work runs on a worker thread (a palette's content worked out off the UI
+/// thread, Q6585; the sheets going out of memory).
+fn settle(h: &mut Harness<'static, CadApp>) {
+    let t = std::time::Instant::now();
+    while cadaddy_ui_egui::busy::running(h.state()).is_some() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(120), "work in the background never ended");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+}
+
 /// The palettes and dialogs that read sheet linework as they are drawn, so opening one loads the
 /// set (once): a count and a purge look at every object, a plot preview and a transmittal at
 /// everything they will write, a standards check at every object's properties, the room list
@@ -91,6 +102,9 @@ fn an_open_palette_or_dialog_loads_the_whole_set_at_most_once_and_only_for_sheet
         let before = h.state().session.whole_set_loads.0;
         h.state_mut().session.whole_set_asked.clear();
         h.run_steps(12);
+        // What it works out on a worker thread (Q6585) is its own too: the session comes back
+        // with what that ran.
+        settle(&mut h);
         let (n, last) = h.state().session.whole_set_loads.clone();
         let by = last.last().cloned().unwrap_or_default();
         // Every command it ran that reads the whole set, whether or not that one loaded it.
@@ -113,6 +127,7 @@ fn an_open_palette_or_dialog_loads_the_whole_set_at_most_once_and_only_for_sheet
         // the sheets going out.)
         cadaddy_ui_egui::sheetload::forget_holds();
         h.run_steps(4);
+        settle(&mut h);
     }
     assert!(needless.is_empty(), "opened, these ran whole-set commands and read no sheet linework:\n{}", needless.join("\n"));
     assert!(again.is_empty(), "open, these loaded the whole set again and again:\n{}", again.join("\n"));

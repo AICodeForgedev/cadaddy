@@ -66,12 +66,33 @@ fn check_id() -> egui::Id {
     egui::Id::new("cadaddy-checkstandards-dialog")
 }
 
+/// The check worked out for an opening of the dialog.
+fn check_result_id() -> egui::Id {
+    egui::Id::new("cadaddy-checkstandards-result")
+}
+
+/// Which opening of the dialog this is: each checks afresh.
+fn check_opening_id() -> egui::Id {
+    egui::Id::new("cadaddy-checkstandards-opening")
+}
+
 /// Check Standards.
 pub fn check(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
     let mut st: CheckState = ctx.data(|d| d.get_temp(check_id())).unwrap_or_default();
     if st.result.is_none() {
-        st.result = Some(app.session.execute("checkstandards", &json!({})).map_err(|e| e.user_message()));
+        // Checking every object's properties reads the whole set: on a worker thread, the
+        // dialog open meanwhile (Q6585). Each opening checks afresh.
+        let opening: u64 = ctx.data(|d| d.get_temp(check_opening_id())).unwrap_or_default();
+        let checked = crate::asked::worked_out(
+            app,
+            ctx,
+            check_result_id(),
+            "checkstandards",
+            move |_| opening,
+            |s| s.execute("checkstandards", &json!({})).map_err(|e| e.user_message()),
+        );
+        st.result = checked.map(|r| (*r).clone());
     }
     let mut run: Option<Value> = None;
     let mut report = false;
@@ -150,7 +171,7 @@ pub fn check(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             Some(Err(e)) => {
                 ui.label(RichText::new(e).color(t.warn));
             }
-            None => {}
+            None => crate::asked::working(ui),
         });
     // A fix that fails is told on the command line; the list stays.
     if let Some(p) = run
@@ -174,7 +195,11 @@ pub fn check(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if *open {
         ctx.data_mut(|d| d.insert_temp(check_id(), st));
     } else {
-        ctx.data_mut(|d| d.remove::<CheckState>(check_id()));
+        ctx.data_mut(|d| {
+            d.remove::<CheckState>(check_id());
+            let opening: u64 = d.get_temp(check_opening_id()).unwrap_or_default();
+            d.insert_temp(check_opening_id(), opening.wrapping_add(1));
+        });
     }
 }
 
