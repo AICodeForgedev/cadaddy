@@ -5765,6 +5765,138 @@ fn guest_room_name(name: &str) -> bool {
 /// The most words a room's name has (a longer label is a note).
 const MAX_ROOM_NAME_WORDS: usize = 4;
 
+/// A variant room's panel (`derived`: by the room, its basis) is derived from its type's plan,
+/// never drawn for it: its `STATUS` and `BASIS` say so (the provenance mark), its place the basis.
+fn mark_derived_panels(gear: &mut [cadaddy_walk3d::MepEquipment], derived: &BTreeMap<String, String>) {
+    for g in gear {
+        if let Some(basis) = g.properties.get("ROOM").and_then(|r| derived.get(r)).cloned() {
+            g.properties.insert("STATUS".into(), "derived".into());
+            g.properties.insert("BASIS".into(), basis.clone());
+            g.sources.insert("position".into(), basis);
+        }
+    }
+}
+
+/// Most units and panels listed by name in the unit-panel check (the rest counted).
+const MAX_UNIT_PANELS_LISTED: usize = 200;
+
+/// The unit-panel check (Q6351): every guest unit (a room the rooms stage read that
+/// [`guest_room_name`] names) has its own panel, one a typical-room plan letters (`gear`: the
+/// stamped rooms' panels, `panel_rooms`: each one's room and whether a typical plan stamped it).
+/// Per floor the units and their panels; each unit with none and each unit panel in no guest
+/// unit; and the key count the documents state against the units read (a unit whose tag no plan
+/// reading gave is counted there, not named).
+pub(crate) fn unit_panel_check(
+    job: &GuidedJob,
+    gear: &[cadaddy_walk3d::MepEquipment],
+    panel_rooms: &BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
+) -> Value {
+    let units: Vec<(String, String, String)> = job_rooms(job)
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _, _, _))| guest_room_name(name))
+        .map(|(i, (name, level, _, number))| (stamped_room(name, number, i), level_name(level), name.clone()))
+        .collect();
+    let unit_rooms: BTreeSet<&str> = units.iter().map(|(r, _, _)| r.as_str()).collect();
+    // The unit panels: those a typical-room plan put in a room (its own load center).
+    let mut panelled: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for g in gear.iter().filter(|g| g.kind.eq_ignore_ascii_case("panel")) {
+        let Some(room) = g.properties.get("ROOM") else { continue };
+        if panel_rooms.get(room).is_some_and(|(_, _, typical)| *typical) {
+            panelled.entry(room.clone()).or_default().push(g.tag.clone());
+        }
+    }
+    let mut by_level: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (room, level, _) in &units {
+        let e = by_level.entry(level.clone()).or_default();
+        e.0 += 1;
+        e.1 += usize::from(panelled.contains_key(room));
+    }
+    let missing: Vec<Value> = units
+        .iter()
+        .filter(|(room, _, _)| !panelled.contains_key(room))
+        .map(|(room, level, name)| json!({"room": room, "level": level, "name": name}))
+        .collect();
+    let stray: Vec<Value> =
+        panelled.iter().filter(|(room, _)| !unit_rooms.contains(room.as_str())).map(|(room, tags)| json!({"room": room, "panels": tags})).collect();
+    let keys = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("keys"))
+        .and_then(|k| k.get("stated"))
+        .and_then(Value::as_u64);
+    json!({
+        "units": units.len(),
+        "units_with_panel": units.len() - missing.len(),
+        "stated_keys": keys,
+        "by_level": by_level.iter().map(|(l, (u, p))| (l.clone(), json!({"units": u, "with_panel": p}))).collect::<serde_json::Map<_, _>>(),
+        "units_without_panel": missing.iter().take(MAX_UNIT_PANELS_LISTED).collect::<Vec<_>>(),
+        "units_without_panel_count": missing.len(),
+        "panels_without_unit": stray.iter().take(MAX_UNIT_PANELS_LISTED).collect::<Vec<_>>(),
+        "panels_without_unit_count": stray.len(),
+        "rule": "every guest unit the documents show has its own unit panel (the typical unit's panel schedule) and that schedule's breakers",
+    })
+}
+
+/// The unit-panel check's findings: each guest unit with no panel, each unit panel in no guest
+/// unit, and fewer units read than the documents state (one finding each, the rooms listed).
+fn unit_panel_findings(job: &mut GuidedJob, check: &Value) {
+    let n = |k: &str| check.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let names = |k: &str| -> String {
+        check
+            .get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.get("room").and_then(Value::as_str))
+            .take(20)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if n("units_without_panel_count") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} guest unit(s) without a unit panel: {}", n("units_without_panel_count"), names("units_without_panel")),
+            "every guest unit gets its unit panel and the panel schedule's breakers; no typical-room plan stamped one into these rooms",
+            2,
+            vec!["Give the unit's type its typical-room plan, or name the type it is a variant of".into()],
+            None,
+            false,
+        );
+    }
+    if n("panels_without_unit_count") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} unit panel(s) in no guest unit: {}", n("panels_without_unit_count"), names("panels_without_unit")),
+            "a typical-room plan's panel was stamped into a room not read as a guest unit",
+            2,
+            vec!["Check the room's name, or leave the panel out".into()],
+            None,
+            false,
+        );
+    }
+    let units = n("units");
+    if let Some(stated) = check.get("stated_keys").and_then(Value::as_u64).filter(|k| *k > units) {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} guest unit(s) the documents count have no unit panel: {stated} keys stated, {units} units read", stated - units),
+            "a unit whose room tag the plan reading gave no room has no unit panel or breakers: its room is not in the model",
+            2,
+            vec!["Close the unit's outline on the plan or read its tag, and run the rooms stage again".into()],
+            None,
+            false,
+        );
+    }
+}
+
+/// Whether a room named `name` is a guest room varying the typical room type `words`: its type's
+/// words are all of the type's and more (`KING CORNER` of `KING`; not `STUDIO` of `KING`, nor an
+/// `OFFICE`).
+fn variant_of(name: &str, words: &BTreeSet<String>) -> bool {
+    let mine = type_words(name, None);
+    !words.is_empty() && mine.len() > words.len() && words.is_subset(&mine) && guest_room_name(name)
+}
+
 /// The keys gate: the count the documents state most often (`stated`: count, sheet, text) against
 /// the guest rooms among `rooms` (the rooms stage's: those [`guest_room_name`] names).
 /// None when no document states a count.
@@ -8162,6 +8294,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             all_devices.extend(stacks);
         }
     }
+    // Each guest unit's own panel against the units the rooms stage read (Q6351).
+    let mut unit_panels = Value::Null;
     if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         // (Or onto the plans the floors were taken from, with no architectural floor plans.)
@@ -8173,6 +8307,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
         let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
         let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+        // The guest rooms whose panel is the typical plan's of the type they vary, by the room: the basis.
+        let mut derived_panels: BTreeMap<String, String> = BTreeMap::new();
         // The plans' breaker labels of the feeders to a typical panel, placed (Q6436).
         let mut feeder_marks: Vec<super::gearbuild::PlanLabel> = Vec::new();
         // Each stamped unit's footprint (its typical view's unit box in the room), by its room.
@@ -8299,8 +8435,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_PLACEABLE, &why));
                 }
                 let stamp_clock = web_time::Instant::now();
-                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints, differs, duplicates } =
-                    stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                let StampedRooms {
+                    devices: mut stamped,
+                    report,
+                    authority,
+                    panels,
+                    rooms,
+                    sleeping: guest,
+                    footprints,
+                    differs,
+                    duplicates,
+                    derived_panels: derived,
+                } = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
                 // One room's two copies of a tag at one spot are one device (its plan read it twice).
@@ -8401,6 +8547,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 room_panels = panels;
                 panel_rooms = rooms;
+                derived_panels = derived;
                 unit_footprints = footprints.iter().map(|(l, r, c, _)| (r.clone(), (l.clone(), c.clone()))).collect();
                 sleeping = guest;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
@@ -8669,6 +8816,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // their routes in the room, where the sheet's reading can't put them.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let (mut gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
+            mark_derived_panels(&mut gear, &derived_panels);
+            if !derived_panels.is_empty() {
+                progress_line(&format!(
+                    "  guest rooms of a type no typical plan is drawn for: {} took the unit panel of the type they vary",
+                    derived_panels.len()
+                ));
+            }
+            unit_panels = unit_panel_check(job, &gear, &panel_rooms);
             // Each copy of a typical panel takes the breaker label lettered in its room (Q6436).
             if !feeder_marks.is_empty() {
                 let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms, &unit_footprints, sp.units_per_foot);
@@ -9352,6 +9507,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["fixture_schedule_error"] = json!(e.to_string()),
     }
     result["typical_plan_diffs"] = json!(plan_diffs.iter().take(MAX_PLAN_DIFFS).collect::<Vec<_>>());
+    if !unit_panels.is_null() {
+        unit_panel_findings(job, &unit_panels);
+        result["unit_panels"] = unit_panels;
+    }
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
             "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; drawn clear of the walls, hung from the ceiling: {}; outside their level's footprint: {}",
@@ -12306,6 +12465,11 @@ fn stamp_typical_rooms(
     let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
     let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
     let mut sleeping: BTreeMap<usize, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
+    // The panels a guest room of a type no typical plan is drawn for would take from the typical
+    // plan of the type it varies (by the room: the type's word count, level, outline, the panels
+    // laid in, the view).
+    #[allow(clippy::type_complexity)]
+    let mut variants: BTreeMap<String, (usize, String, Vec<cadaddy_geom::Vec2>, Vec<(String, [f64; 2])>, String)> = BTreeMap::new();
     if unplaced.is_empty() {
         return StampedRooms {
             devices: out,
@@ -12317,6 +12481,7 @@ fn stamp_typical_rooms(
             footprints: Vec::new(),
             differs: Vec::new(),
             duplicates: BTreeMap::new(),
+            derived_panels: BTreeMap::new(),
         };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
@@ -12555,6 +12720,43 @@ fn stamp_typical_rooms(
                 *report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
         }
+        // A guest room of a type no typical plan is drawn for, its name a typical type's words
+        // and more (a wider or reversed unit of the type): the unit panel the type's plan letters,
+        // laid into it as that plan lays into its rooms (taken below only where no plan of its own
+        // gave it one).
+        for (title, view, words) in &views {
+            let lettering = panels_in(view);
+            if lettering.is_empty() {
+                continue;
+            }
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().take(MAX_STAMPED) {
+                if !variant_of(name, words) {
+                    continue;
+                }
+                let room = stamped_room(name, number, ri);
+                if variants.get(&room).is_some_and(|v| v.0 >= words.len()) {
+                    continue;
+                }
+                let turn = turn_of(view, ri, outline);
+                let at: Vec<(String, [f64; 2])> =
+                    lettering.iter().filter_map(|(n, p)| Some((n.clone(), place_in_room(*p, *view, bbox(outline), turn)?))).collect();
+                if !at.is_empty() {
+                    variants.insert(room, (words.len(), level.clone(), outline.clone(), at, format!("{sheet} {title}")));
+                }
+            }
+        }
+    }
+    let mut derived_panels: BTreeMap<String, String> = BTreeMap::new();
+    for (room, (_, level, outline, at, view)) in variants {
+        if panels.contains_key(&room) {
+            continue;
+        }
+        derived_panels.insert(
+            room.clone(),
+            format!("derived: no typical-room plan is drawn for its type; the panel the typical plan of the type it varies letters ({view}), one in every guest room"),
+        );
+        panel_rooms.insert(room.clone(), (level, outline, true));
+        panels.insert(room, at);
     }
     // A device the floor's plans show in a room is the typical plan's copy of its tag and kind
     // nearest it there (a smoke detector a fire alarm plan marks S is no switch S): the copy is
@@ -12643,6 +12845,7 @@ fn stamp_typical_rooms(
         footprints,
         differs,
         duplicates,
+        derived_panels,
     }
 }
 
@@ -12869,7 +13072,7 @@ fn restore_typical_symbols(d: &cadaddy_doc::Drawing, job: &mut GuidedJob) -> usi
 }
 
 /// The set's sheet numbers, upper case: the sheet map's and the sheet list's.
-fn job_sheet_numbers(job: &GuidedJob) -> BTreeSet<String> {
+pub(crate) fn job_sheet_numbers(job: &GuidedJob) -> BTreeSet<String> {
     job.sheet_regions
         .iter()
         .map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase())
@@ -28767,6 +28970,9 @@ struct StampedRooms {
     /// The floor plans' devices (by their index in `placed`) where a typical plan's copy landed:
     /// the same devices, left out; each by the copy's mark (its handle) and room.
     duplicates: BTreeMap<usize, (String, String)>,
+    /// The guest rooms of a type no typical plan is drawn for whose panels are the typical plan's
+    /// of the type they vary ([`variant_of`]): by the room, the basis.
+    derived_panels: BTreeMap<String, String>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -38265,6 +38471,141 @@ mod tests {
             m
         });
         assert_eq!(rooms, BTreeMap::from([("201", 3), ("401", 3)]));
+    }
+
+    /// A two-storey set of guest rooms (inches): two of a type a typical-room view is drawn for
+    /// (`KING`, 12' × 24') and two of a wider variant of it no view is drawn for (named `wide`,
+    /// 16' × 24'), and a corridor; the view (`title`) letters the unit's panel (`PNLBD 'U'`) and
+    /// draws three devices. The session, the job, the view's devices.
+    fn variant_rooms_set(title: &str, wide: &str) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>) {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let room_lines = |s: &mut crate::Session, o: [f64; 2], w: f64| {
+            let mut segs = vec![((0.0, 0.0), (w, 0.0)), ((w, 0.0), (w, 288.0)), ((w, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (w, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((w - 44.0, 210.0), (w, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        room_lines(&mut s, v, 144.0);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": title, "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 110.0, v[1] + 150.0], "text": "PNLBD 'U'", "height": 3.0})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        let rooms = [
+            ("KING", "501", "5", 10_000.0, 144.0),
+            ("KING", "601", "6", 10_400.0, 144.0),
+            (wide, "503", "5", 10_800.0, 192.0),
+            (wide, "603", "6", 11_200.0, 192.0),
+        ];
+        for (_, _, _, x, w) in rooms {
+            room_lines(&mut s, [x, 0.0], w);
+        }
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-907".into(),
+            level: "5".into(),
+            discipline: "E".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-907".into(), lo, hi }];
+        let mut list: Vec<Value> = rooms
+            .iter()
+            .map(|(name, n, level, x, w)| json!({"name": name, "number": n, "level": level, "outline": [[x, 0], [x + w, 0], [x + w, 288], [x, 288]]}))
+            .collect();
+        list.push(
+            json!({"name": "CORRIDOR", "number": "500", "level": "5", "outline": [[10_000, 300], [11_400, 300], [11_400, 360], [10_000, 360]]}),
+        );
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": list, "keys": {"stated": 5}}));
+        }
+        let device = |tag: &str, kind: &str, circuit: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: kind.into(),
+            circuit: circuit.into(),
+            at: [v[0] + at[0], v[1] + at[1]],
+            sheet: "E-907".into(),
+            level: "Level 5".into(),
+            ..Default::default()
+        };
+        let read = vec![
+            device("GFCI", "receptacle", "U-1", [20.0, 20.0]),
+            device("T", "thermostat", "", [120.0, 270.0]),
+            device("S", "switch", "", [130.0, 120.0]),
+        ];
+        (s, job, read)
+    }
+
+    /// Q6351: a guest room of a type no typical-room plan is drawn for (a wider unit of a typical
+    /// type, its name the type's words and more) had no unit panel: it takes the panel the type's
+    /// plan letters (derived, its basis said), laid into it as the plan lays into its own rooms,
+    /// and none of the plan's devices (the floor's plans show those). A room of a type of its own
+    /// (not a variant) takes nothing, and the unit-panel check lists it.
+    #[test]
+    fn a_guest_room_of_a_variant_type_takes_its_types_unit_panel() {
+        let (s, job, read) = variant_rooms_set("UNIT POWER PLAN - KING", "KING CORNER");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
+        let devices: BTreeSet<&str> = stamped.devices.iter().map(|d| d.room.as_str()).collect();
+        assert_eq!(devices, BTreeSet::from(["501", "601"]), "the view's devices only in its own type's rooms: {:?}", stamped.report);
+        let panelled: Vec<&str> = stamped.panels.iter().filter(|(_, at)| !at.is_empty()).map(|(r, _)| r.as_str()).collect();
+        assert_eq!(panelled, ["501", "503", "601", "603"], "{:?}", stamped.panels);
+        assert!(["503", "603"].iter().all(|r| stamped.rooms.get(*r).is_some_and(|(_, _, typical)| *typical)), "{:?}", stamped.rooms.keys());
+        assert_eq!(stamped.derived_panels.keys().map(String::as_str).collect::<Vec<_>>(), ["503", "603"]);
+        assert!(stamped.derived_panels.values().all(|b| b.starts_with("derived") && b.contains("E-907 UNIT POWER PLAN - KING")));
+        // Each in its own room.
+        for (room, at) in &stamped.panels {
+            let (_, outline, _) = stamped.rooms.get(room).unwrap();
+            let b = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+            assert!(
+                at.iter().all(|(_, p)| p[0] >= b.min.x - 1.0 && p[0] <= b.max.x + 1.0 && p[1] >= b.min.y - 1.0 && p[1] <= b.max.y + 1.0),
+                "{room}: {at:?}"
+            );
+        }
+        // The panels built from them: the variant rooms' derived, the rest as before.
+        let (mut gear, _) = super::super::printcond::room_panel_equipment(&stamped.panels, &stamped.rooms, 12.0);
+        mark_derived_panels(&mut gear, &stamped.derived_panels);
+        let status = |room: &str| {
+            gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some(room)).and_then(|g| g.properties.get("STATUS").cloned())
+        };
+        assert_eq!((status("501"), status("503").as_deref()), (None, Some("derived")));
+        assert_eq!(gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some("603")).map(|g| g.tag.as_str()), Some("U-603"));
+        let check = unit_panel_check(&job, &gear, &stamped.rooms);
+        assert_eq!((check["units"].as_u64(), check["units_with_panel"].as_u64()), (Some(4), Some(4)), "{check:#}");
+        assert_eq!(check["by_level"]["Level 5"], json!({"units": 2, "with_panel": 2}), "{check:#}");
+        // A type of its own no plan is drawn for (not a variant of one): no panel, and listed.
+        let (s, mut job, read) = variant_rooms_set("UNIT POWER PLAN - KING", "STUDIO");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
+        assert!(stamped.derived_panels.is_empty() && !stamped.panels.contains_key("503"), "{:?}", stamped.panels);
+        let (gear, _) = super::super::printcond::room_panel_equipment(&stamped.panels, &stamped.rooms, 12.0);
+        let check = unit_panel_check(&job, &gear, &stamped.rooms);
+        let missing: Vec<&str> = check["units_without_panel"].as_array().unwrap().iter().filter_map(|v| v["room"].as_str()).collect();
+        assert_eq!(missing, ["503", "603"], "{check:#}");
+        assert_eq!(check["stated_keys"].as_u64(), Some(5));
+        unit_panel_findings(&mut job, &check);
+        let said: Vec<&str> = job.findings.iter().map(|f| f.description.as_str()).collect();
+        assert!(said.iter().any(|d| d.starts_with("2 guest unit(s) without a unit panel: 503, 603")), "{said:?}");
+        assert!(said.iter().any(|d| d.contains("5 keys stated, 4 units read")), "{said:?}");
     }
 
     /// fix-room-enlarged-view-copied-up: a typical view goes into every room of its type; where a
