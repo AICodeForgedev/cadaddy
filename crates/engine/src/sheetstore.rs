@@ -13,15 +13,58 @@
 //! first ([`Session::needs_whole_set`]; the app loads them on a worker thread with progress before
 //! it runs the command). Saving to .cdy writes the parked sheets back byte for byte; saving to
 //! any other format writes the whole set from a combined copy ([`combined`]), never loading it
-//! into the drawing. Headless sessions (the CLI, the job pipeline, MCP servers) never park: a
-//! drawing there holds everything, as it always did.
+//! into the drawing. Headless sessions (the CLI, the job pipeline, MCP servers) never park between
+//! commands: a drawing there holds everything, as it always did. Inside one command, work done
+//! reading the sheets may put them out for its rest ([`Session::put_out_sheets`]: a guided job
+//! after its build, Q6577); they are back when the command ends.
 
 use std::sync::Arc;
 
+use std::collections::HashMap;
+
 use cadaddy_doc::sheetstore::{ParkedSheet, SheetRect, StoredChunk};
-use cadaddy_doc::{ChunkRef, Drawing, Entity};
+use cadaddy_doc::{ChunkRef, Drawing, Entity, Handle};
 
 use crate::{Result, Session};
+
+/// One sheet change made while a command ran ([`crate::DocState`]'s `sheet_moves`, Q6570), object
+/// by object: the objects it put out of memory, each by its address as it was, and the objects it
+/// loaded. It holds no drawing state: a guided job that put its sheets out after its build kept
+/// every one of them in memory through the state before (Q6577).
+///
+/// An object put out is only ever looked up as an object of the drawing the command started
+/// from, which still holds it: while it lives no other object has its address.
+#[derive(Clone, Default)]
+pub(crate) struct SheetMove {
+    out: HashMap<Handle, usize>,
+    loaded: HashMap<Handle, Arc<Entity>>,
+}
+
+impl std::fmt::Debug for SheetMove {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SheetMove {{ out: {}, loaded: {} }}", self.out.len(), self.loaded.len())
+    }
+}
+
+impl SheetMove {
+    /// The change from `old` to `now`: what left model space and what came into it.
+    fn between(old: &Drawing, now: &Drawing) -> Self {
+        let (added, _, erased) = old.model.changes(&now.model);
+        let out = erased.into_iter().filter_map(|h| old.model.get(h).map(|e| (h, Arc::as_ptr(e) as usize))).collect();
+        let loaded = added.into_iter().filter_map(|h| now.model.get(h).map(|e| (h, Arc::clone(e)))).collect();
+        Self { out, loaded }
+    }
+
+    /// Whether it put object `h`, as `e` (of the drawing the command started from), out of memory.
+    pub(crate) fn put_out(&self, h: Handle, e: &Arc<Entity>) -> bool {
+        self.out.get(&h).is_some_and(|at| *at == Arc::as_ptr(e) as usize)
+    }
+
+    /// Whether it loaded object `h` as `e`.
+    pub(crate) fn loaded(&self, h: Handle, e: &Arc<Entity>) -> bool {
+        self.loaded.get(&h).is_some_and(|x| Arc::ptr_eq(x, e))
+    }
+}
 
 /// Sheets a print set keeps in memory in the interface: the open one and the most recent others.
 pub const CACHE: usize = 3;
@@ -29,6 +72,13 @@ pub const CACHE: usize = 3;
 /// Most sheet changes one command remembers ([`crate::DocState`]'s `sheet_moves`): past it, a
 /// further change counts as an edit of the plan (the model is built again, never left stale).
 const MAX_SHEET_MOVES: usize = 64;
+
+/// Chunks encoded at once when sheets go out of memory ([`park`]). Encoding one takes several times
+/// its objects' bytes for a moment (a four-storey set's largest, 15 MB of objects, about 100 MB):
+/// on every core at once it added about 0.8 GB at the moment a guided job is at its largest, its
+/// build just done (Q6577). On two, that set's million objects go out in about the same time
+/// the job's other steps take.
+const ENCODE_THREADS: usize = 2;
 
 /// How many of the latest whole-set loads a session remembers the command of ([`Session::whole_set_loads`]).
 pub const LOADS_KEPT: usize = 32;
@@ -369,17 +419,34 @@ fn to_park(d: &Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Vec<(ChunkR
             .get(k)
             .is_none_or(|s| keep.iter().any(|x| x.number.eq_ignore_ascii_case(&s.number) && cadaddy_doc::sheetstore::same_rect(&x.rect, &s.rect)))
     };
+    // The draw-order places taken: by the chunks in memory and the ones out already.
+    let orders: Vec<u32> = refs.iter().map(ChunkRef::order).collect();
+    let parked: std::collections::HashSet<u32> = d.sheet_store.parked.iter().flat_map(|p| p.chunks.iter().map(|c| c.order)).collect();
     refs.into_iter()
         .zip(filed)
-        .filter_map(|(c, runs)| {
+        .enumerate()
+        .filter_map(|(i, (c, runs))| {
             let whole = runs.len() == 1;
+            let at = c.order();
             // Each run goes back after what is left of its chunk: at the chunk's place, plus one
-            // and its own place among the runs (fewer than a chunk step).
+            // and its own place among the runs (fewer than a chunk step). The runs before the
+            // chunk's first object that stays go back just before it instead, when those places
+            // are free, so the objects come back in the order they had (Q6577: a sheet's last
+            // run and the first elements built after it shared a chunk, and came back the other
+            // way round; what reads the plan in order read it otherwise).
+            let lead = runs.iter().position(|(k, _, _)| k.is_none_or(|k| kept(k as usize))).unwrap_or(0);
+            let lead_at = u32::try_from(lead).ok().and_then(|n| at.checked_sub(n)).filter(|lo| {
+                lead > 0 && i.checked_sub(1).and_then(|p| orders.get(p)).is_none_or(|p| p < lo) && !(*lo..at).any(|x| parked.contains(&x))
+            });
             let out: Vec<(usize, usize, usize, u32)> = runs
                 .into_iter()
                 .enumerate()
                 .filter_map(|(j, (k, from, to))| {
-                    let order = if whole { c.order() } else { c.order().saturating_add(1).saturating_add(u32::try_from(j).ok()?) };
+                    let order = match lead_at {
+                        _ if whole => at,
+                        Some(lo) if j < lead => lo.saturating_add(u32::try_from(j).ok()?),
+                        _ => at.saturating_add(1).saturating_add(u32::try_from(j).ok()?),
+                    };
                     Some((k? as usize, from, to, order))
                 })
                 .filter(|(k, _, _, _)| !kept(*k))
@@ -401,7 +468,28 @@ pub fn park(d: &mut Drawing, sheets: &[SheetRect], keep: &[SheetRect]) -> Result
 /// Runs of chunks encoded by [`park_with`], by (chunk key, from, to, draw order): drawings that
 /// share a chunk (a drawing and its undo steps) park it as one stored chunk, encoded once. The
 /// keys name chunks only while they are held: a map lives no longer than the drawings it parked.
-type Encoded = std::collections::HashMap<(usize, usize, usize, u32), Arc<StoredChunk>>;
+type Encoded = HashMap<(usize, usize, usize, u32), Arc<StoredChunk>>;
+
+/// Drawings parked by [`park_shared`], by the address of the drawing each replaces (shared by
+/// several holders: the drawing, its undo steps, the drawing as saved, a build's record). The
+/// addresses name drawings only while the caller keeps the replaced ones.
+type Shared = HashMap<usize, Arc<Drawing>>;
+
+/// `d` with the sheets not in `keep` out of memory, parked once however many hold it (`done`):
+/// `d` itself when it has none in memory (or couldn't be encoded).
+fn park_shared(d: &Arc<Drawing>, rects: &[SheetRect], keep: &[SheetRect], encoded: &mut Encoded, done: &mut Shared) -> Arc<Drawing> {
+    let at = Arc::as_ptr(d) as usize;
+    if let Some(now) = done.get(&at) {
+        return Arc::clone(now);
+    }
+    let mut c = (**d).clone();
+    let now = match park_with(&mut c, rects, keep, encoded) {
+        Ok(n) if n > 0 => Arc::new(c),
+        _ => Arc::clone(d),
+    };
+    done.insert(at, Arc::clone(&now));
+    now
+}
 
 /// [`park`], with what parking other drawings sharing `d`'s chunks encoded already.
 fn park_with(d: &mut Drawing, sheets: &[SheetRect], keep: &[SheetRect], encoded: &mut Encoded) -> Result<usize> {
@@ -427,10 +515,14 @@ fn park_with(d: &mut Drawing, sheets: &[SheetRect], keep: &[SheetRect], encoded:
             },
         }
     };
+    // On a few cores only: encoding a chunk takes several times its objects' bytes for a moment.
     #[cfg(not(target_arch = "wasm32"))]
     let stored: Vec<_> = {
         use rayon::prelude::*;
-        jobs.par_iter().map(one).collect()
+        match rayon::ThreadPoolBuilder::new().num_threads(ENCODE_THREADS).build() {
+            Ok(pool) => pool.install(|| jobs.par_iter().map(one).collect()),
+            Err(_) => jobs.iter().map(one).collect(),
+        }
     };
     #[cfg(target_arch = "wasm32")]
     let stored: Vec<_> = jobs.iter().map(one).collect();
@@ -474,10 +566,25 @@ impl Session {
         self.state().is_ok_and(|st| st.doc.sheet_store.has_parked())
     }
 
+    /// The outermost command is over: sheets its work held out of memory
+    /// ([`Session::sheets_stay_out`]) are held out no longer, and a headless session has them back
+    /// in memory (its drawings hold everything between commands: what reads them there, an export
+    /// or an agent's selection, never asks for a sheet).
+    pub(crate) fn sheets_back_after_command(&mut self) {
+        self.sheets_stay_out = false;
+        if self.sheets_on_demand || !self.has_parked_sheets() {
+            return;
+        }
+        if let Err(e) = self.load_all_sheets() {
+            self.echo(format!("the print sheets couldn't be loaded back: {e}"));
+        }
+    }
+
     /// Whether running command `id` must load the sheets out of memory first: it may read the
-    /// whole set ([`SHEET_LOCAL`]).
+    /// whole set ([`SHEET_LOCAL`]). Never while work done with the sheets holds them out
+    /// ([`Session::sheets_stay_out`]: a guided job's stages after its build read the model).
     pub fn needs_whole_set(&self, id: &str) -> bool {
-        self.has_parked_sheets() && !is_sheet_local(id)
+        self.has_parked_sheets() && !is_sheet_local(id) && !self.sheets_stay_out
     }
 
     /// Change the active drawing's sheets in memory with `f`: not an edit (no undo step; a
@@ -502,7 +609,7 @@ impl Session {
             let now = Arc::clone(&st.doc);
             crate::cmd::wallgen::carry_state(st, &old, &now);
             if in_command && st.sheet_moves.len() < MAX_SHEET_MOVES {
-                st.sheet_moves.push((old, now));
+                st.sheet_moves.push(SheetMove::between(&old, &now));
             }
         }
         // Selected objects that left memory are no longer selected.
@@ -608,25 +715,70 @@ impl Session {
         };
         let (rects, keep) = self.keep_open_sheets_of(i)?;
         if !rects.is_empty() {
-            self.park_history(&rects, &keep);
+            self.park_history(&rects, &keep, &mut Encoded::new(), Shared::new());
         }
         Ok(true)
+    }
+
+    /// Every sheet of the print set out of memory but the ones on screen (with sheets on demand:
+    /// the open one and the [`CACHE`] most recent ones; none in a headless session): from the
+    /// drawing, its undo and redo steps, the drawing as saved and the drawings its build records
+    /// keep, and what the process-wide caches held of them let go of. For work that is done
+    /// reading the sheets: a guided job once its build has read them (Q6577: the job kept every
+    /// sheet in memory to its end, about 1.1 GB on a four-storey set). A later command that may
+    /// read the whole set loads it again ([`Session::needs_whole_set`]). The objects put out of
+    /// the drawing (0: nothing was in memory to put out, and nothing else was done).
+    pub fn put_out_sheets(&mut self) -> Result<usize> {
+        let sheets = self.print_sheets();
+        if sheets.is_empty() {
+            return Ok(0);
+        }
+        let rects = rects_of(&sheets);
+        let keep: Vec<SheetRect> = if self.sheets_on_demand {
+            let recent = self.state()?.sheet_nav.recent.clone();
+            recent.iter().filter_map(|i| sheets.get(*i)).map(|s| SheetRect { number: s.number.clone(), rect: s.rect }).collect()
+        } else {
+            Vec::new()
+        };
+        // The build's record of the plan, while the whole set is still in memory.
+        let plan = crate::cmd::buildrec::plan_before_sheets_out(self);
+        // The drawing as it was stays held until everything sharing its chunks has gone out:
+        // `encoded` names chunks by address.
+        let was = Arc::clone(&self.state()?.doc);
+        let mut encoded = Encoded::new();
+        let n = match self.change_sheets(|d| park_with(d, &rects, &keep, &mut encoded))? {
+            Some(r) => r?,
+            None => return Ok(0),
+        };
+        if n == 0 {
+            return Ok(0);
+        }
+        crate::cmd::buildrec::plan_after_sheets_out(self, plan);
+        let mut done = Shared::new();
+        done.insert(Arc::as_ptr(&was) as usize, Arc::clone(&self.state()?.doc));
+        self.park_history(&rects, &keep, &mut encoded, done);
+        drop(was);
+        self.whole_set_loaded = false;
+        self.release_unheld();
+        Ok(n)
     }
 
     /// The undo and redo steps of the active drawing with the sheets not in `keep` out of memory,
     /// as the drawing has them: a step recorded while the whole set was in memory (an edit just
     /// after a count) held every sheet of it, and undo counts a step's cost by what it doesn't
     /// share with the drawing, so it never saw it once the drawing let the sheets go. A step
-    /// whose drawing was the saved one is still the saved one after (no change to save). A step
-    /// that doesn't park (it couldn't be encoded) stays as it was.
-    fn park_history(&mut self, rects: &[SheetRect], keep: &[SheetRect]) {
+    /// whose drawing was the saved one is still the saved one after (no change to save). The
+    /// drawing as saved and the drawings the build records keep (as their builds left them) go
+    /// the same way (Q6577: a job's build record kept the whole set). Each drawing state let go
+    /// of is followed by the one that replaces it (behind its model, from its build, as it was).
+    /// A drawing that doesn't park (it couldn't be encoded) stays as it was. `done` holds the
+    /// drawings parked already (by the address of the drawing they replace, which the caller
+    /// keeps alive), `encoded` their chunks.
+    fn park_history(&mut self, rects: &[SheetRect], keep: &[SheetRect], encoded: &mut Encoded, mut done: Shared) {
         let Ok(st) = self.state_mut() else { return };
         if st.block_edit.is_some() || st.block_test.is_some() {
             return;
         }
-        let mut encoded = Encoded::new();
-        // By the drawing a step held (steps share drawings): what it holds now.
-        let mut done: std::collections::HashMap<usize, Arc<Drawing>> = std::collections::HashMap::new();
         // The drawings let go of, dropped only at the end: `encoded` names chunks by address.
         let mut old: Vec<Arc<Drawing>> = Vec::new();
         // Undo steps whose cost is no longer what was recorded: the step parked, or the one after it.
@@ -636,19 +788,7 @@ impl Session {
             *c = true;
         }
         for (i, snap) in st.undo.iter_mut().chain(st.redo.iter_mut()).enumerate() {
-            let at = Arc::as_ptr(&snap.doc) as usize;
-            let now = match done.get(&at) {
-                Some(d) => d.clone(),
-                None => {
-                    let mut d = (*snap.doc).clone();
-                    let now = match park_with(&mut d, rects, keep, &mut encoded) {
-                        Ok(n) if n > 0 => Arc::new(d),
-                        _ => snap.doc.clone(),
-                    };
-                    done.insert(at, now.clone());
-                    now
-                }
-            };
+            let now = park_shared(&snap.doc, rects, keep, encoded, &mut done);
             if Arc::ptr_eq(&now, &snap.doc) {
                 continue;
             }
@@ -661,6 +801,23 @@ impl Session {
                 }
             }
         }
+        if !Arc::ptr_eq(&st.saved, &st.doc) {
+            let now = park_shared(&st.saved, rects, keep, encoded, &mut done);
+            if !Arc::ptr_eq(&now, &st.saved) {
+                old.push(std::mem::replace(&mut st.saved, now));
+            }
+        }
+        for built in st.model_records.built_mut() {
+            let now = park_shared(built, rects, keep, encoded, &mut done);
+            if !Arc::ptr_eq(&now, built) {
+                old.push(std::mem::replace(built, now));
+            }
+        }
+        for was in &old {
+            if let Some(now) = done.get(&(Arc::as_ptr(was) as usize)).cloned() {
+                crate::cmd::wallgen::carry_state(st, was, &now);
+            }
+        }
         // What a parked step holds by itself (its own handle index once its sheets went out),
         // for the undo budget ([`crate::undoctl`]): what it doesn't share with the drawing after it.
         for (i, c) in costed.iter().enumerate() {
@@ -671,9 +828,6 @@ impl Session {
             if let Some(snap) = st.undo.get_mut(i) {
                 snap.bytes = snap.doc.unique_bytes(&newer);
             }
-        }
-        if let Some(d) = done.get(&(Arc::as_ptr(&st.saved) as usize)) {
-            st.saved = d.clone();
         }
         drop(old);
     }
@@ -749,5 +903,41 @@ impl Session {
             self.echo(n);
         }
         Ok((rects, keep))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, RawTag, Space};
+    use cadaddy_geom::{Bounds2, Vec2, Vec3};
+
+    /// Q6577: a sheet's last objects and the first elements built after them share a chunk; put
+    /// out of memory and loaded again, every object comes back in the order it had (the sheet's
+    /// run went back after the elements, and what reads the plan in order read it otherwise).
+    #[test]
+    fn objects_put_out_and_loaded_again_keep_their_order() {
+        let mut d = Drawing::default();
+        let line = |x: f64| EntityKind::Line(Line { a: Vec3::new(x, 1.0, 0.0), b: Vec3::new(x + 0.5, 2.0, 0.0) });
+        // The sheet's first objects fill a chunk of their own; its last ones start the next.
+        for i in 0..1064 {
+            d.add(&Space::Model, Common::default(), line(f64::from(i % 90))).unwrap();
+        }
+        // Built elements (they carry extended data: never a sheet's) right after, on the sheet.
+        let element = Common {
+            xdata: vec![RawTag { code: 1001, value: "CADADDY_PROPS".into() }, RawTag { code: 1000, value: "{}".into() }].into(),
+            ..Default::default()
+        };
+        for i in 0..5 {
+            d.add(&Space::Model, element.clone(), line(f64::from(i) + 0.25)).unwrap();
+        }
+        assert_eq!(d.model.chunk_refs().len(), 2, "the sheet's last objects and the elements share a chunk");
+        let order = |d: &Drawing| d.model.iter().map(|e| e.handle).collect::<Vec<_>>();
+        let before = order(&d);
+        let sheets = vec![SheetRect { number: "Z-901".into(), rect: Bounds2::new(Vec2::new(-10.0, -10.0), Vec2::new(100.0, 100.0)) }];
+        assert_eq!(park(&mut d, &sheets, &[]).unwrap(), 1064);
+        assert_eq!(d.model.len(), 5, "the elements stay in memory");
+        assert!(load(&mut d, |_| true).is_empty());
+        assert_eq!(order(&d), before, "the objects came back in another order");
     }
 }

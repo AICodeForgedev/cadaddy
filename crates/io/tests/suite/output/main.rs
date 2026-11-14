@@ -4,6 +4,7 @@
 //! `cargo test -p cadaddy-io <file>::` still selects that file's tests. Every module of this
 //! program shares one process: a test file that changes process-wide state stays a top-level file.
 
+mod cdy_stored_chunk;
 mod dwf_underlay_roundtrip;
 mod eps_wmf_export;
 mod image_export;

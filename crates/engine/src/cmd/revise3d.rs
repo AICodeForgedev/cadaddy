@@ -132,6 +132,11 @@ impl ModelRecords {
     fn index_of(&self, id: u64) -> Option<usize> {
         self.records.iter().position(|(i, _)| *i == id)
     }
+    /// The drawings the records keep as their builds left them: a print set's sheets go out of
+    /// memory in them too ([`crate::Session::put_out_sheets`]).
+    pub(crate) fn built_mut(&mut self) -> impl Iterator<Item = &mut std::sync::Arc<Drawing>> {
+        self.records.iter_mut().filter_map(|(_, r)| r.built.as_mut().map(|b| &mut b.0))
+    }
     /// The record drawing state `d` comes from: none when it comes from no build (or its
     /// build's record is no longer kept); the last build's when the state was never followed
     /// (a drawing changed outside any command).
