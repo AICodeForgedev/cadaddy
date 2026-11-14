@@ -167,7 +167,7 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                 let piece = p.strip_prefix("atom:").map(|k| match k {
                     "conduit" => "conduit",
                     "box" | "ring" => "box",
-                    "strap" => "support",
+                    "strap" | "strut" | "strut_strap" | "rod" | "support_anchor" | "strut_nut" | "riser_clamp" => "support",
                     "cable" => "cable",
                     "wire" => "wire",
                     "breaker" => "breaker",
