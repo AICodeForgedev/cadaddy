@@ -71,6 +71,10 @@ pub struct Scheduled {
     pub size_ft: Option<[f64; 3]>,
     pub round: bool,
     pub cfm: Option<f64>,
+    /// How its tag was told when the schedule prints only a number (`1` in an air handling unit
+    /// schedule, the plans' `AHU-1`); empty when the tag is as printed.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag_basis: String,
 }
 
 /// A run joined to a piece of equipment.
@@ -782,7 +786,10 @@ pub fn scheduled(tables: &[Table]) -> Vec<Scheduled> {
                 continue;
             };
             for tag in row_tags(&cell) {
-                if out.iter().any(|s| s.tag == tag) {
+                // A bare number (`1`) is a row of its own table's kind: an air handling unit
+                // schedule's `1` and an exhaust fan schedule's `1` are two units.
+                let bare = tag.chars().all(|c| c.is_ascii_digit());
+                if out.iter().any(|s| s.tag == tag && (!bare || s.kind == kind)) {
                     continue;
                 }
                 let col = |c: &str| row.iter().find(|(k, _)| k.trim().eq_ignore_ascii_case(c)).map(|(_, v)| v);
@@ -808,6 +815,7 @@ pub fn scheduled(tables: &[Table]) -> Vec<Scheduled> {
                     size_ft: size.map(|s| s.0),
                     round: size.is_some_and(|s| s.1),
                     cfm,
+                    tag_basis: String::new(),
                 });
             }
         }
@@ -819,7 +827,12 @@ pub fn scheduled(tables: &[Table]) -> Vec<Scheduled> {
 
 /// A kind's usual footprint (feet) and height when the schedule prints no size.
 pub fn rule_size(kind: &str) -> [f64; 3] {
-    match kind {
+    rule_size_of(kind).unwrap_or([2.0, 2.0, 2.0])
+}
+
+/// [`rule_size`] for the kinds it knows; none for any other (electrical gear, a proxy).
+pub fn rule_size_of(kind: &str) -> Option<[f64; 3]> {
+    Some(match kind {
         "ahu" => [8.0, 5.0, 5.0],
         "rtu" => [10.0, 6.0, 4.5],
         "outdoor_air_unit" | "energy_recovery_unit" => [8.0, 6.0, 4.5],
@@ -834,8 +847,8 @@ pub fn rule_size(kind: &str) -> [f64; 3] {
         "water_heater" => [2.0, 2.0, 5.0],
         "condensing_unit" => [3.0, 3.0, 3.0],
         "gas_meter" => [1.5, 1.0, 3.0],
-        _ => [2.0, 2.0, 2.0],
-    }
+        _ => return None,
+    })
 }
 
 /// Whether a kind hangs in its run (centred on it) rather than standing on the floor.
