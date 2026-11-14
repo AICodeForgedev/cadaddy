@@ -418,6 +418,20 @@ fn show_summary(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State, job: &Value
     } else {
         text(ui, &state, &state);
     }
+    // What to ask before building leads a job that has built its model (Q6619).
+    if let Some(open) = job.pointer("/inconsistencies/open").and_then(Value::as_u64) {
+        let high = job.pointer("/inconsistencies/high").and_then(Value::as_u64).unwrap_or(0);
+        let head = if open == 1 {
+            crate::tf!("1 thing to ask before you build: {high} high", high = high)
+        } else {
+            crate::tf!("{n} things to ask before you build: {high} high", n = open, high = high)
+        };
+        let colour = if high > 0 { egui::Color32::from_rgb(210, 60, 50) } else { t.accent };
+        text(ui, RichText::new(&head).strong().color(colour), &head);
+        if open > 0 && button(ui, crate::tl!("Open RFI List")) {
+            app.cmdline("rfilist");
+        }
+    }
     ui.add(egui::ProgressBar::new(progress as f32).text(format!("{:.0}%", progress * 100.0)));
     ui.horizontal_wrapped(|ui| {
         if !done && error.is_none() {

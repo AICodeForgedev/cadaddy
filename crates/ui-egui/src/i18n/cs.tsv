@@ -3495,3 +3495,6 @@ menu	Modify	Modifikace
 	Electrical Power	Silnoproud
 	Other Systems	Další systémy
 	Document Source	Zdroj dokumentů
+	{n} things to ask before you build: {high} high	{n} věcí k dotazu před stavbou: {high} vysoké závažnosti
+	1 thing to ask before you build: {high} high	1 věc k dotazu před stavbou: {high} vysoké závažnosti
+	Open RFI List	Otevřít seznam RFI

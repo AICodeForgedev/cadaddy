@@ -177,7 +177,9 @@
         {"words": ["LINEAR", "SLOT"], "size_in": 8.0},
         {"words": ["RETURN", "EXHAUST", "TRANSFER"], "size_in": 10.0}
       ],
-      "default_size_in": 8.0
+      "default_size_in": 8.0,
+      "main_to_drawn_only": true,
+      "branch_within_run_basis": "trade practice: a branch is never larger than the duct it leaves (a tap no wider than the duct's side; the sheet metal worker reduces the neck at the terminal); a duct main is carried on past its end only to a terminal the documents draw, a terminal no document draws takes a branch off the main's end"
     },
     {
       "id": "M-FIRE-DAMPER",
@@ -200,8 +202,8 @@
     {
       "id": "M-TERMINAL-CEILING",
       "trade": "mechanical",
-      "fills": "the height of a ceiling air terminal and of the ducts with no height of their own that serve the ceilings: the terminal's face in the ceiling built over it (its room's ceiling as the reflected ceiling plans, unit RCPs, legend or sections give it, else derived), each duct with no drawn height (a default, an estimated route, a branch inferred to a terminal) in the plenum over the highest ceiling it passes under (numbers: clear_ft, how far over that ceiling the duct's bottom is at least; words: terminal_words name a terminal that is set in a ceiling, not_ceiling_words one that is not, a sidewall register or a floor or door grille)",
-      "basis": "trade practice: a ceiling diffuser, register or grille is set in the finished ceiling of the room it serves, its face flush with the ceiling (laid in the grid or framed in the board), never over it in the plenum or hanging under it; the ducts that serve it run in the plenum above that ceiling and drop to its neck; nothing hangs below a finished ceiling unless the documents call the space exposed (an area the reflected ceiling plans leave open to the structure: what is in it keeps its height); where no room's ceiling is built, the ceiling is the level's; a duct height the documents give stays (a clash below the ceiling is reported)",
+      "fills": "the height of a ceiling air terminal and of the ducts with no height of their own that serve the ceilings: the terminal's face in the ceiling built over it (its room's ceiling as the reflected ceiling plans, unit RCPs, legend or sections give it, else derived), each duct with no drawn height (a default, an estimated route, a branch inferred to a terminal) in the plenum over the highest ceiling it passes under , its top under the underside of the structure over its level: the next storey's floor framing and deck as its notes give them, else the roof's framing, else the next floor's slab (numbers: clear_ft, how far over that ceiling the duct's bottom is at least; words: terminal_words name a terminal that is set in a ceiling, not_ceiling_words one that is not, a sidewall register or a floor or door grille)",
+      "basis": "trade practice: a ceiling diffuser, register or grille is set in the finished ceiling of the room it serves, its face flush with the ceiling (laid in the grid or framed in the board), never over it in the plenum or hanging under it; the ducts that serve it run in the plenum above that ceiling and drop to its neck; a duct never runs up in the joist space of the floor or roof over it (it is hung under the structure, which no duct passes through unless the documents say so); one too deep for the plenum is hung under the structure below the ceiling and marked for review (a soffit, a flatter duct or a lower ceiling); nothing hangs below a finished ceiling unless the documents call the space exposed (an area the reflected ceiling plans leave open to the structure: what is in it keeps its height); where no room's ceiling is built, the ceiling is the level's; a duct height the documents give stays (a clash below the ceiling is reported)",
       "clear_ft": 0.25,
       "terminal_words": ["DIFFUSER", "REGISTER", "GRILLE"],
       "not_ceiling_words": ["SIDEWALL", "SIDE WALL", "WALL", "FLOOR", "DOOR", "UNDERCUT", "LOUVER"]

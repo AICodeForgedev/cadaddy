@@ -10,6 +10,14 @@
 //! rule's clearance over the highest built ceiling it passes under; it never hangs below a
 //! finished ceiling.
 //!
+//! Nor does it ever run up in the structure over it (Q6554): its top stays under the underside of
+//! the floor or roof framing over its level (the next storey's floor framing and deck as its
+//! notes give them, else the roof's framing; where nothing frames it, the next floor's slab), so a
+//! duct with no height of its own above that is brought down under it. Where the plenum is too
+//! shallow for it (the ceiling's clearance and its depth past the structure's underside) the
+//! structure wins, as the field hangs it: under the structure, below the ceiling, marked for
+//! review (a soffit, a flatter duct or a lower ceiling settles it).
+//!
 //! Where no ceiling is built on a level the build laid ceilings out on (a space no room was
 //! traced in), the ceiling is its level's, as model.clashes measures it. What stays: an area the reflected ceiling plans leave open to the
 //! structure is exposed, so what is in it keeps its height. A terminal kind the rule names as not
@@ -39,6 +47,8 @@ const STEP_FT: f64 = 2.0;
 const MAX_STEPS: usize = 500;
 /// A height this close (feet) is where it should be.
 const SLACK_FT: f64 = 0.25 / 12.0;
+/// What a duct too deep for its plenum says of its height: hung under the structure.
+const TIGHT: &str = "under the structure: too deep for the plenum over the ceiling";
 
 /// The rule's numbers and words.
 pub(crate) struct Rule {
@@ -89,6 +99,11 @@ pub(crate) struct Seated {
     pub terminals: usize,
     /// Duct runs with no height of their own raised over the ceilings they pass under.
     pub runs: usize,
+    /// Duct runs with no height of their own brought down out of the structure over them.
+    pub lowered: usize,
+    /// Of the ducts moved, those the plenum is too shallow for: hung under the structure, below
+    /// the ceiling's clearance, marked for review.
+    pub tight: usize,
     /// Per level: terminals and runs moved.
     pub by_level: BTreeMap<String, [usize; 2]>,
     /// Some of what moved: kind, level, plan point, from and to (feet over the floor).
@@ -97,7 +112,7 @@ pub(crate) struct Seated {
 
 impl Seated {
     pub(crate) fn moved(&self) -> usize {
-        self.terminals + self.runs
+        self.terminals + self.runs + self.lowered
     }
 
     pub(crate) fn json(&self) -> Value {
@@ -106,6 +121,8 @@ impl Seated {
             "terminals_checked": self.terminals_checked,
             "terminals_set_in_ceiling": self.terminals,
             "ducts_raised_over_ceiling": self.runs,
+            "ducts_lowered_under_structure": self.lowered,
+            "ducts_too_deep_for_plenum": self.tight,
             "by_level": self.by_level.iter().map(|(l, [t, r])| (l.clone(), json!({"terminals": t, "ducts": r}))).collect::<serde_json::Map<_, _>>(),
             "listed": self.listed,
         })
@@ -139,6 +156,10 @@ pub(crate) fn seat(d: &Drawing, sp: &mut BuildingSpec) -> Seated {
         .filter(|l| !super::wallgen::roof_level(&sp.levels, &l.name))
         .map(|l| (l.name.to_ascii_lowercase(), (l.name.clone(), l.elevation_ft * upf)))
         .collect();
+    // The underside of the structure over each level, feet over its floor.
+    let heights = super::ceilheight::Rule::load();
+    let structure: BTreeMap<String, f64> =
+        floors.values().filter_map(|(name, _)| structure_under(sp, name, &heights).map(|h| (name.to_ascii_lowercase(), h))).collect();
     // The reflected ceiling plans' areas open to the structure (an exposed ceiling type).
     let mut open: BTreeMap<String, Vec<Vec<Vec2>>> = BTreeMap::new();
     for c in sp.rcp.ceilings.iter().take(MAX_ITEMS) {
@@ -176,12 +197,29 @@ pub(crate) fn seat(d: &Drawing, sp: &mut BuildingSpec) -> Seated {
         // Where no ceiling is built (no room traced there), the level's, as model.clashes measures it.
         level_ceiling.get(&key).copied()
     };
-    seat_with(sp, &Rule::load(), &at)
+    seat_with(sp, &Rule::load(), &at, &|level: &str| structure.get(&level.to_ascii_lowercase()).copied())
+}
+
+/// The underside of the structure over `level`, feet over its floor: its framing's as the
+/// documents give it ([`super::ceilheight::structure_over`]), else under the next floor's slab.
+pub(crate) fn structure_under(sp: &BuildingSpec, level: &str, heights: &super::ceilheight::Rule) -> Option<f64> {
+    let lv = sp.level(level)?;
+    let h = match super::ceilheight::structure_over(sp, level, heights) {
+        Some((s, _)) => s - lv.elevation_ft,
+        None => lv.height_ft - super::mep::SLAB_FT,
+    };
+    (h.is_finite() && h > 0.0 && lv.height_ft.is_finite() && h <= lv.height_ft).then_some(h)
 }
 
 /// [`seat`] with the ceiling over a plan point of a level (feet over its floor; None: no ceiling
-/// built there) given by `ceiling`.
-pub(crate) fn seat_with(sp: &mut BuildingSpec, rule: &Rule, ceiling: &dyn Fn(&str, [f64; 2]) -> Option<f64>) -> Seated {
+/// built there) given by `ceiling`, and the underside of the structure over a level (feet over
+/// its floor; None: nothing known) by `structure`.
+pub(crate) fn seat_with(
+    sp: &mut BuildingSpec,
+    rule: &Rule,
+    ceiling: &dyn Fn(&str, [f64; 2]) -> Option<f64>,
+    structure: &dyn Fn(&str) -> Option<f64>,
+) -> Seated {
     let mut out = Seated::default();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     for t in sp.mep.terminals.iter_mut().take(MAX_ITEMS) {
@@ -216,19 +254,53 @@ pub(crate) fn seat_with(sp: &mut BuildingSpec, rule: &Rule, ceiling: &dyn Fn(&st
                 }
             }
         }
-        let Some(c) = high else { continue };
-        let low = c + rule.clear_ft;
-        let mut was: Option<f64> = None;
-        for b in r.bottoms_ft.iter_mut().filter(|b| b.is_finite() && **b < low - SLACK_FT) {
-            was = Some(was.map_or(*b, |w: f64| w.min(*b)));
-            *b = low;
+        // Its bottom over the ceiling by the rule's clearance, its top under the structure.
+        let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] };
+        let depth = if depth.is_finite() { depth.max(0.0) / 12.0 } else { 0.0 };
+        let low = high.map(|c| c + rule.clear_ft);
+        let cap = structure(&r.level).filter(|s| s.is_finite() && *s > 0.0).map(|s| (s - depth).max(0.0));
+        if low.is_none() && cap.is_none() {
+            continue;
         }
-        if let Some(from) = was {
-            let first = r.points.first().copied().unwrap_or_default();
-            out.list(&format!("{} duct", r.system), &r.level, [first[0] / upf, first[1] / upf], from, low);
+        let tight = matches!((low, cap), (Some(l), Some(c)) if l > c + SLACK_FT);
+        let (mut from, mut to, mut up, mut down) = (f64::NAN, f64::NAN, false, false);
+        for b in r.bottoms_ft.iter_mut().filter(|b| b.is_finite()) {
+            let mut seated = *b;
+            if let Some(l) = low.filter(|l| seated < l - SLACK_FT) {
+                seated = l;
+            }
+            // The structure wins: a duct never runs up in the floor or roof framing.
+            if let Some(c) = cap.filter(|c| seated > c + SLACK_FT) {
+                seated = c;
+            }
+            if (seated - *b).abs() > SLACK_FT {
+                up |= seated > *b;
+                down |= seated < *b;
+                if from.is_nan() {
+                    (from, to) = (*b, seated);
+                }
+                *b = seated;
+            }
+        }
+        if !(up || down) {
+            continue;
+        }
+        let first = r.points.first().copied().unwrap_or_default();
+        let what = if tight { format!("{} duct (too deep for the plenum: under the structure)", r.system) } else { format!("{} duct", r.system) };
+        out.list(&what, &r.level, [first[0] / upf, first[1] / upf], from, to);
+        if up {
             out.runs += 1;
-            out.by_level.entry(r.level.clone()).or_default()[1] += 1;
+        } else {
+            out.lowered += 1;
         }
+        if tight {
+            out.tight += 1;
+            r.reviewed = false;
+            if !r.height_source.contains(TIGHT) {
+                r.height_source = format!("{} ({TIGHT})", r.height_source.trim());
+            }
+        }
+        out.by_level.entry(r.level.clone()).or_default()[1] += 1;
     }
     out
 }
@@ -303,7 +375,7 @@ mod tests {
                 None
             }
         };
-        let got = seat_with(&mut sp, &rule(), &ceiling);
+        let got = seat_with(&mut sp, &rule(), &ceiling, &|_: &str| None);
         let t: Vec<f64> = sp.mep.terminals.iter().map(|t| (t.bottom_ft * 1000.0).round() / 1000.0).collect();
         // Down into room A's ceiling from the level's, up into room B's; the sidewall register, the
         // VAV box over the ceiling, a grille in the exposed space and a height an edit set stay.
@@ -315,8 +387,144 @@ mod tests {
         assert_eq!(b, vec![8.75, 8.75, 7.5, 9.5, 6.0, 7.0]);
         assert_eq!((got.terminals, got.runs, got.terminals_checked), (2, 2, 2));
         assert_eq!(got.json()["by_level"]["Level 1"], json!({"terminals": 2, "ducts": 2}));
-        let again = seat_with(&mut sp, &rule(), &ceiling);
+        let again = seat_with(&mut sp, &rule(), &ceiling, &|_: &str| None);
         assert_eq!(again.moved(), 0, "once");
+    }
+
+    /// Q6554: an 11'-0" storey under a floor framed with 22" joists and the usual deck (the
+    /// structure's underside 9'-0 1/2" over the floor), an 8'-0" ceiling. Ducts no document gives a
+    /// height (an inferred branch, a default main, one at the next floor's slab) stay under the
+    /// structure, over the ceiling; one too deep for that plenum hangs under the structure, marked
+    /// for review; a tagged height and a riser keep theirs.
+    #[test]
+    fn ducts_with_no_height_of_their_own_stay_under_the_floor_framing_over_them() {
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 11.0, "ceiling_ft": 8.0},
+                {"name": "Level 2", "elevation_ft": 11.0, "height_ft": 10.0, "ceiling_ft": 8.0}
+            ],
+            "floor_framing": [{"level": "Level 2", "member": "joist", "spacing_in": 16, "depth_in": 22}],
+            "mep": {
+                "systems": [{"name": "RA", "layer": "M-RETURN", "kind": "duct", "size_in": [18, 18], "bottom_ft": 9.0}],
+                "runs": [
+                    {"system": "RA", "level": "Level 1", "points": [[0, 0], [240, 0]], "size_in": [6, 0], "bottoms_ft": [9.5], "height_source": "inferred", "made": "inferred"},
+                    {"system": "RA", "level": "Level 1", "points": [[0, 50], [240, 50]], "size_in": [10, 8], "bottoms_ft": [8.0], "height_source": "default"},
+                    {"system": "RA", "level": "Level 1", "points": [[0, 100], [240, 100]], "size_in": [18, 18], "bottoms_ft": [9.0], "height_source": "inferred", "made": "inferred"},
+                    {"system": "RA", "level": "Level 1", "points": [[0, 150], [240, 150]], "size_in": [10, 8], "bottoms_ft": [9.5], "height_source": "tag"},
+                    {"system": "RA", "level": "Level 1", "points": [[0, 200]], "size_in": [10, 8], "bottoms_ft": [0.0], "top_ft": 21.0, "height_source": "default"}
+                ]
+            }
+        }))
+        .unwrap();
+        let heights = super::super::ceilheight::Rule::load();
+        let under = structure_under(&sp, "Level 1", &heights).unwrap_or_else(|| panic!("the framing over Level 1 is known"));
+        // 11'-0" less the 22" joists and the rule's deck.
+        assert!((under - (11.0 - (22.0 + heights.deck_in) / 12.0)).abs() < 1e-9, "{under}");
+        assert_eq!(structure_under(&sp, "Level 2", &heights), Some(9.5), "nothing framed over it: under the next floor's slab");
+        let ceiling = |level: &str, _: [f64; 2]| (level == "Level 1").then_some(8.0);
+        let structure = |level: &str| structure_under(&sp, level, &heights);
+        let mut seated = sp.clone();
+        let got = seat_with(&mut seated, &rule(), &ceiling, &structure);
+        let tops: Vec<f64> =
+            seated.mep.runs.iter().map(|r| r.bottoms_ft[0] * 12.0 + if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }).collect();
+        let bottoms: Vec<f64> = seated.mep.runs.iter().map(|r| (r.bottoms_ft[0] * 1200.0).round() / 100.0).collect();
+        let under_in = (under * 1200.0).round() / 100.0;
+        // The 6" branch was up in the joists (top 120"): brought down under them. The default
+        // main over the 8'-0" ceiling by the clearance (99"). The 18x18 main can't fit between
+        // the ceiling (99") and the structure: hung under the structure. The tagged run and
+        // the riser stay.
+        assert_eq!(bottoms, vec![under_in - 6.0, 99.0, under_in - 18.0, 114.0, 0.0], "{tops:?}");
+        for (i, t) in tops.iter().enumerate().take(3) {
+            assert!(*t <= under_in + 1e-6, "run {i} top {t} in, the structure's underside {under_in} in");
+        }
+        assert_eq!((got.runs, got.lowered, got.tight), (1, 2, 1), "{}", got.json());
+        assert_eq!(got.json()["ducts_too_deep_for_plenum"], json!(1));
+        let deep = &seated.mep.runs[2];
+        assert!(!deep.reviewed && deep.height_source.starts_with("inferred (under the structure"), "{}", deep.height_source);
+        assert!(no_document_height(&deep.height_source), "still a height no document gives");
+        let again = seat_with(&mut seated, &rule(), &ceiling, &structure);
+        assert_eq!(again.moved(), 0, "once: {}", again.json());
+        assert_eq!(seated.mep.runs[2].height_source.matches("under the structure").count(), 1);
+    }
+
+    /// The same through the job's merge (`mep::seat_in_plenum`): a default-height duct is seated
+    /// under the framing, not under a 6" slab up in the joists.
+    #[test]
+    fn the_plenum_seat_keeps_a_duct_under_the_floor_framing() {
+        let mut sp: BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0.0, "height_ft": 11.0, "ceiling_ft": 8.0},
+                {"name": "Level 2", "elevation_ft": 11.0, "height_ft": 10.0, "ceiling_ft": 8.0}
+            ],
+            "floor_framing": [{"level": "Level 2", "member": "joist", "spacing_in": 16, "depth_in": 22}],
+            "mep": {
+                "systems": [
+                    {"name": "RA", "layer": "M-RETURN", "kind": "duct", "size_in": [12, 12], "bottom_ft": 9.0},
+                    {"name": "CW", "layer": "P-CW", "kind": "pipe", "size_in": [1, 0], "bottom_ft": 9.0}
+                ],
+                "runs": [
+                    {"system": "RA", "level": "Level 1", "points": [[0, 0], [240, 0]], "size_in": [8, 8], "bottoms_ft": [9.0], "height_source": "default"},
+                    {"system": "RA", "level": "Level 1", "points": [[0, 50], [240, 50]], "size_in": [18, 18], "bottoms_ft": [9.0], "height_source": "default"},
+                    {"system": "CW", "level": "Level 1", "points": [[0, 100], [240, 100]], "size_in": [1, 0], "bottoms_ft": [9.0], "height_source": "default"}
+                ]
+            }
+        }))
+        .unwrap();
+        // 11'-0" less the 22" joists and the rule's deck.
+        let under = 11.0 - (22.0 + super::super::ceilheight::Rule::load().deck_in) / 12.0;
+        super::super::mep::seat_in_plenum(&mut sp);
+        let b: Vec<f64> = sp.mep.runs.iter().map(|r| r.bottoms_ft[0]).collect();
+        // The 8" duct, up in the joists, comes down under them; the 18" one can't fit over the
+        // ceiling: under the joists all the same; the pipe keeps its height in the plenum.
+        assert!((b[0] - (under - 8.0 / 12.0)).abs() < 1e-9, "{b:?} under {under}");
+        assert!((b[1] - (under - 1.5)).abs() < 1e-9, "{b:?} under {under}");
+        assert!((b[2] - 9.0).abs() < 1e-9, "{b:?}");
+    }
+
+    /// Q6554 through model.build: a storey under a floor framed with 22" joists (the structure's
+    /// underside 108.5" over the floor) and an 8'-0" ceiling; an inferred 6" branch and an
+    /// inferred 18x18 main laid at a main's height up in the joists. Built, no duct's top is
+    /// over the structure's underside.
+    #[test]
+    fn model_build_keeps_ducts_with_no_height_under_the_floor_framing() {
+        use cadaddy_doc::EntityKind;
+        let mut s = crate::Session::empty();
+        s.open_drawing(Drawing::new_imperial(), "Sample Duct Plenum", None);
+        let spec = json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 11, "ceiling_ft": 8, "base": [0, 0]},
+                {"name": "L2", "elevation_ft": 11, "height_ft": 10, "ceiling_ft": 8, "base": [0, 0]}
+            ],
+            "floor_framing": [{"level": "L2", "member": "joist", "spacing_in": 16, "depth_in": 22}],
+            "rcp": {"ceilings": [{"level": "L1", "outline": [[0, 0], [480, 0], [480, 240], [0, 240]], "height_ft": 8.0}]},
+            "mep": {
+                "systems": [{"name": "RA", "layer": "M-RETURN", "kind": "duct", "size_in": [18, 18], "bottom_ft": 9.0}],
+                "runs": [
+                    {"system": "RA", "level": "L1", "points": [[60, 60], [60, 200]], "size_in": [6, 0], "bottoms_ft": [9.5], "height_source": "inferred", "made": "inferred", "basis": "M-BRANCH-DUCT"},
+                    {"system": "RA", "level": "L1", "points": [[100, 120], [400, 120]], "size_in": [18, 18], "bottoms_ft": [9.0], "height_source": "inferred", "made": "inferred", "basis": "M-BRANCH-DUCT"}
+                ]
+            }
+        });
+        s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+        s.execute("model.build", &json!({})).unwrap();
+        let tops: Vec<f64> = s
+            .doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| e.common.xdata.iter().any(|t| t.value.starts_with("part:segment")))
+            .filter_map(|e| match &e.kind {
+                EntityKind::Mesh(m) => m.vertices.iter().map(|p| p.z).reduce(f64::max),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tops.len(), 2, "{tops:?}");
+        let under = (11.0 * 12.0) - 22.0 - super::super::ceilheight::Rule::load().deck_in;
+        let over = tops.iter().filter(|t| **t > under + 0.1).count();
+        assert_eq!(over, 0, "duct tops {tops:?} in, the structure's underside {under} in");
     }
 
     /// model.build seats them in the ceilings it builds (the reflected ceiling plans' areas here),

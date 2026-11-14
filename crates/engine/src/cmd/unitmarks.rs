@@ -175,6 +175,28 @@ impl Template {
         })
     }
 
+    /// As [`Template::new`], except that a circle with a stroke across it (an architect's can
+    /// light, `⊘`) is a drawing too, though it is two pieces: unlike a lone circle, a circle's
+    /// diameter drawn across it tells it apart (Q6612).
+    pub(crate) fn new_crossed(row: &str, sheet: &str, kind: &str, ifc: &str, drawn: &[Piece], text_h: f64) -> Option<Template> {
+        let usable_drawn: Vec<Piece> = drawn.iter().filter(|p| usable(p)).copied().collect();
+        let crossed = match usable_drawn.as_slice() {
+            [Piece::Round(c, r), Piece::Seg(a, b)] | [Piece::Seg(a, b), Piece::Round(c, r)] => {
+                let m = (*a + *b) * 0.5;
+                m.dist(*c) <= 0.35 * r && a.dist(*b) >= *r && a.dist(*b) <= 2.2 * r
+            }
+            _ => false,
+        };
+        if !crossed {
+            return Template::new(row, sheet, kind, ifc, drawn, text_h);
+        }
+        // Built as a lettered drawing is (one or two pieces), with no letters.
+        let mut tp = Template::drawing(row, sheet, kind, ifc, &usable_drawn, text_h, &["X".to_string()])?;
+        tp.letters.clear();
+        tp.simple = false;
+        Some(tp)
+    }
+
     /// A symbol table's drawing (Q6484: the shared library's, a set's legend row's, an answer's):
     /// as [`Template::new`], except that a drawing known by the lettering inside it too may be
     /// one or two pieces (a circle with `SD` in it) or a plain box (a box with `J` in it).

@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20}")
+            .params("{apply?: bool (complete the objects the documents leave open with the build's proposals, marked unsure, and keep the RFIs in the spec)} → {built, counts: {by_kind: {}, by_severity: {}, by_step: {}}, items: first 20 (by the build step they block, then severity), total, headline (N things to ask before you build: X high), requirements: {requirements, ran, did_not_run, objects_checked, open_objects, findings, checks: [{id, object, ran, status, objects, met_by_documents, completed_by_rule, missing, findings, basis}]}, applied?, message?}: the inconsistencies of the model built from the set: the RFIs the build and the readers raised, and each object kind's requirements (a luminaire's circuit, type and control, a receptacle's circuit, a switch's load, equipment's circuit, a panel's feeder) measured over the model; with no model built yet it says so (the RFIs are what the build raises)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -205,6 +205,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 equipment: f("equipment"),
                 near: String::new(),
                 derived: String::new(),
+                made: String::new(),
+                notes: Vec::new(),
                 keynote: f("keynote"),
                 located: String::new(),
                 keynotes: Vec::new(),
@@ -962,24 +964,65 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── rfi.read ────────────────────────────────────────────────────────────────
 
-fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
-
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Ok(no_project("RFIs", json!({"counts": {"by_kind": {}, "by_severity": {}}, "items": []})));
-        }
+    // The RFIs are what the build raises on the objects it cannot complete (Q6619): with no model
+    // built there is nothing to read them from yet, and the answer says so instead of an empty list.
+    let built = super::bspec::current(s, "rfi.read").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+    let Some(sp) = built else {
+        let msg = "no model built from the set yet: the RFIs are what the build raises on each object it cannot complete from the documents; run the guided job (job.start {pdfs}) or build the model (bim.build), then rfi.read lists them";
+        let out = json!({"built": false, "counts": {"by_kind": {}, "by_severity": {}, "by_step": {}}, "items": [], "total": 0});
+        return Ok(match project(s) {
+            Ok(project) => {
+                let mut out = out;
+                out["sheets_read"] = json!(project.sheets.len());
+                out["message"] = json!(msg);
+                out["warnings"] = json!([msg]);
+                out
+            }
+            // No print set either: how to open one first.
+            Err(_) => {
+                let mut out = no_project("RFIs", out);
+                out["message"] = json!(format!("{msg}; {}", out["message"].as_str().unwrap_or("")));
+                out
+            }
+        });
     };
-
-    Ok(json!({
-        "counts": {"by_kind": {}, "by_severity": {}},
-        "items": [],
-        "total": 0,
-        "sheets_read": project.sheets.len(),
-        "apply": apply,
-        "message": "RFI reader wired; requires wall legend and classified sheets",
-    }))
+    let ev = super::requirements::evaluate(s.doc()?, Some(&sp));
+    let measured = super::requirements::summary(&ev);
+    let mut out = json!({"built": true, "apply": apply});
+    let sp = if apply {
+        out["applied"] = json!(super::requirements::apply(s, &ev)?);
+        super::bspec::current(s, "rfi.read")?.0
+    } else {
+        sp
+    };
+    // The spec's items, and (read only) the requirement items the build would raise now.
+    let mut list = cadaddy_walk3d::rfi::list(&sp);
+    for r in &ev.rfis {
+        if !list.iter().any(|x| x.id == r.id) {
+            list.push(r.clone());
+        }
+    }
+    super::requirements::sort_by_step(&mut list);
+    let rules = super::requirements::rules();
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_severity: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_step: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &list {
+        *by_kind.entry(r.kind_name().to_string()).or_default() += 1;
+        *by_severity.entry(r.severity.name().to_string()).or_default() += 1;
+        *by_step.entry(rules.step_of(r).to_string()).or_default() += 1;
+    }
+    let open: Vec<&cadaddy_walk3d::Rfi> = list.iter().filter(|r| r.status == cadaddy_walk3d::RfiStatus::Open).collect();
+    let high = open.iter().filter(|r| r.severity == cadaddy_walk3d::Severity::High).count();
+    out["counts"] = json!({"by_kind": by_kind, "by_severity": by_severity, "by_step": by_step});
+    out["items"] = json!(list.iter().take(20).map(super::requirements::item_json).collect::<Vec<_>>());
+    out["total"] = json!(list.len());
+    out["open"] = json!(open.len());
+    out["headline"] = json!(super::requirements::headline(open.len(), high));
+    out["requirements"] = measured;
+    Ok(out)
 }
 
 // ─── mep.equipment.read ──────────────────────────────────────────────────────
@@ -1206,6 +1249,12 @@ pub(crate) fn receptacle_item(tag: &str) -> String {
 pub(crate) fn device_kind(tag: &str) -> &'static str {
     cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", tag.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
+
+/// Properties a check gives one device, written at most.
+const MAX_DEVICE_NOTES: usize = 16;
+/// The properties a check gives a device it made (Q6612) that its built element carries too: how
+/// sure it is, why no engineer's sheet has it, what is proposed for it, the RFI asking about it.
+pub(crate) const CHECK_FIELDS: [&str; 6] = ["confidence", "not_on_electrical", "proposed_type", "proposed_circuit", "proposed_control", "rfi"];
 
 /// Devices listed at most per call, and read at most.
 const DEVICES_LISTED: usize = 500;
@@ -1496,6 +1545,15 @@ pub struct ReadDevice {
     /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// What it is by the documents when a check made it rather than a plan (`inferred`: only
+    /// another trade's sheet draws it, Q6612), its basis in `derived`. Empty: drawn, or derived
+    /// when `derived` is given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
+    /// Properties a check gives it (`confidence` unsure, `proposed_type`, `proposed_circuit`, `proposed_control`),
+    /// each with its value: written onto its element as rule values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<(String, String)>,
     /// The keynote its sheet tags it with (`E-9 keynote 4: <the note>`), when one is by its
     /// symbol and asks something of it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1849,8 +1907,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // Copied from the room it stacks with on another floor: said so, with the basis, so it
         // never passes for one its own floor's plans show.
         if !dv.derived.is_empty() {
-            e.set("status", super::waterfill::DERIVED, "rule");
+            e.set("status", if dv.made.trim().is_empty() { super::waterfill::DERIVED } else { dv.made.trim() }, "rule");
             e.set("basis", dv.derived.clone(), "rule");
+        }
+        for (k, v) in dv.notes.iter().take(MAX_DEVICE_NOTES) {
+            if !k.trim().is_empty() && !v.trim().is_empty() {
+                e.set(k.trim(), v.clone(), "rule");
+            }
         }
         // The keynote its sheet tags it with; a piece of equipment's receptacle takes what the
         // note asks of it (its rating, poles, orientation and place), the note its source.
