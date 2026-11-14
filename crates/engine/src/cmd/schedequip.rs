@@ -771,7 +771,8 @@ pub(crate) fn merge_tag_variants(equipment: &mut Vec<MepEquipment>, upf: f64) ->
             let reach = equip_reader::rule_size_of(kind).map_or(8.0, |s| s[0].max(s[1])) * upf;
             let gap_x = (a.min[0] - b.max[0]).max(b.min[0] - a.max[0]).max(0.0);
             let gap_y = (a.min[1] - b.max[1]).max(b.min[1] - a.max[1]).max(0.0);
-            if !(gap_x.hypot(gap_y) <= reach) {
+            let gap = gap_x.hypot(gap_y);
+            if !gap.is_finite() || gap > reach {
                 continue;
             }
             let (keep, drop) = if a_fuller { (i, j) } else { (j, i) };
