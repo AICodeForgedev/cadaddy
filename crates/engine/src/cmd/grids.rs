@@ -2184,7 +2184,7 @@ fn fit_linework_on(plan: &PlanLines, src: &[Vec2], lo: f64, hi: f64, whole: bool
     let propose = |&s: &f64| -> Proposals {
         let scells: Vec<(i64, i64)> =
             few.iter().filter_map(|p| coarse_cell(*p * s, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-        let (scells, tcells, thinned, dense) = vote_cells(scells, &tcells);
+        let (scells, tcells, thinned, dense) = vote_cells(scells, tcells);
         // The coarse grid only proposes an offset per scale: a dense plan has lines in nearly
         // every coarse cell, so placements are told apart on the fine grid.
         // Ties go to the smallest offset: a hash map's order differs run to run, and with it the
