@@ -580,6 +580,11 @@ pub struct GuidedJob {
     /// callouts resolved, enlarged plans registered, match lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Value>,
+    /// The requirements' measure as the BIM build left the model (Q6619,
+    /// [`super::requirements::summary`]): each object kind's requirements, the objects each
+    /// looked at and how many it left open; the RFIs are in the building spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requirements: Option<Value>,
     /// What the BIM build did with the marks it read, by the mark's handle (hex): left out and
     /// why, or one with another sheet's. The print inventory ([`super::inventory`]) takes it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1215,6 +1220,7 @@ impl GuidedJob {
             cancelled: None,
             carry: Vec::new(),
             links: None,
+            requirements: None,
             mark_fates: BTreeMap::new(),
             documents: None,
         }
@@ -6675,7 +6681,29 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     out["conduit"] = cond.to_json();
     out["fire_protection"] = fp.to_json();
     out["trade_summary"] = json!(trade_summary);
+    // The requirements a device's own reading can meet, before the build (Q6619).
+    out["requirements"] = super::requirements::documents_pass(&job.devices);
     Ok(out)
+}
+
+/// The requirements pass on the built model (Q6619): each object kind's requirements over its
+/// objects, the objects the documents leave open completed by the build's proposals (marked
+/// unsure) and raised as RFIs in the spec; the measure goes in the stage's result and the job.
+fn requirements_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let sp = super::bspec::current(s, "bim_build").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+    let Ok(d) = s.doc() else { return };
+    let ev = super::requirements::evaluate(d, sp.as_ref());
+    let mut measured = super::requirements::summary(&ev);
+    match super::requirements::apply(s, &ev) {
+        Ok(n) => measured["proposals_written"] = json!(n),
+        Err(e) => measured["error"] = json!(e.to_string()),
+    }
+    progress_line(&format!(
+        "  requirements: {} of {} ran over {} objects, {} open, {} RFIs",
+        measured["ran"], measured["requirements"], measured["objects_checked"], measured["open_objects"], measured["findings"]
+    ));
+    result["requirements"] = measured.clone();
+    job.requirements = Some(measured);
 }
 
 /// What the fire protection read leaves to say (Q6497): no source at all (the trade is missing,
@@ -9834,6 +9862,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     result["connections"] = connected;
     result["conflicts"] = job.conflicts();
     bim_step(s, job, "provenance", t);
+    // Every object completed by its requirements, or carrying the open one as an RFI (Q6619).
+    let t = web_time::Instant::now();
+    requirements_step(s, job, &mut result);
+    bim_step(s, job, "requirements", t);
     super::bspec::recount_built(s.doc()?, &mut result);
     progress_line(&format!("  the model as built: {} walls, {} doors, {} windows", result["walls"], result["doors"], result["windows"]));
     // A level whose walls total a few feet inside a few square feet is a plan at the wrong
@@ -32121,6 +32153,7 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             save_job(s, &saved)?;
             let stats = model_stats_from_session(s);
             let mut status = job_status_value(&saved, stats.as_ref());
+            add_inconsistencies(s, &saved, &mut status);
             status["resumed"] = json!(true);
             status["prints_check"] = json!(match check {
                 PrintsCheck::Same { .. } => "same",
@@ -32153,6 +32186,7 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
 
     let stats = model_stats_from_session(s);
     let mut status = job_status_value(&job, stats.as_ref());
+    add_inconsistencies(s, &job, &mut status);
     if let Some(n) = units_note {
         status["units_note"] = json!(n);
     }
@@ -32747,6 +32781,7 @@ fn cmd_set_mode_inner(s: &mut Session, p: &Value) -> Result<Value> {
     save_job(s, &job)?;
     let stats = model_stats_from_session(s);
     let mut status = job_status_value(&job, stats.as_ref());
+    add_inconsistencies(s, &job, &mut status);
     status["mode"] = json!({"from": if was { "auto" } else { "interactive" }, "to": if auto { "auto" } else { "interactive" }});
     if !reset.is_empty() {
         status["rerun"] = json!(reset.iter().map(|(n, _)| n.label()).collect::<Vec<_>>());
@@ -32759,7 +32794,9 @@ fn cmd_status(s: &mut Session, _p: &Value) -> Result<Value> {
     match load_job(s)? {
         Some(job) => {
             let stats = model_stats_from_session(s);
-            Ok(job_status_value(&job, stats.as_ref()))
+            let mut status = job_status_value(&job, stats.as_ref());
+            add_inconsistencies(s, &job, &mut status);
+            Ok(status)
         }
         None => Ok(json!({"running": false, "hint": "no job running — start one with job.start {pdfs, goal}"})),
     }
@@ -32910,6 +32947,68 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
     w
 }
 
+/// What the job found to ask before building (Q6619): the open RFIs of the model it built by the
+/// build step they block, the requirements' measure over the model's objects (each object kind's
+/// requirements, the objects each looked at and left open), and the documents' pass before the
+/// build. Before anything is built it says so.
+fn inconsistencies(s: &Session, job: &GuidedJob) -> Value {
+    let documents = job
+        .stage(StageName::MepRead)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("requirements"))
+        .cloned()
+        .or_else(|| {
+            job.stage(StageName::Devices).is_some_and(|st| st.status == StageStatus::Done).then(|| super::requirements::documents_pass(&job.devices))
+        })
+        .unwrap_or(Value::Null);
+    let built = super::bspec::current(s, "job").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+    let mut v = match &built {
+        Some(sp) => super::requirements::report(sp, job.requirements.as_ref()),
+        None => json!({"headline": "nothing built yet: the build raises what it can't complete from the documents", "open": Value::Null}),
+    };
+    let model_built = job.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
+    if model_built && job.requirements.is_none() {
+        v["requirements_note"] =
+            json!("the model was built before its objects were checked against their requirements: rfi.read {apply: true} checks them now");
+    }
+    v["levels"] = json!(built.as_ref().map_or(0, |sp| sp.levels.len()));
+    v["documents"] = documents;
+    v
+}
+
+/// Q6619 point 5: a set of several storeys built with nothing open at all is itself an error in
+/// the report (the checks found nothing to look at, or did not run), never "clean".
+fn inconsistency_warning(job: &GuidedJob, inc: &Value) -> Option<Value> {
+    let built = job.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
+    let levels = inc["levels"].as_u64().unwrap_or(0);
+    if !built || levels < 2 || inc["open"].as_u64() != Some(0) {
+        return None;
+    }
+    let ran = inc.pointer("/requirements/ran").and_then(Value::as_u64).unwrap_or(0);
+    let of = inc.pointer("/requirements/requirements").and_then(Value::as_u64).unwrap_or(0);
+    Some(json!({
+        "warning": "no inconsistencies found",
+        "detail": format!("a {levels}-storey set built with nothing to ask: {ran} of {of} requirements ran over {} objects; a real set always leaves something open, so look at what the checks saw", inc.pointer("/requirements/objects_checked").cloned().unwrap_or(json!(0))),
+    }))
+}
+
+/// The status with the job's inconsistencies: the headline first thing to read, the warning
+/// when a built set has none.
+fn add_inconsistencies(s: &Session, job: &GuidedJob, v: &mut Value) {
+    let inc = inconsistencies(s, job);
+    if let Some(w) = inconsistency_warning(job, &inc) {
+        match v.get_mut("warnings").and_then(Value::as_array_mut) {
+            Some(a) => a.push(w),
+            None => v["warnings"] = json!([w]),
+        }
+        if v["status"] == "done" {
+            v["status"] = json!("done_with_warnings");
+        }
+    }
+    v["headline"] = inc["headline"].clone();
+    v["inconsistencies"] = json!({"headline": inc["headline"], "open": inc["open"], "high": inc["high"], "by_step": inc["by_step"]});
+}
+
 /// Q6021 MUST 3: "done" vs "done_with_warnings".
 fn done_status(job: &GuidedJob, warnings: &[Value]) -> &'static str {
     if job.stages.iter().any(|st| st.status == StageStatus::Error) {
@@ -32962,10 +33061,15 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         .collect();
 
     let stats = model_stats_from_session(s);
-    let warnings = job_warnings(&job, stats.as_ref());
+    let mut warnings = job_warnings(&job, stats.as_ref());
+    // What to ask before building leads the report (Q6619).
+    let inconsistencies = inconsistencies(s, &job);
+    warnings.extend(inconsistency_warning(&job, &inconsistencies));
     let status = done_status(&job, &warnings);
 
     Ok(json!({
+        "headline": inconsistencies["headline"],
+        "inconsistencies": inconsistencies,
         "job_id": job.id,
         "goal": job.goal,
         "created": job.created,
@@ -33750,6 +33854,55 @@ mod model_stats_tests {
         assert_eq!(st["elements"]["total"], 3, "{}", st["elements"]);
         assert_eq!(st["elements"]["by_kind"], json!({"door": 1, "wall": 2}));
         assert_eq!(st["elements"]["count"], json!({"complete": true, "scanned": 600_003}));
+    }
+
+    /// Q6619: what to ask before building leads the report and the status, by the build step it
+    /// blocks; a built set of several storeys with nothing open is a warning, never "clean".
+    #[test]
+    fn the_inconsistencies_lead_the_report_and_a_multi_storey_build_with_none_warns() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        for (name, z) in [("1", 0.0), ("2", 10.0)] {
+            sp.levels.push(serde_json::from_value(json!({"name": name, "elevation_ft": z, "height_ft": 10.0})).unwrap());
+        }
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        d.building_spec = Some(sp.to_json()).into();
+        let mut s = Session::new();
+        s.open_drawing(d, "Sample Building", None);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        for st in job.stages.iter_mut().filter(|st| st.status != StageStatus::Skipped) {
+            st.status = StageStatus::Done;
+        }
+        job.requirements = Some(json!({"requirements": 8, "ran": 0, "objects_checked": 0}));
+        save_job(&mut s, &job).unwrap();
+        let r = s.execute("job.report", &json!({})).unwrap();
+        assert_eq!(r["headline"], "0 things to ask before you build: 0 high");
+        assert!(warnings(&r).iter().any(|w| w == "no inconsistencies found"), "{:?}", warnings(&r));
+        assert_eq!(r["status"], "done_with_warnings");
+        assert_eq!(r["inconsistencies"]["requirements"]["ran"], 0, "the measure is reported");
+        let st = s.execute("job.status", &json!({})).unwrap();
+        assert_eq!(st["headline"], r["headline"]);
+        assert!(warnings(&st).iter().any(|w| w == "no inconsistencies found"));
+        assert_eq!(st["status"], "done_with_warnings");
+
+        // Something to ask before the slab and something at trim: the headline counts them, the
+        // slab's first.
+        let mut pour = cadaddy_walk3d::Rfi::new(cadaddy_walk3d::RfiKind::PourHold, "1", [0.0, 0.0], "stub-ups", "not confirmed", "");
+        pour.id = "RFI-901".into();
+        let mut cct = cadaddy_walk3d::Rfi::new(cadaddy_walk3d::RfiKind::Lighting, "2", [0.0, 0.0], "type A", "CCT differs", "");
+        cct.id = "RFI-900".into();
+        cct.topic = "lighting: CCT".into();
+        sp.rfis = vec![cct, pour];
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
+        let r = s.execute("job.report", &json!({})).unwrap();
+        assert_eq!(r["headline"], "2 things to ask before you build: 1 high");
+        assert!(!warnings(&r).iter().any(|w| w == "no inconsistencies found"));
+        let first = &r["inconsistencies"]["items"][0];
+        assert_eq!((first["id"].as_str(), first["before"].as_str()), (Some("RFI-901"), Some("underground")), "{first}");
+        let steps = &r["inconsistencies"]["by_step"];
+        assert_eq!(steps[0]["step"], "underground");
+        assert_eq!(steps[0]["items"], 1);
+        assert_eq!(steps[2]["items"], 1, "the CCT at trim");
+        assert_eq!(s.execute("job.status", &json!({})).unwrap()["inconsistencies"]["open"], 2);
     }
 
     /// A count the cap cuts short says so and raises no "0 elements" warning; a complete count

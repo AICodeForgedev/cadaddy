@@ -363,6 +363,34 @@ fn plan_circuits_and_schedule_rows_that_dont_meet_are_review_items() {
     assert_eq!(done["resolved"], plan["id"], "{done}");
 }
 
+/// Q6619: the plans and schedules that don't meet are objects the build can't complete; the
+/// requirements pass raises each as an RFI on its objects, measured over the step's objects.
+#[test]
+fn plan_circuits_and_rows_that_dont_meet_are_rfis_the_build_raises() {
+    let mut s = building();
+    let r = s.execute("rfi.read", &json!({"apply": true})).expect("rfi.read");
+    let check = |id: &str| r["requirements"]["checks"].as_array().unwrap().iter().find(|c| c["id"] == id).cloned().unwrap_or_default();
+    let sched = check("E-CIRCUIT-SCHEDULED");
+    assert_eq!(sched["ran"], true, "{sched}");
+    assert!(sched["findings"].as_u64().unwrap() >= 1 && sched["objects"].as_u64().unwrap() > 0, "{sched}");
+    assert!(check("E-BREAKER-LOAD")["findings"].as_u64().unwrap() >= 2, "{}", check("E-BREAKER-LOAD"));
+    let panels = check("E-SCHEDULE-PANEL");
+    assert_eq!(panels["findings"], 1, "{panels}");
+    assert_eq!(panels["objects"].as_u64().unwrap(), panels["met_by_documents"].as_u64().unwrap() + 1, "the schedules, one with no panel: {panels}");
+    assert_eq!(sched["objects"].as_u64().unwrap(), sched["met_by_documents"].as_u64().unwrap() + sched["missing"].as_u64().unwrap(), "{sched}");
+    let list = s.execute("rfi.list", &json!({"kind": "requirement"})).expect("list");
+    let items = list["items"].as_array().expect("items");
+    let lp19 = items.iter().find(|i| i["about"] == "panel LP1 circuit LP1-9").cloned().expect("LP1-9");
+    assert!(lp19["issue"].as_str().unwrap().contains("no breaker"), "{lp19}");
+    assert_eq!(lp19["before"], "rough_in");
+    assert_eq!(lp19["severity"], "high");
+    let lp23 = items.iter().find(|i| i["about"] == "panel LP2 circuit LP2-3").cloned().expect("LP2-3");
+    assert!(lp23["proposed"].as_str().unwrap().contains("spare"), "{lp23}");
+    // Raised again, nothing doubles.
+    s.execute("rfi.read", &json!({"apply": true})).expect("again");
+    assert_eq!(s.execute("rfi.list", &json!({"kind": "requirement"})).unwrap()["total"], list["total"]);
+}
+
 #[test]
 fn a_rebuild_replaces_the_breakers_and_keeps_the_count_index_true() {
     let mut s = building();
