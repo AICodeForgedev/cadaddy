@@ -7619,6 +7619,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if joined > 0 {
                     progress_line(&format!("  scheduled units joined to the drawn runs ending at them: {joined}"));
                 }
+                // One unit read twice by its tag with and without its number (`AHU` beside
+                // `AHU-1`): one, the fuller tag kept (Q6579).
+                let merged = super::schedequip::merge_tag_variants(&mut sp.mep.equipment, sp.units_per_foot);
+                if !merged.is_empty() {
+                    progress_line(&format!(
+                        "  equipment read twice by its tag with and without its number, now one: {} ({})",
+                        merged.len(),
+                        merged.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
                 // The equipment built some other way (a typical room's stamped fan) that a
                 // schedule row lists or whose kind's row serves its room: that row's type and
                 // data on it (Q6316).
@@ -7641,6 +7651,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             .unwrap_or_else(|| room.to_string())
                     };
                     let typed = super::schedequip::type_built(&found.rows, &mut sp.mep.equipment, &room_name);
+                    // A box far bigger than its schedule's (or its kind's usual) size is something
+                    // else's its tag was read by: that size at its centre (Q6579).
+                    let fitted = super::schedequip::fit_oversized(&found.rows, &mut sp.mep.equipment, sp.units_per_foot);
+                    if fitted > 0 {
+                        progress_line(&format!("  equipment boxes far bigger than the unit, set to its size: {fitted}"));
+                    }
                     if typed.by_tag + typed.by_room > 0 || !typed.untold.is_empty() {
                         progress_line(&format!(
                             "  built equipment given its schedule row: {} by its tag, {} by the row serving its room; {} with no one row ({:?})",
