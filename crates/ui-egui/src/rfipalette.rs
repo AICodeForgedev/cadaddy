@@ -59,17 +59,19 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if st.open_only {
         q["status"] = json!("open");
     }
-    let r = app.session.execute("rfi.list", &q).unwrap_or(Value::Null);
-    let list: Vec<Value> = r["items"].as_array().cloned().unwrap_or_default();
-    let levels: Vec<String> = app
-        .session
-        .execute("bspec.get", &json!({}))
-        .ok()
-        .and_then(|v| v["spec"]["levels"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|l| l["name"].as_str().map(String::from))
-        .collect();
+    // Asked once per state of the drawing and of the filter, not on every frame (Q6573).
+    let r = crate::asked::ask(app, ctx, "rfi.list", &q);
+    let list: &[Value] = r["items"].as_array().map_or(&[], Vec::as_slice);
+    let levels = crate::asked::kept(app, ctx, egui::Id::new("rfi-levels"), &(), |app| -> Vec<String> {
+        app.session
+            .execute("bspec.get", &json!({}))
+            .ok()
+            .and_then(|v| v["spec"]["levels"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|l| l["name"].as_str().map(String::from))
+            .collect()
+    });
     let mut zoom: Option<String> = None;
     let mut walk: Option<(String, [f64; 2])> = None;
     let mut set: Option<(String, String)> = None;
@@ -92,7 +94,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 let shown = st.level.clone().unwrap_or_else(|| crate::tl!("All levels").to_string());
                 egui::ComboBox::from_id_salt("rfi-level").selected_text(shown).show_ui(ui, |ui| {
                     ui.selectable_value(&mut st.level, None, crate::tl!("All levels"));
-                    for l in &levels {
+                    for l in levels.iter() {
                         ui.selectable_value(&mut st.level, Some(l.clone()), l);
                     }
                 });
@@ -105,11 +107,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     .color(t.text_dim),
             );
             ui.separator();
-            egui::ScrollArea::vertical().id_salt("rfi-list").max_height(260.0).show(ui, |ui| {
-                if list.is_empty() {
-                    ui.label(RichText::new(crate::tl!("No gaps or conflicts in the building spec.")).color(t.text_dim));
-                }
-                for item in &list {
+            if list.is_empty() {
+                ui.label(RichText::new(crate::tl!("No gaps or conflicts in the building spec.")).color(t.text_dim));
+            }
+            // Only the rows on screen are laid out.
+            let row_height = ui.spacing().interact_size.y;
+            egui::ScrollArea::vertical().id_salt("rfi-list").max_height(260.0).show_rows(ui, row_height, list.len(), |ui, rows| {
+                for item in list.get(rows).into_iter().flatten() {
                     let rid = item["id"].as_str().unwrap_or_default().to_string();
                     let (b, colour) = badge(item["severity"].as_str().unwrap_or_default());
                     ui.horizontal(|ui| {

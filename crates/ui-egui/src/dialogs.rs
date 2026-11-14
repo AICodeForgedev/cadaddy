@@ -112,6 +112,9 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     }
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
+    // The open dialog's part of the frame (`perf.sections`): a dialog costs a frame a few
+    // milliseconds whatever the size of the drawing (Q6573).
+    let t0 = crate::now_ms();
     match d.as_str() {
         "spacemouse" => crate::spacemouse::dialog(app, ctx, &mut open),
         "language" => language(app, ctx, &mut open),
@@ -187,6 +190,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
+    crate::framecost::add("dialog", crate::now_ms() - t0);
     // A dialog that closed by opening another (Plot Preview back to Plot) keeps the new one.
     if !open && app.ui.dialog.as_deref() == Some(d.as_str()) {
         app.ui.dialog = None;
