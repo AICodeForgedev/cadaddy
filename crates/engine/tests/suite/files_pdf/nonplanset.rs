@@ -230,6 +230,51 @@ fn a_part_drawing_declines_and_a_plan_correction_goes_on() {
     assert!(!job["specs_found"].is_null(), "the specification is looked for once it goes on");
 }
 
+/// Q6600: a set with no plan view declines at classify, and the job has ended there: polling
+/// `job.next` (unattended or interactive, its questions answered with their defaults) answers
+/// the stop with its stage and why, never `waiting` with nothing open, never done.
+#[test]
+fn a_declined_job_has_ended_and_never_waits() {
+    let _g = serial();
+    pdf_reader();
+    for (goal, auto) in [("bim", true), ("takeoff", true), ("estimate", false)] {
+        let what = format!("{goal}, auto {auto}");
+        let dir = folder(&format!("ended_{goal}"));
+        let pdf = dir.join("Support Plate.pdf");
+        std::fs::write(&pdf, part_drawing()).expect("write");
+        let mut s = Session::new();
+        let mut r =
+            s.execute("job.start", &json!({"pdfs": pdf.to_string_lossy(), "goal": goal, "auto": auto, "checkpoint": false})).expect("job.start");
+        let mut stops = 0;
+        for poll in 0..12 {
+            assert_ne!(r["waiting"], json!(true), "{what} #{poll}: waiting with nothing running: {r}");
+            assert_ne!(r["done"], json!(true), "{what} #{poll}: declined, not done: {r}");
+            // A question open: answer it with its default (the job waits for it, not for ever).
+            let q = r.get("question").or_else(|| r.get("next")).filter(|q| q.is_object()).cloned();
+            r = match q {
+                Some(q) => {
+                    let a = q.get("default").cloned().filter(|d| !d.is_null()).or_else(|| q["choices"].get(0).cloned()).unwrap_or(json!("Correct"));
+                    s.execute("job.answer", &json!({"id": q["id"], "answer": a})).expect("job.answer")
+                }
+                None => {
+                    if r["stopped"].is_object() {
+                        stops += 1;
+                    }
+                    s.execute("job.next", &json!({})).expect("job.next")
+                }
+            };
+        }
+        assert!(stops >= 3, "{what}: the stop answered again and again: {r}");
+        assert_eq!(r["status"], json!("error"), "{what}: {r}");
+        assert_eq!(r["stopped"]["stage"], json!("classify"), "{what}: {r}");
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("has no plan views")), "{what}: {r}");
+        let st = s.execute("job.status", &json!({})).expect("job.status");
+        assert_eq!(st["stopped"]["stage"], json!("classify"), "{what}: {st}");
+        assert!(st["stopped"]["how_to_go_on"].to_string().contains("job.sheets.set"), "{what}: says how to go on: {st}");
+        assert_eq!(st["done"], json!(false), "{what}: {st}");
+    }
+}
+
 /// The prints beside another job's print set (drawing sheets carrying section headers) and a
 /// book of sections: the book is the specification found; the other set's sheets are no book's
 /// pages and aren't read.
