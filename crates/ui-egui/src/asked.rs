@@ -74,6 +74,116 @@ pub fn ask(app: &mut CadApp, ctx: &egui::Context, cmd: &'static str, params: &Va
     kept(app, ctx, egui::Id::new(("asked", cmd)), params, |app| app.session.execute(cmd, params).unwrap_or(Value::Null))
 }
 
+/// What [`worked_out`] keeps under one id: the value worked out for `key` (`None` while its work
+/// runs, or when the work failed), and whether that work is running.
+struct Worked<K, T> {
+    key: K,
+    value: Option<Arc<T>>,
+    running: bool,
+}
+
+impl<K: Clone, T> Clone for Worked<K, T> {
+    fn clone(&self) -> Self {
+        Self { key: self.key.clone(), value: self.value.clone(), running: self.running }
+    }
+}
+
+/// How long the frame that starts [`worked_out`]'s work waits for it: work this quick shows in
+/// that frame, as if it had run in place. A frame or two at most (Q6585).
+pub const WORK_WAIT: web_time::Duration = web_time::Duration::from_millis(30);
+
+/// What an opening palette or dialog shows when working it out may take long (Q6585): reading
+/// the whole print set (its sheets out of memory load first) or a long computation (Validate's
+/// scores, the agent's briefing, a count of every block, a plot preview, the room list traced
+/// from the plans). `work` runs on a worker thread with the session, as a long command does
+/// ([`crate::busy`]: the busy card shows once it has run [`crate::busy::GRACE`]), and its value
+/// is kept under `id` while `key` (of the drawing's state the window shows and the dialog's own
+/// choices) stays the same. `None` while it is being worked out (the dialog says so; the value
+/// appears when ready) and while other work runs (it starts after). The key is taken again
+/// once the work ends, of the state it left: a read that loaded the sheets keeps its value
+/// for the set in memory. Work that failed is not tried again until the key changes. Without
+/// threads (the web) the work runs in place.
+pub fn worked_out<K, T, W>(
+    app: &mut CadApp,
+    ctx: &egui::Context,
+    id: egui::Id,
+    what: &str,
+    key: impl Fn(&CadApp) -> K + 'static,
+    work: W,
+) -> Option<Arc<T>>
+where
+    K: Clone + PartialEq + Send + Sync + 'static,
+    T: Send + Sync + 'static,
+    W: FnOnce(&mut cadaddy_engine::Session) -> T + Send + 'static,
+{
+    let busy = crate::busy::running(app).is_some();
+    let kept = ctx.data(|d| d.get_temp::<Worked<K, T>>(id));
+    if let Some(k) = &kept {
+        if k.running && busy {
+            return None;
+        }
+        if !k.running && k.key == key(app) {
+            // Worked out (or failed: not tried again for the same state).
+            return k.value.clone();
+        }
+    }
+    if busy {
+        return None;
+    }
+    if !crate::busy::backgrounds_anything() {
+        let value = Arc::new(work(&mut app.session));
+        let k = Worked { key: key(app), value: Some(Arc::clone(&value)), running: false };
+        ctx.data_mut(|d| d.insert_temp(id, k));
+        return Some(value);
+    }
+    let slot: Arc<std::sync::Mutex<Option<T>>> = Arc::new(std::sync::Mutex::new(None));
+    let filled = Arc::clone(&slot);
+    ctx.data_mut(|d| d.insert_temp(id, Worked::<K, T> { key: key(app), value: None, running: true }));
+    let key = std::rc::Rc::new(key);
+    let key_after = std::rc::Rc::clone(&key);
+    let repaint = ctx.clone();
+    crate::busy::start_waiting(
+        app,
+        what,
+        Box::new(move |s| {
+            let v = work(s);
+            if let Ok(mut g) = filled.lock() {
+                *g = Some(v);
+            }
+            Ok(Value::Null)
+        }),
+        Box::new(move |app, r| {
+            let value = slot.lock().ok().and_then(|mut g| g.take()).map(Arc::new);
+            if let Err(e) = r {
+                app.session.echo(e);
+            }
+            let k = Worked { key: key_after(app), value, running: false };
+            repaint.data_mut(|d| d.insert_temp(id, k));
+            repaint.request_repaint();
+        }),
+        WORK_WAIT,
+    );
+    let now = key(app);
+    ctx.data(|d| d.get_temp::<Worked<K, T>>(id)).filter(|k| !k.running && k.key == now).and_then(|k| k.value)
+}
+
+/// Let go of what [`worked_out`] keeps under `id` (with its key and value types): once the
+/// caller holds it in another form (a texture), or to work it out again.
+pub fn forget_worked<K: Clone + Send + Sync + 'static, T: Send + Sync + 'static>(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| d.remove::<Worked<K, T>>(id));
+}
+
+/// What a palette or dialog shows while [`worked_out`] works its content out: a spinner and
+/// "Working it out…" (named in `ui.elements`, role "text").
+pub fn working(ui: &mut egui::Ui) {
+    let s = crate::tl!("Working it out…");
+    let r = ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new());
+        ui.label(s)
+    });
+    crate::control::record_widget(ui, &r.inner, s, "text", None);
+}
+
 /// The heights the rows of a [`rows_in_view`] list had when last laid out, for one key.
 #[derive(Clone, Debug, Default)]
 struct Heights<K> {

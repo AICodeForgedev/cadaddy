@@ -87,6 +87,8 @@ impl Spot {
             "linework"
         } else if basis.starts_with("at its label") {
             "label"
+        } else if basis.starts_with("on its symbol's drawn shape") {
+            "symbol shape"
         } else {
             "symbol block"
         }

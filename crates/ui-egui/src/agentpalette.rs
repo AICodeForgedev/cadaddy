@@ -14,27 +14,30 @@ fn cache_id() -> egui::Id {
     egui::Id::new("agentwork_cache")
 }
 
-fn fetch(app: &mut CadApp) -> (Value, Value) {
-    let log = app.session.execute("review.log", &json!({"author": "agent", "approved": false, "limit": 50})).unwrap_or(Value::Null);
-    let brief = app.session.execute("project.briefing", &json!({})).unwrap_or(Value::Null);
+fn fetch(s: &mut cadaddy_engine::Session) -> (Value, Value) {
+    let log = s.execute("review.log", &json!({"author": "agent", "approved": false, "limit": 50})).unwrap_or(Value::Null);
+    let brief = s.execute("project.briefing", &json!({})).unwrap_or(Value::Null);
     (log, brief)
 }
 
-pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    // The document and its revision key the cache: any edit refreshes it.
+/// The document and its revision key the cache: any edit refreshes it.
+fn key(app: &CadApp) -> (usize, usize) {
     let doc_key = app.session.doc().ok().map_or(0, |d| d as *const _ as usize);
     let rev = app.session.doc().ok().and_then(|d| d.agent.as_ref().map(String::len)).unwrap_or(0);
-    let key = (doc_key, rev);
-    let (log, brief) = match ctx.data_mut(|d| d.get_temp::<((usize, usize), (Value, Value))>(cache_id())) {
-        Some((k, v)) if k == key => v,
-        _ => {
-            let v = fetch(app);
-            ctx.data_mut(|d| d.insert_temp(cache_id(), (key, v.clone())));
-            v
-        }
-    };
+    (doc_key, rev)
+}
+
+pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    // The briefing reads the model against the whole set: worked out on a worker thread, the
+    // window open meanwhile (Q6585).
+    let fetched = crate::asked::worked_out(app, ctx, cache_id(), "project.briefing", key, fetch);
     let mut approve: Option<Value> = None;
     egui::Window::new(crate::tl!("Agent Work")).id(egui::Id::new("agentwork_palette")).default_size([460.0, 520.0]).open(open).show(ctx, |ui| {
+        let Some(fetched) = &fetched else {
+            crate::asked::working(ui);
+            return;
+        };
+        let (log, brief) = &**fetched;
         if let Some(t) = brief["text"].as_str() {
             ui.label(RichText::new(t).small());
             ui.separator();
@@ -69,10 +72,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             }
         });
     });
-    if let Some(p) = approve {
-        if let Err(e) = app.session.execute("review.approve", &p) {
-            app.status = Some((e.to_string(), crate::now_ms()));
-        }
-        ctx.data_mut(|d| d.remove::<((usize, usize), (Value, Value))>(cache_id()));
+    // Accepting is an edit: the drawing the list keys on changes, so it is worked out again.
+    if let Some(p) = approve
+        && let Err(e) = app.session.execute("review.approve", &p)
+    {
+        app.status = Some((e.to_string(), crate::now_ms()));
     }
 }

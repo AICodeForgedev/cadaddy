@@ -606,7 +606,15 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     let assemblies: HashMap<String, super::floorasm::Assembly> = {
         let d = s.doc()?;
         let trade_rules = g.spec.as_ref().map_or_else(super::tradeatoms::Rules::default, |sp| super::tradeatoms::Rules::of(d, sp));
-        let cx = super::floorasm::Context { spec: g.spec.as_ref(), rules: &trade_rules, default_in: g.slab_ft.max(0.0) * 12.0 };
+        // A slab thickness other than the build's own is a person's (`slabThickness`): every
+        // storey's. A plain WALLGEN (no spec) lays out no trades: its slab is every storey's.
+        let given = g.slab_ft.is_finite() && (g.slab_ft - SLAB_FT).abs() > 1e-9;
+        let cx = super::floorasm::Context {
+            spec: g.spec.as_ref(),
+            rules: &trade_rules,
+            default_in: g.slab_ft.max(0.0) * 12.0,
+            slab_everywhere: given || g.spec.is_none(),
+        };
         super::floorasm::by_level(d, &g.rules.levels, &cx).into_iter().map(|a| (a.level.clone(), a)).collect()
     };
     let slab_of = |level: &str| assemblies.get(level).map_or(g.slab_ft.max(0.0) * upf, |a| a.thickness_in() / 12.0 * upf);
@@ -1422,13 +1430,12 @@ fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
 }
 
 /// Whether object `h`, different between `before` (where a command started) and `now`, differs
-/// only because a sheet change during the command (`moves`: each as the drawing before and after
-/// it) loaded it into memory or put it out (Q6570): put out as it was when the command started,
-/// or loaded and unchanged since, or both. That is no edit of the plan.
-fn sheet_moved(moves: &[(Arc<Drawing>, Arc<Drawing>)], before: &Drawing, now: &Drawing, h: Handle) -> bool {
-    let put_out =
-        |b: &Arc<Entity>| moves.iter().any(|(pre, post)| post.model.get(h).is_none() && pre.model.get(h).is_some_and(|p| Arc::ptr_eq(p, b)));
-    let loaded = |n: &Arc<Entity>| moves.iter().any(|(pre, post)| pre.model.get(h).is_none() && post.model.get(h).is_some_and(|p| Arc::ptr_eq(p, n)));
+/// only because a sheet change during the command (`moves`, [`crate::sheetstore::SheetMove`])
+/// loaded it into memory or put it out (Q6570): put out as it was when the command started, or
+/// loaded and unchanged since, or both. That is no edit of the plan.
+fn sheet_moved(moves: &[crate::sheetstore::SheetMove], before: &Drawing, now: &Drawing, h: Handle) -> bool {
+    let put_out = |b: &Arc<Entity>| moves.iter().any(|m| m.put_out(h, b));
+    let loaded = |n: &Arc<Entity>| moves.iter().any(|m| m.loaded(h, n));
     match (before.model.get(h), now.model.get(h)) {
         (Some(b), None) => put_out(b),
         (None, Some(n)) => loaded(n),
@@ -1561,8 +1568,8 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, uid:
         super::overrides::after_command(s, before);
         behind_after_command(s, before);
     }
-    // The outermost command is over: the sheet changes it made are forgotten (they hold
-    // drawing states, the sheets put out among them).
+    // The outermost command is over: the sheet changes it made are forgotten (they hold the
+    // objects they loaded).
     if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
         for st in &mut s.docs {
             st.sheet_moves.clear();

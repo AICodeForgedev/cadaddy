@@ -27,9 +27,9 @@ fn id() -> egui::Id {
 }
 
 /// COUNT's list for the palette's scope (with the similar-copies check).
-fn list(app: &mut CadApp, all: bool) -> Value {
+fn list(s: &mut cadaddy_engine::Session, all: bool) -> Value {
     let space = if all { "all" } else { "current" };
-    app.session.execute("count", &json!({ "space": space, "similar": true })).unwrap_or(Value::Null)
+    s.execute("count", &json!({ "space": space, "similar": true })).unwrap_or(Value::Null)
 }
 
 /// Select `handles` and zoom to them (the first one's layout made current), in the part of the
@@ -108,17 +108,12 @@ fn highlight(app: &mut CadApp, name: &str, all: bool, covered: Option<egui::Rect
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let mut st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_default();
-    // Worked out again only when the drawing or the scope changes.
-    let key = (app.session.doc().map(|d| std::ptr::from_ref(d) as usize).unwrap_or(0), st.all_spaces, format!("{:?}", app.session.space()));
-    let cache = egui::Id::new("count_palette_list");
-    let data = match ctx.data_mut(|d| d.get_temp::<((usize, bool, String), Value)>(cache)) {
-        Some((k, v)) if k == key => v,
-        _ => {
-            let v = list(app, st.all_spaces);
-            ctx.data_mut(|d| d.insert_temp(cache, (key.clone(), v.clone())));
-            v
-        }
-    };
+    // Worked out again only when the drawing or the scope changes. Counting every reference
+    // (and looking for similar copies) reads the whole set: on a worker thread, the palette open
+    // meanwhile (Q6585).
+    let all = st.all_spaces;
+    let key = move |app: &CadApp| (app.session.doc().map(|d| std::ptr::from_ref(d) as usize).unwrap_or(0), all, format!("{:?}", app.session.space()));
+    let data = crate::asked::worked_out(app, ctx, egui::Id::new("count_palette_list"), "count", key, move |s| list(s, all));
     let mut pick: Option<String> = None;
     let mut similar: Option<Vec<String>> = None;
     let mut action: Option<&str> = None;
@@ -142,6 +137,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.selectable_value(&mut st.all_spaces, false, crate::tl!("Current space"));
                 ui.selectable_value(&mut st.all_spaces, true, crate::tl!("All spaces"));
             });
+            let Some(data) = &data else {
+                crate::asked::working(ui);
+                return;
+            };
             let blocks = data["blocks"].as_object().cloned().unwrap_or_default();
             ui.label(RichText::new(crate::tf!("Total: {n}", n = data["total"].as_u64().unwrap_or(0))).small().color(t.text_dim));
             egui::ScrollArea::vertical().id_salt("count_list").max_height(300.0).show(ui, |ui| {
@@ -260,7 +259,7 @@ mod tests {
                 d.model.push(Entity::new(h, EntityKind::Insert(i)));
             }
         }
-        assert_eq!(list(&mut app, false)["blocks"]["CHAIR"], 3);
+        assert_eq!(list(&mut app.session, false)["blocks"]["CHAIR"], 3);
         assert_eq!(highlight(&mut app, "chair", false, None), 3);
         assert_eq!(app.session.selection().len(), 3);
         // COUNTLIST typed alone opens it, and it renders.

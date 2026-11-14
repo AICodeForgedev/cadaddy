@@ -82,8 +82,9 @@ fn an_l_plans_slab_is_its_l_and_the_takeoff_matches() {
         assert!(v.x >= -1e-6 && v.x <= 1200.0 + 1e-6 && v.y >= -1e-6 && v.y <= 1200.0 + 1e-6, "{v:?}");
         assert!(!(v.x > 480.0 + 6.0 && v.y > 480.0 + 6.0), "slab over the L's notch at {v:?}");
     }
-    // The slab is 6" thick: its underside has the same plate.
-    let under = flat_sf(m, -6.0);
+    // The slab on grade is the trade rules' 4" (nothing gives it): its underside has the same
+    // plate.
+    let under = flat_sf(m, -4.0);
     assert!((under - top).abs() < 1e-6, "{under} {top}");
 
     // The takeoff: the slab's square feet once.
