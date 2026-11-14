@@ -424,7 +424,25 @@ fn the_building_models_reads_need_no_sheet_and_answer_the_same() {
     assert!(o.has_parked_sheets(), "and nothing was loaded for it");
     // The 3D view's own settings and the BIM view's state (read by the view whenever the
     // drawing changes): a whole-set load there changes the drawing, and so would never end.
-    for c in ["bim.view", "bim.look", "view.bim3d", "view.fidelity", "view.dir", "vpoint", "vscurrent"] {
+    for c in [
+        "bim.view",
+        "bim.look",
+        "view.bim3d",
+        "view.fidelity",
+        "view.dir",
+        "vpoint",
+        "vscurrent",
+        "plan",
+        "plan.world",
+        "view.top",
+        "view.swiso",
+        "view.twist",
+        "view",
+        "zoom.extents",
+        "ucs",
+        "camera.view",
+        "navswheel.orbit",
+    ] {
         assert!(!o.needs_whole_set(c), "{c} loads the whole set");
     }
     let view = |s: &mut Session| {
@@ -599,5 +617,170 @@ fn changing_sheets_never_rebuilds_an_associative_model_or_modifies_the_drawing()
     let after = elements(&s);
     let kept = built.keys().filter(|h| after.contains_key(h)).count();
     assert!(kept * 10 >= built.len() * 8, "rebuilt from the whole set: {kept} of {} elements kept, {} now", built.len(), after.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Commands that only change how a print set is seen (Q6572): the view direction and twist
+/// (PLAN and the preset views), zoom and pan from the menus, named views, the UCS, cameras, the
+/// navigation wheel, visual styles and display settings. Run with the sheets out of memory
+/// (an associative model built, the set opened on one sheet), none of them loads the set, and
+/// the model's elements stay the very same objects, not behind their plan.
+#[test]
+fn view_commands_load_no_sheet() {
+    let dir = folder("view-cmds");
+    let p = built_set(&dir, |_| {});
+    let mut s = opened_on_demand(&p);
+    assert!(s.has_parked_sheets(), "the other sheets are out of memory");
+    let built = elements(&s);
+    let steps: Vec<(&str, serde_json::Value)> = vec![
+        ("view.swiso", json!({})),
+        ("plan", json!({})),
+        ("view.front", json!({})),
+        ("plan.world", json!({})),
+        ("view.top", json!({})),
+        ("view.twist", json!({ "angle": 15.0 })),
+        ("plan", json!({ "option": "world" })),
+        ("vs.shaded", json!({})),
+        ("vs.2dwireframe", json!({})),
+        ("zoom.extents", json!({})),
+        ("zoom.all", json!({})),
+        ("zoom.in", json!({})),
+        ("zoom.out", json!({})),
+        ("zoom.previous", json!({})),
+        ("zoom.window", json!({ "p1": [0, 0], "p2": [120, 80] })),
+        ("-pan", json!({ "delta": [10, 5] })),
+        ("view.set", json!({ "center": [60, 40], "height": 100 })),
+        ("view.get", json!({})),
+        ("view", json!({ "option": "save", "name": "Look A" })),
+        ("view", json!({ "option": "restore", "name": "Look A" })),
+        ("view", json!({ "option": "list" })),
+        ("ucs", json!({ "option": "origin", "origin": [10, 10] })),
+        ("ucs", json!({ "option": "save", "name": "Grid A" })),
+        ("plan", json!({ "option": "ucs", "name": "Grid A" })),
+        ("ucs", json!({ "option": "world" })),
+        ("ucsman", json!({})),
+        ("ucsicon", json!({ "option": "off" })),
+        ("camera", json!({ "position": [0, 0], "target": [100, 100] })),
+        ("camera.list", json!({})),
+        ("navswheel.pan", json!({ "by": [5, 5] })),
+        ("navswheel.rewind", json!({})),
+        ("3dwalk", json!({})),
+        ("attdisp.off", json!({})),
+        ("annovisible.all", json!({})),
+    ];
+    for (c, params) in &steps {
+        assert!(!s.needs_whole_set(c), "{c} loads the whole set");
+        s.execute(c, params).unwrap_or_else(|e| panic!("{c}: {e}"));
+        assert!(s.has_parked_sheets(), "{c} loaded sheets (loads: {:?})", s.whole_set_loads.1);
+        assert!(!cadaddy_engine::cmd::wallgen::model_behind(&s), "{c} left the model behind its plan");
+    }
+    // 3DORBIT is the app window's mode: the engine only says how; still nothing loaded.
+    assert!(s.execute("3dorbit", &json!({})).is_err());
+    // Typed (the interactive form starts the same way).
+    s.start("plan").unwrap();
+    s.cancel();
+    assert_eq!(s.whole_set_loads.0, 0, "none of it loaded the set: {:?}", s.whole_set_loads.1);
+    assert!(s.has_parked_sheets());
+    let now = elements(&s);
+    assert_eq!(now.len(), built.len(), "the same elements");
+    assert!(built.iter().all(|(h, e)| now.get(h).is_some_and(|n| Arc::ptr_eq(n, e))), "the very same objects");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every view command (the View menu and the view families wherever they sit) works on what is
+/// in memory, or is one of the few that read or make objects from the whole set, named here
+/// with why (Q6572: PLAN was missed when the 3D view commands were made sheet-local).
+#[test]
+fn every_view_command_is_sheet_local_or_named_as_reading_the_set() {
+    use cadaddy_engine::sheetstore::is_sheet_local;
+    // Commands that read or make objects, so a whole-set load before them is right.
+    const READS_THE_SET: &[(&str, &str)] = &[
+        ("vports", "in a layout: viewports zoomed to the model's extents"),
+        ("vports.1", "in a layout: a viewport zoomed to the model's extents"),
+        ("vports.2", "in a layout: viewports zoomed to the model's extents"),
+        ("vports.3", "in a layout: viewports zoomed to the model's extents"),
+        ("vports.4", "in a layout: viewports zoomed to the model's extents"),
+        ("-vports", "in a layout: MVIEW's viewports"),
+        ("vports.named", "in a layout: a viewport a tile"),
+        ("mview.polygonal", "a viewport made from an object"),
+        ("tour.create", "viewpoints from the plans' rooms"),
+        ("tour.rooms", "viewpoints from the plans' rooms"),
+        ("tour.list", "tour views with their rooms"),
+        ("walk.publish", "renders the building"),
+        ("annoupdate", "changes annotative objects"),
+        ("light", "a light object"),
+        ("lightlist", "the drawing's lights"),
+        ("sunproperties", "the sun light"),
+        ("renderexposure", "renders"),
+        ("visualstyles", "the styles' preview renders"),
+        ("render", "renders the objects"),
+        ("rendercrop", "renders the objects"),
+        ("renderenvironment", "renders"),
+        ("lightbake", "renders the objects"),
+        ("materials", "materials the objects use"),
+        ("materialattach", "changes objects by layer"),
+        ("materialmap", "changes objects"),
+        ("viewbase", "views of the model's objects"),
+        ("viewsection", "views of the model's objects"),
+        ("fourd.import", "matches objects to a schedule"),
+        ("saveimg", "renders the objects"),
+        ("view.fidelity.report", "measures the whole drawing when no model is built"),
+    ];
+    let family = |id: &str| {
+        ["zoom", "pan", "view", "vs", "ucs", "ucsicon", "camera", "navswheel", "vports", "attdisp", "annovisible"]
+            .iter()
+            .any(|f| id == *f || id.strip_prefix(f).is_some_and(|rest| rest.starts_with('.')))
+            || ["-pan", "-vports", "plan", "plan.world", "ucsman", "navvcube", "vpoint", "vscurrent", "3dorbit", "3dwalk", "3dfly"].contains(&id)
+    };
+    let mut missed = Vec::new();
+    for c in cadaddy_engine::command_specs() {
+        let named = READS_THE_SET.iter().any(|(id, _)| *id == c.id);
+        if !(c.menu.first() == Some(&"View") || family(c.id)) {
+            continue;
+        }
+        if is_sheet_local(c.id) == named {
+            missed.push(format!("{} ({})", c.id, if named { "named as reading the set, yet sheet-local" } else { "loads the whole set" }));
+        }
+    }
+    for (id, why) in READS_THE_SET {
+        assert!(cadaddy_engine::find_command(id).is_some(), "{id} ({why}) is no command");
+    }
+    assert!(missed.is_empty(), "view commands to sort out: {missed:?}");
+}
+
+/// A measurement on a print set from disk, run by hand: `CADADDY_VIEW_BENCH_SET=<.cdy> cargo test
+/// -p cadaddy-engine --test cdy_fast view_commands_on_a_set_from_disk -- --ignored --nocapture`
+/// (a copy is saved beside the temporary folder first, so that it has its sheet sections). Each
+/// view command after a 3D look: milliseconds, whole-set loads, objects in memory after it.
+#[test]
+#[ignore = "a measurement on a file from disk: run by hand (see the doc comment)"]
+fn view_commands_on_a_set_from_disk() {
+    let Ok(src) = std::env::var("CADADDY_VIEW_BENCH_SET") else { return };
+    let dir = folder("view-bench");
+    hooks();
+    let p = dir.join("set.cdy").to_string_lossy().into_owned();
+    {
+        let mut s = Session::new();
+        s.execute("open", &json!({ "path": src })).unwrap();
+        s.execute("saveas", &json!({ "path": p })).unwrap();
+    }
+    let mut s = opened_on_demand(&p);
+    let opened = held(&s);
+    s.execute("bim.look", &json!({ "on": true })).unwrap();
+    let mut rows = Vec::new();
+    for c in ["plan", "view.swiso", "plan.world", "view.top", "view.twist", "zoom.extents", "zoom.all", "ucs", "camera.list", "navswheel.rewind"] {
+        let params = match c {
+            "view.twist" => json!({ "angle": 10.0 }),
+            "ucs" => json!({ "option": "world" }),
+            _ => json!({}),
+        };
+        let loads = s.whole_set_loads.0;
+        let t = std::time::Instant::now();
+        let r = s.execute(c, &params).map(|_| "ok".to_string()).unwrap_or_else(|e| e.to_string());
+        let ms = t.elapsed().as_millis();
+        rows.push(json!({ "command": c, "ms": ms, "loads": s.whole_set_loads.0 - loads, "objects": held(&s), "result": r }));
+        let _ = s.park_idle_sheets();
+    }
+    println!("{}", json!({ "opened_objects": opened, "rows": rows }));
     let _ = std::fs::remove_dir_all(&dir);
 }
