@@ -2770,6 +2770,8 @@ impl Session {
             return r;
         }
         let outer = self.journal.enter();
+        // The building spec is read once while the command runs, however many of its parts ask.
+        let _spec_scope = outer.then(cmd::bspec::read_spec_scope);
         // A call from outside starts outside any one-step group (one a failed command left).
         if outer {
             self.one_undo_step = 0;

@@ -1729,15 +1729,21 @@ impl Filter {
 /// What an element is counted as in the index: an atom by its kind, a device by its own kind;
 /// with its length (feet) and whether it is on an estimated route. Nothing for other elements.
 pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
-    let (mut k, m) = counted_as(e)?;
+    super::wallgen::made_as(e)?;
+    counted_with(e, &props::read(&e.common.xdata))
+}
+
+/// [`counted`] with the element's properties already read (`ps`, its store): a pass that reads
+/// them anyway reads them once (Q6568).
+pub(crate) fn counted_with(e: &Entity, ps: &props::Props) -> Option<(Key, Measure)> {
+    let (mut k, m) = counted_as(e, ps)?;
     k.made = made_key(e);
     Some((k, m))
 }
 
-fn counted_as(e: &Entity) -> Option<(Key, Measure)> {
+fn counted_as(e: &Entity, ps: &props::Props) -> Option<(Key, Measure)> {
     let part = super::wallgen::made_as(e)?;
     let level = super::bspec::made_level(e).unwrap_or_default();
-    let ps = props::read(&e.common.xdata);
     let text = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
     let num = |k: &str| ps.get(k).map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
     if let Some(kind) = ps.get(ATOM_KEY).map(Prop::text).filter(|k| !k.is_empty()) {

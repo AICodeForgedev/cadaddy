@@ -178,17 +178,19 @@ impl Prop {
 
     /// The property made safe to keep: a scalar value, text, keys and numbers capped.
     pub fn sanitized(mut self) -> Option<Self> {
+        // Capped in place: a text already short enough (nearly every one) is kept as it is, so
+        // reading a store costs no copy of each of its strings (Q6568).
         self.value = match self.value {
-            Value::String(s) => Value::String(cap(&s, MAX_TEXT)),
+            Value::String(s) => Value::String(cap_owned(s, MAX_TEXT)),
             Value::Number(n) if n.as_f64().is_some_and(f64::is_finite) => Value::Number(n),
             Value::Bool(b) => Value::Bool(b),
             Value::Null => Value::Null,
             _ => return None,
         };
-        self.unit = self.unit.map(|u| cap(&u, MAX_KEY)).filter(|u| !u.is_empty());
-        self.note = self.note.map(|n| cap(&n, MAX_TEXT)).filter(|n| !n.is_empty());
+        self.unit = self.unit.map(|u| cap_owned(u, MAX_KEY)).filter(|u| !u.is_empty());
+        self.note = self.note.map(|n| cap_owned(n, MAX_TEXT)).filter(|n| !n.is_empty());
         self.confidence = self.confidence.filter(|c| c.is_finite()).map(|c| c.clamp(0.0, 1.0));
-        self.source.doc = self.source.doc.map(|d| cap(&d, MAX_TEXT)).filter(|d| !d.is_empty());
+        self.source.doc = self.source.doc.map(|d| cap_owned(d, MAX_TEXT)).filter(|d| !d.is_empty());
         self.source.at = self.source.at.filter(|a| a.iter().all(|v| v.is_finite()));
         Some(self)
     }
@@ -200,6 +202,22 @@ pub struct Entry {
     pub key: String,
     #[serde(flatten)]
     pub prop: Prop,
+}
+
+/// An [`Entry`] as the store's text is read: the same fields side by side. `#[serde(flatten)]`
+/// buffers every entry into an intermediate tree before reading it, which made reading a store
+/// several times dearer than the store's size (Q6568); this reads the same text the same way.
+#[derive(Deserialize)]
+struct EntryIn {
+    key: String,
+    value: Value,
+    #[serde(default)]
+    unit: Option<String>,
+    source: Source,
+    #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
+    note: Option<String>,
 }
 
 /// An element's properties, in the order they were set.
@@ -228,7 +246,11 @@ impl Props {
     /// Set `key` (a new key goes last; an existing one keeps its place). False when the key is
     /// empty, the value isn't a scalar, or the store is full.
     pub fn set(&mut self, key: &str, prop: Prop) -> bool {
-        let key = cap(key.trim(), MAX_KEY);
+        self.set_owned(key.trim().to_string(), prop)
+    }
+    /// [`Self::set`] with a key already trimmed, kept without a copy when short enough.
+    fn set_owned(&mut self, key: String, prop: Prop) -> bool {
+        let key = cap_owned(key, MAX_KEY);
         let Some(prop) = prop.sanitized() else { return false };
         if key.is_empty() {
             return false;
@@ -280,10 +302,11 @@ impl Props {
     }
 
     fn from_text(text: &str) -> Props {
-        let Ok(entries) = serde_json::from_str::<Vec<Entry>>(text) else { return Props::default() };
-        let mut p = Props::default();
+        let Ok(entries) = serde_json::from_str::<Vec<EntryIn>>(text) else { return Props::default() };
+        let mut p = Props { items: Vec::with_capacity(entries.len().min(MAX_PROPS)) };
         for e in entries.into_iter().take(MAX_PROPS) {
-            p.set(&e.key, e.prop);
+            let key = if e.key.trim().len() == e.key.len() { e.key } else { e.key.trim().to_string() };
+            p.set_owned(key, Prop { value: e.value, unit: e.unit, source: e.source, confidence: e.confidence, note: e.note });
         }
         p
     }
@@ -291,6 +314,17 @@ impl Props {
 
 fn cap(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
+}
+
+/// `s` cut to its first `n` characters, in place (no copy when it is short enough).
+fn cap_owned(mut s: String, n: usize) -> String {
+    // A string of at most `n` bytes has at most `n` characters.
+    if s.len() > n
+        && let Some((at, _)) = s.char_indices().nth(n)
+    {
+        s.truncate(at);
+    }
+    s
 }
 
 /// The range of `xdata` that is the store's: its `1001` group up to the next application's.
@@ -310,7 +344,51 @@ pub fn read(xdata: &[RawTag]) -> Props {
         }
         text.push_str(&t.value);
     }
-    Props::from_text(&text)
+    Props::from_text(&plain_escapes(text))
+}
+
+/// JSON text with every `\uXXXX` escape of a printable ASCII character other than `"` and `\`
+/// (the store writes each space so) as that character: the same JSON, since inside a string an
+/// escape and its character read the same, read without the parser's slow escape path (Q6568).
+/// Only escapes inside strings change; text that is not JSON stays as it was.
+fn plain_escapes(text: String) -> String {
+    if !text.contains("\\u") {
+        return text;
+    }
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let (mut i, mut from, mut in_str) = (0usize, 0usize, false);
+    while let Some(&c) = b.get(i) {
+        match c {
+            b'"' => in_str = !in_str,
+            b'\\' if in_str => {
+                let hex = b.get(i + 2..i + 6).filter(|h| b.get(i + 1) == Some(&b'u') && h.iter().all(u8::is_ascii_hexdigit));
+                let code = hex.and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+                match code.filter(|c| (0x20..0x7f).contains(c) && *c != b'"' && *c != b'\\') {
+                    Some(ch) => {
+                        let Some(kept) = text.get(from..i) else { return text };
+                        out.push_str(kept);
+                        out.push(char::from(ch));
+                        i += 6;
+                        from = i;
+                        continue;
+                    }
+                    // Any other escape is kept as written, both its characters (so `\\` never
+                    // starts another).
+                    None => i += 1,
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    match text.get(from..) {
+        Some(rest) => {
+            out.push_str(rest);
+            out
+        }
+        None => text,
+    }
 }
 
 /// Whether an element's XDATA holds a property store.
@@ -564,6 +642,75 @@ mod tests {
             .chain((0..3000).map(|_| RawTag { code: 1000, value: "x".repeat(200) }))
             .collect();
         assert!(read(&huge).is_empty());
+    }
+
+    /// The store as it was read before Q6568 (every entry through `#[serde(flatten)]`).
+    fn from_text_flattened(text: &str) -> Props {
+        let Ok(entries) = serde_json::from_str::<Vec<Entry>>(text) else { return Props::default() };
+        let mut p = Props::default();
+        for e in entries.into_iter().take(MAX_PROPS) {
+            p.set(&e.key, e.prop);
+        }
+        p
+    }
+
+    #[test]
+    fn a_store_reads_the_same_as_through_the_flattened_entry() {
+        let long = "x".repeat(MAX_TEXT + 7);
+        let wide = "é".repeat(MAX_TEXT + 3);
+        let texts = [
+            Props::default().to_text().unwrap_or_default(),
+            sample().to_text().unwrap_or_default(),
+            r#"[{"key":" Type ","value":"duplex","source":{"kind":"legend","doc":"L1"}}]"#.to_string(),
+            r#"[{"key":"a","value":1,"source":{"kind":"user"}},{"key":"A","value":2,"source":{"kind":"rule"}}]"#.to_string(),
+            r#"[{"key":"n","value":null,"unit":"","note":"","source":{"kind":"default","doc":"","at":[1,2]},"confidence":3}]"#.to_string(),
+            r#"[{"key":"i","value":7,"confidence":1,"source":{"kind":"print","at":[1.5,-2]},"extra":"ignored"}]"#.to_string(),
+            format!(
+                r#"[{{"key":"{}","value":"{long}","note":"{wide}","unit":"{}","source":{{"kind":"spec","doc":"{wide}"}}}}]"#,
+                "k".repeat(90),
+                "u".repeat(80)
+            ),
+            r#"[{"key":"o","value":{"a":1},"source":{"kind":"user"}},{"key":"keep","value":true,"source":{"kind":"user"}}]"#.to_string(),
+            r#"[{"key":"","value":1,"source":{"kind":"user"}}]"#.to_string(),
+            // Refused whole, both ways: a missing value or source, an unknown source kind, a
+            // field given twice, not a list.
+            r#"[{"key":"m","source":{"kind":"user"}}]"#.to_string(),
+            r#"[{"key":"m","value":1}]"#.to_string(),
+            r#"[{"key":"m","value":1,"source":{"kind":"guess"}}]"#.to_string(),
+            r#"[{"key":"m","value":1,"value":2,"source":{"kind":"user"}}]"#.to_string(),
+            r#"{"key":"m"}"#.to_string(),
+            "[".to_string(),
+        ];
+        for t in &texts {
+            assert_eq!(Props::from_text(t), from_text_flattened(t), "{t}");
+            assert_eq!(Props::from_text(&plain_escapes(t.clone())), from_text_flattened(t), "{t}");
+        }
+        // Escapes read as the parser reads them: written as their characters only where that
+        // is the same JSON; escaped backslashes, quotes, controls, other characters, malformed
+        // escapes and anything outside a string stay as written.
+        let escaped = [
+            r#"[{"key":"a\u0020b","value":"x\u0020y\u0041\u007e","source":{"kind":"spec","doc":"d\u0020e"}}]"#,
+            r#"[{"key":"q","value":"say\u0020\u0022hi\u0022\u0020back\u005cslash\u005c\u0022","source":{"kind":"user"}}]"#,
+            r#"[{"key":"b","value":"\\u0020 stays \\\\u0041 \u00e9 \ud83d\ude00 \u001f","source":{"kind":"user"}}]"#,
+            r#"[{"key":"m","value":"\u+020","source":{"kind":"user"}}]"#,
+            r#"[{"key":"m","value":"\u00","source":{"kind":"user"}}]"#,
+            r#"[\u0020{"key":"m","value":1,"source":{"kind":"user"}}]"#,
+            r#"[{"key":"m","value":"end\"#,
+        ];
+        for t in escaped {
+            assert_eq!(Props::from_text(&plain_escapes(t.to_string())), from_text_flattened(t), "{t}");
+        }
+        assert_eq!(plain_escapes(r#"["a\u0020b","\\u0020","\u0022",\u0020]"#.into()), r#"["a b","\\u0020","\u0022",\u0020]"#);
+        assert_eq!(Props::from_text(&plain_escapes(escaped[0].into())).get("a b").map(Prop::text), Some("x yA~".to_string()));
+        let many = format!(
+            "[{}]",
+            (0..MAX_PROPS + 20).map(|i| format!(r#"{{"key":"k{i}","value":{i},"source":{{"kind":"user"}}}}"#)).collect::<Vec<_>>().join(",")
+        );
+        assert_eq!(Props::from_text(&many), from_text_flattened(&many));
+        assert_eq!(Props::from_text(&many).len(), MAX_PROPS);
+        assert_eq!(cap_owned("ab".into(), 5), "ab");
+        assert_eq!(cap_owned("ééé".into(), 2), "éé");
+        assert_eq!(cap_owned("abc".into(), 0), "");
     }
 
     #[test]
