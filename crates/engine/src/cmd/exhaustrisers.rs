@@ -34,7 +34,8 @@
 //! so a rebuild replaces them and nothing passes for drawn; the fans' own ducts are left as they
 //! are (a piece of its own carries each on across the chase). A terminal no chase reaches, a chase
 //! under no terminal, and a riser carrying another number of fans than its detail says are
-//! reported, with how far each storey and the roof were moved to line up.
+//! reported, with how far each storey and the roof were moved to line up (and, where another
+//! registration seats nearly as many, that the fit is uncertain and what the other was).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -225,61 +226,120 @@ fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
 /// Points looked at when fitting one layout onto another, at most.
 const MAX_FIT: usize = 300;
 
-/// The shift (no longer than `most`) that puts the most of `a` within `tol` of a point of `b`:
-/// how many it puts there and the shift (the shorter of equals; none moved: zero). Two plans of
-/// one building registered a few feet apart line up again by what they share (the same chases
-/// floor after floor; the terminals over them).
-fn best_shift(a: &[[f64; 2]], b: &[[f64; 2]], tol: f64, most: f64) -> (usize, [f64; 2]) {
+/// A layout lined up on another ([`best_shift`]): how many of its points the shift seats, the
+/// shift, and where another shift (another registration) seats nearly as many, that one: the fit
+/// is then uncertain, decided for the shorter shift rather than by a count of one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fit {
+    seated: usize,
+    shift: [f64; 2],
+    other: Option<(usize, [f64; 2])>,
+}
+
+/// Two shifts are a near-tie when the one seats at most this many points fewer than the other,
+/// and at least this share of them.
+const NEAR_TIE_SEATS: usize = 1;
+const NEAR_TIE_SHARE: f64 = 0.8;
+
+/// The shift (no longer than `most`) that seats the most of `a` on points of `b`, one to one:
+/// each point of `b` takes the nearest point of `a` within `tol` still free (nearest pairs first),
+/// so points crowding round one point of `b` count once and a point of `b` left with none costs
+/// the shift a seat. Of shifts seating about as many (a near-tie: [`NEAR_TIE_SEATS`]), the
+/// shortest, the other said ([`Fit::other`]); never one that leaves points of both unseated where
+/// another seats every point it can. None moved: zero. Two plans of one building registered a
+/// few feet apart line up again by what they share (the same chases floor after floor; the
+/// terminals over them).
+fn best_shift(a: &[[f64; 2]], b: &[[f64; 2]], tol: f64, most: f64) -> Fit {
     let (a, b) = (a.get(..a.len().min(MAX_FIT)).unwrap_or(a), b.get(..b.len().min(MAX_FIT)).unwrap_or(b));
+    let mut fit = Fit { seated: 0, shift: [0.0, 0.0], other: None };
     if !(tol.is_finite() && tol > 0.0) {
-        return (0, [0.0, 0.0]);
+        return fit;
     }
     // `b` by cells `tol` wide: a point's neighbours are in its cell and the eight round it.
     let cell = |p: [f64; 2]| ((p[0] / tol).floor() as i64, (p[1] / tol).floor() as i64);
-    let mut grid: std::collections::HashMap<(i64, i64), Vec<[f64; 2]>> = std::collections::HashMap::new();
-    for q in b.iter().filter(|q| q[0].is_finite() && q[1].is_finite()) {
-        grid.entry(cell(*q)).or_default().push(*q);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, [f64; 2])>> = std::collections::HashMap::new();
+    for (j, q) in b.iter().enumerate().filter(|(_, q)| q[0].is_finite() && q[1].is_finite()) {
+        grid.entry(cell(*q)).or_default().push((j, *q));
     }
-    // The nearest point of `b` within `tol` of `p`.
-    let hit = |p: [f64; 2]| {
-        let (i, j) = cell(p);
-        (i - 1..=i + 1)
-            .flat_map(|x| (j - 1..=j + 1).map(move |y| (x, y)))
-            .filter_map(|k| grid.get(&k))
-            .flatten()
-            .filter(|q| dist(p, **q) <= tol)
-            .min_by(|u, v| dist(p, **u).total_cmp(&dist(p, **v)))
-            .copied()
+    // The pairs `a` shifted by `t` makes with `b` one to one, nearest first: how far each point of
+    // `b` is from its point of `a`.
+    let seat = |t: [f64; 2]| -> Vec<[f64; 2]> {
+        let mut near: Vec<(f64, usize, usize, [f64; 2])> = Vec::new();
+        for (i, p) in a.iter().enumerate() {
+            let p = add(*p, t);
+            let (ci, cj) = cell(p);
+            for (j, q) in (ci - 1..=ci + 1).flat_map(|x| (cj - 1..=cj + 1).map(move |y| (x, y))).filter_map(|k| grid.get(&k)).flatten() {
+                let d = dist(p, *q);
+                if d <= tol {
+                    near.push((d, i, *j, sub(*q, p)));
+                }
+            }
+        }
+        near.sort_by(|u, v| u.0.total_cmp(&v.0).then(u.1.cmp(&v.1)).then(u.2.cmp(&v.2)));
+        let (mut used_a, mut used_b) = (vec![false; a.len()], vec![false; b.len()]);
+        let mut out = Vec::new();
+        for (_, i, j, d) in near {
+            if let (Some(ua), Some(ub)) = (used_a.get(i).copied(), used_b.get(j).copied())
+                && !ua
+                && !ub
+            {
+                if let Some(u) = used_a.get_mut(i) {
+                    *u = true;
+                }
+                if let Some(u) = used_b.get_mut(j) {
+                    *u = true;
+                }
+                out.push(d);
+            }
+        }
+        out
     };
-    let count = |t: [f64; 2]| a.iter().filter(|p| hit(add(**p, t)).is_some()).count();
-    let mut best: (usize, [f64; 2]) = (count([0.0, 0.0]), [0.0, 0.0]);
-    for p in a {
-        for q in b {
-            let t = sub(*q, *p);
-            let len = t[0].hypot(t[1]);
-            if !len.is_finite() || len > most {
-                continue;
-            }
-            let n = count(t);
-            let best_len = best.1[0].hypot(best.1[1]);
-            if n > best.0 || n == best.0 && len < best_len {
-                best = (n, t);
-            }
+    // Every shift putting a point of `a` on one of `b` (and none), each about once.
+    let mut seen: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+    let step = tol / 4.0;
+    let mut tried: Vec<(usize, f64, [f64; 2])> = Vec::new();
+    for t in std::iter::once([0.0, 0.0]).chain(a.iter().flat_map(|p| b.iter().map(move |q| sub(*q, *p)))) {
+        let len = t[0].hypot(t[1]);
+        if !len.is_finite() || len > most || !seen.insert(((t[0] / step).round() as i64, (t[1] / step).round() as i64)) {
+            continue;
         }
+        tried.push((seat(t).len(), len, t));
     }
-    // Every shift within `tol` of the true one matches as many: the one the matched pairs agree
-    // on (their mean), not the shortest.
-    let t = best.1;
-    let pairs: Vec<[f64; 2]> = a.iter().filter_map(|p| hit(add(*p, t)).map(|q| sub(q, add(*p, t)))).collect();
-    if !pairs.is_empty() {
-        let n = pairs.len() as f64;
-        let mean = [pairs.iter().map(|d| d[0]).sum::<f64>() / n, pairs.iter().map(|d| d[1]).sum::<f64>() / n];
-        let refined = add(t, mean);
-        if count(refined) >= best.0 {
-            best.1 = refined;
+    // Most seated first, the shorter of equals.
+    tried.sort_by(|u, v| v.0.cmp(&u.0).then(u.1.total_cmp(&v.1)));
+    let Some(most_seated) = tried.first().map(|t| t.0) else { return fit };
+    // A shift seating every point it can is never passed over for one that doesn't.
+    let all = a.len().min(b.len());
+    let near_tie = |n: usize| {
+        if most_seated >= all { n == most_seated } else { n + NEAR_TIE_SEATS >= most_seated && n as f64 >= NEAR_TIE_SHARE * most_seated as f64 }
+    };
+    let Some(&(n, _, t)) = tried.iter().filter(|c| near_tie(c.0)).min_by(|u, v| u.1.total_cmp(&v.1).then(v.0.cmp(&u.0))) else { return fit };
+    // Every shift within `tol` of the true one seats about as many: the one the seated pairs agree
+    // on (their mean), not the one found first.
+    let refine = |n: usize, t: [f64; 2]| {
+        let pairs = seat(t);
+        if pairs.is_empty() {
+            return (n, t);
         }
-    }
-    best
+        let k = pairs.len() as f64;
+        let refined = add(t, [pairs.iter().map(|d| d[0]).sum::<f64>() / k, pairs.iter().map(|d| d[1]).sum::<f64>() / k]);
+        let m = seat(refined).len();
+        if m >= n { (m, refined) } else { (n, t) }
+    };
+    (fit.seated, fit.shift) = refine(n, t);
+    // Another registration (not within two `tol` of this one) seating nearly as many.
+    fit.other = tried.iter().find(|c| near_tie(c.0) && dist(c.2, t) > 2.0 * tol && dist(c.2, fit.shift) > 2.0 * tol).map(|c| refine(c.0, c.2));
+    fit
+}
+
+/// A shift (sheet units) in feet, to a tenth.
+fn feet(t: [f64; 2], upf: f64) -> [f64; 2] {
+    [(t[0] / upf * 10.0).round() / 10.0, (t[1] / upf * 10.0).round() / 10.0]
+}
+
+/// What a near-tie fit reports: the other registration it passed over (see [`Fit::other`]).
+fn uncertain(seated: usize, shift: [f64; 2], upf: f64) -> Value {
+    json!({"near_tie": "another registration seats nearly as many; the shorter shift was taken", "other_matched": seated, "other_moved_ft": feet(shift, upf)})
 }
 
 /// How close (feet) two floors' chases must come to be the same chase once lined up; how far
@@ -484,7 +544,8 @@ fn centres(points: &[[f64; 2]], reach: f64) -> Vec<[f64; 2]> {
 /// The fans' duct ends are put on one plan (the storey with most of them): each storey by its
 /// plan's place, then lined up with that one by the ends they share (a storey's plan registered a
 /// few feet off moves onto the others). Ends within [`CHASE_FT`] of each other are one chase. The
-/// roof's terminals are lined up with the chases the same way, then each chase takes the nearest
+/// roof's terminals are lined up with the chases the same way (each terminal seating one chase:
+/// [`best_shift`]), then each chase takes the nearest
 /// terminal still free within the rule's reach (one terminal per riser, as the details draw).
 /// Each riser stands in each storey's own drawing of its chase and clear of fixtures and
 /// equipment ([`stand`]).
@@ -573,14 +634,17 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
         let Some((o_l, o_b)) = super::schedequip::origins(sp, level, &base) else { continue };
         let placed = sub(o_b, o_l);
         let moved: Vec<[f64; 2]> = ends.iter().map(|p| add(*p, placed)).collect();
-        let (n, fit) =
-            if *level == base { (ends.len(), [0.0, 0.0]) } else { best_shift(&moved, &base_ends, SAME_CHASE_FT * upf, FLOOR_SHIFT_FT * upf) };
+        let Fit { seated: n, shift: fit, other } = if *level == base {
+            Fit { seated: ends.len(), shift: [0.0, 0.0], other: None }
+        } else {
+            best_shift(&moved, &base_ends, SAME_CHASE_FT * upf, FLOOR_SHIFT_FT * upf)
+        };
         // Lined up by too few to trust: by its plan's place alone.
         let fit = if n >= 2 && 3 * n >= ends.len() { fit } else { [0.0, 0.0] };
         onto.insert((*level).to_string(), add(placed, fit));
         floor_fit.insert(
             (*level).to_string(),
-            json!({"chases_matched": n, "of": ends.len(), "moved_ft": [(fit[0] / upf * 10.0).round() / 10.0, (fit[1] / upf * 10.0).round() / 10.0]}),
+            json!({"chases_matched": n, "of": ends.len(), "moved_ft": feet(fit, upf), "uncertain": other.map(|(m, t)| uncertain(m, t, upf))}),
         );
     }
     // The chases: duct ends within CHASE_FT of each other's mean, on the base storey's plan.
@@ -608,11 +672,14 @@ pub(crate) fn stack_fan_ducts(sp: &mut BuildingSpec, details: &[RiserDetail], co
         let Some((o_b, o_r)) = super::schedequip::origins(sp, &base, level) else { continue };
         let placed = sub(o_b, o_r);
         let here: Vec<[f64; 2]> = terminals.iter().filter(|t| t.level == level).map(|t| add(t.centre, placed)).collect();
-        let (n, fit) = best_shift(&chase_points, &here, ROOF_FIT_FT * upf, ROOF_SHIFT_FT * upf);
+        let Fit { seated: n, shift: fit, other } = best_shift(&chase_points, &here, ROOF_FIT_FT * upf, ROOF_SHIFT_FT * upf);
         // `best_shift` moves the chases onto the terminals: the terminals move the other way.
         let fit = if n >= 2 { [-fit[0], -fit[1]] } else { [0.0, 0.0] };
         roof_onto.insert(level.to_string(), add(placed, fit));
-        roof_fit.push(json!({"level": level, "matched": n, "chases": chase_points.len(), "moved_ft": [(fit[0] / upf * 10.0).round() / 10.0, (fit[1] / upf * 10.0).round() / 10.0]}));
+        roof_fit.push(json!({
+            "level": level, "matched": n, "chases": chase_points.len(), "terminals": here.len(), "moved_ft": feet(fit, upf),
+            "uncertain": other.filter(|_| n >= 2).map(|(m, t)| uncertain(m, [-t[0], -t[1]], upf)),
+        }));
     }
     let terminal_at = |t: &Terminal| roof_onto.get(&t.level).map(|s| add(t.centre, *s));
     // Each chase to the nearest terminal still free (nearest pairs first), within reach.
@@ -1357,5 +1424,64 @@ mod tests {
         let report = stack_fan_ducts(&mut sp, &details, Some("EACH EXHAUST DUCT CONTINUOUS TO ITS HOOD"));
         assert_eq!(report["fans_stacked"], 8, "{report}");
         assert_eq!(sp.mep.runs.iter().filter(|r| r.level == "Roof" && r.top_ft.is_some()).count(), 8);
+    }
+
+    #[test]
+    fn the_roof_lines_up_by_the_hoods_it_seats_one_chase_each_not_by_chases_crowding_round_one_hood() {
+        // Six chases (two runs of 25 ft spacing), a hood over each with the roof plan 2 ft off,
+        // and three more chases 4 ft apart 25 ft west of the first. Moved 25 ft east, four of the
+        // six and all three extra chases come within the fit's reach of a hood: seven, but the
+        // three crowd round one hood and two hoods are left with none. Moved 2 ft, every hood
+        // has its chase.
+        let originals = [0.0, 300.0, 600.0, 900.0, 1300.0, 1600.0];
+        let extras = [-324.0, -276.0, -228.0];
+        let chases: Vec<f64> = originals.iter().chain(extras.iter()).copied().collect();
+        let hoods: Vec<(&str, [f64; 2])> = originals.iter().map(|c| ("GRH-7", [40_000.0 + 130.0 + c + 24.0, 240.0])).collect();
+        let mut sp = building_with(&chases, [[0.0, 0.0]; 4], &hoods);
+        let report = stack_fan_ducts(&mut sp, &[detail(8, "GRH-7")], Some("CONTINUOUS"));
+        let roof = &report["roof"][0];
+        assert_eq!(roof["matched"], 6, "{report}");
+        assert_eq!(roof["moved_ft"], json!([-2.0, 0.0]), "{report}");
+        assert!(roof["uncertain"].is_null(), "{report}");
+        assert_eq!(report["chases"], 9, "{report}");
+        assert_eq!(report["chases_under_no_terminal"], 3, "{report}");
+        assert_eq!(report["terminals_no_chase_reaches"].as_array().map(Vec::len), Some(0), "{report}");
+        // Each chase's ducts go into the hood over it.
+        for c in originals {
+            let hood = [40_000.0 + 130.0 + c + 24.0, 240.0];
+            let into = sp
+                .mep
+                .runs
+                .iter()
+                .filter(|r| r.level == "Roof" && r.top_ft.is_some() && r.points.first().is_some_and(|p| dist(*p, hood) < 30.0))
+                .count();
+            assert_eq!(into, 8, "chase {c}");
+        }
+    }
+
+    #[test]
+    fn a_near_tie_between_two_registrations_takes_the_shorter_shift_and_says_so() {
+        // Ten hoods in a row, unevenly spaced. Eight chases sit 2 ft west of the first eight
+        // hoods; nine more sit 2 ft west and 30 ft south of the first nine: 30 ft seats one more.
+        let hoods: Vec<[f64; 2]> = [0.0, 300.0, 700.0, 1000.0, 1500.0, 1800.0, 2400.0, 2700.0, 3300.0, 3600.0].iter().map(|x| [*x, 0.0]).collect();
+        let mut chases: Vec<[f64; 2]> = hoods.iter().take(8).map(|h| sub(*h, [24.0, 0.0])).collect();
+        chases.extend(hoods.iter().take(9).map(|h| sub(*h, [24.0, 360.0])));
+        let fit = best_shift(&chases, &hoods, 60.0, 480.0);
+        assert_eq!(fit.seated, 8);
+        assert!(dist(fit.shift, [24.0, 0.0]) < 1e-6, "{fit:?}");
+        let (n, other) = fit.other.unwrap_or_else(|| panic!("the other registration: {fit:?}"));
+        assert_eq!(n, 9);
+        assert!(dist(other, [24.0, 360.0]) < 1e-6, "{fit:?}");
+        // One more chase there and the far shift seats every hood: that one, whatever its length.
+        chases.push(sub(hoods.get(9).copied().unwrap_or_default(), [24.0, 360.0]));
+        let fit = best_shift(&chases, &hoods, 60.0, 480.0);
+        assert_eq!(fit.seated, 10);
+        assert!(dist(fit.shift, [24.0, 360.0]) < 1e-6, "{fit:?}");
+        assert_eq!(fit.other, None);
+        // Far apart in count: no near-tie, no other said.
+        let few: Vec<[f64; 2]> = hoods.iter().take(4).map(|h| sub(*h, [24.0, 360.0])).collect();
+        let lots: Vec<[f64; 2]> = hoods.iter().take(8).map(|h| sub(*h, [24.0, 0.0])).chain(few).collect();
+        let fit = best_shift(&lots, &hoods, 60.0, 480.0);
+        assert_eq!((fit.seated, fit.other), (8, None), "{fit:?}");
     }
 }
