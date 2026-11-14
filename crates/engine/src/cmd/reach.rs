@@ -590,8 +590,8 @@ mod tests {
     fn the_rule_reads_its_data() {
         let r = Rule::load();
         assert_eq!((r.max_in, r.min_in), (48.0, 15.0));
-        assert!(r.accessible("KING ADA 105") && r.accessible("UNIT PLAN - ACCESSIBLE SUITE") && r.accessible("TYPE A UNIT"));
-        assert!(!r.accessible("DOUBLE QUEEN 204") && !r.accessible("CANADA ROOM") && !r.accessible("TYPE C UNIT"), "whole words only");
+        assert!(r.accessible("STUDIO ADA 705") && r.accessible("UNIT PLAN - ACCESSIBLE SUITE") && r.accessible("TYPE A UNIT"));
+        assert!(!r.accessible("STUDIO 704") && !r.accessible("CANADA ROOM") && !r.accessible("TYPE C UNIT"), "whole words only");
         assert!(r.device_control("thermostat", "T") && r.device_control("switch", "switch, 3-way S3") && r.device_control("device", "DIMMER"));
         assert!(!r.device_control("receptacle", "duplex receptacle"), "a receptacle is no control here");
         assert!(!r.device_control("switch", "SPRINKLER FLOW SWITCH"), "a flow switch is no occupant's control");

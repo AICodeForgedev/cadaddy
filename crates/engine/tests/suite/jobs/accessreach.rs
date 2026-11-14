@@ -27,9 +27,9 @@ fn tag(n: usize, kind: &str, mark: &str, at: [f64; 2], room: &str) -> Value {
     json!({"id": format!("device:L1:{:.1},{:.1}:{mark}-{n}", at[0], at[1]), "kind": kind, "level": "L1", "at_ft": at, "fields": f})
 }
 
-/// Two 19' x 19' rooms inside 6" walls (inches): SUITE ADA 101 and SUITE 102. In each a
+/// Two 19' x 19' rooms inside 6" walls (inches): SUITE ADA 701 and SUITE 702. In each a
 /// thermostat and a switch at the usual height (48" to their middle, their tops at 50"), a
-/// panel topped at 6'-6"; a receptacle in 101. The general notes list one accessible height:
+/// panel topped at 6'-6"; a receptacle in 701. The general notes list one accessible height:
 /// thermostats and controls 46" at most to the top.
 fn built() -> Session {
     let mut s = Session::new();
@@ -39,15 +39,15 @@ fn built() -> Session {
     rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
     s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
     text(&mut s, [100.0, 120.0], "SUITE ADA");
-    text(&mut s, [100.0, 100.0], "101");
+    text(&mut s, [100.0, 100.0], "701");
     text(&mut s, [340.0, 120.0], "SUITE");
-    text(&mut s, [340.0, 100.0], "102");
+    text(&mut s, [340.0, 100.0], "702");
     let tags = vec![
-        tag(1, "thermostat", "T", [0.8, 10.0], "101"),
-        tag(2, "thermostat", "T", [20.8, 10.0], "102"),
-        tag(3, "switch", "S", [0.8, 14.0], "101"),
-        tag(4, "switch", "S", [20.8, 14.0], "102"),
-        tag(5, "receptacle", "", [10.0, 0.8], "101"),
+        tag(1, "thermostat", "T", [0.8, 10.0], "701"),
+        tag(2, "thermostat", "T", [20.8, 10.0], "702"),
+        tag(3, "switch", "S", [0.8, 14.0], "701"),
+        tag(4, "switch", "S", [20.8, 14.0], "702"),
+        tag(5, "receptacle", "", [10.0, 0.8], "701"),
     ];
     let spec = json!({
         "version": 1, "units_per_foot": 12,
@@ -55,8 +55,8 @@ fn built() -> Session {
         "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
         "wall_types": [{"name": "Partition", "thickness_in": 6}],
         "rooms": [
-            {"name": "SUITE ADA", "number": "101", "level": "L1"},
-            {"name": "SUITE", "number": "102", "level": "L1"},
+            {"name": "SUITE ADA", "number": "701", "level": "L1"},
+            {"name": "SUITE", "number": "702", "level": "L1"},
         ],
         "mount_notes": [{
             "sheet": "G-0", "subject": "THERMOSTATS AND CONTROLS", "ada_inches": 46, "datum": "top",
@@ -116,7 +116,7 @@ fn controls_in_an_accessible_room_are_within_reach() {
     assert_eq!(p["design:mount_height"]["value"].as_f64(), Some(48.0), "its design height kept: {p:#}");
     assert_eq!(p["mount_height"]["value"].as_f64(), Some(46.0), "{p:#}");
     let why = p["correction:mount_height"]["value"].as_str().unwrap_or_default();
-    assert!(why.starts_with("A-REACH") && why.contains("accessible room (101)"), "{p:#}");
+    assert!(why.starts_with("A-REACH") && why.contains("accessible room (701)"), "{p:#}");
     // The standard room's switch keeps the usual height.
     let h = find(&mut s, "device", "S-4");
     let (_, top, p) = element(&mut s, h);
