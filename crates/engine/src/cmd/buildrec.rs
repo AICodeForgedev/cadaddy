@@ -82,9 +82,15 @@ pub(crate) struct BuildRecord {
     pub steps_dropped: u64,
     /// The elements as the last step left them, by `level|part`.
     pub now: BTreeMap<String, u64>,
+    /// While the command that built runs: [`Self::drawing`] of the whole print set, taken before
+    /// its sheets went out of memory, and the hash of what stayed in memory then (Q6577). Never
+    /// saved.
+    #[serde(skip)]
+    pub whole_plan: Option<(String, String)>,
 }
 
 /// FNV-1a over formatted text (no copy of it is made).
+#[derive(Clone, Copy)]
 struct Fnv(u64);
 
 impl Fnv {
@@ -129,22 +135,87 @@ pub(crate) fn counts(d: &Drawing) -> BTreeMap<String, u64> {
 }
 
 /// A hash of everything in the drawing a build reads besides the spec: the plan's objects (not
-/// the ones a build made), the blocks, layers, BIM types, project rules and overrides.
+/// the ones a build made) whatever their order, the blocks, layers, BIM types, project rules and
+/// overrides.
 pub(crate) fn drawing_hash(d: &Drawing) -> String {
-    hash_with(d, &super::overrides::build_input(d))
+    finish(plan_objects(d).by_handle, d, &super::overrides::build_input(d))
 }
 
-/// [`drawing_hash`] as records written before Q6620 hold it (every override, as stored): a
-/// record of one still matches the drawing it was made of.
-fn drawing_hash_before_q6620(d: &Drawing) -> String {
-    hash_with(d, &d.overrides)
-}
-
-fn hash_with(d: &Drawing, overrides: &dyn std::fmt::Debug) -> String {
-    let mut h = Fnv::new();
-    for e in d.model.iter().filter(|e| wallgen::made_as(e).is_none()) {
-        let _ = write!(h, "{e:?}");
+/// [`drawing_hash`] of `d` as a whole: with sheets out of memory, the hash taken before they went
+/// out (`whole`: it and the hash of what stayed in memory then) while what is in memory is as it
+/// was then, else the hash of every sheet loaded (a copy: `d` keeps them out).
+fn plan_hash(d: &Arc<Drawing>, whole: Option<(String, String)>) -> String {
+    if !d.sheet_store.has_parked() {
+        return drawing_hash(d);
     }
+    match whole {
+        Some((whole, rest)) if drawing_hash(d) == rest => whole,
+        _ => drawing_hash(&crate::sheetstore::combined(d)),
+    }
+}
+
+/// The plan's hash for a build this command made, while the whole print set is in memory
+/// ([`crate::Session::put_out_sheets`] takes it before the sheets go out): `None` when the command
+/// made no build of the active drawing, or some sheets are out already.
+pub(crate) fn plan_before_sheets_out(s: &Session) -> Option<String> {
+    let (uid, _) = s.pending_build.as_ref()?;
+    let st = s.state().ok()?;
+    (st.uid == *uid && !st.doc.sheet_store.has_parked()).then(|| drawing_hash(&st.doc))
+}
+
+/// The sheets went out: the build's record keeps the whole plan's hash (`plan`, from
+/// [`plan_before_sheets_out`]) and the hash of what stayed in memory, which tells at the end of
+/// the command whether the plan changed since ([`plan_hash`]).
+pub(crate) fn plan_after_sheets_out(s: &mut Session, plan: Option<String>) {
+    let Some(whole) = plan else { return };
+    let Ok(st) = s.state() else { return };
+    let rest = drawing_hash(&st.doc);
+    if let Some((_, rec)) = s.pending_build.as_mut() {
+        rec.whole_plan = Some((whole, rest));
+    }
+}
+
+/// The plan's objects (the ones no build made) hashed: as a set, each object's hash by its handle
+/// ([`drawing_hash`]: a print set's sheets put out of memory and loaded again come back in
+/// another order in model space, and the plan is the same, Q6577), and in draw order, as records
+/// written before that hold it.
+struct PlanObjects {
+    by_handle: Fnv,
+    ordered: Fnv,
+}
+
+fn plan_objects(d: &Drawing) -> PlanObjects {
+    let mut ordered = Fnv::new();
+    let mut each: Vec<(u64, u64)> = Vec::new();
+    let mut text = String::new();
+    for e in d.model.iter().filter(|e| wallgen::made_as(e).is_none()) {
+        text.clear();
+        let _ = write!(text, "{e:?}");
+        let _ = ordered.write_str(&text);
+        let mut one = Fnv::new();
+        let _ = one.write_str(&text);
+        each.push((e.handle.0, one.0));
+    }
+    each.sort_unstable();
+    let mut by_handle = Fnv::new();
+    for (h, v) in &each {
+        let _ = write!(by_handle, "{h:x}:{v:016x}|");
+    }
+    PlanObjects { by_handle, ordered }
+}
+
+/// The drawing's hash in the three forms a record may hold: [`drawing_hash`]; as records written
+/// before Q6577 hold it (the plan's objects in draw order); and before Q6620 (in draw order, with
+/// every override as stored). A record of any of them still matches the drawing it was made of.
+fn drawing_hashes(d: &Drawing) -> (String, String, String) {
+    let p = plan_objects(d);
+    let input = super::overrides::build_input(d);
+    (finish(p.by_handle, d, &input), finish(p.ordered, d, &input), finish(p.ordered, d, &d.overrides))
+}
+
+/// `h` (the plan's objects hashed) with the rest of what a build reads: the blocks, layers, BIM
+/// types, project rules and `overrides`.
+fn finish(mut h: Fnv, d: &Drawing, overrides: &dyn std::fmt::Debug) -> String {
     // A block field by field and its objects one by one: its object store's own layout (its
     // index's order) differs from one reading of the same file to the next.
     for (name, b) in d.blocks.iter() {
@@ -283,6 +354,7 @@ impl BuildRecord {
             built,
             steps: Vec::new(),
             steps_dropped: 0,
+            whole_plan: None,
         }
     }
 
@@ -317,6 +389,8 @@ pub(crate) struct Inputs {
     pub exterior: BTreeMap<String, Vec<String>>,
     pub provenance: BTreeMap<String, String>,
     pub drawing: String,
+    /// The drawing hashed as a record written before Q6577 did it (the plan's objects in order).
+    drawing_ordered: String,
     /// The drawing hashed as a record written before Q6620 did it.
     drawing_before: String,
 }
@@ -324,6 +398,7 @@ pub(crate) struct Inputs {
 impl Inputs {
     pub(crate) fn of(d: &Drawing, sp: &BuildingSpec, switches: BTreeMap<String, Value>) -> Self {
         let h = spec_hashes(sp);
+        let (drawing, drawing_ordered, drawing_before) = drawing_hashes(d);
         Inputs {
             engine: super::guided::source_stamp().to_string(),
             switches,
@@ -331,14 +406,15 @@ impl Inputs {
             levels: h.levels,
             exterior: h.exterior,
             provenance: h.provenance,
-            drawing: drawing_hash(d),
-            drawing_before: drawing_hash_before_q6620(d),
+            drawing,
+            drawing_ordered,
+            drawing_before,
         }
     }
 
     /// Whether the drawing differs from the one `rec` was made of.
     fn drawing_changed(&self, rec: &BuildRecord) -> bool {
-        self.drawing != rec.drawing && self.drawing_before != rec.drawing
+        self.drawing != rec.drawing && self.drawing_ordered != rec.drawing && self.drawing_before != rec.drawing
     }
 
     /// The spec parts that differ from the record's.
@@ -598,7 +674,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
             let h = spec_hashes(&sp);
             (rec.spec, rec.levels, rec.exterior, rec.provenance) = (h.parts, h.levels, h.exterior, h.provenance);
         }
-        rec.drawing = drawing_hash(&d);
+        rec.drawing = plan_hash(&d, rec.whole_plan.take());
         write(s, &rec);
         return;
     }

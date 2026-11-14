@@ -369,7 +369,7 @@ pub struct DocState {
     /// it, [`crate::sheetstore`]): each as the drawing state before and after it. No edit of the
     /// plan (Q6570): the command's check for plan edits leaves out what they moved. Cleared when
     /// the outermost command ends.
-    pub(crate) sheet_moves: Vec<(Arc<Drawing>, Arc<Drawing>)>,
+    pub(crate) sheet_moves: Vec<sheetstore::SheetMove>,
     /// The plan's rooms as last traced, by drawing state (`rooms_found` in `cmd::perceive`).
     pub(crate) room_trace: cmd::RoomTraceCache,
     /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
@@ -2249,6 +2249,10 @@ pub struct Session {
     /// A command read the whole print set: every sheet is in memory until the interface is idle
     /// ([`Session::park_idle_sheets`]).
     pub(crate) whole_set_loaded: bool,
+    /// Work done reading the print set's sheets holds them out of memory: no command it runs
+    /// loads them ([`Session::needs_whole_set`]). A guided job's stages after its build, which
+    /// read the model (Q6577). Off again when the outermost command ends.
+    pub(crate) sheets_stay_out: bool,
     /// Sheets on demand: the commands that loaded the whole set as they ran (on the thread that
     /// ran them), the latest [`sheetstore::LOADS_KEPT`]; and how many did since the session began.
     /// A read the interface makes on its own must never be among them ([`sheetstore::SHEET_LOCAL`]).
@@ -2451,6 +2455,7 @@ impl Session {
             viewport_inset_px: (0.0, 0.0),
             sheets_on_demand: false,
             whole_set_loaded: false,
+            sheets_stay_out: false,
             whole_set_loads: (0, Vec::new()),
             whole_set_asks: 0,
             whole_set_asked: Vec::new(),
@@ -2728,7 +2733,8 @@ impl Session {
     /// are as able to panic as the command, and a panic there restores the drawing the same way.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute_guarded(id, params))) {
+        let outer = self.journal.is_outer();
+        let r = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute_guarded(id, params))) {
             Ok(r) => r,
             Err(p) => {
                 let msg = crate::guard::message(&*p);
@@ -2741,7 +2747,13 @@ impl Session {
                 }
                 Err(EngineError::Internal(id.into(), msg))
             }
+        };
+        // Sheets held out of memory by the command's work (a job's later stages) are held out no
+        // longer: the next command that may read the whole set loads it, even after a panic.
+        if outer {
+            self.sheets_stay_out = false;
         }
+        r
     }
 
     fn execute_guarded(&mut self, id: &str, params: &Value) -> Result<Value> {

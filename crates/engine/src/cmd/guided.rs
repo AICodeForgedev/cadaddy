@@ -2653,6 +2653,11 @@ fn unread_sheets_question(job: &mut GuidedJob, stage: StageName, failed: &[Strin
 /// once, small fills merged ([`super::exchange::import_pdf_pages`]).
 fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     if job.sheets_loaded {
+        // Out of memory since the build read them (Q6577): back for a step that reads them,
+        // never for one of the stages after the build (they read the model).
+        if s.has_parked_sheets() && !s.sheets_stay_out {
+            s.load_all_sheets()?;
+        }
         return Ok(());
     }
     let sheets_val = match &job.sheets {
@@ -31590,6 +31595,33 @@ fn release_stage_caches() {
     cadaddy_io::pdf_read::clear_cache();
 }
 
+/// The stages that read the model the build made, never the print sheets' linework: they run with
+/// the sheets out of memory (Q6577).
+fn reads_the_model_only(stage: StageName) -> bool {
+    matches!(stage, StageName::Takeoff | StageName::Estimate | StageName::Clash)
+}
+
+/// Once the build has read the print sheets, they go out of memory, parked as the .cdy file stores
+/// them ([`Session::put_out_sheets`]): the stages after it read the model's elements, and the job
+/// held every sheet to its end (about 1.1 GB on a four-storey set, Q6577). A step that reads them
+/// again loads them ([`ensure_sheets_loaded`]); a save or checkpoint writes them as stored.
+fn sheets_out_after_build(s: &mut Session, job: &GuidedJob) {
+    if !job.sheets_loaded || s.has_parked_sheets() {
+        return;
+    }
+    let started = web_time::Instant::now();
+    // The print set's sheets come from the job's state in the drawing.
+    let out = save_job(s, job).and_then(|()| s.put_out_sheets());
+    match out {
+        Ok(0) => {}
+        Ok(n) => {
+            let memory = super::memstat::process_mb().map_or_else(String::new, |(now, peak)| format!(" (memory {now} MB, peak {peak} MB)"));
+            progress_line(&format!("  print sheets out of memory: {n} objects in {:.1} s{memory}", started.elapsed().as_secs_f64()));
+        }
+        Err(e) => progress_line(&format!("  the print sheets stay in memory: {e}")),
+    }
+}
+
 /// Stop the job at `stage` for a cancel: the stage waits (pending) and job.next runs it.
 fn stop_cancelled(s: &mut Session, job: &mut GuidedJob, stage: StageName) {
     JOB_CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -31662,6 +31694,13 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         // (Q6362). While it runs (again), they are traced.
         let settled = if stage_name == StageName::Rooms { None } else { settled_rooms_of(job) };
         super::perceive::geometry::settle_rooms(s, settled);
+        // A stage after the build runs with the sheets out of memory (a job resumed there from a
+        // checkpoint has them all in), and nothing it runs loads them (Q6577).
+        let model_only = reads_the_model_only(stage_name);
+        if model_only {
+            sheets_out_after_build(s, job);
+        }
+        s.sheets_stay_out = model_only;
         let result = match stage_name {
             StageName::Import => run_import(s, job),
             StageName::Classify => run_classify(s, job),
@@ -31674,8 +31713,13 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Estimate => run_estimate(s, job),
             StageName::Clash => run_clash(s, job),
         };
+        s.sheets_stay_out = false;
         super::perceive::geometry::settle_rooms(s, None);
         release_stage_caches();
+        // The build has read the sheets: out of memory before its checkpoint is written.
+        if stage_name == StageName::BimBuild && result.is_ok() {
+            sheets_out_after_build(s, job);
+        }
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(st) = job.stage_mut(stage_name) {
             st.elapsed_ms = Some(ms);

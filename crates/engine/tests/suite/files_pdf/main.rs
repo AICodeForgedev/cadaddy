@@ -16,6 +16,7 @@ mod devicefit;
 mod drawingsheets;
 mod enlargedviews;
 mod fpshopdrawings;
+mod job_sheets_out;
 mod jobmep;
 mod jobunits;
 mod legendsheet;

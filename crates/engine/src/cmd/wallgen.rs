@@ -1422,13 +1422,12 @@ fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
 }
 
 /// Whether object `h`, different between `before` (where a command started) and `now`, differs
-/// only because a sheet change during the command (`moves`: each as the drawing before and after
-/// it) loaded it into memory or put it out (Q6570): put out as it was when the command started,
-/// or loaded and unchanged since, or both. That is no edit of the plan.
-fn sheet_moved(moves: &[(Arc<Drawing>, Arc<Drawing>)], before: &Drawing, now: &Drawing, h: Handle) -> bool {
-    let put_out =
-        |b: &Arc<Entity>| moves.iter().any(|(pre, post)| post.model.get(h).is_none() && pre.model.get(h).is_some_and(|p| Arc::ptr_eq(p, b)));
-    let loaded = |n: &Arc<Entity>| moves.iter().any(|(pre, post)| pre.model.get(h).is_none() && post.model.get(h).is_some_and(|p| Arc::ptr_eq(p, n)));
+/// only because a sheet change during the command (`moves`, [`crate::sheetstore::SheetMove`])
+/// loaded it into memory or put it out (Q6570): put out as it was when the command started, or
+/// loaded and unchanged since, or both. That is no edit of the plan.
+fn sheet_moved(moves: &[crate::sheetstore::SheetMove], before: &Drawing, now: &Drawing, h: Handle) -> bool {
+    let put_out = |b: &Arc<Entity>| moves.iter().any(|m| m.put_out(h, b));
+    let loaded = |n: &Arc<Entity>| moves.iter().any(|m| m.loaded(h, n));
     match (before.model.get(h), now.model.get(h)) {
         (Some(b), None) => put_out(b),
         (None, Some(n)) => loaded(n),
