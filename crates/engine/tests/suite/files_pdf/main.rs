@@ -17,6 +17,7 @@ mod drawingsheets;
 mod enlargedviews;
 mod fpshopdrawings;
 mod jobmep;
+mod jobtailheld;
 mod jobunits;
 mod legendsheet;
 mod levelregions;
