@@ -9,6 +9,7 @@
 #[path = "../helper.rs"]
 mod helper;
 
+mod attribution;
 mod automation_takeoff;
 mod bom_device_edits;
 mod bom_user_types;
