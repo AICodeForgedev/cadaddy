@@ -33,6 +33,7 @@ mod ceilings;
 mod clash_fix_persists;
 mod clash_framing;
 mod clash_named;
+mod clash_normal;
 mod completebuilding;
 mod concrete;
 mod conduitjob;

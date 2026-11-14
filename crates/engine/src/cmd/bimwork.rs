@@ -42,6 +42,7 @@ mod bid;
 mod bid_tests;
 mod clash;
 mod clashkeep;
+mod construction;
 mod framing;
 mod issues;
 mod priced;
