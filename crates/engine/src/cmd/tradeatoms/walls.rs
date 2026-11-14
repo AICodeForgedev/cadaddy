@@ -877,26 +877,10 @@ fn frame(
     let jambs = r.num("framing.jamb_studs", 1.0).round().clamp(0.0, 4.0) as usize;
     let jacks = if wood { r.num("framing.jack_studs", 1.0).round().clamp(0.0, 4.0) as usize } else { 0 };
     let mut fixed: Vec<f64> = Vec::new();
-    for h in &w.holes {
-        let headed = h.z1 < w.zt - 1e-6;
-        for side in [-1.0f64, 1.0] {
-            let edge = if side < 0.0 { h.s0 } else { h.s1 };
-            for j in 0..jacks.min(usize::from(headed) * jacks) {
-                let s = edge - side * (f * (j as f64 + 0.5));
-                let i = mk_stud(batch, s, z0, h.z1, "jack");
-                out.push((s, i));
-                fixed.push(s);
-            }
-            for j in 0..jambs {
-                let s = edge + side * (f * ((j + if headed { jacks } else { 0 }) as f64 + 0.5));
-                if s < w.s0 || s > w.s1 {
-                    continue;
-                }
-                let i = mk_stud(batch, s, z0, z1, "king");
-                out.push((s, i));
-                fixed.push(s);
-            }
-        }
+    for js in jamb_studs(w, f, jambs, jacks) {
+        let i = mk_stud(batch, js.s, z0, js.top.unwrap_or(z1), js.role);
+        out.push((js.s, i));
+        fixed.push(js.s);
     }
     // The layout from the wall's start, the last stud at its end.
     let mut s = w.s0 + f / 2.0;
@@ -1133,6 +1117,111 @@ fn frame(
     let _ = stud_idx;
     let _ = stud_len_ft;
     (out, f, (bottom_h, top_h))
+}
+
+/// A jamb stud of an opening: where along the wall, its top (a jack: the opening's head; a king:
+/// none, full height), its role and the way off its opening (-1: towards smaller s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct JambStud {
+    s: f64,
+    top: Option<f64>,
+    role: &'static str,
+    away: f64,
+}
+
+/// The jamb studs of `w`'s openings, `f` wide: `jacks` under each header (beside the opening),
+/// `jambs` kings beyond them; a king off the wall's end is none.
+fn jamb_studs(w: &Wall, f: f64, jambs: usize, jacks: usize) -> Vec<JambStud> {
+    let mut out = Vec::new();
+    for h in w.holes.iter().take(MAX_PER_WALL) {
+        let headed = h.z1 < w.zt - 1e-6;
+        for side in [-1.0f64, 1.0] {
+            let edge = if side < 0.0 { h.s0 } else { h.s1 };
+            for j in 0..jacks.min(usize::from(headed) * jacks) {
+                out.push(JambStud { s: edge - side * (f * (j as f64 + 0.5)), top: Some(h.z1), role: "jack", away: side });
+            }
+            for j in 0..jambs {
+                let s = edge + side * (f * ((j + if headed { jacks } else { 0 }) as f64 + 0.5));
+                if s < w.s0 || s > w.s1 {
+                    continue;
+                }
+                out.push(JambStud { s, top: None, role: "king", away: side });
+            }
+        }
+    }
+    out
+}
+
+/// Where an opening's jamb studs (its king studs, and the jacks under a wood header) stand in a
+/// wall as the stud layout puts them (Q6623): along the wall's axis (`o` + `u`·s) from `s0` to
+/// `s1`, from `z0` to `z1`; `away` the way off the opening (-1: towards smaller s).
+#[derive(Clone, Debug)]
+pub(crate) struct Jamb {
+    pub o: Vec2,
+    pub u: Vec2,
+    pub s0: f64,
+    pub s1: f64,
+    pub z0: f64,
+    pub z1: f64,
+    pub away: f64,
+}
+
+/// The jambs of the openings in `walls` (built wall elements), by wall: none for a wall with no
+/// framing layer, or when the project turns the rule off. The source: the rules' (why no box stands
+/// in a stud, and the jamb studs).
+pub(crate) fn jambs_of(d: &Drawing, sp: &BuildingSpec, walls: &BTreeSet<Handle>) -> (HashMap<Handle, Vec<Jamb>>, String) {
+    let r = Rules::of(d, sp);
+    let src = format!("{}; {}", r.source_text("framing.box_beside_stud"), r.source_text("framing.jamb_studs"));
+    let mut out: HashMap<Handle, Vec<Jamb>> = HashMap::new();
+    if walls.is_empty() || r.get("framing.box_beside_stud").and_then(Value::as_bool) == Some(false) {
+        return (out, src);
+    }
+    let k = upf_of(sp) / 12.0;
+    let jambs = r.num("framing.jamb_studs", 1.0).round().clamp(0.0, 4.0) as usize;
+    for h in walls.iter().take(MAX_WALLS) {
+        let Some(w) = d.entity(*h).and_then(|e| read_wall(e)) else { continue };
+        let Some(asm) =
+            sp.wall_types.iter().find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type)).and_then(|t| t.assembly.as_ref())
+        else {
+            continue;
+        };
+        let Some(layer) = asm.layers.iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS).find(|l| l.category == "framing") else { continue };
+        let wood = is_wood(&r, &layer.material);
+        let f = if wood { r.num("framing.wood_thickness_in", 1.5) } else { r.num("framing.steel_flange_in", 1.25) } * k;
+        let jacks = if wood { r.num("framing.jack_studs", 1.0).round().clamp(0.0, 4.0) as usize } else { 0 };
+        let list: Vec<Jamb> = jamb_studs(&w, f, jambs, jacks)
+            .into_iter()
+            .map(|js| Jamb { o: w.o, u: w.u, s0: js.s - f / 2.0, s1: js.s + f / 2.0, z0: w.zf, z1: js.top.unwrap_or(w.zt), away: js.away })
+            .filter(|j| j.s1 - j.s0 > 1e-9 && j.s0.is_finite() && j.s1.is_finite())
+            .collect();
+        if !list.is_empty() {
+            out.insert(*h, list);
+        }
+    }
+    (out, src)
+}
+
+/// How far a box centred at `c` (its half width along the wall `hw`, half height `hh`) moves along
+/// its wall's axis so that it stands in none of `jambs`: off each jamb it stands in, away from the
+/// opening (a few steps: a move may land in the next jamb). None when it stands in none.
+pub(crate) fn off_jambs(c: Vec3, hw: f64, hh: f64, jambs: &[Jamb]) -> Option<Vec2> {
+    let eps = 1e-6 + hw.abs() * 1e-9;
+    let mut at = c;
+    let mut total: Option<Vec2> = None;
+    for _ in 0..8 {
+        let hit = jambs.iter().find_map(|j| {
+            let s = (Vec2::new(at.x, at.y) - j.o).dot(j.u);
+            if at.z - hh >= j.z1 || at.z + hh <= j.z0 || s + hw <= j.s0 + eps || s - hw >= j.s1 - eps {
+                return None;
+            }
+            let d = if j.away < 0.0 { j.s0 - (s + hw) } else { j.s1 - (s - hw) };
+            d.is_finite().then(|| j.u * d)
+        });
+        let Some(d) = hit else { return total };
+        at = at + Vec3::new(d.x, d.y, 0.0);
+        total = Some(total.map_or(d, |t| t + d));
+    }
+    total
 }
 
 /// Overlap ignored between a stud and a thing in the wall, inches (a box set against a stud's face
@@ -1943,6 +2032,29 @@ mod tests {
         let under = thing("box", (79.5, 81.5), (face, face + 2.5), (16.5, 19.5));
         let (p_off, _) = lay_with(&w, steel_partition(), &off, vec![under]);
         assert_eq!(cripples(&p_off), cripples(&bare));
+    }
+
+    #[test]
+    fn a_box_in_a_jamb_moves_off_it_away_from_the_opening() {
+        // A wall along x; a door from 60" to 96": jambs 3" wide each side (king + jack).
+        let j = |s0: f64, s1: f64, away: f64| Jamb { o: Vec2::new(0.0, 0.0), u: Vec2::new(1.0, 0.0), s0, s1, z0: 0.0, z1: 120.0, away };
+        let jambs = [j(57.0, 60.0, -1.0), j(96.0, 99.0, 1.0)];
+        // A 2" box centred 1" left of the left jamb's middle: its right edge to the jamb's start.
+        let d = off_jambs(Vec3::new(57.5, 3.0, 48.0), 1.0, 1.5, &jambs).unwrap();
+        assert!((d.x + 1.5).abs() < 1e-9 && d.y.abs() < 1e-9, "{d:?}");
+        // One in the right jamb moves right, off it.
+        let d = off_jambs(Vec3::new(97.0, 3.0, 48.0), 1.0, 1.5, &jambs).unwrap();
+        assert!((d.x - 3.0).abs() < 1e-9, "{d:?}");
+        // Clear of it (touching its face, or above it), nothing.
+        assert!(off_jambs(Vec3::new(56.0, 3.0, 48.0), 1.0, 1.5, &jambs).is_none());
+        assert!(off_jambs(Vec3::new(57.5, 3.0, 130.0), 1.0, 1.5, &jambs).is_none());
+        // A pier between two openings all jamb: no spot off them, so the move found still
+        // stands in one (the caller leaves the box for review).
+        let pier = [j(40.0, 43.0, 1.0), j(43.0, 46.0, -1.0)];
+        let d = off_jambs(Vec3::new(44.0, 0.0, 48.0), 1.0, 1.5, &pier).unwrap();
+        assert!(off_jambs(Vec3::new(44.0 + d.x, 0.0, 48.0), 1.0, 1.5, &pier).is_some(), "{d:?}");
+        // Hostile numbers never panic.
+        let _ = off_jambs(Vec3::new(f64::NAN, 0.0, f64::INFINITY), f64::NAN, -1.0, &jambs);
     }
 
     #[test]

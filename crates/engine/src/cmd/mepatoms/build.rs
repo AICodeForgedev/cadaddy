@@ -1920,9 +1920,45 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .any(|(bb, z0, z1)| *z0 < hi && *z1 > lo && front.x >= bb.min.x && front.x <= bb.max.x && front.y >= bb.min.y && front.y <= bb.max.y)
     };
     let lands = |i: usize, p: Vec3| -> bool { clear_boxes.get(i).is_some_and(|b| !behind(b, p) || behind(b, b.centre)) };
-    let cleared = super::boxclear::clear(&clear_boxes, cr, inch, &fits, &lands);
+    // A wall box never stands in an opening's jamb studs (Q6623): the king stud stays where the
+    // opening needs it, and the electrician sets the box against its far face, in the bay. The
+    // jambs are where the trades' stud layout puts them (its wall type's framing and rules).
+    let jamb_walls: BTreeSet<Handle> = clear_boxes.iter().filter(|b| b.movable).filter_map(|b| b.wall).collect();
+    let (jambs, jamb_src) = super::super::tradeatoms::jambs_of(d, sp, &jamb_walls);
+    let mut off_jamb: Vec<(usize, Vec2)> = Vec::new();
+    let mut in_jamb_left = 0usize;
+    for (i, b) in clear_boxes.iter().enumerate() {
+        let Some(js) = b.wall.filter(|_| b.movable).and_then(|w| jambs.get(&w)) else { continue };
+        let Some(first) = js.first() else { continue };
+        let hw = b.along.dot(first.u).abs() * b.w / 2.0 + b.out.dot(first.u).abs() * b.t / 2.0;
+        let Some(shift) = super::super::tradeatoms::off_jambs(b.centre, hw, b.h / 2.0, js) else { continue };
+        let p = b.centre + Vec3::new(shift.x, shift.y, 0.0);
+        if super::super::tradeatoms::off_jambs(p, hw, b.h / 2.0, js).is_none() && fits(i, p) && lands(i, p) {
+            off_jamb.push((i, shift));
+        } else {
+            in_jamb_left += 1;
+        }
+    }
+    // The other boxes are cleared from where these stand now.
+    let mut from_jambs = clear_boxes.clone();
+    for (i, shift) in &off_jamb {
+        if let Some(b) = from_jambs.get_mut(*i) {
+            b.centre = b.centre + Vec3::new(shift.x, shift.y, 0.0);
+        }
+    }
+    let cleared = super::boxclear::clear(&from_jambs, cr, inch, &fits, &lands);
     let mut device_moves: HashMap<Handle, (Vec3, String, String)> = HashMap::new();
     let mut box_moves: BTreeMap<usize, (Vec3, Vec<String>, String)> = BTreeMap::new();
+    for (i, shift) in &off_jamb {
+        let Some((bi, _, _)) = clear_of.get(*i) else { continue };
+        let why = format!(
+            "moved {} along its wall: it stood in the jamb studs of the opening beside it; set against the jamb's far face, in the bay",
+            super::super::walltypes::frac(shift.len() / inch)
+        );
+        let e = box_moves.entry(*bi).or_insert_with(|| (Vec3::new(0.0, 0.0, 0.0), Vec::new(), jamb_src.clone()));
+        e.0 = e.0 + Vec3::new(shift.x, shift.y, 0.0);
+        e.1.push(why);
+    }
     let (mut moved_overlap, mut moved_back) = (0usize, 0usize);
     // The remedy each back-to-back box took and why (Q6553): kept on the box.
     let mut remedy_of: BTreeMap<usize, (String, String)> = BTreeMap::new();
@@ -2085,6 +2121,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             atoms.push((pad, ctx));
             putty_pads += 1;
         }
+    }
+    if (!off_jamb.is_empty() || in_jamb_left > 0) && notes.len() < 200 {
+        notes.push(format!(
+            "{} wall box(es) moved along their walls off the jamb studs of the opening beside them{} ({jamb_src})",
+            off_jamb.len(),
+            if in_jamb_left > 0 {
+                format!("; {in_jamb_left} with no spot along their wall's face clear of the jambs: a review")
+            } else {
+                String::new()
+            }
+        ));
     }
     // Which remedy the pairs took, and why (Q6488).
     let pairs = moved_back + cleared.putty.len() + cleared.unseparated.len();
@@ -3161,6 +3208,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "devicesPigtailed": pigtailed,
         "boxClearance": {
             "movedOffOverlap": moved_overlap,
+            "movedOffJambs": off_jamb.len(),
+            "inJambsReview": in_jamb_left,
             "movedOffBackToBack": moved_back,
             "devicesMoved": device_moves.len(),
             "puttyPads": putty_pads,

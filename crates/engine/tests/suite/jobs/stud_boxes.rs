@@ -39,12 +39,16 @@ fn overlap(a: &Bx, b: &Bx) -> Option<f64> {
 }
 
 fn receptacle(n: usize, x: f64, y: f64) -> Value {
-    json!({"id": format!("device:L1:{n}"), "kind": "receptacle", "level": "L1", "at_ft": [x, y], "fields": {
+    device(n, "receptacle", x, y, 18)
+}
+
+fn device(n: usize, kind: &str, x: f64, y: f64, mount_in: u32) -> Value {
+    json!({"id": format!("device:L1:{n}"), "kind": kind, "level": "L1", "at_ft": [x, y], "fields": {
         "type": {"value": "A", "source": "plan"},
         "symbol": {"value": format!("{:X}", 0x2A0 + n), "source": "plan"},
         "sheet": {"value": "E-101", "source": "plan"},
         "circuit": {"value": "LP1-1", "source": "plan"},
-        "mount_height_in": {"value": "18", "source": "note"}
+        "mount_height_in": {"value": mount_in.to_string(), "source": "note"}
     }})
 }
 
@@ -62,11 +66,32 @@ fn circuit() -> Value {
 /// Two stacked storeys of 2x4 wood stud exterior walls at 16" o.c., and L1's receptacles at
 /// `at` (feet; each 18" above the floor).
 fn building(at: &[[f64; 2]]) -> (Session, Value) {
+    let tags: Vec<Value> = at.iter().enumerate().map(|(i, p)| receptacle(i + 1, p[0], p[1])).collect();
+    building_with(tags, false)
+}
+
+/// Half the partition's thickness, inches.
+const HALF: f64 = 4.875 / 2.0;
+
+/// [`building`] with L1's device `tags`; `door`: a 2x4 partition across L1 at 20' with a 3' door
+/// from 100" to 136" (y).
+fn building_with(mut tags: Vec<Value>, door: bool) -> (Session, Value) {
     let mut d = Drawing::new_imperial();
     storey_walls(&mut d, 0.0);
     storey_walls(&mut d, 200.0);
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
+    if door {
+        if s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).is_err() {
+            s.execute("layer.current", &json!({"name": "A-WALL"})).expect("layer");
+        }
+        for dx in [-HALF, HALF] {
+            s.execute("line", &json!({"points": [[240.0 + dx, 7.25], [240.0 + dx, 100.0]]})).expect("line");
+            s.execute("line", &json!({"points": [[240.0 + dx, 136.0], [240.0 + dx, 288.0 - 7.25]]})).expect("line");
+        }
+        // Its swing: hinged at the gap's start, a 3' leaf.
+        s.execute("arc", &json!({"center": [240.0, 100.0], "radius": 36.0, "start": 0.0, "end": 90.0})).expect("arc");
+    }
     let exterior = json!({
         "tag": "X1", "description": "EXTERIOR WALL", "source": "sample legend, mark X1",
         "layers": [
@@ -76,8 +101,16 @@ fn building(at: &[[f64; 2]]) -> (Session, Value) {
             {"material": "5/8\" gypsum board", "thickness_in": 0.625, "category": "board", "side": "side2"}
         ]
     });
-    let mut tags: Vec<Value> = at.iter().enumerate().map(|(i, p)| receptacle(i + 1, p[0], p[1])).collect();
     tags.push(circuit());
+    let partition = json!({
+        "tag": "P1", "description": "PARTITION", "source": "sample legend, mark P1",
+        "layers": [
+            {"material": "5/8\" gypsum board", "thickness_in": 0.625, "category": "board", "side": "side1"},
+            {"material": "2x4 wood studs @ 16\" o.c.", "thickness_in": 3.5, "category": "framing", "side": "core"},
+            {"material": "5/8\" gypsum board", "thickness_in": 0.625, "category": "board", "side": "side2"}
+        ]
+    });
+    let walls = if door { json!([{"level": "L1", "a": [240.0, 7.25], "b": [240.0, 288.0 - 7.25], "wall_type": "P1"}]) } else { json!([]) };
     let spec = json!({
         "version": 1, "units_per_foot": 12, "stack": true,
         "levels": [
@@ -85,7 +118,11 @@ fn building(at: &[[f64; 2]]) -> (Session, Value) {
             {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "region": [1900, -100, 3400, 1000], "base": [2400, 0]}
         ],
         "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "X1"}],
-        "wall_types": [{"name": "X1", "thickness_in": 7.25, "from": "pairs", "assembly": exterior}],
+        "wall_types": [
+            {"name": "X1", "thickness_in": 7.25, "from": "pairs", "assembly": exterior},
+            {"name": "P1", "thickness_in": 4.875, "from": "pairs", "assembly": partition}
+        ],
+        "walls": walls,
         "tags": tags,
         "mep": {"systems": [], "runs": [], "equipment": [
             {"tag": "LP1", "kind": "panel", "level": "L1", "min": [12, 120], "max": [32, 124], "height_ft": 4, "bottom_ft": 2.5,
@@ -158,6 +195,34 @@ fn the_stud_layout_stands_its_studs_beside_the_boxes_in_the_wall() {
     s.execute("bim.atoms.build", &json!({"trades": ["framing"]})).unwrap();
     let again = atoms(&s, "stud", "L1");
     assert!(in_wall.iter().all(|(b, _)| again.iter().all(|(st, _)| overlap(b, st).is_none())));
+}
+
+#[test]
+fn a_box_drawn_in_a_doors_jamb_studs_moves_off_them_into_the_bay() {
+    // A switch drawn 3" past the door's opening (48" AFF, on the partition's east face): its box
+    // would stand in the door's king stud (the jack beside the opening under the header, the king
+    // beyond it: 137 1/2" to 139").
+    let tags = vec![device(1, "switch", (240.0 + HALF + 0.25) / 12.0, 139.0 / 12.0, 48)];
+    let (mut s, built) = building_with(tags, true);
+    let boxes: Vec<(Bx, _)> = atoms(&s, "box", "L1").into_iter().filter(|((lo, hi), _)| lo[0] > 230.0 && hi[0] < 250.0).collect();
+    assert_eq!(boxes.len(), 1, "the switch's box is in the partition: {} {}", boxes.len(), short(&built));
+    let (b, h) = boxes[0];
+    let studs = atoms(&s, "stud", "L1");
+    let inside: Vec<Bx> = studs.iter().filter(|(st, _)| overlap(&b, st).is_some()).map(|(st, _)| *st).collect();
+    assert!(inside.is_empty(), "the box {b:?} stands in studs: {inside:?}");
+    // Moved off the jambs, away from the door, with the design spot and the reason kept.
+    assert!(b.0[1] >= 139.0 - 0.05, "north of the king stud: {b:?}");
+    assert!(b.0[1] <= 139.0 + 0.5, "just clear of it: {b:?}");
+    let d = s.doc().unwrap();
+    let ps = cadaddy_engine::doc::props::read(&d.entity(h).unwrap().common.xdata);
+    let corr = ps.get("correction:location").map(cadaddy_engine::doc::props::Prop::text).unwrap_or_default();
+    assert!(corr.contains("jamb studs"), "{ps:?}");
+    assert!(ps.get("design:location").is_some(), "{ps:?}");
+    // The device moves with its box; the clash check finds no box in a stud.
+    let r = s.execute("bim.clash", &json!({"a": "framing", "b": "electrical", "hosted": true})).unwrap();
+    let stands =
+        r["clashes"].as_array().into_iter().flatten().filter(|c| c["framing"]["why"].as_str().unwrap_or("").contains("stands in the stud")).count();
+    assert_eq!(stands, 0, "{}", short(&r));
 }
 
 fn short(v: &Value) -> String {
