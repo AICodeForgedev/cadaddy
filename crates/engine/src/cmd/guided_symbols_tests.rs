@@ -479,7 +479,7 @@ fn an_unexplained_repeating_symbol_is_asked_once_and_its_answer_carries_to_the_n
     q.answer = Some(json!({"kind": "card_reader", "name": "card reader"}));
     q.answered_by = Some("agent".into());
     learn_from_answer(&mut set.job, &q);
-    assert_eq!(answer_effect(&mut set.job, &q).0, Some(StageName::BimBuild));
+    assert_eq!(answer_effect(&mut set.job, &q).unwrap().0, Some(StageName::BimBuild));
     let after = set.search(&shipped(), Some(&dir));
     assert_eq!(after.added.iter().filter(|dv| dv.kind == "card_reader").count(), 4, "{:#?}", after.added);
     assert!(after.added.iter().all(|dv| dv.kind_source == format!("answer {}", q.id) && dv.derived.is_empty()));
