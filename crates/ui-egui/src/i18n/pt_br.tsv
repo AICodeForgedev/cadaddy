@@ -3503,3 +3503,23 @@
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Corrigir elementos por propriedade (BIM)
 	Read Elevator Hoistway	Ler caixa do elevador
+	Branches	Ramais
+	Interior Walls	Paredes internas
+	Presentation	Apresentação
+	Supply Air	Ar de insuflamento
+	Return Air	Ar de retorno
+	Exhaust Air	Ar de exaustão
+	Outside Air	Ar externo
+	Ductwork	Dutos
+	Mechanical Equipment	Equipamentos mecânicos
+	Domestic Water	Água potável
+	Sanitary and Vent	Esgoto e ventilação
+	Condensate	Condensado
+	Refrigerant	Refrigerante
+	Hydronic	Hidrônico
+	Plumbing Equipment	Equipamentos hidráulicos
+	Fire Alarm	Alarme de incêndio
+	Low Voltage	Baixa tensão
+	Electrical Power	Energia elétrica
+	Other Systems	Outros sistemas
+	Document Source	Origem dos documentos

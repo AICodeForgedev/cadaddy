@@ -43,6 +43,7 @@ mod dash_styles;
 pub mod dimcheck;
 pub(crate) mod dimreader;
 mod doc_objects;
+pub mod docsource;
 mod draw;
 mod draw2;
 mod draworder;
@@ -1059,6 +1060,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(coordination::specs());
         v.extend(guided::specs());
         v.extend(project::specs());
+        v.extend(docsource::specs());
         v.extend(project_hub::specs());
         v.extend(rhai_cmd::specs());
         v.extend(plugins_cmd::specs());

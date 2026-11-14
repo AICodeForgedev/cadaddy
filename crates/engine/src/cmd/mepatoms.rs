@@ -337,6 +337,10 @@ pub(crate) struct AtomRules {
     /// it (inches): the router ends each run on what it serves.
     pub routed_touch_in: f64,
     pub routed_touch_source: String,
+    /// The runs entering one box: each by its own knockout, this far apart centre to centre
+    /// along the box's top (inches, Q6552).
+    pub knockout_spacing_in: f64,
+    pub knockout_source: String,
     pub feeder_makeup_ft: f64,
     pub feeder_makeup_source: String,
     pub feeder_conductors: BTreeMap<String, ConductorKind>,

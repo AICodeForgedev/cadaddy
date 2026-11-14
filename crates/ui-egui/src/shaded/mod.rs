@@ -222,6 +222,16 @@ pub fn active(app: &CadApp) -> Option<VisualStyle> {
 /// visual style.
 pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, bg: Rgb) -> bool {
     let Some(style) = active(app) else { return false };
+    // The BIM view's look (Q6617): the Systems view's edges in their own colour, two pixels
+    // wide at least; the presentation look on white.
+    let (systems, presentation) = match bim_view_on(app) {
+        Some(v) => (
+            v.get("view").and_then(serde_json::Value::as_str) == Some("systems"),
+            v.get("presentation").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        ),
+        None => (false, false),
+    };
+    let bg = if presentation { Rgb(255, 255, 255) } else { bg };
     let ppp = ui.ctx().pixels_per_point();
     let (w, h) = ((xf.rect.width() * ppp).round().max(1.0) as u32, (xf.rect.height() * ppp).round().max(1.0) as u32);
     // Curves to about half a pixel, in power-of-two bands so zooming rebuilds rarely.
@@ -286,6 +296,11 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
             let relative = rs.adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::BASE_VERTEX);
             Gpu::new(&rs.device, caps.msaa, relative)
         });
+        if g.own_edges != systems {
+            g.own_edges = systems;
+            st.uploaded = None;
+            g.stream_gen = None;
+        }
         // The GPU times of earlier frames that have arrived.
         if let Some(t) = &g.timer {
             t.read(&rs.device, &rs.queue, |ms, s| {
@@ -535,8 +550,21 @@ fn switch_label(k: &str) -> &'static str {
         "e" => "E",
         "p" => "P",
         "cabinets" => crate::i18n::t("Cabinets"),
+        "branches" => crate::i18n::t("Branches"),
+        "interior" => crate::i18n::t("Interior Walls"),
+        "site" => crate::i18n::t("Site"),
         _ => crate::i18n::t("Furniture"),
     }
+}
+
+/// A `#rrggbb` colour of the view's legend.
+fn legend_color(t: &str) -> Option<egui::Color32> {
+    let t = t.trim().strip_prefix('#')?;
+    if t.len() != 6 || !t.is_ascii() {
+        return None;
+    }
+    let ch = |k: usize| t.get(k..k + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+    Some(egui::Color32::from_rgb(ch(0)?, ch(2)?, ch(4)?))
 }
 
 /// The BIM view's control in the view's top left corner (Q6419), always there: the four views
@@ -551,6 +579,7 @@ fn view_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
     let (level, room) = (text("level"), text("room"));
     let list = |k: &str| v.get(k).and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut run: Option<serde_json::Value> = None;
+    let mut look: Option<serde_json::Value> = None;
     egui::Area::new(ui.id().with("bim-view-bar")).order(egui::Order::Middle).fixed_pos(xf.rect.left_top() + egui::vec2(8.0, 8.0)).show(
         ui.ctx(),
         |ui| {
@@ -566,6 +595,13 @@ fn view_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
                         let mut full = v.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
                         if ui.checkbox(&mut full, crate::i18n::t("Full MEP")).changed() {
                             run = Some(serde_json::json!({ "full": full }));
+                        }
+                    }
+                    if view == View::Systems {
+                        ui.separator();
+                        let mut white = v.get("presentation").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                        if ui.checkbox(&mut white, crate::i18n::t("Presentation")).changed() {
+                            look = Some(serde_json::json!({ "presentation": white }));
                         }
                     }
                     let offered = list("offered");
@@ -623,6 +659,19 @@ fn view_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
                 {
                     run = Some(serde_json::json!({ "follow": h.hex() }));
                 }
+                // The Systems view's legend: each system it draws in its colour.
+                let legend = list("legend");
+                if !legend.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        for row in &legend {
+                            let label = row.get("label").and_then(serde_json::Value::as_str).unwrap_or_default();
+                            let Some(c) = row.get("color").and_then(serde_json::Value::as_str).and_then(legend_color) else { continue };
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            ui.painter().rect_filled(r, 2.0, c);
+                            ui.label(egui::RichText::new(crate::i18n::t(label)).small());
+                        }
+                    });
+                }
                 let left = v.get("left_out").cloned().unwrap_or_default();
                 let n = |k: &str| left.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
                 if view == View::Mep && n("pipe_unknown_size") > 0 {
@@ -633,6 +682,11 @@ fn view_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf) {
     );
     if let Some(p) = run
         && let Err(e) = app.run("bim.view", p)
+    {
+        app.set_status(format!("{}: {e}", crate::i18n::t("BIM View")));
+    }
+    if let Some(p) = look
+        && let Err(e) = app.run("bim.look", p)
     {
         app.set_status(format!("{}: {e}", crate::i18n::t("BIM View")));
     }
@@ -1084,6 +1138,9 @@ struct Gpu {
     relative: bool,
     /// Corners are welded (off only to compare pictures in the tests).
     weld: bool,
+    /// The Systems view's look (Q6617): opaque surfaces' edges in their own colour, at least two
+    /// pixels wide (the line nudged a pixel right and a pixel up too), not dark.
+    own_edges: bool,
     /// Milliseconds the last upload of the model's buffers took (packing and copying).
     upload_ms: f64,
 }
@@ -1419,6 +1476,7 @@ impl Gpu {
             mat_rows: 0,
             relative,
             weld: true,
+            own_edges: false,
             upload_ms: 0.0,
         }
     }
@@ -1444,7 +1502,7 @@ impl Gpu {
         }
         // Texture and lightmap coordinates only where a texture or baked light is drawn.
         let extra = physical && (!layers.is_empty() || scenes.iter().any(|sc| sc.baked.is_some()));
-        let how = Packing { style, bg, physical, layers: layers.len(), extra };
+        let how = Packing { style, bg, physical, layers: layers.len(), extra, own_edges: self.own_edges };
         let t0 = web_time::Instant::now();
         self.materials = Materials::default();
         let mut pack = Pack::new(self.relative, self.weld);
@@ -1698,7 +1756,7 @@ impl Gpu {
         if self.stream_gen == Some(stream.generation) {
             return;
         }
-        let how = Packing { style, bg, physical: false, layers: 0, extra: false };
+        let how = Packing { style, bg, physical: false, layers: 0, extra: false, own_edges: self.own_edges };
         let mut pack = Pack::new(self.relative, self.weld);
         let mut ranges = std::collections::BTreeMap::new();
         for (k, c) in &stream.cells {
@@ -2187,7 +2245,16 @@ struct Packing {
     physical: bool,
     layers: usize,
     extra: bool,
+    /// Opaque surfaces' edges in their own colour, drawn three times (as they are, a pixel to
+    /// the right, a pixel up: the shader nudges the copies), so every run is at least two
+    /// pixels wide on screen and none has a dark outline (the Systems view).
+    own_edges: bool,
 }
+
+/// A line corner's alpha that tells the shader to nudge it a pixel along the view's right, and
+/// up (255: where it is).
+pub const LINE_NUDGE_RIGHT: u8 = 254;
+pub const LINE_NUDGE_UP: u8 = 253;
 
 /// One buffer being packed: its vertices (and their second stream), welded, and the 16- and
 /// 32-bit indices that draw them.
@@ -2410,13 +2477,18 @@ impl Pack {
             }
         }
         for l in lines.iter().filter(|l| !l.edge || edges) {
+            let own = how.own_edges && l.edge && !l.faint;
             let c = match (l.edge && style == VisualStyle::ShadedEdges, l.faint) {
+                _ if own => l.color,
                 (true, true) => cadaddy_render::shade::faint_ink(dark, bg),
                 (true, false) => dark,
                 _ => l.color,
             };
-            ends.corner(&mut self.lines, seen_lines, &line_bytes(rel(l.a), c), &[], weld);
-            ends.corner(&mut self.lines, seen_lines, &line_bytes(rel(l.b), c), &[], weld);
+            let copies: &[u8] = if own { &[255, LINE_NUDGE_RIGHT, LINE_NUDGE_UP] } else { &[255] };
+            for a in copies {
+                ends.corner(&mut self.lines, seen_lines, &line_bytes_a(rel(l.a), c, *a), &[], weld);
+                ends.corner(&mut self.lines, seen_lines, &line_bytes_a(rel(l.b), c, *a), &[], weld);
+            }
         }
         let relative = self.relative;
         [opaque.finish(&mut self.tris, relative), glass.finish(&mut self.clear, relative), ends.finish(&mut self.lines, relative)]
@@ -2472,12 +2544,13 @@ fn extra_bytes(uv: [f32; 2], lm: [f32; 4]) -> [u8; EXTRA_SIZE as usize] {
 }
 
 /// A line end's bytes (see [`LINE_VERTEX_SIZE`]).
-fn line_bytes(p: [f32; 3], c: Rgb) -> [u8; LINE_VERTEX_SIZE as usize] {
+/// A line corner with alpha `a` (255, or a nudge: [`LINE_NUDGE_RIGHT`], [`LINE_NUDGE_UP`]).
+fn line_bytes_a(p: [f32; 3], c: Rgb, a: u8) -> [u8; LINE_VERTEX_SIZE as usize] {
     let mut out = [0u8; LINE_VERTEX_SIZE as usize];
     for (k, x) in p.into_iter().enumerate() {
         put(&mut out, k * 4, x.to_le_bytes());
     }
-    put(&mut out, 12, [c.0, c.1, c.2, 255]);
+    put(&mut out, 12, [c.0, c.1, c.2, a]);
     out
 }
 
@@ -3149,6 +3222,40 @@ mod tests {
         assert_eq!(unoct(oct([f32::NAN, 0.0, 1.0])), [0.0, 0.0, 1.0]);
     }
 
+    /// The Systems view's packing (Q6617): an opaque surface's edges in its own colour, each
+    /// line as it is and two copies the shader nudges a pixel right and up (the thinnest run two
+    /// pixels wide); a see-through surface's edges stay faint and single; Shaded with Edges
+    /// otherwise draws them near black.
+    #[test]
+    fn systems_edges_are_own_colour_and_drawn_three_times() {
+        use super::*;
+        use cadaddy_render::shade::Line3;
+        let p = Vec3::new;
+        let red = Rgb(200, 30, 20);
+        let mut sc = Scene::default();
+        let corners = [p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(0.0, 1.0, 0.0)];
+        sc.lines = (0..4).map(|i| Line3 { a: corners[i], b: corners[(i + 1) % 4], color: red, edge: true, faint: i == 3 }).collect();
+        let pack_with = |own_edges: bool| {
+            let how = Packing { style: VisualStyle::ShadedEdges, bg: Rgb(255, 255, 255), physical: false, layers: 0, extra: false, own_edges };
+            let mut pack = Pack::new(true, false);
+            pack.emit(&how, &mut Materials::default(), &sc, 0, 0..0, 0..4, Vec3::ZERO);
+            let v = LINE_VERTEX_SIZE as usize;
+            let colours: Vec<[u8; 4]> = pack.lines.verts.chunks(v).filter_map(|c| c.get(12..16)).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+            colours
+        };
+        let own = pack_with(true);
+        // Three solid edges three times over, the faint one once: 2 ends each.
+        assert_eq!(own.len(), (3 * 3 + 1) * 2);
+        let solid: Vec<&[u8; 4]> = own.iter().filter(|c| c[..3] == [red.0, red.1, red.2]).collect();
+        assert_eq!(solid.len(), 18, "the solid edges in their own colour");
+        for a in [255, LINE_NUDGE_RIGHT, LINE_NUDGE_UP] {
+            assert_eq!(solid.iter().filter(|c| c[3] == a).count(), 6, "copy {a}");
+        }
+        let plain = pack_with(false);
+        assert_eq!(plain.len(), 8);
+        assert!(plain.iter().all(|c| c[3] == 255 && c[..3] != [red.0, red.1, red.2]), "Shaded with Edges: dark or faint ink");
+    }
+
     /// Corners weld only when every value is the same: a flat quad's two triangles share their
     /// diagonal (4 vertices, not 6), a triangle across a crease shares none (its normal differs),
     /// a line loop's ends are shared. Each run counts from its own first vertex (or, without a
@@ -3169,7 +3276,7 @@ mod tests {
         ];
         let corners = [p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(0.0, 1.0, 0.0)];
         sc.lines = (0..4).map(|i| Line3 { a: corners[i], b: corners[(i + 1) % 4], color: red, edge: false, faint: false }).collect();
-        let how = Packing { style: VisualStyle::Shaded, bg: Rgb(255, 255, 255), physical: false, layers: 0, extra: false };
+        let how = Packing { style: VisualStyle::Shaded, bg: Rgb(255, 255, 255), physical: false, layers: 0, extra: false, own_edges: false };
         let mut mats = Materials::default();
         let mut pack = Pack::new(true, true);
         let s1 = pack.emit(&how, &mut mats, &sc, 0, 0..3, 0..4, Vec3::ZERO);

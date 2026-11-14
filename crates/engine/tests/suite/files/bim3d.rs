@@ -39,7 +39,7 @@ fn three_d_bim_is_one_click_from_any_state() {
     assert_eq!(s.state().unwrap().visual_style, VisualStyle::Wireframe2d);
 
     let r = run(&mut s, "view.bim3d", json!({}));
-    assert_eq!(r["view"], "mep", "{r}");
+    assert_eq!(r["view"], "systems", "the whole-building view of a model with MEP (Q6617): {r}");
     assert_eq!(r["level"], serde_json::Value::Null, "the whole building: {r}");
     assert_eq!(r["ghost"], true);
     assert_eq!(r["fidelity"], "auto");
@@ -98,7 +98,13 @@ fn three_d_bim_frames_the_building_not_a_stray_object() {
         let shell = shell_box(&s);
         shell.width().max(shell.height())
     };
-    // Zoom Extents takes it in: the building a speck.
+    // The Systems view leaves an object off the building to its site switch: Zoom Extents
+    // fits the building (Q6617).
+    run(&mut s, "zoom.extents", json!({}));
+    let fit = s.state().unwrap().view().height;
+    assert!(fit < 2.0 * span, "the stray object shrank the building to a speck: extents height {fit} for a {span} building");
+    // With the site switch on it is drawn: Zoom Extents takes it in, the building a speck.
+    run(&mut s, "bim.view", json!({"switches": {"site": true}}));
     run(&mut s, "zoom.extents", json!({}));
     let all = s.state().unwrap().view().height;
     assert!(all > 4.0 * span, "the stray object is drawn and far off: extents height {all} for a {span} building");

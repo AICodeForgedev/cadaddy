@@ -3284,3 +3284,23 @@
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Исправить элементы по свойству (BIM)
 	Read Elevator Hoistway	Прочитать шахту лифта
+	Branches	Ответвления
+	Interior Walls	Внутренние стены
+	Presentation	Презентация
+	Supply Air	Приточный воздух
+	Return Air	Рециркуляционный воздух
+	Exhaust Air	Вытяжной воздух
+	Outside Air	Наружный воздух
+	Ductwork	Воздуховоды
+	Mechanical Equipment	Механическое оборудование
+	Domestic Water	Хозяйственно-питьевая вода
+	Sanitary and Vent	Канализация и вентиляция стояков
+	Condensate	Конденсат
+	Refrigerant	Хладагент
+	Hydronic	Системы тепло- и холодоснабжения
+	Plumbing Equipment	Сантехническое оборудование
+	Fire Alarm	Пожарная сигнализация
+	Low Voltage	Слаботочные системы
+	Electrical Power	Силовое электроснабжение
+	Other Systems	Прочие системы
+	Document Source	Источник документов

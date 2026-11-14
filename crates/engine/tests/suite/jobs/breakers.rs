@@ -436,7 +436,7 @@ fn breaker_circuit(s: &mut Session, h: &str) -> Value {
 /// Q6501: a device copied from another and given a new circuit and panel by property keeps none
 /// of its source's derived links: its panel element, its breaker, its row and the feed walk all
 /// follow the new values (LP2's row 1, where the source's links named LP1, whose row 1 is
-/// lighting), at once and after a re-route; taking the edit off puts the source's links back.
+/// lighting), at once and after a re-route; set back, the source's links come back.
 #[test]
 fn a_copied_device_given_a_new_circuit_and_panel_takes_its_new_panels_links() {
     let mut s = building_routed(true);
@@ -473,14 +473,14 @@ fn a_copied_device_given_a_new_circuit_and_panel_takes_its_new_panels_links() {
     // The source is as it was.
     assert_eq!(links(&mut s, &src)["fed_from_handle"], json!(lp1));
     assert_eq!(breaker_circuit(&mut s, &src), "LP1-2");
-    // The edit taken off (an override on a generated element): the copy's links are LP1's again.
+    // The copy is a person's (Q6620): recorded as an added item, its properties its own (no
+    // override); set back, its links are LP1's again.
     let list = s.execute("override.list", &json!({})).expect("list");
-    let id = list["overrides"]
-        .as_array()
-        .and_then(|a| a.iter().find(|o| o["element"] == json!(copy)))
-        .map(|o| o["id"].clone())
-        .unwrap_or_else(|| panic!("the copy's override: {list:#}"));
-    s.execute("override.revert", &json!({"id": id})).expect("revert");
+    let mine: Vec<&str> =
+        list["overrides"].as_array().into_iter().flatten().filter(|o| o["element"] == json!(copy)).filter_map(|o| o["kind"].as_str()).collect();
+    assert_eq!(mine, ["add"], "{list:#}");
+    s.execute("bim.props.set", &json!({"handles": [copy], "props": {"circuit": "LP1-2", "panel": "LP1"}})).expect("set back");
+    s.execute("bim.breakers", &json!({})).expect("breakers");
     let c = links(&mut s, &copy);
     assert_eq!((&c["circuit"], &c["fed_from_handle"]), (&json!("LP1-2"), &json!(lp1)), "{c:#}");
     assert_eq!(breaker_circuit(&mut s, &copy), "LP1-2");

@@ -3658,3 +3658,23 @@ menu	Modify	Ändra
 # bim.props.batch (Q6438).
 	Correct Elements by Property (BIM)	Korrigera element efter egenskap (BIM)
 	Read Elevator Hoistway	Läs hisschakt
+	Branches	Grenledningar
+	Interior Walls	Innerväggar
+	Presentation	Presentation
+	Supply Air	Tilluft
+	Return Air	Återluft
+	Exhaust Air	Frånluft
+	Outside Air	Uteluft
+	Ductwork	Kanaler
+	Mechanical Equipment	Mekanisk utrustning
+	Domestic Water	Tappvatten
+	Sanitary and Vent	Spillvatten och luftning
+	Condensate	Kondensat
+	Refrigerant	Köldmedium
+	Hydronic	Värme- och kylvatten
+	Plumbing Equipment	VS-utrustning
+	Fire Alarm	Brandlarm
+	Low Voltage	Svagström
+	Electrical Power	Elkraft
+	Other Systems	Övriga system
+	Document Source	Dokumentkälla

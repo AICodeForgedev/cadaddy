@@ -1236,8 +1236,11 @@ fn a_two_device_circuits_length_is_its_route_with_every_drop_and_the_makeup() {
     assert!(near(&area["conductor_ft"], wire), "conductors {wire}: {area}");
     // The pieces carry the same: the circuit's wire in the takeoff, the panel's makeup on the
     // homerun's conductors.
+    // Each raceway into the first box (the joint and the homerun) turns down at its own knockout
+    // (Q6552), up to the knockouts' spacing (1-1/2", rules data) off the box's centre.
     let w = count(&mut s, json!({"kind": "wire", "circuit": "LP1-7"}));
-    assert!(w["length_ft"].as_f64().is_some_and(|x| (x - wire).abs() < 0.5), "{wire} vs {w}");
+    let knock = 3.0 * 2.0 * 1.5 / 12.0;
+    assert!(w["length_ft"].as_f64().is_some_and(|x| (x - wire).abs() < 0.5 + knock), "{wire} vs {w}");
 }
 
 #[test]

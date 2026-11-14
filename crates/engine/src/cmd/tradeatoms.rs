@@ -87,7 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{section?: framing|drywall|insulation|cladding|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
             .noundo(),
         CommandSpec::new("bim.atoms.docs", "Read Trade Documents", run_docs).params(
-            "{paths: [file or folder] or one path (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
+            "{paths: [file or folder] or one path (submittals, specification sections; PDF or text), store?: bool (default true: add the facts to the ones the building spec keeps for the layouts; a fact read replaces only a kept one of the same key and scope, and a document read again its own earlier facts), replace?: bool (default false: true clears every kept fact first), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}], stored, kept?: n (the facts the spec keeps now)}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
         ),
     ]
 }
@@ -1087,14 +1087,16 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`paths` is empty: give the submittal and specification files or folders"));
     }
     let store = bool_or(p, "store", true);
+    let replace = bool_or(p, "replace", false);
     let show = p.get("show_text").and_then(Value::as_u64).map_or(0, |n| n.min(20_000) as usize);
     let read = docs::read(s, &paths, show);
     if read.files.is_empty() && read.unread.is_empty() {
         return Err(bad(CMD, "no PDF or text files at the paths given"));
     }
+    let mut kept = None;
     if store {
         let (mut sp, _) = super::bspec::current(s, CMD)?;
-        docs::store(&mut sp, &read);
+        kept = Some(docs::store(&mut sp, &read, replace));
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         s.touch();
     }
@@ -1109,6 +1111,9 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
         "unread": read.unread,
         "stored": store,
     });
+    if let Some(n) = kept {
+        out["kept"] = json!(n);
+    }
     fit(&mut out, "facts");
     Ok(out)
 }
@@ -1117,7 +1122,7 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
 /// of what was read.
 pub(crate) fn read_documents(s: &mut Session, sp: &mut BuildingSpec, paths: &[String]) -> String {
     let read = docs::read(s, paths, 0);
-    docs::store(sp, &read);
+    docs::store(sp, &read, false);
     let mut by = BTreeMap::<&str, usize>::new();
     for f in &read.facts {
         *by.entry(f.trade.as_str()).or_default() += 1;
