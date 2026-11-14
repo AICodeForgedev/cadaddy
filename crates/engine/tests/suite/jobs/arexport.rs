@@ -472,7 +472,8 @@ fn hostile_calls_are_refused_not_panicked() {
     for (p, says) in [
         (json!({"room": "999"}), "no room"),
         (json!({"level": "L9"}), "no level"),
-        (json!({"room": "101", "kinds": ["no-such-kind"], "context": "off"}), "nothing built"),
+        (json!({"room": "101", "kinds": ["no-such-kind"], "context": "off"}), "matches nothing"),
+        (json!({"room": "101", "trades": ["no-such-trade"]}), "matches nothing"),
         (json!({"box": {"min": [0, 0]}}), "box"),
         (json!({"box": {"min": [0, 0], "max": [1e9, 1]}}), "100,000"),
         (json!({"room": "101", "anchor": {"corner": 99}}), "corners"),

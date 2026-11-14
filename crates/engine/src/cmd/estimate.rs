@@ -52,6 +52,8 @@ mod outputs;
 
 /// Rows read from one baseline file, at most (hostile files).
 const MAX_ROWS: usize = 200_000;
+/// The most a price or labor figure per unit may be (Q6384): a slip, not a price, past it.
+const MAX_PRICE: f64 = 1e8;
 /// Lines per `estimate.query` page by default, and at most.
 const PAGE: usize = 50;
 const MAX_PAGE: usize = 1_000;
@@ -389,7 +391,14 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     if !dir.is_dir() {
         return Err(bad("estimate.import", format!("{folder}: not a folder")));
     }
-    let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
+    // How many of the baseline's files the folder has (Q6384: a folder with none is refused,
+    // not read as an empty baseline that replaces the one there is).
+    let found = std::cell::Cell::new(0usize);
+    let read = |name: &str| {
+        let t = std::fs::read_to_string(dir.join(name)).ok();
+        found.set(found.get() + usize::from(t.is_some()));
+        t
+    };
     let (sp, mut st) = state(s, "estimate.import")?;
     let mut notes: Vec<String> = Vec::new();
     let mut baseline = Map::new();
@@ -457,6 +466,24 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     // The label: given, else the pack's own (`pack.json`: the public pack says "public data").
     let pack: Value = read("pack.json").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
     let label = str_param(p, "label").or_else(|| pack["label"].as_str()).unwrap_or("baseline").to_string();
+    if found.get() == 0 {
+        return Err(bad(
+            "estimate.import",
+            format!("{folder}: none of the baseline's files are here (item_labor_units.csv, prices.csv, rates.json…); nothing imported"),
+        ));
+    }
+    let read_rows = items.len()
+        + assemblies.len()
+        + prices.len()
+        + factors.len()
+        + production.len()
+        + observations.len()
+        + indexes.len()
+        + tool_rules.len()
+        + history.len();
+    if read_rows == 0 && rates.as_object().is_none_or(Map::is_empty) && benchmarks.as_object().is_none_or(Map::is_empty) {
+        notes.push(format!("{folder}: its baseline files hold no rows; the baseline is now empty"));
+    }
     let mut counts = json!({ "items": items.len(), "assemblies": assemblies.len(), "prices": prices.len(), "rates": rates.as_object().map_or(0, Map::len), "benchmarks": benchmarks.as_object().map_or(0, Map::len), "factors": factors.len(), "drivers": production.len(), "observations": observations.len(), "indexes": indexes.len(), "tool_rules": tool_rules.len(), "history": history.len(), "label": label, "notes": notes });
     baseline.insert("label".into(), json!(label));
     baseline.insert("items".into(), Value::Object(items));
@@ -597,7 +624,21 @@ fn run_set_price(s: &mut Session, p: &Value) -> Result<Value> {
     let unit = str_param(p, "unit").filter(|u| !u.trim().is_empty()).ok_or_else(|| bad("estimate.set_price", "`unit` is required"))?;
     let material =
         p["material"].as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad("estimate.set_price", "`material` (dollars per unit) is required"))?;
+    // A price is what something costs (Q6384): 0 or more, a date that is one.
+    if !(0.0..=MAX_PRICE).contains(&material) {
+        return Err(bad("estimate.set_price", format!("`material` is dollars per unit, 0 to {MAX_PRICE}: {material} is not")));
+    }
+    for k in ["labor_hours", "labor_dollars"] {
+        if let Some(v) = p.get(k).filter(|v| !v.is_null()) {
+            v.as_f64()
+                .filter(|x| x.is_finite() && (0.0..=MAX_PRICE).contains(x))
+                .ok_or_else(|| bad("estimate.set_price", format!("`{k}` is a number per unit, 0 to {MAX_PRICE}")))?;
+        }
+    }
     let date = str_param(p, "date").ok_or_else(|| bad("estimate.set_price", "`date` (YYYY-MM-DD) is required"))?;
+    if parse_date(date).is_none() {
+        return Err(bad("estimate.set_price", format!("`date` is YYYY-MM-DD: `{}` is not a date", date.chars().take(40).collect::<String>())));
+    }
     let source = str_param(p, "source")
         .filter(|x| !x.trim().is_empty())
         .ok_or_else(|| bad("estimate.set_price", "`source` (where the price came from) is required"))?;
@@ -727,6 +768,10 @@ fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
                 .as_f64()
                 .filter(|x| x.is_finite() && *x >= 0.0 && *x <= 1e6)
                 .ok_or_else(|| bad("estimate.settings", format!("`{k}` must be a number, 0 or more")))?;
+            // A crew costs something (Q6384): at 0 every labor line would be $0.
+            if k == "crew_rate" && v <= 0.0 {
+                return Err(bad("estimate.settings", "`crew_rate` is dollars per crew hour, more than 0"));
+            }
             set.insert(k.into(), json!(v));
         }
     }
