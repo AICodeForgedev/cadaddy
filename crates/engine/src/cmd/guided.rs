@@ -12724,6 +12724,8 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             continue;
         }
         let sheet = sh.number.split('/').next().unwrap_or(&sh.number).trim().to_string();
+        // The symbol inserts whose blocks were drawn from them (their strokes are theirs, Q6603).
+        let drawn = super::labelspot::drawn_copies(&sub);
         for (title, rect) in views.iter().map(|(t, r, _)| (t, r)).chain(room_plans) {
             let inside = |p: cadaddy_geom::Vec2| p.x >= rect[0] && p.x <= rect[2] && p.y >= rect[1] && p.y <= rect[3];
             let mine: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts.iter().filter(|t| inside(t.at)).collect();
@@ -12744,13 +12746,17 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             // read elsewhere is that device here too.
             let mut pieces = Vec::new();
             let mut known: Vec<([f64; 4], super::unitmarks::Symbol)> = Vec::new();
-            // Its loose straight pieces, for the leaders its labels are set on (Q6337).
+            // Its loose objects, for the switch symbols drawn as linework (Q6602).
             let mut loose: Vec<&cadaddy_doc::EntityKind> = Vec::new();
+            // Its straight pieces, for the leaders its labels are set on (Q6337), the symbol
+            // blocks' own too (a leader the import took into a block, Q6603).
+            let mut leader_src: Vec<cadaddy_doc::EntityKind> = Vec::new();
             for e in sub.model.iter() {
                 let b = cadaddy_doc::entity_bounds(&sub, e, 0);
                 if b.is_empty() || b.max.x < rect[0] || b.min.x > rect[2] || b.max.y < rect[1] || b.min.y > rect[3] {
                     continue;
                 }
+                super::labelspot::leader_pieces(&sub, e, &drawn, &mut leader_src);
                 let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else {
                     super::unitmarks::pieces(&e.kind, &mut pieces);
                     if loose.len() < super::labelspot::MAX_LEADER_SEGS {
@@ -12798,7 +12804,7 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 .filter(|dv| sheet_key(&dv.sheet) == key && inside(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
                 .collect();
             let strokes = super::labelspot::Strokes::of(loose.iter().copied(), text_h);
-            let leaders = super::labelspot::Leaders::of(loose, 4.0 * text_h);
+            let leaders = super::labelspot::Leaders::of(leader_src.iter(), 4.0 * text_h).with_lettering(&mine);
             let view = super::unitmarks::View {
                 sheet: &sheet,
                 level: &level,

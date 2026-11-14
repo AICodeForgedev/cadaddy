@@ -45,6 +45,48 @@ pub(crate) const MAX_LEADER_SEGS: usize = 400_000;
 /// Corners of one polyline looked at as a leader, at most (more is a drawing, not a leader).
 const MAX_LEADER_CORNERS: usize = 8;
 
+/// A leader's tip within this many heights of another label's lettering (its baseline's middle
+/// line) ends on that label; within this many of a keynote's marker number, on that marker (its
+/// drawn box around the number).
+const LETTERING_TIP_H: f64 = 0.75;
+const KEYNOTE_TIP_H: f64 = 2.0;
+/// Lines of lettering of one sheet looked at for leaders' tips, at most.
+const MAX_LETTERING: usize = 40_000;
+
+/// An arrowhead no larger than this many label heights, its middle within this many of a
+/// leader's end, is drawn at that end.
+const ARROW_MAX_H: f64 = 2.0;
+const ARROW_AT_H: f64 = 1.5;
+
+/// An arrowhead: a small triangle, outlined (a closed polyline of three corners) or filled (a
+/// solid of three), as its middle and its size.
+fn arrowhead(k: &cadaddy_doc::EntityKind) -> Option<(Vec2, f64)> {
+    let mut pts: Vec<Vec2> = match k {
+        cadaddy_doc::EntityKind::LwPolyline(pl) if pl.closed && (3..=4).contains(&pl.vertices.len()) => {
+            pl.vertices.iter().map(|v| Vec2::new(v.p.x, v.p.y)).collect()
+        }
+        cadaddy_doc::EntityKind::Solid(so) => so.corners.iter().map(|c| Vec2::new(c.x, c.y)).collect(),
+        _ => return None,
+    };
+    // Corners repeated (a triangle closed on its first corner, a solid's fourth on its third) once.
+    pts.dedup_by(|a, b| a.dist(*b) <= 1e-9);
+    if pts.len() > 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9) {
+        pts.pop();
+    }
+    if pts.len() != 3 || !pts.iter().all(|p| p.is_finite()) {
+        return None;
+    }
+    let (a, b, c) = (*pts.first()?, *pts.get(1)?, *pts.get(2)?);
+    let size = a.dist(b).max(b.dist(c)).max(c.dist(a));
+    ((b - a).cross(c - a).abs() > 1e-12 && size > 0.0).then_some(((a + b + c) * (1.0 / 3.0), size))
+}
+
+/// A keynote's marker: one to three digits alone.
+fn keynote_marker(t: &TextItem) -> bool {
+    let v = t.value.trim();
+    (1..=3).contains(&v.len()) && v.chars().all(|c| c.is_ascii_digit())
+}
+
 /// How a device made from a label found its spot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Spot {
@@ -99,6 +141,11 @@ pub(crate) struct Leaders {
     segs: Vec<(Vec2, Vec2)>,
     cell: f64,
     ends: HashMap<(i64, i64), Vec<usize>>,
+    /// The sheet's lettering (each line along its baseline middle, its height, and whether it is
+    /// a keynote's marker): no label's leader ends on it (Q6603).
+    lettering: Vec<(Vec2, Vec2, f64, bool)>,
+    /// The sheet's arrowheads (small filled or outlined triangles): each one's middle and size.
+    heads: Vec<(Vec2, f64)>,
 }
 
 impl Leaders {
@@ -116,16 +163,23 @@ impl Leaders {
                 ends.entry(kb).or_default().push(i);
             }
         }
-        Leaders { segs, cell, ends }
+        Leaders { segs, cell, ends, lettering: Vec::new(), heads: Vec::new() }
     }
 
     /// The straight pieces of a sheet's objects (lines; open polylines of a few corners, their
     /// sides and end to end: a leader drawn with a bend is one).
     pub(crate) fn of<'a>(objects: impl IntoIterator<Item = &'a cadaddy_doc::EntityKind>, cell: f64) -> Leaders {
         let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+        let mut heads: Vec<(Vec2, f64)> = Vec::new();
         for k in objects {
             if segs.len() >= MAX_LEADER_SEGS {
                 break;
+            }
+            if let Some(head) = arrowhead(k)
+                && heads.len() < MAX_LEADER_SEGS
+            {
+                heads.push(head);
+                continue;
             }
             match k {
                 cadaddy_doc::EntityKind::Line(l) => segs.push((Vec2::new(l.a.x, l.a.y), Vec2::new(l.b.x, l.b.y))),
@@ -141,7 +195,43 @@ impl Leaders {
                 _ => {}
             }
         }
-        Leaders::new(segs, cell)
+        let mut out = Leaders::new(segs, cell);
+        out.heads = heads;
+        out
+    }
+
+    /// The same pieces, knowing the sheet's lettering (Q6603): a leader that ends on another
+    /// label's lettering, or by a keynote's marker, is no leader from the label it starts by. It
+    /// is that label's or that keynote's, drawn to the symbol the label is printed beside (a
+    /// keynote's arrow to a switch, its head by the switch's designation).
+    pub(crate) fn with_lettering(mut self, texts: &[&TextItem]) -> Leaders {
+        self.lettering = texts
+            .iter()
+            .filter(|t| t.height.is_finite() && t.height > 0.0 && t.at.is_finite() && !t.value.trim().is_empty())
+            .take(MAX_LETTERING)
+            .map(|t| {
+                let (s, e, h) = baseline(t);
+                (s, e, h, keynote_marker(t))
+            })
+            .collect();
+        self
+    }
+
+    /// Whether an arrowhead is drawn at a point (one no larger than a few label heights `h`).
+    fn head_at(&self, p: Vec2, h: f64) -> bool {
+        self.heads.iter().any(|(c, size)| *size <= ARROW_MAX_H * h && c.dist(p) <= ARROW_AT_H * h)
+    }
+
+    /// Whether a leader's tip lands on lettering other than its own (`own`: the baselines of the
+    /// label and the lines printed with it).
+    fn tip_on_lettering(&self, tip: Vec2, own: &[(Vec2, Vec2, f64)]) -> bool {
+        self.lettering.iter().any(|(s, e, h, marker)| {
+            if own.iter().any(|(os, oe, _)| os.dist(*s) <= 1e-9 && oe.dist(*e) <= 1e-9) {
+                return false;
+            }
+            let reach = if *marker { KEYNOTE_TIP_H } else { LETTERING_TIP_H };
+            seg_dist(tip, *s, *e) <= reach * h
+        })
     }
 
     fn key_of(p: Vec2, cell: f64) -> (i64, i64) {
@@ -229,7 +319,10 @@ impl Leaders {
                 (false, true) => (b, a),
                 _ => continue,
             };
-            if self.walled(i, h) {
+            // A leader leaves its label bare and points at its symbol: an arrowhead at the end by
+            // the lettering points at the label's spot, the line is another's (a keynote's arrow, a
+            // copy of a symbol block's leader stamped beside it).
+            if self.walled(i, h) || self.head_at(near, h) {
                 continue;
             }
             // Followed on through its bends: a piece starting where it ends, going on (not back).
@@ -255,7 +348,7 @@ impl Leaders {
                 dir = d;
                 slanted |= slant(d, label.rotation);
             }
-            if !slanted {
+            if !slanted || self.tip_on_lettering(tip, &boxes) {
                 continue;
             }
             let gap = tip.dist(label.at);
@@ -264,6 +357,61 @@ impl Leaders {
             }
         }
         best.map(|(_, p)| p)
+    }
+}
+
+/// The inserts of a drawing whose blocks were drawn from them (Q6603): each block's first insert,
+/// in the drawing's order. A PDF import makes a symbol drawn again and again into one block drawn
+/// from its first copy, and inserts that block at every copy: the strokes inside the block are
+/// that first copy's own, at any other copy only the first's stamped there (a leader the first
+/// copy took is no leader at the others).
+pub(crate) fn drawn_copies(d: &cadaddy_doc::Drawing) -> std::collections::HashSet<cadaddy_doc::Handle> {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut out = std::collections::HashSet::new();
+    for e in d.model.iter() {
+        if let cadaddy_doc::EntityKind::Insert(ins) = &e.kind
+            && seen.insert(ins.block.as_str())
+        {
+            out.insert(e.handle);
+        }
+    }
+    out
+}
+
+/// The pieces of one object of a view that a leader may be drawn with (Q6603), added to `out`:
+/// a line, a short open polyline or an arrowhead as it is; a block inserted there that was drawn
+/// from this insert (one of `drawn`, [`drawn_copies`]), the same pieces of its own objects, one
+/// level opened. A PDF import's symbol block takes every short stroke around its tag, a leader
+/// passing by on its way to another symbol too, so a label's leader may be inside the block of the
+/// symbol beside the one it names.
+pub(crate) fn leader_pieces(
+    d: &cadaddy_doc::Drawing,
+    e: &cadaddy_doc::Entity,
+    drawn: &std::collections::HashSet<cadaddy_doc::Handle>,
+    out: &mut Vec<cadaddy_doc::EntityKind>,
+) {
+    let leaderish = |k: &cadaddy_doc::EntityKind| match k {
+        cadaddy_doc::EntityKind::Line(_) => true,
+        cadaddy_doc::EntityKind::LwPolyline(pl) => !pl.closed && pl.vertices.len() <= MAX_LEADER_CORNERS,
+        _ => arrowhead(k).is_some(),
+    };
+    if out.len() >= MAX_LEADER_SEGS {
+        return;
+    }
+    if matches!(e.kind, cadaddy_doc::EntityKind::Insert(_)) {
+        if !drawn.contains(&e.handle) {
+            return;
+        }
+        for part in super::modify::explode_kind(d, e).unwrap_or_default() {
+            if out.len() >= MAX_LEADER_SEGS {
+                break;
+            }
+            if leaderish(&part.kind) {
+                out.push(part.kind);
+            }
+        }
+    } else if leaderish(&e.kind) {
+        out.push(e.kind.clone());
     }
 }
 
@@ -760,6 +908,109 @@ mod tests {
             elevation: 0.0,
             plinegen: false,
         })
+    }
+
+    #[test]
+    fn a_keynotes_arrow_to_the_symbol_by_a_label_is_no_leader_from_the_label() {
+        // Q6603: a switch's designation `3,a` at (0, 0); a keynote's marker `2` in its box at
+        // (-60, 40) with its arrow slanting down to the switch symbol beside the designation, its
+        // head by the lettering's start. Another label `X-1` at (60, -40) with a line from the
+        // designation's end slanting to it. Neither is the designation's leader.
+        let l = text("3,a", 0.0, 0.0);
+        let marker = text("2", -60.0, 40.0);
+        let other = text("X-1", 60.0, -40.0);
+        let segs = vec![(Vec2::new(-1.0, 1.0), Vec2::new(-52.0, 40.0)), (Vec2::new(12.5, 2.0), Vec2::new(60.0, -38.0))];
+        let leaders = Leaders::new(segs.clone(), 8.0).with_lettering(&[&l, &marker, &other]);
+        let (at, spot) = locate(&l, &[], Some(&leaders), &[], 0.0);
+        assert_eq!(spot, Spot::Label, "{at:?}");
+        // Without the sheet's lettering known, the arrow is taken for its leader.
+        let (_, spot) = locate(&l, &[], Some(&Leaders::new(segs, 8.0)), &[], 0.0);
+        assert_eq!(spot, Spot::Leader);
+        // A keynote's marker printed with the label (its own) does not stop its leader.
+        let beside = text("2", -10.0, 0.0);
+        let leaders = Leaders::new(vec![(Vec2::new(-11.0, 1.0), Vec2::new(-40.0, -30.0))], 8.0).with_lettering(&[&l, &beside]);
+        let (at, spot) = locate(&l, &[&beside], Some(&leaders), &[], 0.0);
+        assert_eq!(spot, Spot::Leader, "{at:?}");
+    }
+
+    #[test]
+    fn a_line_with_its_arrowhead_by_the_label_points_at_it_and_is_no_leader_from_it() {
+        // Q6603: a symbol block's leader stamped beside another symbol (the import draws every
+        // copy of a block alike) ends, arrowhead and all, by a switch's designation `3,a`.
+        let l = text("3,a", 0.0, 0.0);
+        let line = pline(&[Vec2::new(-1.0, 1.0), Vec2::new(-30.0, 30.0), Vec2::new(-40.0, 30.0)], false);
+        let head_by_label = pline(&[Vec2::new(-1.0, 1.0), Vec2::new(-4.5, 2.0), Vec2::new(-2.0, 4.5)], true);
+        let head_far = pline(&[Vec2::new(-40.0, 30.0), Vec2::new(-36.0, 31.5), Vec2::new(-36.0, 28.5)], true);
+        let at_label = Leaders::of([&line, &head_by_label], 16.0);
+        assert_eq!(locate(&l, &[], Some(&at_label), &[], 0.0).1, Spot::Label);
+        // Its arrowhead at the far end: the label's own leader, to there.
+        let at_far = Leaders::of([&line, &head_far], 16.0);
+        let (at, spot) = locate(&l, &[], Some(&at_far), &[], 0.0);
+        assert_eq!(spot, Spot::Leader);
+        assert!(at.dist(Vec2::new(-40.0, 30.0)) < 1e-9, "{at:?}");
+        // A filled one (a solid of three corners, its fourth on its third) is one too.
+        let solid = cadaddy_doc::EntityKind::Solid(cadaddy_doc::Solid {
+            corners: [
+                cadaddy_geom::Vec3::new(-1.0, 1.0, 0.0),
+                cadaddy_geom::Vec3::new(-4.5, 2.0, 0.0),
+                cadaddy_geom::Vec3::new(-2.0, 4.5, 0.0),
+                cadaddy_geom::Vec3::new(-2.0, 4.5, 0.0),
+            ],
+        });
+        assert_eq!(locate(&l, &[], Some(&Leaders::of([&line, &solid], 16.0)), &[], 0.0).1, Spot::Label);
+    }
+
+    #[test]
+    fn a_leader_the_import_took_into_a_symbol_block_is_followed() {
+        // Q6603: a PDF import's symbol block (a receptacle's circle and the strokes around its
+        // tag) holds the leader of a label printed beside it: from (-28, 6) by the label's end,
+        // level to (-20, 6), then slanting down to (12, -8) by the block's own circle. Inserted
+        // at (100, 50). A loose line and a closed outline beside it.
+        use cadaddy_doc::{Block, Common, EntityKind, Insert, Line, Space};
+        use cadaddy_geom::Vec3;
+        let mut d = cadaddy_doc::Drawing::default();
+        let mut b = Block::new("PDF-SYM-1");
+        for kind in [
+            EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::ZERO, radius: 3.0 }),
+            pline(&[Vec2::new(-28.0, 6.0), Vec2::new(-20.0, 6.0), Vec2::new(12.0, -8.0)], false),
+        ] {
+            b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: Common::default(), kind });
+        }
+        d.blocks.insert("PDF-SYM-1".into(), std::sync::Arc::new(b));
+        let ins = Insert {
+            block: "PDF-SYM-1".into(),
+            insert: Vec3::new(100.0, 50.0, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: Vec::new(),
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        };
+        let copy = Insert { insert: Vec3::new(300.0, 50.0, 0.0), ..ins.clone() };
+        d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).ok();
+        // A second copy of the symbol: the block's leader is stamped there too, and is not its own.
+        d.add(&Space::Model, Common::default(), EntityKind::Insert(copy)).ok();
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(5.0, 0.0, 0.0) })).ok();
+        d.add(&Space::Model, Common::default(), pline(&[Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(4.0, 4.0), Vec2::new(0.0, 4.0)], true))
+            .ok();
+        let drawn = drawn_copies(&d);
+        assert_eq!(drawn.len(), 1);
+        let mut pieces = Vec::new();
+        for e in d.model.iter() {
+            leader_pieces(&d, e, &drawn, &mut pieces);
+        }
+        // The block's leader (opened where its first copy is drawn) and the loose line; no
+        // circle, no outline of four corners, nothing of the second copy.
+        assert_eq!(pieces.len(), 2, "{pieces:?}");
+        let leaders = Leaders::of(pieces.iter(), 16.0);
+        // `X-8` printed so its lettering ends by the leader's start.
+        let l = text("X-8", 60.0, 54.0);
+        let (at, spot) = locate(&l, &[], Some(&leaders), &[], 0.0);
+        assert_eq!(spot, Spot::Leader);
+        assert!(at.dist(Vec2::new(112.0, 42.0)) < 1e-6, "{at:?}");
     }
 
     #[test]
