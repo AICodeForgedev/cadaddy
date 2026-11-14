@@ -1,5 +1,5 @@
 {
-  "about": "What each kind of object needs before it can be installed (Q6619: the RFI is what the build produces when it cannot complete an object the way the codes and trade practice require). One requirement per entry: the objects it applies to, the property that meets it, the code section or trade rule behind it, the question it asks when no document meets it, the build step it must be answered before, and how the build completes the object meanwhile (a proposal marked unsure). Rules data, never job values.",
+  "about": "What each kind of object needs before it can be installed (Q6619: the RFI is what the build produces when it cannot complete an object the way the codes and trade practice require). One requirement per entry: the objects it applies to, the property that meets it (or what the model as it stands gives instead, `or_model`: `controlled_loads` a switch's load = the luminaires and loads carrying its leg or naming it; `circuit_loads` a breaker's load = any element carrying its circuit, site equipment included; `emergency_circuit` a luminaire on the emergency system's circuit is unswitched by design, NEC 700.21), the code section or trade rule behind it, the question it asks when no document meets it, the build step it must be answered before, and how the build completes the object meanwhile (a proposal marked unsure). `closes_topics`: the review items of those topics the requirement answers once every object they name meets it. Rules data, never job values.",
   "documented_sources": ["print", "legend", "schedule", "spec", "submittal", "note", "user", "computed"],
   "empty_values": ["none found", "none", "unknown", "?", "tbd", "n/a", "-"],
   "steps": [
@@ -91,7 +91,9 @@
       "severity": "medium",
       "propose": "neighbour",
       "propose_keys": ["controlled_by", "control"],
-      "reach_ft": 40.0
+      "reach_ft": 40.0,
+      "or_model": "emergency_circuit",
+      "closes_topics": ["lighting: fixture with no control", "lighting: fixture leg with no switch"]
     },
     {
       "id": "E-REC-CIRCUIT",
@@ -134,7 +136,10 @@
       "ask": "What does it control?",
       "step": "rough_in",
       "severity": "medium",
-      "propose": "room_loads"
+      "propose": "room_loads",
+      "reach_ft": 40.0,
+      "or_model": "controlled_loads",
+      "closes_topics": ["lighting: switch leg with no fixture"]
     },
     {
       "id": "E-EQ-CIRCUIT",
@@ -190,6 +195,7 @@
       "needs": ["devices"],
       "from_build": "breakers",
       "build_kinds": ["row_no_plan"],
+      "or_model": "circuit_loads",
       "what": "a load on the plans",
       "basis": "NEC 408.4(A): each circuit's load is identified; a breaker the schedule loads with nothing on the plans is a load nobody has located, or a row to make a spare",
       "ask": "Where is its load, or is it a spare?",

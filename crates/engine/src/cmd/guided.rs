@@ -21276,7 +21276,13 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     }
     let emergency: BTreeMap<String, lt::Emergency> = types.iter().filter_map(|t| Some((t.tag.clone(), lt::emergency_type(t)?))).collect();
     let plans = "the electrical plans";
-    let links = lt::link_controls(&lums, &ctrls, &others, &lt::ControlDocs { codes: &codes, emergency: &emergency, plans });
+    let emergency_circuits = lt::emergency_circuits(&sp);
+    let links = lt::link_controls(
+        &lums,
+        &ctrls,
+        &others,
+        &lt::ControlDocs { codes: &codes, emergency: &emergency, emergency_circuits: &emergency_circuits, plans },
+    );
     conflicts.extend(links.conflicts.iter().cloned());
     // Sensors the energy code or the specification asks for, and guest rooms' master controls.
     let rule = lt::sensor_rule();

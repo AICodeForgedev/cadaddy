@@ -112,6 +112,12 @@ pub(crate) struct Requirement {
     /// circuits against the panel schedules' rows), and the kinds of its findings this one is.
     pub from_build: String,
     pub build_kinds: Vec<String>,
+    /// What the model as it stands gives instead of the object's own property (Q6651):
+    /// `controlled_loads`, `circuit_loads`, `emergency_circuit`; empty: none.
+    pub or_model: String,
+    /// The review items of these topics (`lighting: fixture with no control`) it answers once
+    /// every object they name meets it.
+    pub closes_topics: Vec<String>,
 }
 
 impl Requirement {
@@ -248,6 +254,9 @@ pub(crate) struct Evaluation {
     writes: Vec<(Handle, Vec<(String, Prop)>)>,
     /// The objects an earlier pass marked open (their marks go before the new ones are set).
     marked: Vec<Handle>,
+    /// Open review items the model as it stands now answers: (id, the answer). `apply` closes
+    /// them; a read-only pass lists them closed.
+    pub closed: Vec<(String, String)>,
 }
 
 fn lower(v: &[String]) -> Vec<String> {
@@ -312,8 +321,9 @@ fn applies(r: &Requirement, el: &El, equipment: &HashMap<String, (String, BTreeS
     by_kind || has(&r.with_keys)
 }
 
-/// Where an object stands on a requirement.
-fn met(rules: &Rules, r: &Requirement, el: &El, fed: &BTreeSet<String>) -> Met {
+/// Where an object stands on a requirement: its own properties, a feeder of the spec, then what
+/// the model as it stands gives ([`ModelFacts`]).
+fn met(rules: &Rules, r: &Requirement, el: &El, fed: &BTreeSet<String>, facts: &ModelFacts, upf: f64) -> Met {
     let mut assumed: Option<(String, String)> = None;
     for key in &r.needs {
         let Some(p) = el.get(key) else { continue };
@@ -338,7 +348,196 @@ fn met(rules: &Rules, r: &Requirement, el: &El, fed: &BTreeSet<String>) -> Met {
             return Met::Documented;
         }
     }
+    if let Some((documented, v)) = facts.gives(r, el, upf) {
+        if documented {
+            return Met::Documented;
+        }
+        if assumed.is_none() {
+            assumed = Some((r.needs.first().cloned().unwrap_or_default(), v));
+        }
+    }
     assumed.map_or(Met::Missing, |(k, v)| Met::ByRule(k, v))
+}
+
+// ─── What the model as it stands gives ───────────────────────────────────────
+
+/// Loads one fact names at most (a switch's luminaires listed in a proposal).
+const MAX_LOADS_NAMED: usize = 6;
+/// Circuits one label carries at most (`A-1,3,5`).
+const MAX_LABEL_PARTS: usize = 12;
+
+/// A load the model ties to a switch leg (a luminaire, a fan on the leg).
+#[derive(Clone, Debug)]
+struct LegLoad {
+    level: String,
+    room: String,
+    leg: String,
+    at: [f64; 2],
+    label: String,
+    documented: bool,
+}
+
+/// What the model as it stands says beyond an object's own properties (Q6651: "the requirement
+/// checks read the model as it stands"): a switch's load is the luminaires and loads carrying its
+/// leg or naming it (NEC 404.2), a breaker's load any element carrying its circuit, site
+/// equipment included (NEC 408.4(A)), and a luminaire on the emergency system's circuit is
+/// unswitched by design (NEC 700.21). Each fact says whether a document (or a value computed
+/// from them) gives it, or only a rule.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ModelFacts {
+    legs: Vec<LegLoad>,
+    /// The controls (level, room, leg) the model has: a load in another room is a switch's only
+    /// where its own room has no control of its leg.
+    control_legs: BTreeSet<(String, String, String)>,
+    /// A control's handle (upper case) → the loads naming it (`controlled_by`, `control`).
+    named: HashMap<String, Vec<(String, bool)>>,
+    /// (panel, circuit number) → whether a document gives an element carrying it.
+    circuits: BTreeMap<(String, u32), bool>,
+    /// (panel, circuit number) → why it is the emergency system's.
+    emergency: BTreeMap<(String, u32), String>,
+}
+
+/// A switch leg letter in a control's words (`switch leg a: S 1A2`, `switch S leg a`).
+fn leg_in(text: &str) -> Option<String> {
+    let words: Vec<&str> = text.split(|c: char| c.is_whitespace() || matches!(c, ':' | ',' | ';' | '(' | ')')).filter(|w| !w.is_empty()).collect();
+    let at = words.iter().position(|w| w.eq_ignore_ascii_case("leg"))?;
+    let leg = words.get(at + 1)?.to_ascii_lowercase();
+    (leg.len() <= 3 && leg.chars().all(|c| c.is_ascii_alphanumeric())).then_some(leg)
+}
+
+/// The handles a link value names (`1A2B, 1A2C`; `switch leg a: S 1A2B`): words of hex digits.
+fn handles_in(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 2 && w.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_ascii_uppercase)
+        .take(200)
+}
+
+/// The (panel, number) pairs a circuit label carries (`A-40`, `A-1,3`, `A-40, A-42`; a bare
+/// number takes `panel`, or the panel named before it in the label).
+fn circuits_in(label: &str, panel: &str) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
+    let mut current = panel.trim().to_ascii_uppercase();
+    for part in label.split([',', ';', '&', '+']).map(str::trim).filter(|p| !p.is_empty()).take(MAX_LABEL_PARTS) {
+        if part.chars().any(|c| c.is_ascii_alphabetic())
+            && let Some(p) = super::propfill::panel_of(part)
+        {
+            current = p.to_ascii_uppercase();
+        }
+        if current.is_empty() {
+            continue;
+        }
+        for n in super::breakers::circuit_numbers(part, &current) {
+            out.push((current.clone(), n));
+        }
+    }
+    out
+}
+
+impl ModelFacts {
+    /// The model's facts: its loads' legs and links, the circuits its elements carry, and the
+    /// spec's emergency circuits. `controls`: the device kinds that are switches or sensors.
+    pub(crate) fn of(rules: &Rules, m: &Model, sp: Option<&BuildingSpec>, controls: &[String]) -> ModelFacts {
+        let mut f = ModelFacts::default();
+        let documented = |p: &Prop| rules.documented(p.source.kind);
+        for el in m.els.iter().take(MAX_OBJECTS) {
+            let is_control = el.kind.eq_ignore_ascii_case("device") && controls.contains(&device_kind(el));
+            let (level, room) = (el.level().to_ascii_uppercase(), el.text("room").unwrap_or_default().to_ascii_uppercase());
+            let own_leg = ["switch_leg", "leg"].iter().find_map(|k| el.get(k).map(|p| (p.text().trim().to_ascii_lowercase(), documented(p))));
+            if is_control {
+                if let Some((leg, _)) = own_leg.filter(|(l, _)| !l.is_empty()) {
+                    f.control_legs.insert((level, room, leg));
+                }
+            } else {
+                let control = el.get("control").filter(|p| !rules.empty(&p.text()));
+                let leg = own_leg
+                    .filter(|(l, _)| !l.is_empty() && !rules.empty(l))
+                    .or_else(|| control.and_then(|p| leg_in(&p.text()).map(|l| (l, documented(p)))));
+                if let Some((leg, doc)) = leg {
+                    f.legs.push(LegLoad { level, room, leg, at: plan_at(el), label: el.label(), documented: doc });
+                }
+                for p in [el.get("controlled_by"), control].into_iter().flatten() {
+                    for h in handles_in(&p.text()) {
+                        if h != el.handle().hex() {
+                            f.named.entry(h).or_default().push((el.label(), documented(p)));
+                        }
+                    }
+                }
+            }
+            // The circuits it carries: its properties, and the build's record of equipment.
+            let mut carried: Vec<(String, u32, bool)> = Vec::new();
+            if let Some(c) = el.get("circuit").filter(|p| !rules.empty(&p.text())) {
+                let panel = el.text("panel").unwrap_or_default();
+                carried.extend(circuits_in(&c.text(), &panel).into_iter().map(|(p, n)| (p, n, documented(c))));
+            }
+            if let Some(c) = super::breakers::made_prop(el.e, "CIRCUIT").filter(|c| !rules.empty(c)) {
+                let panel = super::breakers::made_prop(el.e, "PANEL").unwrap_or_default();
+                // The build's record holds what the documents gave the equipment.
+                carried.extend(circuits_in(&c, &panel).into_iter().map(|(p, n)| (p, n, true)));
+            }
+            for (p, n, doc) in carried {
+                let slot = f.circuits.entry((p, n)).or_insert(false);
+                *slot |= doc;
+            }
+        }
+        if let Some(sp) = sp {
+            for ((panel, number), why) in super::lighting::emergency_circuits(sp) {
+                for n in super::breakers::circuit_numbers(&number, "") {
+                    f.emergency.entry((panel.clone(), n)).or_insert_with(|| why.clone());
+                }
+            }
+        }
+        f
+    }
+
+    /// What the model gives an object for a requirement: (a document gives it, in words).
+    fn gives(&self, r: &Requirement, el: &El, upf: f64) -> Option<(bool, String)> {
+        match r.or_model.as_str() {
+            "controlled_loads" => self.controlled(el, r.reach_ft.max(0.0) * upf),
+            "emergency_circuit" => {
+                let c = el.text("circuit")?;
+                let why = circuits_in(&c, &el.text("panel").unwrap_or_default()).into_iter().find_map(|k| self.emergency.get(&k))?;
+                Some((true, format!("unswitched: on the emergency system's circuit ({why}; NEC 700.21)")))
+            }
+            _ => None,
+        }
+    }
+
+    /// A control's load: the loads naming it, else those carrying its leg in its room, else
+    /// within reach in a room with no control of that leg of its own.
+    fn controlled(&self, el: &El, reach: f64) -> Option<(bool, String)> {
+        let say = |loads: &[(String, bool)], how: &str| {
+            let names: Vec<&str> = loads.iter().take(MAX_LOADS_NAMED).map(|(l, _)| l.as_str()).collect();
+            let more = loads.len().saturating_sub(MAX_LOADS_NAMED);
+            let named = if more > 0 { format!("{} and {more} more", names.join(", ")) } else { names.join(", ") };
+            (loads.iter().any(|(_, d)| *d), format!("{} load(s) {how}: {named}", loads.len()))
+        };
+        if let Some(loads) = self.named.get(&el.handle().hex()).filter(|l| !l.is_empty()) {
+            return Some(say(loads, "that name it as their control"));
+        }
+        let leg = el.first(&["switch_leg", "leg"])?.to_ascii_lowercase();
+        let (level, room) = (el.level().to_ascii_uppercase(), el.text("room").unwrap_or_default().to_ascii_uppercase());
+        let mine = |l: &&LegLoad| l.leg == leg && (l.level.is_empty() || level.is_empty() || l.level == level);
+        let in_room: Vec<(String, bool)> =
+            self.legs.iter().filter(mine).filter(|l| !room.is_empty() && l.room == room).map(|l| (l.label.clone(), l.documented)).collect();
+        if !in_room.is_empty() {
+            return Some(say(&in_room, &format!("on its leg {leg} in its room")));
+        }
+        let at = plan_at(el);
+        let near: Vec<(String, bool)> = self
+            .legs
+            .iter()
+            .filter(mine)
+            .filter(|l| dist(l.at, at) <= reach && !self.control_legs.contains(&(l.level.clone(), l.room.clone(), leg.clone())))
+            .map(|l| (l.label.clone(), l.documented))
+            .collect();
+        (!near.is_empty()).then(|| say(&near, &format!("on its leg {leg} within reach")))
+    }
+
+    /// Whether an element carries a scheduled circuit (any of its numbers).
+    fn carries(&self, panel: &str, label: &str) -> bool {
+        circuits_in(label, panel).iter().any(|k| self.circuits.contains_key(k))
+    }
 }
 
 fn plan_at(el: &El) -> [f64; 2] {
@@ -507,7 +706,7 @@ fn rfi_for(rules: &Rules, r: &Requirement, level: &str, room: &str, open: &[&Ope
 /// schedules (a circuit on the plans no schedule row has, a row nothing on the plans is on, a
 /// label naming a panel no document has). Each finding of its kinds is one RFI on its objects;
 /// the objects counted are the step's own (the devices on circuits, or the breakers).
-fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::Report>, ev: &mut Evaluation) {
+fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::Report>, facts: &ModelFacts, ev: &mut Evaluation) {
     let mut out = Outcome { id: r.id.clone(), object: r.object.clone(), trade: r.trade.clone(), ..Outcome::default() };
     let Some(rep) = report.filter(|_| r.from_build == "breakers") else {
         ev.outcomes.push(out);
@@ -525,6 +724,11 @@ fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::R
         rep.devices_linked + rep.devices_unlinked
     };
     for m in rep.mismatches.iter().filter(|m| kinds.contains(&m.kind.to_ascii_lowercase())) {
+        // The model as it stands: an element carrying the row's circuit is its load (a site
+        // pole, a sign, a charger the site plan draws), however the build linked it.
+        if r.or_model == "circuit_loads" && facts.carries(&m.panel, &m.circuit) {
+            continue;
+        }
         out.missing += if breaker_side { 1 } else { m.devices.max(1) };
         if ev.rfis.len() >= MAX_RAISED {
             ev.not_raised += 1;
@@ -568,16 +772,29 @@ pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
         ..Evaluation::default()
     };
     let breakers = super::breakers::stored(d);
+    let controls: Vec<String> = rules
+        .requirements
+        .iter()
+        .filter(|r| r.or_model == "controlled_loads")
+        .flat_map(|r| lower(&r.device_kinds))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let facts = ModelFacts::of(rules, &m, sp, &controls);
+    // Each requirement's objects (handle, upper case) and whether each is met by the documents.
+    let mut measured: HashMap<&str, HashMap<String, bool>> = HashMap::new();
     for r in &rules.requirements {
         if !r.from_build.is_empty() {
-            from_build(rules, r, breakers.as_ref(), &mut ev);
+            from_build(rules, r, breakers.as_ref(), &facts, &mut ev);
             continue;
         }
         let idx: Vec<usize> = m.els.iter().enumerate().filter(|(_, el)| applies(r, el, &equipment)).map(|(i, _)| i).take(MAX_OBJECTS).collect();
         let mut out = Outcome { id: r.id.clone(), object: r.object.clone(), trade: r.trade.clone(), objects: idx.len(), ..Outcome::default() };
+        let mine = measured.entry(r.id.as_str()).or_default();
         for &i in &idx {
             let Some(el) = m.get(i) else { continue };
-            let state = met(rules, r, el, &fed);
+            let state = met(rules, r, el, &fed, &facts, upf);
+            mine.insert(el.handle().hex(), state == Met::Documented);
             let (proposal, set) = match &state {
                 Met::Documented => {
                     out.documented += 1;
@@ -646,7 +863,32 @@ pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
         }
         ev.outcomes.push(out);
     }
+    ev.closed = answered(rules, sp, &measured);
     ev
+}
+
+/// The open review items a requirement now answers: of a topic it closes, every element they
+/// name one of its objects the documents (or the model) meet (Q6651: an item is raised only where
+/// neither the documents nor the model give the value).
+fn answered(rules: &Rules, sp: Option<&BuildingSpec>, measured: &HashMap<&str, HashMap<String, bool>>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(sp) = sp else { return out };
+    for x in sp.rfis.iter().filter(|x| x.status == RfiStatus::Open && !x.elements.is_empty()) {
+        let topic = x.topic.trim().to_ascii_lowercase();
+        let by = rules
+            .requirements
+            .iter()
+            .find(|r| r.closes_topics.iter().any(|t| !t.trim().is_empty() && topic.starts_with(&t.trim().to_ascii_lowercase())));
+        let Some(r) = by else { continue };
+        let Some(objects) = measured.get(r.id.as_str()) else { continue };
+        if x.elements.iter().all(|h| objects.get(&h.trim().to_ascii_uppercase()) == Some(&true)) {
+            out.push((
+                x.id.clone(),
+                format!("Answered by the model: each of its {} element(s) now has {} ({}, {}).", x.elements.len(), r.what, r.id, r.basis),
+            ));
+        }
+    }
+    out
 }
 
 /// Write an evaluation into the model: each open object's proposal and mark (a proposal never
@@ -687,6 +929,12 @@ pub(crate) fn apply(s: &mut Session, ev: &Evaluation) -> Result<usize> {
     }
     let raised: BTreeSet<&str> = ev.rfis.iter().map(|r| r.id.as_str()).collect();
     sp.rfis.retain(|x| x.kind != Some(RfiKind::Requirement) || x.status != RfiStatus::Open || raised.contains(x.id.as_str()));
+    for (id, answer) in &ev.closed {
+        if let Some(x) = sp.rfis.iter_mut().find(|x| &x.id == id && x.status == RfiStatus::Open) {
+            x.status = RfiStatus::Closed;
+            x.answer = Some(answer.clone());
+        }
+    }
     for r in &ev.rfis {
         let n = sp.rfis.len();
         match sp.rfis.iter_mut().find(|x| x.id == r.id) {
@@ -847,6 +1095,12 @@ mod tests {
             assert!(Severity::parse(&q.severity).is_some(), "{}: severity {}", q.id, q.severity);
             assert!(!q.kinds.is_empty() && !q.needs.is_empty(), "{}", q.id);
             assert!(matches!(q.propose.as_str(), "neighbour" | "spare_circuit" | "room_loads" | "none"), "{}: propose {}", q.id, q.propose);
+            assert!(
+                matches!(q.or_model.as_str(), "" | "controlled_loads" | "circuit_loads" | "emergency_circuit"),
+                "{}: or_model {}",
+                q.id,
+                q.or_model
+            );
         }
         // Every RFI kind has a step.
         for k in RfiKind::ALL.into_iter().filter(|k| *k != RfiKind::Requirement) {
