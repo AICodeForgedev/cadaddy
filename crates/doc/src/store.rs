@@ -111,9 +111,12 @@ impl Default for EntityStore {
     }
 }
 
+/// Shared chunks and shared objects are equal without looking inside: comparing a drawing with
+/// the copy a command took for writing costs a pointer per chunk, not a walk of every object's
+/// geometry (Q6330: every command that left the drawing as it was is compared so).
 impl PartialEq for EntityStore {
     fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && self.iter().zip(other.iter()).all(|(a, b)| a == b)
+        self.unchanged_from(other) || (self.len == other.len && self.iter().zip(other.iter()).all(|(a, b)| Arc::ptr_eq(a, b) || a == b))
     }
 }
 
@@ -909,5 +912,30 @@ mod tests {
         for h in 1..=3000 {
             assert_eq!(s.get(Handle(h)).map(|e| e.handle.0), Some(h));
         }
+    }
+
+    /// Q6330: a copy taken for writing equals its drawing while nothing changed (shared chunks and
+    /// kept data are not walked), and any change to an object or to the kept file data shows.
+    #[test]
+    fn a_copy_equals_its_drawing_until_something_changes() {
+        let mut d = crate::Drawing::default();
+        d.model.push_many((1..=5000).map(ent).collect());
+        d.foreign = Arc::new(crate::foreign::Foreign { data_store: vec![crate::RawTag { code: 1, value: "ASM_Data".into() }], ..Default::default() });
+        let copy = d.clone();
+        assert!(copy == d && copy.model.unchanged_from(&d.model));
+        // The same objects in a store of its own: compared by content, still equal.
+        let mut rebuilt = d.clone();
+        rebuilt.model = EntityStore::new();
+        rebuilt.model.push_many((1..=5000).map(ent).collect());
+        assert!(rebuilt == d);
+        let mut moved = d.clone();
+        assert!(moved.model.modify(Handle(4999), |e| e.kind = ent(7).kind));
+        assert!(moved != d, "an object changed");
+        let mut kept = d.clone();
+        Arc::make_mut(&mut kept.foreign).data_store.push(crate::RawTag { code: 2, value: "more".into() });
+        assert!(kept != d, "the kept file data changed");
+        let mut shown = d.clone();
+        Arc::make_mut(&mut shown.foreign).class_order.push("ACDBPROXY".into());
+        assert!(shown != d);
     }
 }

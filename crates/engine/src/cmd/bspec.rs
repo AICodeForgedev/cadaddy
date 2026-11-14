@@ -1085,6 +1085,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     // each the room came out twice).
     let mut claimed: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut texts = room_texts_sized(sp, &ents);
+    // A dimension string's plain figure (`2160` beside `3'-0"`) is no room's number (Q6298).
+    let dims = super::perceive::geometry::dimension_figures(&ents);
+    texts.retain(|(h, _, _, _)| !dims.contains(h));
     // Untagged, the plan's room tag size: a number or room name in it that the spec's rooms
     // don't list is still a room's tag (Q6160: a closet tagged with its number only).
     // Measured on the levels' own plans: the other trades' sheets print the same rooms' numbers

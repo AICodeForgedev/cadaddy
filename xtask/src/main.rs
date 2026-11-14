@@ -114,11 +114,9 @@ commands:
                   [--area <BLS area code, default 38060>] [--occupation <SOC, default 47-2061>];
                   generates the baseline/ folder for estimate.import; enforces source+licence
                   on every row and refuses any electrical labor
-  fuzz [dxf|dwg|pdf|svg|image|cdy|all] [seconds]
-                  mutation-fuzz the file readers (default all, 60 s each); crashes and hangs are
   fuzz [TARGET|all] [seconds]
-                  mutation-fuzz the readers (default all, 60 s each): dxf dwg pdf svg image cdy shx
-                  las pts xyz cdywalk markups stl obj gltf xlsx zip lisp; crashes and hangs are
+                  mutation-fuzz the readers (default all, 60 s each): dxf dwg dwgnative pdf svg image
+                  cdy shx las pts xyz cdywalk markups stl obj gltf xlsx zip lisp; crashes and hangs are
                   saved in target/fuzz-findings/ (coverage-guided targets: fuzz/, nightly)
   repro FILE [--save OUT]
                   replay a recorded journal (.scr) or action macro (.actm) headless through
