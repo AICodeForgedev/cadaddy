@@ -1332,3 +1332,43 @@ fn a_top_floors_tiers_go_up_into_the_roof_trusses_bearing_on_its_walls() {
     assert_eq!(framing_tier_top(0.0, 96.0, 216.0, 240.0, keep, UPF), None);
     assert_eq!(framing_tier_top(0.0, 96.0, f64::NAN, f64::NAN, keep, UPF), None);
 }
+
+/// Q6631: a leg's change of tier at a corner (a crossing taking the next tier, Q6552) never goes
+/// down through a joist's depth: `seat` counts one it can't avoid, and `route_leg` takes a shape
+/// whose tiers change in a bay instead.
+#[test]
+fn a_change_of_tier_never_goes_through_a_joists_depth() {
+    // I-joists along y every 24" (112" to 124"), a duct under them across the bay east of x = 24
+    // at the lower tier; tiers under the joists (108") and through their webs (118").
+    let joists = rimmed(false);
+    let r = 0.375;
+    let tiers = [108.0, 118.0];
+    let low_duct = duct(28.0, -2.0, 40.0, 2.0, 104.0, 110.0);
+    let framed: Vec<(Obs, Frame)> = joists.obs.iter().enumerate().filter_map(|(i, o)| joists.frames.get(&i).map(|f| (o.clone(), *f))).collect();
+    let rebuilt = |extra: Vec<Obs>| Field::with_framing(extra, framed.clone(), UPF);
+    let field = rebuilt(vec![low_duct.clone()]);
+    // A vertical piece in a joist, under it, and in the bay beside it.
+    assert!(field.framing_column(Vec2::new(48.0, 0.0), 108.0, 118.0, r).is_some());
+    assert!(field.framing_column(Vec2::new(48.0, 0.0), 100.0, 108.0, r).is_none(), "wholly under the joist");
+    assert!(field.framing_column(Vec2::new(36.0, 0.0), 108.0, 118.0, r).is_none(), "in the bay");
+    // East along y = 0 over the duct (118", through the webs) to the joist at x = 48, then north
+    // along it under the joists (108"): the step down at the corner is in the joist.
+    let l = seat(&[Vec2::new(12.0, 0.0), Vec2::new(48.0, 0.0), Vec2::new(48.0, 60.0)], &tiers, r, &field, UPF, &[], "", rules());
+    assert_eq!(l.z, vec![118.0, 108.0], "{l:?}");
+    assert!(l.blocked.is_empty(), "{l:?}");
+    assert_eq!(l.through, 1, "the step at the corner goes through the joist: {l:?}");
+    // With the way north at x = 12 shut at every tier, the router takes a shape whose change of
+    // tier is in a bay.
+    let field = rebuilt(vec![low_duct, duct(8.0, 20.0, 16.0, 40.0, 96.0, 130.0)]);
+    let leg = route_leg(Vec2::new(12.0, 0.0), Vec2::new(48.0, 60.0), &tiers, r, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty() && leg.through == 0, "{leg:?}");
+    assert!(square(&leg), "{leg:?}");
+    for (i, p) in leg.pts.iter().enumerate().skip(1).take(leg.z.len().saturating_sub(1)) {
+        let (za, zb) = (leg.z[i - 1], leg.z[i]);
+        assert!(field.framing_column(*p, za, zb, r).is_none(), "the change of tier at {p:?} is in a joist: {leg:?}");
+    }
+    for (w, z) in leg.pts.windows(2).zip(&leg.z) {
+        let [p, q] = w else { continue };
+        assert!(field.framing(*p, *q, *z, r, UPF, rules()).is_ok(), "{leg:?}");
+    }
+}

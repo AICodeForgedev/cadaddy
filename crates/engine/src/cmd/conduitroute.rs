@@ -691,7 +691,7 @@ pub(crate) const CHORD: &str = "it would bore a truss chord";
 pub(crate) const EDGE: &str = "the hole would be too near the member's top or bottom edge";
 
 /// The distance from `p` to the segment `a`–`b`.
-fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+pub(crate) fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p.x - a.x) * dx + (p.y - a.y) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
@@ -802,6 +802,35 @@ impl Field {
     /// The first obstacle a vertical piece at `p` from `z0` to `z1` (radius `r`) comes within
     /// its clearance of, skipping `skip`: a drop, a riser, a change of tier.
     #[allow(clippy::too_many_arguments)]
+    /// The framing member a vertical piece at `p` from `z0` to `z1` (radius `r`) stands in: it
+    /// would go through the member's depth (Q6631: a change of tier at a corner over a joist).
+    pub(crate) fn framing_column(&self, p: Vec2, z0: f64, z1: f64, r: f64) -> Option<usize> {
+        if self.frames.is_empty()
+            || (z1 - z0).abs() < 1e-9
+            || !(p.is_finite() && z0.is_finite() && z1.is_finite() && r.is_finite())
+            || self.cell <= 0.0
+        {
+            return None;
+        }
+        let (zlo, zhi) = (z0.min(z1), z0.max(z1));
+        let reach = r.max(0.0) + self.cell;
+        let (x0, y0, x1, y1) =
+            (Self::c(p.x - reach, self.cell), Self::c(p.y - reach, self.cell), Self::c(p.x + reach, self.cell), Self::c(p.y + reach, self.cell));
+        if x1.saturating_sub(x0) > 64 || y1.saturating_sub(y0) > 64 {
+            return None;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for &i in self.grid.get(&(x, y)).into_iter().flatten() {
+                    let (Some(f), Some(o)) = (self.frames.get(&i), self.obs.get(i)) else { continue };
+                    if zhi + r > o.lo.z && zlo - r < o.hi.z && seg_dist(p, f.a, f.b) < f.t / 2.0 + r {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
+    }
     pub(crate) fn hit_column(&self, p: Vec2, z0: f64, z1: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
         if (z1 - z0).abs() < 1e-9 {
             return None;
@@ -1294,6 +1323,9 @@ pub(crate) struct Leg {
     /// The raceways laid before it that a piece crosses at every tier it is otherwise clear at
     /// (Q6552): what the field must still offset.
     pub crossings: Vec<Crossing>,
+    /// Its changes of tier (and its end's drop) that go through a framing member's depth where
+    /// no tier of the piece avoids it (Q6631): a shape without one is taken first.
+    pub through: usize,
 }
 
 /// Each piece of `path` at the lowest of `tiers` it is clear at, of the raceways laid before it
@@ -1307,10 +1339,19 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
     // Its end boxes, where raceways meet.
     let ends: Vec<Vec2> = path.first().into_iter().chain(path.last()).copied().collect();
     let meet = rl.route.box_meet(upf);
+    // The height the path stands at before each piece: its rise from the lowest tier at its
+    // start, then the piece before's.
+    let mut prev = first;
     for (k, w) in path.windows(2).enumerate() {
         let [a, b] = w else { continue };
         // Clear of the obstacles, and through the framing only where its web may be bored.
         let clear = |z: &f64| field.hit(*a, *b, *z, r, upf, skip, rl).is_none() && field.framing(*a, *b, *z, r, upf, rl).is_ok();
+        // Its change of tier at its start (and its drop to the lowest tier at the path's end)
+        // never through a framing member's depth (Q6631): a tier that needs one is taken only
+        // where no other is clear.
+        let from = prev;
+        let steps =
+            |z: &f64| field.framing_column(*a, from, *z, r).is_none() && (k + 2 != path.len() || field.framing_column(*b, *z, first, r).is_none());
         // Its rise from the lowest tier at its first box and its drop into its last: never
         // through a raceway running over the box.
         let column = |q: Option<&Vec2>, z: f64| q.and_then(|q| field.column_crosses_laid(*q, first, z, r, meet, true, own, upf, rl));
@@ -1322,8 +1363,21 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         };
         let apart = |z: &f64| crosses(*z).is_none();
         let crossing = || tiers.iter().copied().find(clear).map(|z| (z, crosses(z)));
-        match tiers.iter().copied().find(|z| clear(z) && apart(z)).map(|z| (z, None)).or_else(crossing) {
+        // The framing's rules before another raceway's crossing (a crossing is listed for the
+        // field to offset; a member is never bored through its depth).
+        let stepped = || {
+            tiers
+                .iter()
+                .copied()
+                .find(|z| clear(z) && apart(z) && steps(z))
+                .map(|z| (z, None))
+                .or_else(|| tiers.iter().copied().find(|z| clear(z) && steps(z)).map(|z| (z, crosses(z))))
+        };
+        let seated = stepped().or_else(|| tiers.iter().copied().find(|z| clear(z) && apart(z)).map(|z| (z, None))).or_else(crossing);
+        prev = seated.as_ref().map_or(first, |(z, _)| *z);
+        match seated {
             Some((z, crossed)) => {
+                leg.through += usize::from(!steps(&z));
                 leg.crossings.extend(crossed.map(|c| Crossing { piece: k, ..c }));
                 // A pass through a truss's open web bores nothing: only bored holes are labor
                 // (Q6314: counted, a top floor's runs went round the trusses' ends, past the walls).
@@ -1388,9 +1442,10 @@ pub(crate) fn route_leg_of(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Fiel
     let bore = rl.framing.hole_penalty_ft.max(0.0) * upf;
     let score = |l: &Leg| {
         let tiers_changed = l.z.windows(2).filter(|w| matches!(w, [p, q] if (p - q).abs() > 1e-9)).count() as f64;
-        // Blocked pieces first, then crossings of the raceways laid before (Q6552).
+        // Blocked pieces (and changes of tier through a framing member, Q6631) first, then
+        // crossings of the raceways laid before (Q6552).
         (
-            (l.blocked.len(), l.crossings.len()),
+            (l.blocked.len() + l.through, l.crossings.len()),
             poly_len(&l.pts) + bend * (l.pts.len().saturating_sub(2) as f64 + tiers_changed) + bore * l.holes as f64,
         )
     };
@@ -3084,6 +3139,50 @@ fn leg_columns(leg: &Leg, z0: f64, r: f64, field: &Field, upf: f64, skip: &[Hand
     check(leg.pts.last(), z0, leg.z.last().copied().unwrap_or(z0));
 }
 
+/// The framing over each level (by its lowercased name): the members of `members` (the floor
+/// joists above it, the roof's trusses, the rim boards) over the level's space, on its plan
+/// (from their own floor's stacked plan by the levels' `moves`), each as an obstacle and a frame.
+/// Shared by the router and the pieces' knockouts (Q6631: a drop never stands in a member).
+pub(crate) fn framing_over_levels(
+    d: &Drawing,
+    sp: &BuildingSpec,
+    members: &[super::tradeatoms::Member],
+    moves: &HashMap<String, Vec2>,
+    upf: f64,
+) -> BTreeMap<String, Vec<(Obs, Frame)>> {
+    let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+    let mut framing: BTreeMap<String, Vec<(Obs, Frame)>> = BTreeMap::new();
+    if members.is_empty() {
+        return framing;
+    }
+    let mut storeys: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
+    storeys.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    for (li, l) in storeys.iter().enumerate() {
+        let floor = l.elevation_ft * upf;
+        let top = storeys.get(li + 1).map_or((l.elevation_ft + l.height_ft.max(1.0)) * upf, |n| n.elevation_ft * upf);
+        let list = framing.entry(l.name.to_ascii_lowercase()).or_default();
+        for m in members.iter().filter(|m| m.z1 > floor && m.z0 < top + upf / 12.0) {
+            // From its floor's own plan onto this level's.
+            let own = d.model.get(m.host).map_or(Vec2::new(0.0, 0.0), |e| super::bspec::stacked_by(e));
+            let o = own - move_of(&m.level) + move_of(&l.name);
+            let (a, b) = (m.a - o, m.b - o);
+            let n = {
+                let d = b - a;
+                let len = d.len().max(1e-9);
+                Vec2::new(-d.y / len, d.x / len) * (m.t / 2.0)
+            };
+            let (pa, pb, pc, pd) = (a + n, a - n, b + n, b - n);
+            let lo = Vec3::new(pa.x.min(pb.x).min(pc.x).min(pd.x), pa.y.min(pb.y).min(pc.y).min(pd.y), m.z0);
+            let hi = Vec3::new(pa.x.max(pb.x).max(pc.x).max(pd.x), pa.y.max(pb.y).max(pc.y).max(pd.y), m.z1);
+            list.push((
+                Obs { handle: m.host, lo, hi, category: FRAMING.into(), system: m.item.clone(), trade: "framing" },
+                Frame { a, b, t: m.t, kind: FrameKind::of(m.kind, &m.item) },
+            ));
+        }
+    }
+    framing
+}
+
 pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let rl = rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -3246,34 +3345,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // layout makes them from the joist and truss documents: each member over the level's space,
     // on its plan.
     let members = super::tradeatoms::framing_members(d, sp);
-    let mut framing: BTreeMap<String, Vec<(Obs, Frame)>> = BTreeMap::new();
-    if !members.is_empty() {
-        let mut storeys: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
-        storeys.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-        for (li, l) in storeys.iter().enumerate() {
-            let floor = l.elevation_ft * upf;
-            let top = storeys.get(li + 1).map_or((l.elevation_ft + l.height_ft.max(1.0)) * upf, |n| n.elevation_ft * upf);
-            let list = framing.entry(l.name.to_ascii_lowercase()).or_default();
-            for m in members.iter().filter(|m| m.z1 > floor && m.z0 < top + upf / 12.0) {
-                // From its floor's own plan onto this level's.
-                let own = d.model.get(m.host).map_or(Vec2::new(0.0, 0.0), |e| super::bspec::stacked_by(e));
-                let o = own - move_of(&m.level) + move_of(&l.name);
-                let (a, b) = (m.a - o, m.b - o);
-                let n = {
-                    let d = b - a;
-                    let len = d.len().max(1e-9);
-                    Vec2::new(-d.y / len, d.x / len) * (m.t / 2.0)
-                };
-                let (pa, pb, pc, pd) = (a + n, a - n, b + n, b - n);
-                let lo = Vec3::new(pa.x.min(pb.x).min(pc.x).min(pd.x), pa.y.min(pb.y).min(pc.y).min(pd.y), m.z0);
-                let hi = Vec3::new(pa.x.max(pb.x).max(pc.x).max(pd.x), pa.y.max(pb.y).max(pc.y).max(pd.y), m.z1);
-                list.push((
-                    Obs { handle: m.host, lo, hi, category: FRAMING.into(), system: m.item.clone(), trade: "framing" },
-                    Frame { a, b, t: m.t, kind: FrameKind::of(m.kind, &m.item) },
-                ));
-            }
-        }
-    }
+    let mut framing = framing_over_levels(d, sp, &members, &moves, upf);
     let mut fields: BTreeMap<String, Field> = BTreeMap::new();
     for (k, v) in obstacles {
         let fr = framing.remove(&k).unwrap_or_default();
