@@ -608,7 +608,9 @@ fn words(s: &str) -> BTreeSet<String> {
 
 /// The rough-in table's row for a fixture: the one sharing most words with its name (and its
 /// description), a row for a narrower use (rules data `narrowing_words`) only when the fixture says
-/// it; a tie the name alone can't settle is no row. The row and the other rows that tied.
+/// it; a tie the name alone can't settle is no row. A name sharing only one word with several
+/// rows (`SINK`) is such a tie: a word of its description (`BASIN`) only breaks ties between rows
+/// the name already narrows to. The row and the other rows that tied.
 pub(crate) fn connection_row<'a>(r: &Rules, rows: &'a [ConnectionRow], fixture: &str, description: &str) -> Option<(&'a ConnectionRow, Vec<String>)> {
     let name = words(fixture);
     let all: BTreeSet<String> = name.union(&words(description)).cloned().collect();
@@ -623,6 +625,9 @@ pub(crate) fn connection_row<'a>(r: &Rules, rows: &'a [ConnectionRow], fixture: 
         .filter(|(n, _, _)| *n > 0)
         .collect();
     let best = scored.iter().map(|(n, d, _)| (*n, *d)).max()?;
+    if best.0 < 2 && scored.len() > 1 {
+        return None;
+    }
     let top: Vec<&ConnectionRow> = scored.iter().filter(|(n, d, _)| (*n, *d) == best).map(|(_, _, row)| *row).collect();
     match top.as_slice() {
         [one] => Some((*one, Vec::new())),
@@ -1525,6 +1530,9 @@ mod tests {
         assert_eq!(pick("SERVICE SINK", "").as_deref(), Some("SERVICE SINK/MOP BASIN"));
         // `SINK` alone fits two rows: no row is guessed.
         assert_eq!(pick("LAUNDRY SINK", ""), None);
+        // Nor once its description is read: `BASIN` in it doesn't make it the mop basin's row.
+        assert_eq!(pick("LAUNDRY SINK", "FLOOR MOUNTED SINGLE BASIN LAUNDRY SINK"), None);
+        assert_eq!(pick("SERVICE SINK", "MOLDED STONE MOP BASIN").as_deref(), Some("SERVICE SINK/MOP BASIN"));
     }
 
     #[test]
