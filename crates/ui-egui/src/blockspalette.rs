@@ -324,7 +324,8 @@ fn id() -> egui::Id {
 /// The palette window.
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
-    let mut st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_default();
+    // Moved out for the frame and back, not copied with every block's preview (Q6482).
+    let mut st: State = crate::kept::take(ctx, id()).unwrap_or_default();
     let mut insert: Option<BlockRef> = None;
     let mut fav: Option<BlockRef> = None;
     let mut pick_library = false;
@@ -538,8 +539,6 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         }
     }
     if *open {
-        ctx.data_mut(|d| d.insert_temp(id(), st));
-    } else {
-        ctx.data_mut(|d| d.remove::<State>(id()));
+        crate::kept::put(ctx, id(), st);
     }
 }

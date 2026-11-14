@@ -33,6 +33,7 @@ use crate::{Result, Session};
 
 pub(crate) mod boxclear;
 pub(crate) mod build;
+pub(crate) mod splices;
 
 /// The rules data.
 const RULES: &str = include_str!("mepatoms.json");
@@ -55,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
         CommandSpec::new("bim.chain", "Walk the Feed", run_chain)
-            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
+            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), circuit?: {system, name, source} (a fire alarm element's circuit), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders; a fire alarm device along its own circuit's cable to the power supply or control panel that circuit leaves, then up to the panel")
             .noundo(),
     ]
 }
@@ -319,6 +320,8 @@ pub(crate) struct AtomRules {
     pub colors: BTreeMap<String, BTreeMap<String, String>>,
     pub colors_source: String,
     pub phase_source: String,
+    /// The same on a single-phase panel (A and B only).
+    pub phase_single_source: String,
     pub offset_max_ft: f64,
     pub joint_tol_in: f64,
     /// Why one circuit's runs along one route are one raceway (Q6245).
@@ -334,11 +337,17 @@ pub(crate) struct AtomRules {
     /// it (inches): the router ends each run on what it serves.
     pub routed_touch_in: f64,
     pub routed_touch_source: String,
+    /// The runs entering one box: each by its own knockout, this far apart centre to centre
+    /// along the box's top (inches, Q6552).
+    pub knockout_spacing_in: f64,
+    pub knockout_source: String,
     pub feeder_makeup_ft: f64,
     pub feeder_makeup_source: String,
     pub feeder_conductors: BTreeMap<String, ConductorKind>,
     pub feeder_conductors_source: String,
     pub luminaire_box: LuminaireBox,
+    /// The splices in each box and their connectors (Q6349).
+    pub splices: splices::SpliceRules,
 }
 
 /// The rules data, read once.
@@ -1044,6 +1053,33 @@ pub(crate) fn large_conductors(makeup: &str, min_awg: u32) -> bool {
     conductor_parts(makeup).iter().any(|(_, s, g)| !g && large_awg(s, min_awg))
 }
 
+/// The phase a panel circuit lands on, on a panel of `phases` (1: single phase, its rows
+/// alternate A and B; anything else three phase, [`phase_of`]).
+pub(crate) fn phase_on(circuit: u32, phases: u32) -> &'static str {
+    if phases == 1 { if (circuit.saturating_sub(1) / 2).is_multiple_of(2) { "A" } else { "B" } } else { phase_of(circuit) }
+}
+
+/// A panel's phase count from its `volts/phase` text (`120/208V, 1PH, 3W`, `208Y/120V 3PH 4W`,
+/// `120/240V`): 1 when it says single phase (`1PH`, `1 PH`, `1Ø`, `1-PHASE`, `SINGLE PHASE`) or
+/// is a 120/240 V system naming no phase count, 3 when it says three phase or is any other
+/// system; None when the text names neither a voltage nor a phase count.
+pub(crate) fn phases_in(text: &str) -> Option<u32> {
+    let u: String = text.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
+    let says = |n: char| ["PH", "Ø", "ø", "\u{3a6}", "\u{3c6}"].iter().any(|w| u.contains(&format!("{n}{w}")));
+    if says('1') || u.contains("SINGLEPHASE") {
+        return Some(1);
+    }
+    if says('3') || u.contains("THREEPHASE") {
+        return Some(3);
+    }
+    let (ln, ll) = super::conduitroute::size::system_volts(text);
+    match (ln, ll) {
+        (Some(a), Some(b)) if (a - 120.0).abs() < 1.0 && (b - 240.0).abs() < 1.0 => Some(1),
+        (None, None) => None,
+        _ => Some(3),
+    }
+}
+
 /// The phase of a panel circuit by its number (standard bussing: 1-2 A, 3-4 B, 5-6 C).
 pub(crate) fn phase_of(circuit: u32) -> &'static str {
     match (circuit.saturating_sub(1) / 2) % 3 {
@@ -1129,7 +1165,15 @@ pub(crate) fn cable_pieces(path: &[Vec3], upf: f64, kind: &str, cr: &CableRule, 
 /// phases; `voltage`: `120/208`.
 pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], voltage: &str, rules: &AtomRules) -> Vec<Atom> {
     let m = rules.makeup_ft.max(0.0);
-    wires_with(path, upf, makeup, circuits, voltage, rules, &WireOpts { kind: None, makeup_ft: [m, m], makeup_source: &rules.makeup_source })
+    wires_with(
+        path,
+        upf,
+        makeup,
+        circuits,
+        voltage,
+        rules,
+        &WireOpts { kind: None, makeup_ft: [m, m], makeup_source: &rules.makeup_source, phases: 3 },
+    )
 }
 
 /// How a run's conductors differ from a branch circuit's: what they are bought as (`None`: THHN
@@ -1138,6 +1182,8 @@ pub(crate) struct WireOpts<'a> {
     pub kind: Option<(&'a ConductorKind, &'a str)>,
     pub makeup_ft: [f64; 2],
     pub makeup_source: &'a str,
+    /// The panel's phases (1: single phase, A and B only; else three phase).
+    pub phases: u32,
 }
 
 /// [`wires`], the conductors' kind and each end's makeup as `opts` say.
@@ -1159,7 +1205,8 @@ pub(crate) fn wires_with(
     let ends = opts.makeup_ft.map(|m| if m.is_finite() { m.max(0.0) } else { 0.0 });
     let len = path_ft(&pts, upf) + ends[0] + ends[1];
     let makeup_text = if (ends[0] - ends[1]).abs() < 1e-9 { format!("{}", ends[0]) } else { format!("{} + {}", ends[0], ends[1]) };
-    let mut phases: Vec<&str> = circuits.iter().map(|c| phase_of(*c)).collect();
+    let mut phases: Vec<&str> = circuits.iter().map(|c| phase_on(*c, opts.phases)).collect();
+    let phase_src = if opts.phases == 1 { &rules.phase_single_source } else { &rules.phase_source };
     if phases.is_empty() {
         phases.push("A");
     }
@@ -1207,7 +1254,7 @@ pub(crate) fn wires_with(
                 } else {
                     format!("phase {role}")
                 },
-                rules.phase_source.clone(),
+                phase_src.clone(),
             ));
             w.extra.push(("makeup_ft", makeup_text.clone(), opts.makeup_source.to_string()));
             out.push(w);
@@ -1423,9 +1470,77 @@ pub(crate) fn is_labor_item(item: &str) -> bool {
     })
 }
 
+thread_local! {
+    /// The counted elements of the last model's chunks that hold any (Q6529), by chunk: a chunk
+    /// no edit has touched since (copy-on-write) is not read again.
+    static KEYED: std::cell::RefCell<Vec<(cadaddy_doc::ChunkRef, std::rc::Rc<Vec<(Key, Handle)>>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The counted elements of a drawing by their key, as handles (Q6529): what each row of its
+/// index counts, so a line counted from the index lists its elements. The same elements, in the
+/// same order and under the same cap, as [`Index::of`]; at most `per_key` handles a key. Each
+/// chunk of the model is read once while it is unchanged.
+pub(crate) fn handles_by_key(d: &Drawing, per_key: usize) -> BTreeMap<Key, Vec<String>> {
+    type Part = std::rc::Rc<Vec<(Key, Handle)>>;
+    let refs = d.model.chunk_refs();
+    let read =
+        |r: &cadaddy_doc::ChunkRef| -> Vec<(Key, Handle)> { r.items().iter().filter_map(|e| counted(e).map(|(k, _)| (k, e.handle))).collect() };
+    let parts: Vec<Part> = KEYED.with(|c| {
+        let old = std::mem::take(&mut *c.borrow_mut());
+        let by_key: HashMap<usize, &(cadaddy_doc::ChunkRef, Part)> = old.iter().map(|x| (x.0.key(), x)).collect();
+        let held: Vec<Option<Part>> = refs.iter().map(|r| by_key.get(&r.key()).filter(|x| x.0.same(r)).map(|x| std::rc::Rc::clone(&x.1))).collect();
+        // The chunks not held, read side by side (each one's elements, in order).
+        let todo: Vec<&cadaddy_doc::ChunkRef> = refs.iter().zip(&held).filter(|(_, h)| h.is_none()).map(|(r, _)| r).collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let fresh: Vec<Vec<(Key, Handle)>> = {
+            use rayon::prelude::*;
+            todo.par_iter().map(|r| read(r)).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let fresh: Vec<Vec<(Key, Handle)>> = todo.iter().map(|r| read(r)).collect();
+        let mut fresh = fresh.into_iter();
+        let mut keep = Vec::new();
+        let parts: Vec<Part> = refs
+            .iter()
+            .zip(held)
+            .map(|(r, h)| {
+                let part = h.unwrap_or_else(|| std::rc::Rc::new(fresh.next().unwrap_or_default()));
+                if !part.is_empty() {
+                    keep.push((r.clone(), std::rc::Rc::clone(&part)));
+                }
+                part
+            })
+            .collect();
+        drop(by_key);
+        drop(old);
+        *c.borrow_mut() = keep;
+        parts
+    });
+    let mut out: BTreeMap<Key, Vec<String>> = BTreeMap::new();
+    for (k, h) in parts.iter().flat_map(|p| p.iter()).take(MAX_ELEMENTS) {
+        if out.len() >= MAX_ROWS && !out.contains_key(k) {
+            continue;
+        }
+        let v = out.entry(k.clone()).or_default();
+        if v.len() < per_key {
+            v.push(h.hex());
+        }
+    }
+    out
+}
+
 /// The drawing's stored index, if it has one.
 pub(crate) fn stored(d: &Drawing) -> Option<Index> {
     d.embedded.get(INDEX_FILE).and_then(|b| Index::from_bytes(b))
+}
+
+/// The drawing's count index: the stored one, else (a file that came without it: a format that
+/// can't hold it, one written by another program, an older save) a recount of its counted
+/// elements, as `bim.count` does (Q6376). None when the model counts nothing.
+/// Whatever reads the model's pieces reads them through this, so a drawing with the same
+/// elements gives the same counts, BOM and takeoff whether or not its file kept the index.
+pub(crate) fn kept_or_recount(d: &Drawing) -> Option<Index> {
+    stored(d).or_else(|| Some(Index::of(d)).filter(|ix| !ix.rows.is_empty()))
 }
 
 /// FNV-1a of bytes (which stored index the cache holds).
@@ -1484,7 +1599,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     }
     let Some(ix) = changed_index(before, &st.doc) else { return };
     if let Ok(d) = s.doc_mut() {
-        store(d, &ix);
+        store_live(d, ix);
     }
 }
 
@@ -1496,8 +1611,42 @@ pub(crate) fn follow_changes(before: &Drawing, d: &mut Drawing) {
         return;
     }
     if let Some(ix) = changed_index(before, d) {
-        store(d, &ix);
+        store_live(d, ix);
     }
+}
+
+thread_local! {
+    /// The index an edit's update last stored, and the very bytes it was stored as (Q6567): the
+    /// next update starts from it instead of reading the stored index again (tens of thousands of
+    /// rows on a whole building: every erase of a built device read them all).
+    static LIVE: std::cell::RefCell<Option<(std::sync::Weak<Vec<u8>>, Index)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Store `ix` as an edit's update left it, kept for the next update.
+fn store_live(d: &mut Drawing, ix: Index) {
+    let bytes = std::sync::Arc::new(ix.to_bytes());
+    LIVE.with(|c| *c.borrow_mut() = Some((std::sync::Arc::downgrade(&bytes), ix)));
+    d.embedded.insert(INDEX_FILE.into(), bytes);
+}
+
+/// `d`'s stored index: the one an update stored, when `d` holds those very bytes, else read.
+fn live_or_stored(d: &Drawing) -> Option<Index> {
+    let b = d.embedded.get(INDEX_FILE)?;
+    let held = LIVE.with(|c| {
+        let mut c = c.borrow_mut();
+        match c.take() {
+            Some((w, ix)) if std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(b)) => Some(ix),
+            other => {
+                *c = other;
+                None
+            }
+        }
+    });
+    held.or_else(|| {
+        #[cfg(test)]
+        tests::INDEX_READS.with(|n| n.set(n.get() + 1));
+        stored(d)
+    })
 }
 
 /// `before`'s stored index changed by what changed in the counted pieces from `before` to `now`
@@ -1520,7 +1669,7 @@ fn changed_index(before: &Drawing, now: &Drawing) -> Option<Index> {
     if out.is_empty() && new.is_empty() {
         return None;
     }
-    let mut ix = stored(before)?;
+    let mut ix = live_or_stored(before)?;
     for (k, m) in &out {
         ix.remove(k, m);
     }
@@ -1614,15 +1763,21 @@ impl Filter {
 /// What an element is counted as in the index: an atom by its kind, a device by its own kind;
 /// with its length (feet) and whether it is on an estimated route. Nothing for other elements.
 pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
-    let (mut k, m) = counted_as(e)?;
+    super::wallgen::made_as(e)?;
+    counted_with(e, &props::read(&e.common.xdata))
+}
+
+/// [`counted`] with the element's properties already read (`ps`, its store): a pass that reads
+/// them anyway reads them once (Q6568).
+pub(crate) fn counted_with(e: &Entity, ps: &props::Props) -> Option<(Key, Measure)> {
+    let (mut k, m) = counted_as(e, ps)?;
     k.made = made_key(e);
     Some((k, m))
 }
 
-fn counted_as(e: &Entity) -> Option<(Key, Measure)> {
+fn counted_as(e: &Entity, ps: &props::Props) -> Option<(Key, Measure)> {
     let part = super::wallgen::made_as(e)?;
     let level = super::bspec::made_level(e).unwrap_or_default();
-    let ps = props::read(&e.common.xdata);
     let text = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
     let num = |k: &str| ps.get(k).map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
     if let Some(kind) = ps.get(ATOM_KEY).map(Prop::text).filter(|k| !k.is_empty()) {
@@ -1915,6 +2070,12 @@ pub(crate) fn is_atom(e: &Entity) -> bool {
     super::bimlook::made_tag(e, "part").is_some_and(|p| p.starts_with("atom:"))
 }
 
+/// The circuit labels of a homerun's list (`LP-1,3, LP-5`: a label's poles are joined by a bare
+/// comma, the labels by a comma and a space), each trimmed; the empty ones dropped.
+pub(crate) fn circuit_list(text: &str) -> Vec<String> {
+    text.split(", ").map(str::trim).filter(|l| !l.is_empty()).take(64).map(str::to_string).collect()
+}
+
 /// The handles an element's `connects` property names.
 pub(crate) fn connects_of(e: &Entity) -> Vec<Handle> {
     props::read(&e.common.xdata)
@@ -1946,27 +2107,59 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
     let limit = p.get("limit").and_then(Value::as_u64).map_or(2000, |n| n.clamp(1, MAX_WALK as u64) as usize);
     let d = s.doc()?;
     let start = d.model.get(h).cloned().ok_or_else(|| bad(CMD, format!("there is no object {} in the model", h.hex())))?;
+    // A fire alarm element (Q6503) walks its own circuit's cable to the panel or power supply its
+    // circuit leaves (passing the modules and power supplies on the way), not any gear it meets.
+    let sps = props::read(&start.common.xdata);
+    let fa_system = sps.get("fa_system").map(Prop::text).filter(|v| !v.trim().is_empty());
+    let fa_source = sps.get("fa_source").map(Prop::text).filter(|v| !v.trim().is_empty());
+    let other_system = |e: &Entity| {
+        fa_system.as_ref().is_some_and(|sy| {
+            let ps = props::read(&e.common.xdata);
+            ps.get(ATOM_KEY).is_some() && ps.get("system").map(Prop::text).is_some_and(|s| !s.eq_ignore_ascii_case(sy))
+        })
+    };
+    let source_gear = |e: &Entity| {
+        is_gear(e) && fa_source.as_ref().is_none_or(|t| super::bimlook::made_tag(e, "tag").is_some_and(|g| g.eq_ignore_ascii_case(t.trim())))
+    };
+    // A unit a circuit feeds (a fan coil, a heat pump: equipment of a kind that is no gear) is a
+    // load, not where the circuit comes from: a power walk passes it by for gear that feeds
+    // circuits, and ends on it only when it reaches no such gear.
+    let load = |e: &Entity| {
+        fa_system.is_none()
+            && super::bimlook::made_tag(e, "part")
+                .and_then(|p| p.split_once(':').map(|(_, k)| k.trim().to_string()))
+                .is_some_and(|k| !k.is_empty() && !super::breakers::is_gear_kind(&k))
+    };
     // Breadth first over `connects` to the nearest gear (a panel): the shortest feed.
     let mut prev: HashMap<Handle, Handle> = HashMap::new();
     let mut seen: BTreeSet<Handle> = BTreeSet::from([h]);
     let mut queue: VecDeque<Handle> = VecDeque::from([h]);
     let mut found: Option<Handle> = None;
+    let mut at_load: Option<Handle> = None;
     while let Some(x) = queue.pop_front() {
         if seen.len() > limit {
             break;
         }
         let Some(e) = d.model.get(x) else { continue };
-        if x != h && is_gear(e) {
+        if x != h && source_gear(e) {
+            if load(e) {
+                at_load.get_or_insert(x);
+                continue;
+            }
             found = Some(x);
             break;
         }
         for n in connects_of(e) {
+            if d.model.get(n).is_some_and(|ne| other_system(ne)) {
+                continue;
+            }
             if seen.insert(n) {
                 prev.insert(n, x);
                 queue.push_back(n);
             }
         }
     }
+    let found = found.or(at_load);
     let mut path: Vec<Handle> = Vec::new();
     if let Some(mut x) = found {
         path.push(x);
@@ -2026,6 +2219,7 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
         "path": path.iter().filter_map(|x| d.model.get(*x)).map(|e| node_json(e)).collect::<Vec<_>>(),
         "source": found.and_then(|x| d.model.get(x)).map(|e| node_json(e)),
         "upstream": upstream,
+        "circuit": fa_system.as_ref().map(|sy| json!({"system": sy, "name": sps.get("fa_circuit").map(Prop::text), "source": fa_source})),
         "length_ft": (length_ft * 100.0).round() / 100.0,
         "note": if found.is_none() { json!("no panel reached through what it connects to (an open end, or a run of no circuit)") } else { Value::Null },
     }))
@@ -2113,11 +2307,12 @@ pub(crate) fn element_detail(d: &Drawing, e: &Entity, upf: f64) -> Option<Value>
     }
     let boxed = ps.get("box").map(Prop::text).and_then(|b| Handle::parse_hex(b.trim()));
     let face = wall_face_of(d, e, upf);
-    if boxed.is_none() && face.is_none() {
-        return None;
-    }
+    // Equipment fed in its own wiring compartment has no box: what feeds it all the same.
     let fed: Vec<Handle> =
         ps.get("fed_by").map(Prop::text).map(|t| t.split([',', ' ']).filter_map(Handle::parse_hex).take(16).collect()).unwrap_or_default();
+    if boxed.is_none() && face.is_none() && fed.is_empty() {
+        return None;
+    }
     let mut j = json!({ "box": boxed.and_then(|b| d.model.get(b)).map(|n| node_json(n)), "fed_by": neighbours(&fed) });
     if let Some(f) = face {
         j["wall_face"] = f;
@@ -2186,7 +2381,7 @@ mod tests {
     fn a_feeders_wires_are_of_its_material_with_the_makeup_each_end_takes() {
         let rl = rules();
         let al = rl.feeder_conductors.get("al").expect("aluminum");
-        let opts = WireOpts { kind: Some((al, "rule")), makeup_ft: [3.0, 0.0], makeup_source: "gear" };
+        let opts = WireOpts { kind: Some((al, "rule")), makeup_ft: [3.0, 0.0], makeup_source: "gear", phases: 3 };
         let w = wires_with(&line(20.0), 12.0, "3#4/0 + 1#4/0 + 1#4G", &[1, 3, 5], "120/208", rl, &opts);
         assert_eq!(w.len(), 5);
         assert!(w.iter().all(|a| (a.length_ft - 23.0).abs() < 1e-9 && a.item == "XHHW aluminum" && a.ty == "XHHW-2"), "{w:?}");
@@ -2336,6 +2531,40 @@ mod tests {
         assert_eq!(phase_of(4), "B");
         assert_eq!(phase_of(6), "C");
         assert_eq!(phase_of(7), "A");
+    }
+
+    #[test]
+    fn a_single_phase_panels_circuits_alternate_a_and_b() {
+        // Q6343: a 1-phase panel has no phase C.
+        let on1: Vec<&str> = (1..=12).map(|n| phase_on(n, 1)).collect();
+        assert_eq!(on1, vec!["A", "A", "B", "B", "A", "A", "B", "B", "A", "A", "B", "B"]);
+        let on3: Vec<&str> = (1..=7).map(|n| phase_on(n, 3)).collect();
+        assert_eq!(on3, vec!["A", "A", "B", "B", "C", "C", "A"]);
+        for (text, want) in [
+            ("120/208V, 1PH, 3W", Some(1)),
+            ("120/208 V 1 PH 3 W", Some(1)),
+            ("120/240V 1Ø 3W", Some(1)),
+            ("120/240V", Some(1)),
+            ("SINGLE PHASE 120/208", Some(1)),
+            ("1-PHASE", Some(1)),
+            ("208Y/120V, 3PH, 4W", Some(3)),
+            ("240/120V 3PH 4W", Some(3)),
+            ("480Y/277", Some(3)),
+            ("120/208", Some(3)),
+            ("SURFACE", None),
+            ("", None),
+        ] {
+            assert_eq!(phases_in(text), want, "{text}");
+        }
+        // The wires of circuits 5 and 11 on a single-phase panel: phase A and B, never C.
+        let r = rules();
+        let path = line(10.0);
+        let opts = WireOpts { kind: None, makeup_ft: [0.0, 0.0], makeup_source: "", phases: 1 };
+        let w = wires_with(&path, 12.0, "4#12 + 1#12G", &[5, 7], "120/208", r, &opts);
+        let roles: Vec<String> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "conductor").map_or(String::new(), |x| x.1.clone())).collect();
+        assert_eq!(roles, vec!["phase A", "phase B", "neutral", "neutral", "ground"]);
+        let src = w.first().and_then(|a| a.extra.iter().find(|x| x.0 == "conductor")).map(|x| x.2.clone()).unwrap_or_default();
+        assert!(src.contains("single-phase"), "{src}");
     }
 
     #[test]
@@ -2516,6 +2745,58 @@ mod tests {
         let back = Index::from_bytes(&ix.to_bytes()).unwrap();
         assert_eq!(back, ix);
         assert!(Index::from_bytes(b"{not json").is_none());
+    }
+
+    thread_local! {
+        /// Stored indexes an edit's update read whole ([`live_or_stored`]) on this thread.
+        pub(super) static INDEX_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Q6567: erasing built devices one at a time updates the stored index from the one the last
+    /// update stored, not by reading the stored index again for every edit (tens of thousands of
+    /// rows on a whole building). It still agrees with a recount after every edit, and after an
+    /// undo the next edit starts from the index the restored drawing holds.
+    #[test]
+    fn erases_of_built_devices_update_the_index_without_reading_it_each_time() {
+        let mut s = Session::new();
+        let mut handles = Vec::new();
+        {
+            let d = s.doc_mut().unwrap();
+            for i in 0..8 {
+                let mut common = cadaddy_doc::Common { layer: "3D-Devices".into(), ..Default::default() };
+                let x = vec![
+                    cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() },
+                    cadaddy_doc::RawTag { code: 1000, value: "device".into() },
+                    cadaddy_doc::RawTag { code: 1000, value: format!("Level {}", i % 2 + 1) },
+                    cadaddy_doc::RawTag { code: 1000, value: "0".into() },
+                ];
+                let mut ps = props::Props::default();
+                ps.set("kind", Prop::new(if i % 3 == 0 { "switch" } else { "receptacle" }, Source::computed()));
+                common.xdata = props::write(&x, &ps).into();
+                let p = Vec3::new(f64::from(i) * 24.0, 0.0, 0.0);
+                handles
+                    .push(d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p, angle: 0.0 })).unwrap());
+            }
+            let ix = Index::of(d);
+            assert_eq!(ix.rows.values().map(|t| t.count).sum::<u64>(), 8);
+            store(d, &ix);
+        }
+        let agrees = |s: &Session| {
+            let d = s.doc().unwrap();
+            assert_eq!(stored(d).unwrap(), Index::of(d));
+        };
+        INDEX_READS.with(|n| n.set(0));
+        for h in handles.iter().take(5) {
+            s.execute("erase", &json!({"handles": [h.hex()]})).unwrap();
+            agrees(&s);
+        }
+        let reads = INDEX_READS.with(std::cell::Cell::get);
+        assert!(reads <= 1, "five erases read the stored index {reads} times");
+        s.execute("undo", &json!({})).unwrap();
+        agrees(&s);
+        s.execute("erase", &json!({"handles": [handles[5].hex()]})).unwrap();
+        agrees(&s);
+        assert_eq!(stored(s.doc().unwrap()).unwrap().rows.values().map(|t| t.count).sum::<u64>(), 3);
     }
 
     #[test]

@@ -233,6 +233,7 @@ fn turn(st: &mut DocState, az: f64, el: f64, pivot: Vec3) -> Result<()> {
     }
     st.view_dir = if view3::is_plan(dir) { Vec3::Z } else { dir };
     st.view_twist = 0.0;
+    st.keep_model_twist();
     let center = at(st.projection()) - offset;
     st.set_view(View { center, height: v.height });
     Ok(())
@@ -309,6 +310,7 @@ fn run_rewind(s: &mut Session, p: &Value) -> Result<Value> {
     if f.space == Space::Model && f.mspace.is_none() {
         st.view_dir = f.dir;
         st.view_twist = f.twist;
+        st.keep_model_twist();
     }
     put(st, View { center: f.center, height: f.height })?;
     report(s)

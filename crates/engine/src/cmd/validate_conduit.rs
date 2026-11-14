@@ -60,6 +60,56 @@ pub const BOX_FILL: &str = "E-BOX-FILL";
 pub const DERATE: &str = "E-DERATE";
 pub const VDROP: &str = "E-VDROP";
 pub const METHOD: &str = "E-METHOD";
+/// E-METHOD's area for work under the slab or in the earth (Q6544).
+const BELOW_GRADE: &str = "below grade";
+
+/// Where the ground is for E-METHOD (Q6544): the lowest storey's floor (the slab on grade).
+struct Grade {
+    /// The lowest storey's floor, drawing units (none: the model gives no storeys).
+    floor: Option<f64>,
+    /// A stub's most rise above that floor (drawing units).
+    stub: f64,
+    /// A drawing unit's slack.
+    slack: f64,
+}
+
+impl Grade {
+    fn of(sp: &BuildingSpec, upf: f64, stub_in: f64) -> Self {
+        let floor = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite()).reduce(f64::min).map(|e| e * upf);
+        let stub = if stub_in.is_finite() && stub_in > 0.0 { stub_in.min(48.0) / 12.0 * upf } else { 0.0 };
+        Self { floor, stub, slack: upf / 12.0 }
+    }
+
+    /// Whether a piece (its run id, its room, its lowest and highest points) is work below grade:
+    /// a buried circuit's piece in no room (site work in the earth, ugcircuit's tag), a piece
+    /// wholly under the slab (a homerun below the slab, a buried feeder leg), or the stub that
+    /// rises out of the slab into the gear it feeds (no more than the stub height above the
+    /// floor). A riser climbing on into a wall, and every piece of an upper storey, is the
+    /// building's.
+    fn below(&self, run: &str, room: &str, z: Option<(f64, f64)>) -> bool {
+        if super::ugcircuit::is_buried(run) && room.trim().is_empty() {
+            return true;
+        }
+        match (self.floor, z) {
+            (Some(f), Some((lo, hi))) if lo.is_finite() && hi.is_finite() => {
+                hi < f - self.slack || (lo < f - self.slack && hi <= f + self.stub + self.slack)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Whether a piece's method (`PVC Sch 40`, `EMT`, `MC 12/2`) is the method a table or rule names
+/// (`PVC`, a project rule's `EMT or MC`): the whole name, or one of its words.
+fn method_is(method: &str, name: &str) -> bool {
+    let (m, n) = (method.trim(), name.trim());
+    if m.is_empty() || n.is_empty() {
+        return false;
+    }
+    m.eq_ignore_ascii_case(n)
+        || m.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).any(|w| w.eq_ignore_ascii_case(n))
+        || n.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w.eq_ignore_ascii_case(m))
+}
 pub const CLASH: &str = "G-CLASH";
 pub const TAKEOFF: &str = "E-TAKEOFF";
 /// Every rule of this module.
@@ -126,7 +176,7 @@ pub(crate) fn awg(s: &str) -> String {
     t.chars().take_while(|c| c.is_ascii_digit() || *c == '/').collect()
 }
 
-/// The rank of a conductor size among the voltage-drop sizes (larger conductor, larger rank).
+/// The rank of a conductor size in the rules' full conductor order (larger conductor, larger rank).
 fn size_rank(size: &str, sizes: &[String]) -> Option<usize> {
     sizes.iter().position(|s| s == size)
 }
@@ -326,6 +376,8 @@ pub(crate) struct BoxEl {
     /// A gang box's other devices (it holds them all).
     pub ganged: Vec<Handle>,
     pub cubic_in: Option<f64>,
+    /// Its inside length (inches) where the build records it (a pull box, NEC 314.28).
+    pub length_in: Option<f64>,
     pub size: String,
     pub level: String,
     pub lo: Vec3,
@@ -509,6 +561,13 @@ fn plan_box(e: &Entity) -> Option<(Vec3, Vec3)> {
 
 impl Net {
     pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Net {
+        let mut n = Net::raceways(d, sp);
+        n.read_obstacles(d);
+        n
+    }
+
+    /// The raceway pieces, devices and gear only (no obstacles): what box fill needs.
+    pub(crate) fn raceways(d: &Drawing, sp: &BuildingSpec) -> Net {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
         let mut n = Net { upf, moves: super::conduitroute::level_moves(d, sp), ..Net::default() };
         let rl = super::conduitroute::rules();
@@ -558,8 +617,13 @@ impl Net {
                 n.gear.push(GearEl { handle: e.handle, tag, level: super::bspec::made_level(e).unwrap_or_default(), lo, hi, electrical });
             }
         }
-        // What a conduit keeps clear of: the other trades' elements, the equipment and the drawn
-        // conduit (as the model's elements classify them).
+        n
+    }
+
+    /// What a conduit keeps clear of: the other trades' elements, the equipment and the drawn
+    /// conduit (as the model's elements classify them).
+    fn read_obstacles(&mut self, d: &Drawing) {
+        let n = self;
         for el in super::bimwork::elements(d) {
             if n.obstacles.len() >= MAX_OBSTACLES {
                 break;
@@ -590,7 +654,6 @@ impl Net {
                 hi,
             });
         }
-        n
     }
 
     /// A point of `level`'s plan where the stacked building has it: a riser between storeys
@@ -693,6 +756,7 @@ impl Net {
                         of: Handle::parse_hex(&text(&ps, "box_of")),
                         ganged: text(&ps, "devices").split(',').filter_map(|h| Handle::parse_hex(h.trim())).take(64).collect(),
                         cubic_in: num(&ps, "cubic_in").filter(|v| *v > 0.0),
+                        length_in: num(&ps, "length_in").filter(|v| *v > 0.0),
                         size: text(&ps, "size"),
                         level: level.clone(),
                         lo,
@@ -740,6 +804,158 @@ impl Net {
             self.counted.push(Counted { kind, item: text(&ps, "item"), size: text(&ps, "size"), level, qty });
         }
     }
+}
+
+// ---------------------------------------------------------------- what is in a box
+
+/// What enters a box (NEC 314.16(B)(1)): each conductor of every run whose stick ends touch it
+/// (a run once, however many of its sticks end there: a conductor passing through is counted
+/// once) and of each cable landing in it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BoxIn {
+    /// Each conductor entering: (size, ground).
+    pub conds: Vec<(String, bool)>,
+    /// The cables landing in it whose type doesn't give their conductors.
+    pub unknown_cable: usize,
+    pub runs: usize,
+    pub cables: usize,
+    /// Each raceway run entering: its trade size (inches, its largest stick ending there).
+    pub raceways_in: Vec<f64>,
+}
+
+/// What enters each of `net`'s boxes (by index), the stick ends within `touch` (drawing units)
+/// of a box landing in it: the build's own pieces, whatever circuit or device they serve.
+pub(crate) fn boxes_in(net: &Net, touch: f64) -> Vec<BoxIn> {
+    let grid = BoxGrid::of(net);
+    // The runs whose ends touch each box, each with its largest trade size there.
+    let mut box_runs: HashMap<usize, BTreeMap<&str, f64>> = HashMap::new();
+    for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
+        for p in [s.a, s.b] {
+            for bi in grid.near(p, touch, net) {
+                let e = box_runs.entry(bi).or_default().entry(s.run.as_str()).or_insert(0.0);
+                *e = e.max(s.size_in.filter(|v| v.is_finite()).unwrap_or(0.0));
+            }
+        }
+    }
+    let mut run_wires: HashMap<&str, Vec<&Wire>> = HashMap::new();
+    for w in net.wires.iter().filter(|w| !w.run.is_empty()) {
+        run_wires.entry(w.run.as_str()).or_default().push(w);
+    }
+    let cables: HashMap<Handle, &Cable> = net.cables.iter().map(|c| (c.handle, c)).collect();
+    // A cable lands in the boxes either side's links name.
+    let mut cable_in: HashMap<Handle, BTreeSet<Handle>> = HashMap::new();
+    for c in &net.cables {
+        for h in &c.links {
+            cable_in.entry(*h).or_default().insert(c.handle);
+        }
+    }
+    net.boxes
+        .iter()
+        .enumerate()
+        .map(|(bi, b)| {
+            let runs = box_runs.get(&bi);
+            // Directly, or through the connector at its end.
+            let mut in_set: BTreeSet<Handle> = b.links.iter().copied().filter(|h| cables.contains_key(h)).collect();
+            for h in b.links.iter().filter(|h| net.what.get(h).is_some_and(|k| k == "connector")) {
+                in_set.extend(net.links.get(h).into_iter().flatten().copied().filter(|x| cables.contains_key(x)));
+            }
+            in_set.extend(cable_in.get(&b.handle).into_iter().flatten().copied());
+            let mut out = BoxIn { runs: runs.map_or(0, BTreeMap::len), cables: in_set.len(), ..BoxIn::default() };
+            for (run, size_in) in runs.into_iter().flatten() {
+                out.raceways_in.push(*size_in);
+                for w in run_wires.get(run).into_iter().flatten() {
+                    out.conds.push((w.size.clone(), w.ground()));
+                }
+            }
+            for cb in in_set.iter().filter_map(|h| cables.get(h)) {
+                match cb.conductors() {
+                    Some((n, size, g)) => {
+                        out.conds.extend(std::iter::repeat_n((size.clone(), false), n as usize));
+                        if g {
+                            out.conds.push((size, true));
+                        }
+                    }
+                    None => out.unknown_cable += 1,
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+/// Does a device of `kind` (lower case) put a yoke in its box (NEC 314.16(B)(4))?
+pub(crate) fn yoke_kind(kind: &str) -> bool {
+    let k = kind.replace('_', " ").to_ascii_lowercase();
+    YOKE_KINDS.iter().any(|w| k.contains(w))
+}
+
+/// What a box's conductors ask of it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FillNeed {
+    /// NEC 314.16(B): the volume its conductors #6 and smaller, its grounds (all as one) and a
+    /// yoke (two of the largest) need.
+    pub need_cu_in: f64,
+    /// NEC 314.28(A): with conductors #4 and larger, the inside length a pull or junction box
+    /// needs (eight times the largest raceway; six times it plus the others for an angle pull).
+    pub pull_len_in: Option<f64>,
+    /// The largest conductor #4 or larger in it.
+    pub large: Option<String>,
+    /// Every conductor's size known (the table's, or #4 and larger with a raceway size).
+    pub known: bool,
+    /// The conductors as a list (`12#12 + 4#12G`).
+    pub list: String,
+}
+
+/// What `conds` (size, ground) need of a box with a yoke or not, the raceways entering it
+/// `raceways_in` (trade sizes, inches); `unknown_cable` cables of no known makeup.
+pub(crate) fn fill_need(
+    conds: &[(String, bool)],
+    unknown_cable: usize,
+    yoke: bool,
+    raceways_in: &[f64],
+    rl: &super::conduitroute::RouteRules,
+) -> FillNeed {
+    let bf = &rl.box_fill;
+    let vol = |s: &str| bf.cu_in.get(s).copied();
+    let rank = |s: &str| rl.vdrop.size_order.iter().position(|x| x == s);
+    let from = rank(&bf.pull.from_size);
+    let large = |s: &str| vol(s).is_none() && matches!((rank(s), from), (Some(a), Some(b)) if a >= b);
+    let hots: Vec<&String> = conds.iter().filter(|c| !c.1).map(|c| &c.0).collect();
+    let bigger = |a: &&String, b: &&String| vol(a).unwrap_or(0.0).total_cmp(&vol(b).unwrap_or(0.0));
+    let largest_hot = hots.iter().copied().max_by(|a, b| bigger(a, b));
+    let largest_g = conds.iter().filter(|c| c.1).map(|c| &c.0).max_by(|a, b| bigger(a, b));
+    let need_cu_in = hots.iter().filter_map(|s| vol(s)).sum::<f64>()
+        + largest_g.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.grounds)
+        + if yoke { largest_hot.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.yoke) } else { 0.0 };
+    let big = conds.iter().map(|c| &c.0).filter(|s| large(s)).max_by_key(|s| rank(s));
+    let raceways: Vec<f64> = raceways_in.iter().copied().filter(|v| v.is_finite() && *v > 0.0).collect();
+    let pull_len_in = big.filter(|_| !raceways.is_empty()).map(|_| pull_length_in(&raceways, bf));
+    let known = unknown_cable == 0 && conds.iter().all(|c| vol(&c.0).is_some() || large(&c.0)) && (big.is_none() || pull_len_in.is_some());
+    let list = {
+        let mut by: BTreeMap<(bool, &str), u32> = BTreeMap::new();
+        for c in conds {
+            *by.entry((c.1, c.0.as_str())).or_default() += 1;
+        }
+        by.iter().map(|((g, s), n)| format!("{n}#{s}{}", if *g { "G" } else { "" })).collect::<Vec<_>>().join(" + ")
+    };
+    FillNeed { need_cu_in, pull_len_in, large: big.cloned(), known, list }
+}
+
+/// NEC 314.28(A): the inside length a box needs for raceways of `raceways_in` (trade sizes):
+/// a straight pull eight times the largest, an angle or U pull six times it plus the others (all
+/// of them taken as one row: the box's walls aren't known).
+pub(crate) fn pull_length_in(raceways_in: &[f64], bf: &super::conduitroute::BoxFill) -> f64 {
+    let mut v: Vec<f64> = raceways_in.iter().copied().filter(|x| x.is_finite() && *x > 0.0).take(MAX_LINKS).collect();
+    v.sort_by(|a, b| b.total_cmp(a));
+    let largest = v.first().copied().unwrap_or(0.0);
+    let others: f64 = v.iter().skip(1).sum();
+    (bf.pull.straight * largest).max(bf.pull.angle * largest + others)
+}
+
+/// A box's inside length (inches): the one the build recorded, else its body's longer side in
+/// plan.
+pub(crate) fn box_length_in(b: &BoxEl, upf: f64) -> f64 {
+    b.length_in.unwrap_or_else(|| ((b.hi.x - b.lo.x).abs().max((b.hi.y - b.lo.y).abs())) / upf.max(1e-9) * 12.0)
 }
 
 // ---------------------------------------------------------------- the end-to-end graph
@@ -1032,33 +1248,17 @@ impl ScheduleDocs {
     /// else the drawing's own texts.
     pub(crate) fn read(s: &crate::Session, d: &Drawing, sp: &BuildingSpec) -> ScheduleDocs {
         let mut out = ScheduleDocs::default();
-        let sheet_of = |p: Vec2| -> String {
-            sp.sheets
-                .iter()
-                .filter_map(|l| {
-                    let r = l.rect?;
-                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-                    (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).then(|| ((x1 - x0) * (y1 - y0), l.number.clone()))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, n)| n)
-                .unwrap_or_default()
-        };
-        out.lengths = super::wiretable::read_drawing(d, &sheet_of);
         let job = super::guided::load_job(s).ok().flatten().filter(|j| j.sheets.is_some());
+        let pages = match &job {
+            Some(job) => super::guided::panel_pages(d, job),
+            None => Vec::new(),
+        };
+        // The wire-length tables by the router's rule (Q6545): the drawing's, the job's kept in
+        // the spec, the job's pages.
+        out.lengths = super::wiretable::documents(d, sp, &pages).into_iter().map(|(t, _)| t).collect();
         match job {
-            Some(job) => {
-                let pages = super::guided::panel_pages(d, &job);
+            Some(_) => {
                 out.reread = super::guided::panel_schedules(&pages);
-                for (number, page) in &pages {
-                    let have = out.lengths.iter().any(|t| t.sheet.eq_ignore_ascii_case(number));
-                    if !have && out.lengths.len() < 32 {
-                        let texts = cadaddy_mepfix::sheet_facts::texts(page);
-                        if texts.iter().any(|t| super::wiretable::is_title(&t.value) || (t.value.contains('#') && t.value.contains('\''))) {
-                            out.lengths.extend(super::wiretable::read_page(&texts, &super::gridtable::segments(page), number));
-                        }
-                    }
-                }
                 out.sheets = pages.into_iter().map(|(n, _)| n).collect();
             }
             None => {
@@ -1074,14 +1274,6 @@ impl ScheduleDocs {
                 }
             }
         }
-        // A table read twice (the drawing's sheet and its page) counts once.
-        let mut seen: Vec<super::wiretable::LengthTable> = Vec::new();
-        for t in std::mem::take(&mut out.lengths) {
-            if !seen.iter().any(|o| o.bands == t.bands) {
-                seen.push(t);
-            }
-        }
-        out.lengths = seen;
         out
     }
 
@@ -1247,6 +1439,48 @@ fn panel_volts(sp: &BuildingSpec, docs: &ScheduleDocs, panel: &str) -> Option<(f
         }
     }
     None
+}
+
+/// The voltages a circuit with `poles` (None: its breaker isn't read) can be at on a panel of
+/// `volts` (line to neutral, line to line): one pole is line to neutral, more line to line, and
+/// an unread breaker either. No panel voltage read: none (never a default, Q6460).
+fn circuit_volts(poles: Option<u32>, volts: Option<(f64, f64)>) -> Vec<f64> {
+    match (poles, volts) {
+        (_, None) => Vec::new(),
+        (Some(1), Some((ln, _))) => vec![ln],
+        (Some(_), Some((_, ll))) => vec![ll],
+        (None, Some((ln, ll))) if (ln - ll).abs() < 1e-6 => vec![ln],
+        (None, Some((ln, ll))) => vec![ln, ll],
+    }
+}
+
+/// What the wire-length table `t` asks of a circuit at one of `volts` (empty: its voltage isn't
+/// known). Several: the answer only where every one of them gives the same; else not covered.
+fn table_need(t: &super::wiretable::LengthTable, ft: f64, amps: Option<f64>, volts: &[f64], sizes: &[String]) -> super::wiretable::Need {
+    use super::wiretable::Need;
+    let [first, rest @ ..] = volts else {
+        return t.need(ft, amps, None, sizes);
+    };
+    let one = t.need(ft, amps, Some(*first), sizes);
+    if rest.is_empty() {
+        return one;
+    }
+    let each: Vec<Need> = rest.iter().map(|v| t.need(ft, amps, Some(*v), sizes)).collect();
+    let either = || volts.iter().map(|v| format!("{v} V")).collect::<Vec<_>>().join(" or ");
+    let all = |f: &dyn Fn(&Need) -> Option<String>| -> Vec<String> { std::iter::once(&one).chain(&each).filter_map(f).collect() };
+    match &one {
+        Need::Size(n, _) if each.iter().all(|x| matches!(x, Need::Size(m, _) if m == n)) => {
+            Need::Size(n.clone(), all(&|x| if let Need::Size(_, b) = x { Some(b.clone()) } else { None }).join("; "))
+        }
+        Need::Beyond(_) if each.iter().all(|x| matches!(x, Need::Beyond(_))) => {
+            Need::Beyond(all(&|x| if let Need::Beyond(w) = x { Some(w.clone()) } else { None }).join("; "))
+        }
+        Need::NotCovered(_) if each.iter().all(|x| matches!(x, Need::NotCovered(_))) => one.clone(),
+        _ => Need::NotCovered(format!(
+            "the circuit's breaker isn't read, so whether it is at {} isn't known, and the table's rows for them differ",
+            either()
+        )),
+    }
 }
 
 /// How near (inches) two raceway ends meet, by E-CONDUIT-CONTINUITY's `touch_in`.
@@ -1662,18 +1896,20 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 .map(|r| r.active.value.trim().to_string())
                 .filter(|v| !v.is_empty());
         let approved = super::valueeng::approved_circuits(cx.d);
+        // Below grade the project's own key for it, never its general rule (Q6544).
+        let below_rule = Some(mr.below.rule_key.trim())
+            .filter(|k| !k.is_empty())
+            .and_then(|k| cx.d.project_rules.get(cadaddy_doc::projrules::RuleDomain::WiringMethod, k))
+            .map(|r| (r.active.value.trim().to_string(), mr.below.rule_key.clone()))
+            .filter(|(v, _)| !v.is_empty());
         let has = |text: &str, words: &[String]| words.iter().any(|w| text.contains(w.as_str()));
-        let name_of = |key: &str| -> Option<String> {
-            let v = match key {
-                "raceway" => &mr.raceway,
-                "mc" => &mr.mc,
-                "ac" => &mr.ac,
-                "nm" => &mr.nm,
-                "se" => &mr.se,
-                "uf" => &mr.uf,
-                _ => return None,
-            };
-            Some(v.clone()).filter(|v| !v.is_empty())
+        // A table's method key's names in an area: below grade a row's bare `in raceway` is a
+        // raceway the code permits there, not the building's EMT.
+        let names_in = |area: &str, key: &str| -> Vec<String> {
+            if area == BELOW_GRADE && key == "raceway" {
+                return mr.below.raceways.clone();
+            }
+            mr.name_of(key).map(str::to_string).into_iter().collect()
         };
         let branch: Vec<&super::conduitroute::MethodApp> = methods
             .applications
@@ -1686,6 +1922,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
         let app_for = |area: &str| -> Option<&super::conduitroute::MethodApp> {
             let pick = |pred: &dyn Fn(&str) -> bool| branch.iter().copied().find(|a| pred(&a.application.to_ascii_uppercase()));
             match area {
+                // A branch row below grade, else any (a feeders-and-branches underground row).
+                BELOW_GRADE => pick(&|u| has(u, &mr.below_words))
+                    .or_else(|| methods.applications.iter().find(|a| has(&a.application.to_ascii_uppercase(), &mr.below_words))),
                 "unit" => pick(&|u| has(u, &mr.unit_words))
                     .or_else(|| pick(&|u| has(u, &mr.concealed_words) && !has(u, &mr.exposed_words) && !has(u, &mr.below_words))),
                 "exposed" => pick(&|u| has(u, &mr.exposed_words) && !has(u, &mr.unit_words)),
@@ -1702,6 +1941,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 "concealed"
             }
         };
+        let grade = Grade::of(cx.sp, upf, mr.below.stub_in);
+        let piece_area =
+            |run: &str, room: &str, z: Option<(f64, f64)>| -> &'static str { if grade.below(run, room, z) { BELOW_GRADE } else { area_of(room) } };
         // Each run: its method, the rooms its pieces are in, a place.
         struct RunM<'b> {
             method: String,
@@ -1710,6 +1952,12 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             handle: Handle,
             at: Vec3,
             rooms: BTreeSet<&'b str>,
+            // The storeys its pieces are on (more than one: it runs in a riser).
+            levels: BTreeSet<&'b str>,
+            // The areas its pieces are in.
+            areas: BTreeSet<&'static str>,
+            // Its first piece is a raceway stick (else a cable).
+            raceway: bool,
         }
         let mut runs: BTreeMap<String, RunM> = BTreeMap::new();
         for s in net.sticks.iter().filter(|s| !s.run.is_empty() && !s.circuit.is_empty()) {
@@ -1720,8 +1968,18 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 handle: s.handle,
                 at: (s.a + s.b) * 0.5,
                 rooms: BTreeSet::new(),
+                levels: BTreeSet::new(),
+                areas: BTreeSet::new(),
+                raceway: true,
             });
-            e.rooms.insert(s.room.as_str());
+            let top = s.path.iter().map(|p| p.z).fold(s.a.z.max(s.b.z), f64::max);
+            let bottom = s.path.iter().map(|p| p.z).fold(s.a.z.min(s.b.z), f64::min);
+            let area = piece_area(&s.run, &s.room, Some((bottom, top)));
+            e.areas.insert(area);
+            if area != BELOW_GRADE {
+                e.rooms.insert(s.room.as_str());
+            }
+            e.levels.insert(s.level.as_str());
         }
         for c in net.cables.iter().filter(|c| !c.run.is_empty() && !c.circuit.is_empty()) {
             let at = c.at.unwrap_or(Vec3::new(f64::NAN, f64::NAN, 0.0));
@@ -1732,9 +1990,23 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 handle: c.handle,
                 at,
                 rooms: BTreeSet::new(),
+                levels: BTreeSet::new(),
+                areas: BTreeSet::new(),
+                raceway: false,
             });
-            e.rooms.insert(c.room.as_str());
+            let area = piece_area(&c.run, &c.room, c.at.map(|p| (p.z, p.z)));
+            e.areas.insert(area);
+            if area != BELOW_GRADE {
+                e.rooms.insert(c.room.as_str());
+            }
+            e.levels.insert(c.level.as_str());
         }
+        // Limited-energy circuits (fire alarm, Class 2/3, communications) are wired by their own
+        // article, not the power wiring-methods table (Q6535): a cable by the spaces its listing
+        // allows, a raceway as the code permits. The ceiling space is a plenum where the job's
+        // documents call for plenum cable.
+        let lim = &mr.limited;
+        let plenum_doc = super::conduitroute::fa::WiringDocs::stored(cx.d).plenum;
         if runs.is_empty() {
             out.unmeasured(METHOD, "no routed raceway or cable in the model", 1);
         }
@@ -1745,8 +2017,64 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             }
             let Some(place) = in_scope(&m.level, m.at) else { continue };
             let method_up = m.method.to_ascii_uppercase();
-            let areas: BTreeSet<&str> = m.rooms.iter().map(|r| area_of(r)).collect();
+            let areas = &m.areas;
+            let below = areas.contains(BELOW_GRADE);
             let measured = json!({"check": "method", "run": run, "circuit": m.circuit, "method": m.method, "areas": areas, "rooms": m.rooms.iter().filter(|r| !r.is_empty()).take(12).collect::<Vec<_>>()});
+            let listed = lim.types.iter().find(|(t, _)| t.eq_ignore_ascii_case(&m.method)).map(|(_, spaces)| spaces);
+            if listed.is_some() || run.starts_with(super::conduitroute::fa::TAG_PREFIX) {
+                let mut spaces: Vec<&str> = vec!["general"];
+                if m.levels.len() > 1 {
+                    spaces.push("riser");
+                }
+                if plenum_doc.is_some() {
+                    spaces.push("plenum");
+                }
+                let mut measured = measured;
+                measured["system"] = json!("limited-energy");
+                measured["spaces"] = json!(spaces);
+                let (verdict, issue, expected) = match listed {
+                    _ if m.raceway => (
+                        "pass",
+                        format!("run {run} is {}: a limited-energy circuit in a raceway", m.method),
+                        format!("a raceway ({})", lim.raceway_source),
+                    ),
+                    Some(allowed) => {
+                        let missing: Vec<&str> = spaces.iter().copied().filter(|sp| !allowed.iter().any(|a| a.eq_ignore_ascii_case(sp))).collect();
+                        let need: Vec<&String> = lim
+                            .types
+                            .iter()
+                            .filter(|(_, a)| spaces.iter().all(|sp| a.iter().any(|x| x.eq_ignore_ascii_case(sp))))
+                            .map(|(t, _)| t)
+                            .collect();
+                        let expected = format!(
+                            "a cable listed for {} ({}; {})",
+                            spaces.join(", "),
+                            need.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", "),
+                            lim.source
+                        );
+                        if missing.is_empty() {
+                            ("pass", format!("run {run} is {}, listed for where it runs ({})", m.method, spaces.join(", ")), expected)
+                        } else {
+                            let why = if missing.contains(&"plenum") {
+                                match &plenum_doc {
+                                    Some(q) => format!(" (the documents call for plenum cable: {})", q.chars().take(160).collect::<String>()),
+                                    None => String::new(),
+                                }
+                            } else {
+                                " (it runs between storeys)".to_string()
+                            };
+                            ("fail", format!("run {run} is {}, not listed for the {} space it runs in{why}", m.method, missing.join(", ")), expected)
+                        }
+                    }
+                    None => (
+                        "unsure",
+                        format!("run {run} is {}: a cable type the limited-energy listings don't name", m.method),
+                        format!("a listed limited-energy cable ({})", lim.source),
+                    ),
+                };
+                push(METHOD, r, Some(m.handle), "conduit", run, verdict, issue, expected, m.method.clone(), measured, &m.level, place, "prescreen");
+                continue;
+            }
             // An approved value engineering alternative, the project's rule, the documents' table.
             let ve = approved.iter().find(|(c, _)| c.eq_ignore_ascii_case(&m.circuit) || c.ends_with(&format!(":{}", m.circuit)));
             if let Some((_, (alt, why))) =
@@ -1769,7 +2097,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 );
                 continue;
             }
-            if let Some(v) = &rule_method {
+            if let Some(v) = rule_method.as_ref().filter(|_| !below) {
                 let ok = v.to_ascii_uppercase().contains(&method_up) && !method_up.is_empty();
                 push(
                     METHOD,
@@ -1794,11 +2122,22 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
             }
             let mut allowed_all: Vec<(String, Vec<String>, String)> = Vec::new();
             let mut missing = Vec::new();
-            for a in &areas {
+            for a in areas {
+                // A run partly below grade: its part in the building by the project's rule.
+                let rule = if *a == BELOW_GRADE { below_rule.clone() } else { rule_method.clone().map(|v| (v, "general".to_string())) };
+                if let Some((v, key)) = rule {
+                    allowed_all.push((a.to_string(), vec![v], format!("project rule wiring_method/{key}")));
+                    continue;
+                }
                 match app_for(a) {
                     Some(app) => {
-                        let names: Vec<String> = app.methods.iter().filter_map(|k| name_of(k)).collect();
+                        let names: Vec<String> = app.methods.iter().flat_map(|k| names_in(a, k)).collect();
                         allowed_all.push((a.to_string(), names, format!("spec {} {}: {}", app.section, app.item, app.application)));
+                    }
+                    // No row for work below grade: the code's own uses permitted, as rules data.
+                    None if *a == BELOW_GRADE && !(mr.below.raceways.is_empty() && mr.below.cables.is_empty()) => {
+                        let names = mr.below.raceways.iter().chain(&mr.below.cables).cloned().collect();
+                        allowed_all.push((a.to_string(), names, format!("code: {}", mr.below.source)));
                     }
                     None => missing.push(a.to_string()),
                 }
@@ -1822,7 +2161,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 continue;
             }
             let bad: Vec<&(String, Vec<String>, String)> =
-                allowed_all.iter().filter(|(_, names, _)| !names.iter().any(|n| n.eq_ignore_ascii_case(&m.method))).collect();
+                allowed_all.iter().filter(|(_, names, _)| !names.iter().any(|n| method_is(&m.method, n))).collect();
             let expected = allowed_all.iter().map(|(a, n, src)| format!("{a}: {} ({src})", n.join(", "))).collect::<Vec<_>>().join("; ");
             push(
                 METHOD,
@@ -2136,7 +2475,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         run_wires.get(run).is_some_and(|ws| ws.first().and_then(|w| circuit_of(&w.circuit)).is_some_and(|(_, n)| n.len() == 1))
                     })
                     .collect();
-                let phase = number.parse::<u32>().ok().map(|n| format!("phase {}", super::mepatoms::phase_of(n)));
+                let phase = number
+                    .parse::<u32>()
+                    .ok()
+                    .map(|n| format!("phase {}", super::mepatoms::phase_on(n, super::mepatoms::build::panel_phases(cx.sp, panel))));
                 let pick: Vec<String> = if own.is_empty() {
                     runs.iter()
                         .flat_map(|run| run_wires.get(run).into_iter().flatten())
@@ -2146,7 +2488,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 } else {
                     own.iter().flat_map(|run| run_wires.get(run).into_iter().flatten()).filter(|w| !w.ground()).map(|w| w.size.clone()).collect()
                 };
-                let smallest = pick.iter().filter_map(|s| size_rank(s, &rl.vdrop.sizes).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
+                let smallest = pick.iter().filter_map(|s| size_rank(s, rl.vdrop.order()).map(|k| (k, s.clone()))).min_by_key(|x| x.0);
                 // Its breaker by its panel instance and number, else by the label's panel.
                 let brk = match breaker(cx.sp, cx.docs, &gtag, number) {
                     Brk::Missing => breaker(cx.sp, cx.docs, panel, number),
@@ -2182,14 +2524,10 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         );
                     };
                     let found_brk = brk.found();
-                    let poles = found_brk.as_ref().map_or(1, |b| b.1);
-                    // The circuit's voltage: line to neutral on one pole, line to line on more.
-                    let cv = match (poles, volts) {
-                        (1, Some((ln, _))) => Some(ln),
-                        (1, None) => Some(rl.vdrop.voltage),
-                        (_, Some((_, ll))) => Some(ll),
-                        (_, None) => None,
-                    };
+                    // The voltages the circuit can be at: line to neutral on one pole, line to
+                    // line on more; a breaker not read (poles unknown) leaves both of its panel's.
+                    // A table's row is never chosen at a default voltage (Q6460).
+                    let cvs = circuit_volts(found_brk.as_ref().map(|b| b.1), volts);
                     // The documents' own wire-length table wins where it has the circuit's row.
                     let mut table_note: Option<String> = None;
                     if let Some(t) = cx.docs.length_table() {
@@ -2199,12 +2537,14 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         if let Some(b) = &found_brk {
                             m["breaker_a"] = json!(b.0);
                         }
-                        if let Some(v) = cv {
-                            m["volts"] = json!(v);
+                        match cvs.as_slice() {
+                            [v] => m["volts"] = json!(v),
+                            [] => {}
+                            many => m["volts_either"] = json!(many),
                         }
-                        match t.need(ft, found_brk.as_ref().map(|b| b.0), cv, &rl.vdrop.sizes) {
+                        match table_need(t, ft, found_brk.as_ref().map(|b| b.0), &cvs, rl.vdrop.order()) {
                             super::wiretable::Need::Size(n, band) => {
-                                let ok = size_rank(&n, &rl.vdrop.sizes).is_some_and(|need| rank_have >= need);
+                                let ok = size_rank(&n, rl.vdrop.order()).is_some_and(|need| rank_have >= need);
                                 m["needed"] = json!(format!("#{n}"));
                                 m["band"] = json!(band);
                                 break 'v (
@@ -2311,93 +2651,59 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
         }
     }
 
-    // ---- E-BOX-FILL: each box's conductors against its volume.
+    // ---- E-BOX-FILL: each box's conductors against its volume (NEC 314.16) and, with
+    // conductors #4 and larger, its length (NEC 314.28).
     if let Some(r) = on.box_fill {
         let touch = tol(r, "touch_in", DEFAULT_TOUCH_IN) / 12.0 * upf;
         let bf = &rl.box_fill;
-        // The runs whose ends touch each box.
-        let mut box_runs: HashMap<usize, BTreeSet<&str>> = HashMap::new();
-        for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
-            for p in [s.a, s.b] {
-                for bi in boxes_near.near(p, touch, net) {
-                    box_runs.entry(bi).or_default().insert(s.run.as_str());
-                }
-            }
-        }
-        let cables: HashMap<Handle, &Cable> = net.cables.iter().map(|c| (c.handle, c)).collect();
-        // A cable lands in the boxes either side's links name.
-        let mut cable_in: HashMap<Handle, BTreeSet<Handle>> = HashMap::new();
-        for c in &net.cables {
-            for h in &c.links {
-                cable_in.entry(*h).or_default().insert(c.handle);
-            }
-        }
+        let entering = boxes_in(net, touch);
         let devs: HashMap<Handle, &Dev> = net.devs.iter().map(|d| (d.handle, d)).collect();
-        let vol = |s: &str| bf.cu_in.get(s).copied();
-        for (bi, b) in net.boxes.iter().enumerate() {
+        for (b, bin) in net.boxes.iter().zip(&entering) {
             let c = (b.lo + b.hi) * 0.5;
             let Some(place) = in_scope(&b.level, c) else { continue };
-            let runs = box_runs.get(&bi);
-            // Directly, or through the connector at its end.
-            let mut in_set: BTreeSet<Handle> = b.links.iter().copied().filter(|h| cables.contains_key(h)).collect();
-            for h in b.links.iter().filter(|h| net.what.get(h).is_some_and(|k| k == "connector")) {
-                in_set.extend(net.links.get(h).into_iter().flatten().copied().filter(|x| cables.contains_key(x)));
-            }
-            in_set.extend(cable_in.get(&b.handle).into_iter().flatten().copied());
-            let in_cables: Vec<&Cable> = in_set.iter().filter_map(|h| cables.get(h).copied()).collect();
-            // Each conductor entering: (size, ground).
-            let mut conds: Vec<(String, bool)> = Vec::new();
-            for run in runs.into_iter().flatten() {
-                for w in run_wires.get(run).into_iter().flatten() {
-                    conds.push((w.size.clone(), w.ground()));
-                }
-            }
-            let mut unknown_cable = 0;
-            for cb in &in_cables {
-                match cb.conductors() {
-                    Some((n, size, g)) => {
-                        conds.extend(std::iter::repeat_n((size.clone(), false), n as usize));
-                        if g {
-                            conds.push((size, true));
-                        }
-                    }
-                    None => unknown_cable += 1,
-                }
-            }
-            if conds.is_empty() && unknown_cable == 0 {
+            if bin.conds.is_empty() && bin.unknown_cable == 0 {
                 out.unmeasured(BOX_FILL, "a box no raceway or cable of the model enters", 1);
                 continue;
             }
             let dev = b.of.and_then(|h| devs.get(&h).copied());
-            let yoke = dev.is_some_and(|d| YOKE_KINDS.iter().any(|k| d.kind.contains(k)));
-            let hots: Vec<&String> = conds.iter().filter(|c| !c.1).map(|c| &c.0).collect();
-            let grounds: Vec<&String> = conds.iter().filter(|c| c.1).map(|c| &c.0).collect();
-            let bigger = |a: &&String, b: &&String| vol(a).unwrap_or(0.0).total_cmp(&vol(b).unwrap_or(0.0));
-            let largest_hot = hots.iter().copied().max_by(|a, b| bigger(a, b));
-            let largest_g = grounds.iter().copied().max_by(|a, b| bigger(a, b));
-            let known = unknown_cable == 0 && conds.iter().all(|c| vol(&c.0).is_some());
-            let need: f64 = hots.iter().filter_map(|s| vol(s)).sum::<f64>()
-                + largest_g.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.grounds)
-                + if yoke { largest_hot.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.yoke) } else { 0.0 };
+            let yoke = dev.is_some_and(|d| yoke_kind(&d.kind));
+            let fill = fill_need(&bin.conds, bin.unknown_cable, yoke, &bin.raceways_in, rl);
+            let box_len = box_length_in(b, upf);
             let what = match dev {
                 Some(d) => format!("{} box", d.kind),
                 None => "junction box".to_string(),
             };
-            let list = {
-                let mut by: BTreeMap<(bool, &str), u32> = BTreeMap::new();
-                for c in &conds {
-                    *by.entry((c.1, c.0.as_str())).or_default() += 1;
-                }
-                by.iter().map(|((g, s), n)| format!("{n}#{s}{}", if *g { "G" } else { "" })).collect::<Vec<_>>().join(" + ")
-            };
-            let m = json!({
+            let list = &fill.list;
+            let mut m = json!({
                 "check": "box_fill", "box": b.handle.hex(), "size": b.size, "device": b.of.map(|h| h.hex()), "cubic_in": b.cubic_in,
-                "conductors": list, "yoke": yoke, "needed_cu_in": r2(need), "runs": runs.map_or(0, BTreeSet::len), "cables": in_cables.len(),
+                "conductors": list, "yoke": yoke, "needed_cu_in": r2(fill.need_cu_in), "runs": bin.runs, "cables": bin.cables,
             });
+            if let Some(l) = fill.pull_len_in {
+                m["pull_length_in"] = json!(r2(l));
+                m["box_length_in"] = json!(r2(box_len));
+            }
             let expected = format!("the box holds what enters it ({})", bf.source);
-            match (b.cubic_in, known) {
+            let pull_words = |l: f64| format!("{l:.1} in long by NEC 314.28 for #{}", fill.large.as_deref().unwrap_or_default());
+            match (b.cubic_in, fill.known) {
                 (Some(cu), true) => {
-                    let ok = need <= cu + 1e-9;
+                    let fits = fill.need_cu_in <= cu + 1e-9;
+                    let long = fill.pull_len_in.is_none_or(|l| box_len + 1e-6 >= l);
+                    let ok = fits && long;
+                    let issue = if ok {
+                        format!("{what}: {} cu in needed, {cu} cu in", r2(fill.need_cu_in))
+                    } else if !fits {
+                        format!("{what} is overfilled: {} cu in of conductors and yoke in a {cu} cu in box", r2(fill.need_cu_in))
+                    } else {
+                        format!(
+                            "{what} is too short for its conductors: {}, the box is {:.1} in",
+                            pull_words(fill.pull_len_in.unwrap_or(0.0)),
+                            box_len
+                        )
+                    };
+                    let expected = match fill.pull_len_in {
+                        Some(l) => format!("at most {cu} cu in ({}), at least {}", b.size, pull_words(l)),
+                        None => format!("at most {cu} cu in ({})", b.size),
+                    };
                     push(
                         BOX_FILL,
                         r,
@@ -2405,13 +2711,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         "box",
                         &b.handle.hex(),
                         if ok { "pass" } else { "fail" },
-                        if ok {
-                            format!("{what}: {} cu in needed, {cu} cu in", r2(need))
-                        } else {
-                            format!("{what} is overfilled: {} cu in of conductors and yoke in a {cu} cu in box", r2(need))
-                        },
-                        format!("at most {cu} cu in ({})", b.size),
-                        format!("{list}{}: {} cu in", if yoke { " + a yoke" } else { "" }, r2(need)),
+                        issue,
+                        expected,
+                        format!("{list}{}: {} cu in", if yoke { " + a yoke" } else { "" }, r2(fill.need_cu_in)),
                         m,
                         &b.level,
                         place,
@@ -2427,7 +2729,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                     "unsure",
                     format!("{what}: its volume isn't recorded"),
                     expected,
-                    list,
+                    list.clone(),
                     m,
                     &b.level,
                     place,
@@ -2442,7 +2744,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                     "unsure",
                     format!("{what}: a conductor whose size the volume table doesn't list"),
                     expected,
-                    list,
+                    list.clone(),
                     m,
                     &b.level,
                     place,
@@ -3144,6 +3446,38 @@ mod tests {
         assert_eq!(c.conductors(), Some((3, "10".into(), false)));
     }
 
+    /// Q6544: below grade is under the lowest storey's floor; a stub out of the slab into the gear
+    /// is the underground run's end; an upper storey's riser and a riser on into a wall are the
+    /// building's.
+    #[test]
+    fn work_below_grade_is_under_the_lowest_floor_or_its_stub_up() {
+        let sp: BuildingSpec = serde_json::from_value(json!({"version": 1, "units_per_foot": 12, "levels": [
+            {"name": "L2", "elevation_ft": 10.0, "height_ft": 10.0},
+            {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0}
+        ]}))
+        .unwrap_or_default();
+        let g = Grade::of(&sp, 12.0, 12.0);
+        let run = "circuit:L1:E-101:LP1-1#1";
+        // Under the slab, whatever room it passes under.
+        assert!(g.below(run, "101", Some((-30.0, -24.0))));
+        // The stub up from under the slab, 6 in above the floor into the gear.
+        assert!(g.below(run, "101", Some((-24.0, 6.0))));
+        // A riser on up into the wall: the room's.
+        assert!(!g.below(run, "101", Some((-24.0, 48.0))));
+        // An upper storey's homerun down its riser to a panel below: in the building.
+        assert!(!g.below("circuit:L2:E-201:LP2-1#1", "201", Some((40.0, 118.0))));
+        // Overhead.
+        assert!(!g.below(run, "101", Some((100.0, 108.0))));
+        // A buried circuit's piece in no room is in the earth; in a room, by its height.
+        let buried = "circuit:L1:buried:LP1-1#E-1.1";
+        assert!(g.below(buried, "", None));
+        assert!(!g.below(buried, "101", Some((-24.0, 48.0))));
+        // No storeys: by the tag only.
+        let none = Grade { floor: None, ..Grade::of(&sp, 12.0, 12.0) };
+        assert!(!none.below(run, "101", Some((-30.0, -24.0))));
+        assert!(!g.below(run, "101", Some((f64::NAN, -24.0))));
+    }
+
     #[test]
     fn a_circuit_on_a_two_pole_breakers_second_pole_takes_its_breaker() {
         let mut sp = BuildingSpec::default();
@@ -3192,5 +3526,59 @@ mod tests {
         assert!(is_panel("LP1", "lp1"));
         assert!(is_panel("RP-7", "RP"));
         assert!(!is_panel("RPA", "RP"));
+    }
+
+    #[test]
+    fn an_unread_breaker_leaves_both_voltages_and_a_table_row_only_where_they_agree() {
+        // Q6460: unknown poles are an unknown voltage, never the line-to-neutral default.
+        assert_eq!(circuit_volts(Some(1), Some((120.0, 208.0))), vec![120.0]);
+        assert_eq!(circuit_volts(Some(2), Some((120.0, 208.0))), vec![208.0]);
+        assert_eq!(circuit_volts(None, Some((120.0, 208.0))), vec![120.0, 208.0]);
+        assert_eq!(circuit_volts(None, Some((240.0, 240.0))), vec![240.0]);
+        assert!(circuit_volts(Some(1), None).is_empty());
+        assert!(circuit_volts(None, None).is_empty());
+        use super::super::wiretable::{Band, LengthTable, Need};
+        let band = |v: f64, size: &str, max_ft: f64| Band { amps: None, volts: Some(v), size: size.into(), max_ft };
+        let t = LengthTable {
+            sheet: String::new(),
+            title: String::new(),
+            bands: vec![band(120.0, "12", 100.0), band(120.0, "10", 160.0), band(208.0, "12", 170.0), band(208.0, "10", 270.0)],
+        };
+        let sizes: Vec<String> = ["14", "12", "10", "8"].iter().map(|s| s.to_string()).collect();
+        let both = [120.0, 208.0];
+        // No voltage: not covered, never the 120 V row.
+        assert!(matches!(table_need(&t, 150.0, None, &[], &sizes), Need::NotCovered(_)));
+        assert!(matches!(table_need(&t, 150.0, None, &[120.0], &sizes), Need::Size(n, _) if n == "10"));
+        // 120 V asks #10, 208 V #12: not covered, saying both.
+        assert!(matches!(table_need(&t, 150.0, None, &both, &sizes), Need::NotCovered(w) if w.contains("120 V or 208 V")));
+        // Both ask #12 (or are past their reach): that answer, with both bands.
+        assert!(matches!(table_need(&t, 80.0, None, &both, &sizes), Need::Size(n, b) if n == "12" && b.contains("120 V") && b.contains("208 V")));
+        assert!(matches!(table_need(&t, 400.0, None, &both, &sizes), Need::Beyond(_)));
+        // One past its reach, one with a row: they differ.
+        assert!(matches!(table_need(&t, 200.0, None, &both, &sizes), Need::NotCovered(_)));
+        // Neither voltage has a row: the table's own reason.
+        assert!(matches!(table_need(&t, 50.0, None, &[277.0, 480.0], &sizes), Need::NotCovered(w) if w.contains("no row")));
+    }
+
+    #[test]
+    fn a_box_with_conductors_4_and_larger_is_judged_by_its_length() {
+        // Q6557: 2#3 + 2#6 + a #6 ground in a 1-1/4" raceway and 2#12 + G in a 1/2": the #6 and
+        // #12 by volume (314.16), the #3 by the box's length (314.28): 8 x 1-1/4 = 10".
+        let rl = super::super::conduitroute::rules();
+        let c = |s: &str, g: bool| (s.to_string(), g);
+        let conds = vec![c("3", false), c("3", false), c("6", false), c("6", false), c("6", true), c("12", false), c("12", false), c("12", true)];
+        let f = fill_need(&conds, 0, true, &[1.25, 0.5], rl);
+        assert!(f.known, "{f:?}");
+        assert_eq!((f.large.as_deref(), f.pull_len_in), (Some("3"), Some(10.0)), "{f:?}");
+        // 2 x 5 + 2 x 2.25 + one ground of #6 (5) + a yoke of the largest #6 (10).
+        assert!((f.need_cu_in - 29.5).abs() < 1e-9, "{f:?}");
+        assert_eq!(f.list, "2#12 + 2#3 + 2#6 + 1#12G + 1#6G");
+        // An angle pull with many raceways: 6 x the largest plus the others.
+        assert!((pull_length_in(&[1.0, 1.0, 1.0, 1.0], &rl.box_fill) - 9.0).abs() < 1e-9);
+        // With no raceway size the length can't be measured: not known (unsure, never a pass).
+        assert!(!fill_need(&conds, 0, true, &[], rl).known);
+        // Only the table's sizes: no length asked.
+        let small = fill_need(&[c("12", false), c("12", false), c("12", true)], 0, true, &[0.5], rl);
+        assert_eq!((small.known, small.pull_len_in), (true, None));
     }
 }

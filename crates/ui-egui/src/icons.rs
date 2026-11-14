@@ -157,6 +157,18 @@ pub enum Icon {
     Takeoff,
     /// The Automation tab's Job: a stack of prints with a run arrow (a guided job from them).
     Job,
+    /// A push pin: keep a palette docked when another opens from the rail.
+    Pin,
+    /// The Tool Sets palette: a grid of tool tiles.
+    ToolSets,
+    /// The Coordination palette: a building block with its levels and a system running up it.
+    Coordination,
+    /// The Sheet Set Manager: sheets fanned out, numbered.
+    SheetSet,
+    /// Plans to Model: a plan sheet turning into a box.
+    PlansToModel,
+    /// QuickCalc: a calculator.
+    Calculator,
 }
 
 struct Pen<'a> {
@@ -987,6 +999,61 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
             pen.rect(3.0, 6.0, 14.0, 15.0, b);
             pen.l(5.5, 9.5, 12.0, 9.5);
             pen.tri([(8.0, 12.0), (8.0, 19.0), (14.0, 15.5)], a);
+        }
+        Pin => {
+            // A push pin seen from the side, tilted: round head, a collar, and the point.
+            pen.poly(&[(10.0, 4.0), (20.0, 14.0)], false, b);
+            pen.poly(&[(12.0, 3.0), (21.0, 12.0), (18.0, 13.0), (11.0, 6.0)], true, b);
+            pen.poly(&[(9.0, 9.0), (15.0, 15.0)], false, b);
+            pen.la(12.0, 12.0, 4.0, 20.0);
+        }
+        ToolSets => {
+            // Four tool tiles, one of them picked.
+            pen.rect(3.0, 3.0, 8.0, 8.0, b);
+            pen.rect(13.0, 3.0, 8.0, 8.0, b);
+            pen.rect(3.0, 13.0, 8.0, 8.0, b);
+            pen.fill_rect(13.0, 13.0, 8.0, 8.0, a);
+            pen.l(5.0, 9.0, 9.0, 5.0);
+            pen.c(17.0, 7.0, 2.2, b);
+            pen.l(5.0, 17.0, 9.0, 17.0);
+        }
+        Coordination => {
+            // A building in outline, its floors, and one system's riser in colour through them.
+            pen.poly(&[(4.0, 21.0), (4.0, 6.0), (12.0, 3.0), (20.0, 6.0), (20.0, 21.0)], true, b);
+            for y in [10.0, 15.0] {
+                pen.l(4.0, y, 20.0, y);
+            }
+            pen.la(14.0, 7.0, 14.0, 21.0);
+            pen.la(14.0, 12.5, 18.0, 12.5);
+            pen.fill_c(14.0, 17.5, 1.4, a);
+        }
+        SheetSet => {
+            // Three sheets fanned out, the front one with a title block.
+            pen.poly(&[(8.0, 3.0), (21.0, 3.0), (21.0, 15.0)], false, b);
+            pen.poly(&[(5.5, 5.5), (18.5, 5.5), (18.5, 18.0)], false, b);
+            pen.rect(3.0, 8.0, 13.0, 13.0, b);
+            pen.la(10.0, 17.0, 16.0, 17.0);
+            pen.la(10.0, 17.0, 10.0, 21.0);
+        }
+        PlansToModel => {
+            // A flat plan below and the box built from it above, joined by an arrow.
+            pen.poly(&[(2.0, 19.0), (10.0, 16.0), (14.0, 19.0), (6.0, 22.0)], true, b);
+            pen.rect(12.0, 6.0, 8.0, 7.0, b);
+            pen.poly(&[(12.0, 6.0), (15.0, 3.0), (23.0, 3.0), (20.0, 6.0)], false, b);
+            pen.l(23.0, 3.0, 23.0, 10.0);
+            pen.l(23.0, 10.0, 20.0, 13.0);
+            pen.la(8.0, 15.0, 11.5, 11.0);
+            pen.arrow_tip(11.5, 11.0, 1.0, -1.2, a);
+        }
+        Calculator => {
+            // A calculator: a display and a grid of keys.
+            pen.rect(5.0, 2.0, 14.0, 20.0, b);
+            pen.rect(7.0, 4.0, 10.0, 4.0, a);
+            for y in [11.0, 14.5, 18.0] {
+                for x in [8.5, 12.0, 15.5] {
+                    pen.fill_c(x, y, 1.1, b);
+                }
+            }
         }
     }
 }

@@ -141,6 +141,14 @@ fn read_elements(d: &Drawing) -> Vec<El> {
                 }
             }
         }
+        if el.part == "room" {
+            // Its number and name as corrected (Q6593).
+            for k in ["number", "name"] {
+                if let Some(v) = super::bspec::room_value(e, k) {
+                    el.tags.insert(k.into(), v);
+                }
+            }
+        }
         if !measure(m, &mut el) {
             continue;
         }
@@ -432,12 +440,26 @@ struct Contribution {
     fallback: f64,
 }
 
+/// Whether a built pipe is the mechanical trade's: what its build said it carries, else its
+/// system's name.
+fn pipe_is_mechanical(e: &El) -> bool {
+    let carries = e.tag("carries");
+    let trade = if carries.is_empty() {
+        cadaddy_walk3d::pipeservice::pipe_trade(e.system(), "")
+    } else {
+        cadaddy_walk3d::pipeservice::service_trade(carries)
+    };
+    trade == "mechanical"
+}
+
 /// The trade an element belongs to in the ceiling space (for overlap and order checks).
 fn el_trade(e: &El) -> Option<&'static str> {
     match e.part.as_str() {
         "mep" => Some(match e.kind() {
             "duct" => "Mechanical",
             "pipe" if is_fire(e.system()) => "Fire Protection",
+            // Refrigerant, condensate and hydronic piping (Q6492) by what its build said it carries.
+            "pipe" if pipe_is_mechanical(e) => "Mechanical",
             "pipe" => "Plumbing",
             "conduit" | "tray" | "cable" | "light_fixture" | "outlet" | "receptacle" | "switch" | "junction_box" | "panel" | "transformer" => {
                 "Electrical"
@@ -523,6 +545,7 @@ fn trade_piece(e: &El) -> Vec<Contribution> {
         ("framing", "joist" | "rim" | "truss") => Kind::Structure,
         ("framing", "sheathing") if e.z[1] - e.z[0] < e.len * 0.1 => Kind::Structure,
         ("framing" | "masonry", _) => Kind::Framing,
+        ("cladding", _) => Kind::ExteriorWalls,
         ("insulation", _) | ("firestopping", _) => Kind::Insulation,
         ("drywall", _) => Kind::Drywall,
         ("finishes", "tile" | "grid_main" | "grid_tee" | "wall_angle") => Kind::Ceilings,

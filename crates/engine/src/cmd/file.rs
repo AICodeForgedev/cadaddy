@@ -505,7 +505,14 @@ fn is_dxf(path: &str) -> bool {
 /// else through the [`write_as`] hook.
 fn write_bytes(s: &Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Vec<u8>> {
     // A drawing file is the drawing outside the Block Editor; an image is what is shown.
-    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) { s.state()?.drawing() } else { s.doc()? };
+    // A print set open one sheet at a time is written whole, from a combined copy (Q6418).
+    let whole;
+    let d: &cadaddy_doc::Drawing = if is_drawing_file(path) {
+        whole = crate::sheetstore::combined(s.state()?.drawing());
+        &whole
+    } else {
+        s.doc()?
+    };
     write_drawing(d, cmd, path, opts)
 }
 
@@ -836,6 +843,50 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     }
 }
 
+/// [`read_file`] for the interface (Q6418): a .cdy print set is read with its sheets out of
+/// memory but the first, as stored ([`crate::sheetstore`]); anything else as [`read_file`] reads
+/// it. Needs no session; runs anywhere.
+pub fn read_file_on_demand(path: &str) -> std::result::Result<ReadFile, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let r = std::panic::catch_unwind(|| {
+            let bytes = crate::readfile::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
+            if !cadaddy_io::cdy::is_cdy(&bytes) {
+                return read_bytes(&bytes, path, Some(path.to_string()));
+            }
+            let drawing = cadaddy_io::cdy::read_cdy_parked(&bytes).map_err(|e| bad("open", e.to_string()))?;
+            let mut f = read_drawing(drawing, &bytes, path, Some(path.to_string()));
+            first_sheet_only(&mut f.drawing);
+            Ok(f)
+        });
+        match r {
+            Ok(r) => r.map_err(|e| e.to_string()),
+            Err(_) => Err(bad("open", format!("{path}: the file could not be read")).to_string()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Err(bad("open", "paths are not available on the web; pass `data`").to_string())
+    }
+}
+
+/// A print set read with its sheets out of memory gets its first sheet in (it opens on it), and
+/// its sheet list. One whose records name no sheet (they changed) gets everything in.
+#[cfg(not(target_arch = "wasm32"))]
+fn first_sheet_only(d: &mut Drawing) {
+    if !d.sheet_store.has_parked() {
+        return;
+    }
+    let sheets = crate::sheetnav::print_sheets(d);
+    let notes = match sheets.first() {
+        Some(first) => crate::sheetstore::load(d, |p| p.is(&first.number, &first.rect)),
+        None => crate::sheetstore::load(d, |_| true),
+    };
+    d.read_notes.extend(notes);
+    d.sheet_store.sheets = std::sync::Arc::new(crate::sheetstore::rects_of(&sheets));
+}
+
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let ReadFile { drawing, binary_dxf, name, path, cdy, disk, walkthrough } = f;
@@ -865,13 +916,18 @@ pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
 fn read_bytes(bytes: &[u8], name: &str, path: Option<String>) -> Result<ReadFile> {
     let hooks = io().ok_or_else(|| bad("open", "file formats are not available in this build"))?;
     let drawing = (hooks.read)(bytes, name).map_err(|e| bad("open", e))?;
+    Ok(read_drawing(drawing, bytes, name, path))
+}
+
+/// A [`ReadFile`] of `drawing`, read from `bytes`.
+fn read_drawing(drawing: Drawing, bytes: &[u8], name: &str, path: Option<String>) -> ReadFile {
     // A file that isn't a drawing (an imported SVG) gives the drawing no file name: QSAVE then
     // asks where to save instead of exporting over the original.
     let path = path.filter(|p| is_drawing_file(p));
     let cdy = path.as_ref().filter(|p| is_cdy(p)).and_then(|_| cdy_hooks()).and_then(|h| (h.seed)(&drawing, bytes));
     let walkthrough = cadaddy_walk3d::package::is_package(bytes).then(|| package_lightmap(bytes));
     let disk = path.as_deref().and_then(|p| DiskId::of(p, Some(bytes)));
-    Ok(ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, disk, walkthrough })
+    ReadFile { drawing, binary_dxf: cadaddy_dxf::is_binary(bytes), name: name.to_string(), path, cdy, disk, walkthrough }
 }
 
 /// The baked lightmap in a walkthrough package, when it has a whole one.
@@ -923,6 +979,10 @@ fn add_read(
         st.open_notes = reset.clone();
         st.cdy_saved = cdy_saved;
         st.disk_id = disk;
+    }
+    // A model saved associative follows its plan again (Q6378).
+    if s.active == i {
+        crate::cmd::revise3d::after_open(s);
     }
     // Fields worked out on opening (FIELDEVAL 1): what they show isn't an edit to save.
     if s.active == i
@@ -1002,11 +1062,17 @@ fn opened(s: &Session, i: usize, entities: bool) -> Value {
             warnings.push(format!("Xref \"{}\" {}: {}", b.name, b.xref_status.label().to_ascii_lowercase(), b.xref_reason));
         }
     }
-    if entities {
+    let mut r = if entities {
         json!({ "index": i, "entities": d.map(|d| d.entity_count()), "warnings": warnings })
     } else {
         json!({ "index": i, "warnings": warnings })
+    };
+    // A drawing holding a built model offers its 3D BIM view (Q6310): it opens on the plan.
+    if d.is_some_and(|d| super::bimlook::has_model(d)) {
+        r["builtModel"] = json!(true);
+        r["offer"] = json!("view.bim3d");
     }
+    r
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1076,6 +1142,8 @@ pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
 /// environments go too.
 fn release_closed(s: &mut Session) {
     crate::spatial::clear_cache();
+    super::elemprops::clear_index();
+    super::overrides::clear_sources();
     s.lisp_forget_closed();
     let used: std::collections::HashSet<&str> = s
         .docs
@@ -1163,6 +1231,9 @@ fn save_as(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Result<Save
     // The save date, and fields worked out on saving (FIELDEVAL 2).
     if is_drawing_file(path) {
         crate::fields::on_save(s);
+        // The associative model's state (what it builds from, the plan it was built from) goes
+        // with the drawing, so it follows its plan again when opened (Q6378).
+        crate::cmd::revise3d::before_save(s);
         // PDF images still in the session's temp folder go with the drawing.
         for note in adopt_session_images(s, path) {
             s.echo(note);
@@ -1219,7 +1290,9 @@ fn save_streamed(s: &mut Session, cmd: &str, path: &str, opts: &SaveAs) -> Resul
     #[cfg(not(target_arch = "wasm32"))]
     {
         let Some(hook) = write_streamed().filter(|_| is_dxf(path) && opts.version != Some(Version::R12)) else { return Ok(None) };
-        let Some(n) = stream_to(cmd, s.state()?.drawing(), path, opts, true, hook)? else { return Ok(None) };
+        // A print set open one sheet at a time is written whole, from a combined copy (Q6418).
+        let whole = crate::sheetstore::combined(s.state()?.drawing());
+        let Some(n) = stream_to(cmd, &whole, path, opts, true, hook)? else { return Ok(None) };
         saved_to(s, path, n, None).map(Some)
     }
     #[cfg(target_arch = "wasm32")]
@@ -1269,9 +1342,11 @@ pub(crate) fn stream_to(cmd: &str, d: &Drawing, path: &str, opts: &SaveAs, save:
 /// written and whether they were appended.
 fn save_cdy(s: &mut Session, path: &str, opts: &SaveAs) -> Result<Option<(usize, bool)>> {
     let Some(h) = cdy_hooks().filter(|_| is_cdy(path) && *opts == SaveAs::default()) else { return Ok(None) };
+    // A print set files each sheet's objects under it (Q6418).
+    let sheets = s.print_sheets();
     let st = s.state()?;
     let prev = st.cdy_saved.as_ref().filter(|c| c.holds(path)).map(|c| c.state.clone());
-    let d = st.drawing().clone();
+    let d = crate::sheetstore::with_sheet_list(st.drawing(), &sheets);
     let (out, mut state) = (h.save)(&d, prev.as_ref()).map_err(|e| bad("save", e))?;
     let (n, incremental) = match out {
         CdyWrite::Append { from, bytes, index_at } => match commit_save(s, path, &bytes, |p, b| append_cdy(p, from, b, index_at)) {
@@ -1724,7 +1799,11 @@ fn run_saveas(s: &mut Session, p: &Value) -> Result<Value> {
 /// The version a drawing is saved in at `path` when none is asked for: its `$ACADVER` (2018 by
 /// default), and for DWG at least 2004 (the io layer's rule: R2000 DWG has no true colours).
 fn drawing_version(s: &Session, path: &str) -> Version {
-    let v = s.doc().ok().and_then(|d| d.header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).and_then(Version::for_acadver)).unwrap_or_default();
+    let v = s
+        .state()
+        .ok()
+        .and_then(|st| st.drawing().header.get("ACADVER").and_then(cadaddy_doc::HVal::as_str).and_then(Version::for_acadver))
+        .unwrap_or_default();
     if is_dxf(path) { v } else { v.max(Version::R2004) }
 }
 
@@ -1848,6 +1927,8 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
     if drops_unknown(&format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
+    } else if version >= Version::R2013 && is_dxf_file(format!("drawing.{fmt}")) {
+        report_sat_text_dropped(s, &mut r);
     }
     Ok(r)
 }
@@ -1879,7 +1960,11 @@ pub fn not_saved_as(d: &Drawing, version: Version) -> std::collections::BTreeMap
     let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
     for e in stores.flat_map(|s| s.iter()) {
         if let cadaddy_doc::EntityKind::Unknown(u) = &e.kind {
-            if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) && stored.contains(&e.handle) {
+            // A DWG before 2013 writes a solid's SAT text as it is; from 2013 the geometry has to be
+            // in the data store, and SAT text alone is lost (#2334).
+            if MODELER_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t))
+                && (stored.contains(&e.handle) || (version < Version::R2013 && cadaddy_doc::foreign::has_sat_text(&u.tags)))
+            {
                 continue;
             }
             if !cadaddy_dxf::is_entity_type(&u.dxf_type) || WRITTEN_UNKNOWN_TYPES.iter().any(|t| u.dxf_type.eq_ignore_ascii_case(t)) {
@@ -1898,7 +1983,10 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
         return None;
     }
     let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
-    Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
+    Some(format!(
+        "Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them, solids only when saved as 2010 or earlier): {}",
+        list.join(", ")
+    ))
 }
 
 /// What saving the active drawing to `path` would leave out, before anything is written: empty
@@ -1925,8 +2013,31 @@ fn is_drawing_file(path: &str) -> bool {
     matches!(ext.as_str(), "cdy" | "dxf" | "dwg" | "dwt" | "")
 }
 
+/// Whether `path` is a DXF file.
+fn is_dxf_file(path: impl AsRef<std::path::Path>) -> bool {
+    path.as_ref().extension().is_some_and(|e| e.eq_ignore_ascii_case("dxf"))
+}
+
+/// Say on the command line which solid modeler entities a DXF of 2013 or later left out because
+/// they hold SAT-text ACIS data, which such files keep in a data store instead (#2334).
+fn report_sat_text_dropped(s: &mut Session, r: &mut Value) {
+    // The drawing a file holds: the host while the Block Editor is open.
+    let lost = s.state().map(|st| cadaddy_doc::foreign::sat_text_dropped(st.drawing())).unwrap_or_default();
+    if lost.is_empty() {
+        return;
+    }
+    let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
+    s.echo(format!(
+        "Not saved in the DXF file (2013 and later keep ACIS geometry in a data store these entities have no record in; save as 2010 or earlier to keep them): {}",
+        list.join(", ")
+    ));
+    if let Some(o) = r.as_object_mut() {
+        o.insert("notSaved".into(), json!(lost));
+    }
+}
+
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
-fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
+pub(super) fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
     let Some(msg) = not_saved_message(lost) else { return };
     s.echo(msg);
     if let Some(o) = r.as_object_mut() {
@@ -1967,6 +2078,8 @@ fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> R
     }
     if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
+    } else if version >= Version::R2013 && r.get("path").and_then(Value::as_str).is_some_and(is_dxf_file) {
+        report_sat_text_dropped(s, &mut r);
     }
     if let Some(path) = r.get("path").and_then(Value::as_str).filter(|p| is_exchange_file(p)).map(str::to_string) {
         let opts = save_options("save", p).unwrap_or_default();

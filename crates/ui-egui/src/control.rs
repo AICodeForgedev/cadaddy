@@ -348,6 +348,11 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.focus", "", "Activate the native window."),
     ("ui.screenshot", "{path?}", "PNG of the window (needs a presented frame)."),
     ("ui.render", "{path?, width?, height?, fit?}", "Headless render of the drawing; replies pngBase64."),
+    (
+        "ui.draw2d",
+        "{on?: bool}",
+        "Where the 2D canvas spends its time: the last regeneration (objects considered and drawn, build time by kind of object, vertex data and upload) and the last frame (primitives sent and in view, cull, canvas and frame times), GPU and system memory and the adapter. `on` starts or stops counting (the --debug overlay counts while shown); `on: true` rebuilds the list once so the next regeneration is counted.",
+    ),
     ("app.open", "{path}", "Open a drawing."),
     (
         "app.save",
@@ -440,15 +445,20 @@ pub fn inspect(app: &CadApp, ctx: &egui::Context) -> Value {
         "snap": app.canvas.snap.map(|s| json!({"point": [s.point.x, s.point.y], "mode": s.name})),
         "session": app.session.summary(),
         "closePrompt": app.close_prompt(),
+        // The Drawing Recovery window's autosave files, while it is open (`ui.set {dialog: null}`
+        // closes it).
+        "recovery": app.recovery.items.len(),
         // The command whose page the Command Reference (F1, HELP) shows, while it is open.
         "helpPage": crate::dialogs::help_page_shown(app, ctx),
         // The 3D view's numbers (triangles, instances, chunks, bytes, timings, the last
         // `ui.bench3d` orbit's frames per second).
         "perf3d": serde_json::to_value(app.canvas.shade.stats).unwrap_or_default(),
-        "perf": {"frameMs": app.frame_ms, "gpuBytes": crate::gpu::gpu_bytes(), "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len()),
+        "perf": {"frameMs": app.frame_ms, "wholeSetLoads": {"count": app.session.whole_set_loads.0, "last": app.session.whole_set_loads.1}, "gpuBytes": crate::gpu::gpu_bytes(), "frameCache": {"drawn": crate::gpu::frame_cache_counts().0, "kept": crate::gpu::frame_cache_counts().1}, "dynamicResolution": crate::dynres::json(), "dynamicResolution3d": crate::dynres::json_3d(app.walk.as_ref().map(|w| w.scale).or(app.canvas.shade.stats.scale).unwrap_or(1.0)), "buildMs": app.canvas.build_ms, "drawMs": app.canvas.draw_ms, "meshMs": app.canvas.mesh_ms, "building": app.canvas.building(), "renderer": if app.canvas.gpu.is_some() { "gpu" } else { "cpu" }, "prims": app.canvas.list.as_ref().map(|l| l.prims.len()), "truncated": app.canvas.list.as_ref().map(|l| l.truncated),
             // What a long session holds (the soak's leak hunt): the session journal, and the
             // widget states egui keeps.
-            "journalLines": app.session.journal.lines().len(), "journalBytes": app.session.journal.bytes(), "uiStates": ctx.memory(|m| m.data.len())},
+            "journalLines": app.session.journal.lines().len(), "journalBytes": app.session.journal.bytes(), "uiStates": ctx.memory(|m| m.data.len()),
+            // Where the frame's own CPU time goes, part by part (Q6482, `framecost`).
+            "sections": crate::framecost::report()},
     })
 }
 
@@ -594,6 +604,17 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             // `perf.slowest` covers the frames since the last report.
             app.slowest.clear();
             ok(v)
+        }
+        "ui.draw2d" => {
+            if let Some(on) = p.get("on").and_then(Value::as_bool) {
+                app.canvas.stats.set_on(on || app.debug_overlay);
+                if on {
+                    // Rebuild so the next regeneration is counted.
+                    app.canvas.list = None;
+                }
+                ctx.request_repaint();
+            }
+            ok(crate::debug_overlay::draw2d_json(app))
         }
         "ui.elements" => ok(elements(ctx, p)),
         "ui.startup" => ok(crate::startup::report()),
@@ -746,6 +767,12 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                         return err(error);
                     }
                     app.ui = u;
+                    // `dialog: null` closes every dialog, the Drawing Recovery window too (as its
+                    // Later: the autosave files stay and it asks again next start), so an agent
+                    // can take a clean screenshot after a crash left autosave files.
+                    if p.get("dialog").is_some_and(Value::is_null) {
+                        app.recovery.items.clear();
+                    }
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
                 }
                 Err(e) => err(e),
@@ -798,9 +825,9 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
                 if let Err(e) = std::fs::write(path, &png) {
                     return err(e);
                 }
-                return ok(render_reply(&png, w, h, Some(path)));
+                return ok(render_reply(&png, w, h, Some(path), list.truncated));
             }
-            ok(render_reply(&png, w, h, None))
+            ok(render_reply(&png, w, h, None, list.truncated))
         }
         "app.open" => {
             let Some(path) = s("path") else { return err("missing path") };
@@ -895,9 +922,11 @@ fn render_view(bounds: &cadaddy_geom::Bounds2, center: Vec2, height: f64, fit: b
     }
 }
 
-/// The `ui.render` reply, matching the headless backend (`pngBase64`, `width`, `height`), plus `bytes` and `path`.
-fn render_reply(png: &[u8], w: u32, h: u32, path: Option<&str>) -> Value {
-    let mut v = json!({"pngBase64": cadaddy_engine::cmd::file::base64_encode(png), "width": w, "height": h, "bytes": png.len()});
+/// The `ui.render` reply, matching the headless backend (`pngBase64`, `width`, `height`), plus
+/// `bytes`, `path` and `truncated` (the build left block contents out, see #1070).
+fn render_reply(png: &[u8], w: u32, h: u32, path: Option<&str>, truncated: bool) -> Value {
+    let mut v =
+        json!({"pngBase64": cadaddy_engine::cmd::file::base64_encode(png), "width": w, "height": h, "bytes": png.len(), "truncated": truncated});
     if let (Some(path), Some(o)) = (path, v.as_object_mut()) {
         o.insert("path".to_string(), json!(path));
     }
@@ -973,12 +1002,14 @@ mod tests {
 
     #[test]
     fn render_reply_has_base64_width_height_and_keeps_old_keys() {
-        let r = render_reply(b"abc", 7, 5, Some("x.png"));
+        let r = render_reply(b"abc", 7, 5, Some("x.png"), false);
         assert_eq!(r["pngBase64"], "YWJj");
         assert_eq!(r["width"], 7);
         assert_eq!(r["height"], 5);
         assert_eq!(r["bytes"], 3);
         assert_eq!(r["path"], "x.png");
-        assert!(render_reply(b"abc", 7, 5, None).get("path").is_none());
+        assert_eq!(r["truncated"], false);
+        assert!(render_reply(b"abc", 7, 5, None, true).get("path").is_none());
+        assert_eq!(render_reply(b"abc", 7, 5, None, true)["truncated"], true);
     }
 }

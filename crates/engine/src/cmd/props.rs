@@ -129,6 +129,13 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) -> Value {
+    entity_props_with(d, e, true)
+}
+
+/// [`entity_props`], with the object's `bounds` only when asked: measuring a block reference
+/// measures its block, and Quick Select, which never shows bounds, measured every object of the
+/// drawing (Q6574).
+pub(super) fn entity_props_with(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity, bounds: bool) -> Value {
     let mut v = json!({
         "handle": e.handle.hex(),
         "type": e.kind.type_name(),
@@ -150,7 +157,7 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
     let geo = serde_json::to_value(&e.kind).unwrap_or(Value::Null);
     if let (Some(o), Some(g)) = (v.as_object_mut(), geo.as_object()) {
         o.insert("geometry".into(), Value::Object(g.clone()));
-        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        let b = if bounds { cadaddy_doc::entity_bounds(d, e, 0) } else { cadaddy_geom::Bounds2::EMPTY };
         if !b.is_empty() {
             o.insert("bounds".into(), json!([[b.min.x, b.min.y], [b.max.x, b.max.y]]));
         }
@@ -796,10 +803,13 @@ fn run_style_current(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-/// Text style names used by entities (in model, paper spaces and blocks) and dimension styles.
+/// Text style names used by entities (in model, paper spaces and blocks), dimension,
+/// multileader and table styles (their cell styles), and the text of complex linetypes.
 pub(super) fn text_styles_in_use(d: &cadaddy_doc::Drawing) -> Vec<String> {
     let mut out: Vec<String> = d.dim_styles.iter().map(|s| s.text_style.clone()).collect();
     out.extend(d.mleader_styles.iter().map(|s| s.text_style.clone()));
+    out.extend(d.table_styles.iter().flat_map(|s| s.cell_styles.iter().map(|c| c.text_style.clone())));
+    out.extend(d.linetypes.iter().flat_map(|lt| lt.pattern.iter().filter_map(|el| el.style.clone())));
     let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
     for st in stores {
         for e in st.iter() {

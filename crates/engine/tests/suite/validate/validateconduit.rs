@@ -384,6 +384,34 @@ fn a_conduit_through_a_duct_is_a_clash_found_without_the_routers_report() {
 }
 
 #[test]
+fn routes_that_cross_or_run_alongside_keep_their_clearance_one_over_the_other() {
+    // Q6552: LP1-1's leg runs north through LP1-3's leg running east; LP1-5's leg runs along
+    // LP1-3's line over part of it. Each raceway keeps the conduit clearance of the others (a
+    // tier over, or a lane beside), never through them at one height.
+    let devices = vec![
+        receptacle(1, 40.0, 0.0, "LP1-1"),
+        receptacle(2, 40.0, 8.0, "LP1-1"),
+        receptacle(3, 35.0, 5.0, "LP1-3"),
+        receptacle(4, 44.0, 5.0, "LP1-3"),
+        receptacle(5, 37.0, 5.0, "LP1-5"),
+        receptacle(6, 47.0, 5.0, "LP1-5"),
+    ];
+    let mut s = building_of(devices, Some(20), |_| {});
+    let (_, fs) = screen(&mut s, &["G-CLASH"]);
+    let raceways: Vec<&Value> = of(&fs, "G-CLASH")
+        .into_iter()
+        .filter(|f| {
+            f["verdict"] == "fail" && (f["measured"]["b"]["category"] == "conduit" || f["measured"]["router_item"]["b"]["category"] == "conduit")
+        })
+        .collect();
+    assert!(raceways.is_empty(), "{raceways:?}");
+    assert!(of(&fs, "G-CLASH").iter().any(|f| f["verdict"] == "pass"), "{fs:?}");
+    // The routes are all there: every box joined to the panel.
+    let (_, fs) = screen(&mut s, &["E-CONDUIT-CONTINUITY"]);
+    assert_eq!(verdicts(&fs, "E-CONDUIT-CONTINUITY").get("pass"), Some(&6), "{:?}", of(&fs, "E-CONDUIT-CONTINUITY"));
+}
+
+#[test]
 fn a_takeoff_off_by_a_fitting_fails() {
     let mut s = building(Some(20), |_| {});
     // One coupling taken out of the model, the stored count index left as it was.
@@ -433,6 +461,57 @@ fn the_wiring_method_is_checked_against_the_specifications_table_and_the_project
     let (_, fs) = screen(&mut s, &["E-METHOD"]);
     let m = verdicts(&fs, "E-METHOD");
     assert!(m.get("fail").copied().unwrap_or(0) > 0 && !m.contains_key("pass"), "{m:?}");
+}
+
+/// Q6535: a limited-energy circuit (fire alarm cable, `fa:` runs as the fire alarm router lays
+/// them) is wired by its own article, not the power wiring-methods table: FPLP cable passes in a
+/// concealed area the power table gives MC only; plain FPL fails once the documents call for
+/// plenum cable, while FPLP still passes.
+#[test]
+fn fire_alarm_cable_is_judged_by_its_listing_not_the_power_wiring_methods_table() {
+    let mut s = building(Some(20), |s| {
+        let methods = json!({"applications": [
+            {"section": "26 05 19", "item": "C", "application": "Branch Circuits Concealed in Ceilings, Walls, and Partitions", "methods": ["mc"]}
+        ]});
+        if let Ok(d) = s.doc_mut() {
+            d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&methods).unwrap_or_default()));
+        }
+    });
+    // Every cable run made a fire alarm loop of `ty` cable.
+    let retype = |s: &mut Session, ty: &str| {
+        let cables = pieces(s, "cable");
+        assert!(!cables.is_empty(), "the router lays cable");
+        let d = s.doc_mut().expect("doc");
+        for (h, mut ps) in cables {
+            let run = ps.get("run").map(|x| x.text()).unwrap_or_default();
+            if !run.starts_with("fa:") {
+                ps.set("run", props::Prop::new(format!("fa:FACP-SLC1#{run}"), props::Source::computed()));
+            }
+            ps.set("type", props::Prop::new(format!("{ty} 16/2"), props::Source::computed()));
+            let _ = d.modify_entity(h, |e| {
+                let x = props::write(&e.common.xdata, &ps);
+                e.common.xdata = x.into();
+            });
+        }
+    };
+    let fa = |fs: &[Value]| -> Vec<Value> {
+        of(fs, "E-METHOD").into_iter().filter(|f| f["measured"]["run"].as_str().is_some_and(|r| r.starts_with("fa:"))).cloned().collect()
+    };
+    retype(&mut s, "FPLP");
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    let runs = fa(&fs);
+    assert!(!runs.is_empty(), "{:?}", of(&fs, "E-METHOD"));
+    assert!(runs.iter().all(|f| f["verdict"] == "pass" && f["measured"]["system"] == "limited-energy"), "{runs:?}");
+    // Not FPL where the documents call for plenum cable; FPLP still.
+    let docs = json!({"plenum": "FIRE ALARM CABLE IN CEILINGS USED AS RETURN AIR PLENUMS SHALL BE PLENUM RATED"});
+    s.doc_mut().expect("doc").embedded.insert("route/fawiring.json".into(), std::sync::Arc::new(serde_json::to_vec(&docs).unwrap_or_default()));
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    assert!(fa(&fs).iter().all(|f| f["verdict"] == "pass"), "{:?}", fa(&fs));
+    retype(&mut s, "FPL");
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    let runs = fa(&fs);
+    assert!(!runs.is_empty() && runs.iter().all(|f| f["verdict"] == "fail" && f["issue"].as_str().is_some_and(|i| i.contains("plenum"))), "{runs:?}");
+    assert!(runs.iter().all(|f| f["expected"].as_str().is_some_and(|e| e.contains("FPLP") && e.contains("760.154"))), "{runs:?}");
 }
 
 #[test]
@@ -755,6 +834,11 @@ fn rows_the_stored_schedule_lacks_are_read_again_off_the_drawn_schedule() {
 /// A gridded wire-length table drawn on the drawing, far from the building: 20 A / 120 V
 /// circuits take #12 to 50 ft, #10 to 100 ft, #8 to 150 ft, #6 to 250 ft.
 fn drawn_length_table(s: &mut Session) {
+    drawn_length_table_of(s, &[("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")]);
+}
+
+/// A gridded wire-length table of six columns (header, first row each), far from the building.
+fn drawn_length_table_of(s: &mut Session, cols: &[(&str, &str); 6]) {
     let (x0, y0) = (3000.0, -200.0);
     text_at(s, [x0 + 10.0, y0 + 10.0], "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE", 2.0);
     let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
@@ -766,9 +850,7 @@ fn drawn_length_table(s: &mut Session) {
     for xx in [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0] {
         line(s, [x0 + xx, y0 + 7.0], [x0 + xx, y0 - 3.0]);
     }
-    for (i, (hd, row)) in
-        [("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#12", "50'"), ("#10", "100'"), ("#8", "150'"), ("#6", "250'")].iter().enumerate()
-    {
+    for (i, (hd, row)) in cols.iter().enumerate() {
         let x = x0 + 2.0 + 20.0 * i as f64;
         text_at(s, [x, y0 + 4.0], hd, 1.5);
         text_at(s, [x, y0 - 1.0], row, 1.5);
@@ -813,6 +895,60 @@ fn the_drawings_wire_length_table_decides_the_conductor_before_the_three_percent
 }
 
 #[test]
+fn a_length_table_the_job_kept_off_its_pages_is_validates_and_the_routers() {
+    // Q6545: a PDF job's wire-length table is on a legend page its drawing doesn't hold; the job
+    // keeps the table it read there in the spec. The router sizes the circuits by it and Validate
+    // judges them by it: one table, one rule. 20 A / 120 V: #12 to 55 ft, #10 to 120 ft, #8 to
+    // 300 ft; LP1-5 runs well over 120 ft both ways it is measured, so both ask #8 of it.
+    let mut s = building(Some(20), |_| {});
+    with_spec(&mut s, |sp| {
+        let band = |size: &str, max_ft: f64| json!({"amps": 20.0, "volts": 120.0, "size": size, "max_ft": max_ft});
+        sp["mep"]["wire_length_tables"] = json!([{"sheet": "X-701", "title": "BRANCH CIRCUIT VOLTAGE DROP WIRING SCHEDULE",
+            "bands": [band("12", 55.0), band("10", 120.0), band("8", 300.0)]}]);
+        sp["mep"]["wire_length_read"] = json!("1 job pages looked at (X-701): 1 tables");
+    });
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert!(r["wire_size_table"]["read"].as_str().is_some_and(|t| t.ends_with("on X-701")), "{}", r["wire_size_table"]);
+    let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
+    assert!(up.iter().any(|u| u["circuit"] == "LP1-5" && u["to"] == "2#8 + 1#8G"), "{up:#?}");
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let vd = of(&fs, "E-VDROP");
+    assert!(vd.len() >= 3, "{vd:#?}");
+    // Every circuit judged by the kept table (never the 3% calculation), a pass exactly when
+    // its conductor is the size the table asks for its length, or larger.
+    let rank = |s: &str| ["#14", "#12", "#10", "#8", "#6", "#4"].iter().position(|x| *x == s);
+    for f in &vd {
+        assert_eq!(f["measured"]["table_from"], "X-701", "{f}");
+        assert!(f["measured"].get("drop_pct").is_none(), "the table, not the calculation: {f}");
+        let (have, need) =
+            (rank(f["measured"]["conductor"].as_str().unwrap_or_default()), rank(f["measured"]["needed"].as_str().unwrap_or_default()));
+        assert!(have.is_some() && need.is_some(), "{f}");
+        assert_eq!(f["verdict"], if have >= need { "pass" } else { "fail" }, "{f}");
+    }
+    let far = vd.iter().find(|f| f["measured"]["circuit"] == "LP1-5").copied().cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 120.0 && l <= 300.0), "{far}");
+    assert_eq!((&far["measured"]["needed"], &far["measured"]["conductor"], &far["verdict"]), (&json!("#8"), &json!("#8"), &json!("pass")), "{far}");
+}
+
+#[test]
+fn a_length_tables_column_past_two_ought_is_chosen_not_read_as_past_the_tables_reach() {
+    // Q6456: the table's sizes run past 2/0 (the voltage-drop calculation's largest). LP1-5,
+    // over 150 ft, is covered only by the #3/0 column: the table asks #3/0, it is not "longer
+    // than the table reaches".
+    let mut s = building(Some(20), |_| {});
+    drawn_length_table_of(&mut s, &[("BREAKER", "20A"), ("VOLTAGE", "120V"), ("#1/0", "100'"), ("#2/0", "150'"), ("#3/0", "260'"), ("#4/0", "300'")]);
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = of(&fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == "LP1-5").cloned().unwrap_or_default();
+    assert!(far["measured"]["length_ft"].as_f64().is_some_and(|l| l > 150.0 && l <= 260.0), "{far}");
+    assert_eq!(far["measured"]["needed"], "#3/0", "{far}");
+    assert!(!far["issue"].as_str().unwrap_or_default().contains("reaches"), "{far}");
+    let conductor = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+    assert_eq!(far["verdict"], if conductor == "#3/0" || conductor == "#4/0" { "pass" } else { "fail" }, "{far}");
+}
+
+#[test]
 fn a_typical_panels_copies_each_judge_only_their_own_circuit() {
     // Q6338: a panel there is one of per unit (LP1, typical of 2: copies LP1-A and LP1-B), each
     // copy's circuit 1 in its own end of the building. Each copy's voltage drop is its own
@@ -851,4 +987,222 @@ fn a_typical_panels_copies_each_judge_only_their_own_circuit() {
         let near_a = f["measured"]["panel"] == "LP1-A";
         assert!(if near_a { at < 70.0 } else { at > 70.0 }, "{f}");
     }
+}
+
+/// Q6544: work below grade is its own area. A buried site circuit's PVC run (in no room) and a
+/// PVC homerun laid wholly under the floor are judged by the table's underground row, else by the
+/// code's uses permitted below grade (rules data), never by the concealed row; the same PVC in the
+/// building's walls and ceilings still fails the concealed row.
+#[test]
+fn a_buried_pvc_run_is_judged_below_grade_and_pvc_in_a_wall_is_not() {
+    let table = |s: &mut Session, underground: bool| {
+        let mut apps = vec![
+            json!({"section": "26 05 19", "item": "C", "application": "Branch Circuits Concealed in Ceilings, Walls, and Partitions", "methods": ["raceway", "mc"]}),
+        ];
+        if underground {
+            apps.push(json!({"section": "26 05 19", "item": "F", "application": "Branch Circuits Underground and Below Slab", "methods": ["pvc"]}));
+        }
+        let methods = json!({"applications": apps});
+        if let Ok(d) = s.doc_mut() {
+            d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&methods).unwrap_or_default()));
+        }
+    };
+    let mut s = building(Some(20), |s| table(s, true));
+    // The router lays raceway (EMT) by the concealed row: three of its runs.
+    let mut runs: std::collections::BTreeMap<String, Vec<cadaddy_engine::doc::Handle>> = std::collections::BTreeMap::new();
+    for (h, ps) in pieces(&s, "conduit") {
+        let run = ps.get("run").map(|x| x.text()).unwrap_or_default();
+        if !run.is_empty() && ps.get("circuit").is_some_and(|c| !c.text().is_empty()) {
+            runs.entry(run).or_default().push(h);
+        }
+    }
+    let picked: Vec<(String, Vec<cadaddy_engine::doc::Handle>)> = runs.into_iter().take(3).collect();
+    assert_eq!(picked.len(), 3, "the router lays at least three conduit runs");
+    let buried = "circuit:L1:buried:LP1-1#1".to_string();
+    let (in_wall, under) = (picked[1].0.clone(), picked[2].0.clone());
+    {
+        let d = s.doc_mut().expect("doc");
+        for (i, (_, handles)) in picked.iter().enumerate() {
+            // Its highest end, so the whole run (drops too) goes under the floor.
+            let top = handles
+                .iter()
+                .filter_map(|h| d.model.iter().find(|e| e.handle == *h))
+                .flat_map(|e| {
+                    let ps = props::read(&e.common.xdata);
+                    ["start", "end"].map(|k| ps.get(k).map_or(0.0, |x| xyz(&x.text())[2]))
+                })
+                .fold(0.0, f64::max);
+            for h in handles {
+                let Some(e) = d.model.iter().find(|e| e.handle == *h) else { continue };
+                let mut ps = props::read(&e.common.xdata);
+                ps.set("type", props::Prop::new("PVC Sch 40", props::Source::computed()));
+                // A buried site circuit's run, as site work tags it: in the earth, in no room.
+                if i == 0 {
+                    ps.set("run", props::Prop::new(buried.clone(), props::Source::computed()));
+                    ps.set("room", props::Prop::new("", props::Source::computed()));
+                }
+                // A run laid 2 ft under the floor (its rooms kept: it runs under them).
+                let drop = if i == 2 { top + 24.0 } else { 0.0 };
+                for k in ["start", "end"] {
+                    if let Some(p) = ps.get(k).map(|x| xyz(&x.text())) {
+                        ps.set(k, props::Prop::new(format!("{},{},{}", p[0], p[1], p[2] - drop), props::Source::computed()));
+                    }
+                }
+                let _ = d.modify_entity(*h, |e| {
+                    e.common.xdata = props::write(&e.common.xdata, &ps).into();
+                    if let cadaddy_engine::doc::EntityKind::Mesh(m) = &mut e.kind {
+                        for v in &mut m.vertices {
+                            v.z -= drop;
+                        }
+                    }
+                });
+            }
+        }
+    }
+    let by_run =
+        |fs: &[Value], run: &str| -> Vec<Value> { of(fs, "E-METHOD").into_iter().filter(|f| f["measured"]["run"] == run).cloned().collect() };
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    for run in [&buried, &under] {
+        let f = by_run(&fs, run);
+        assert!(!f.is_empty(), "{run}: {:?}", of(&fs, "E-METHOD"));
+        assert!(
+            f.iter().all(|f| f["verdict"] == "pass"
+                && f["measured"]["areas"] == json!(["below grade"])
+                && f["expected"].as_str().is_some_and(|e| e.contains("Underground"))),
+            "{run}: {f:?}"
+        );
+    }
+    let f = by_run(&fs, &in_wall);
+    assert!(!f.is_empty() && f.iter().all(|f| f["verdict"] == "fail" && !f["measured"]["areas"].to_string().contains("below")), "{f:?}");
+    // No underground row: the code's uses permitted below grade (rules data) judge it, not the
+    // concealed row; the PVC in the wall still fails.
+    table(&mut s, false);
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    for run in [&buried, &under] {
+        let f = by_run(&fs, run);
+        assert!(
+            !f.is_empty()
+                && f.iter().all(|f| f["verdict"] == "pass" && f["expected"].as_str().is_some_and(|e| e.contains("300.5") && e.contains("352.10"))),
+            "{run}: {f:?}"
+        );
+    }
+    assert!(by_run(&fs, &in_wall).iter().all(|f| f["verdict"] == "fail"), "{:?}", by_run(&fs, &in_wall));
+    // The project's general rule is the building's, not the earth's: EMT everywhere still lets
+    // the buried PVC pass by the code, and fails the PVC in the wall.
+    s.execute(
+        "project.rules.set",
+        &json!({"domain": "wiring_method", "key": "general", "value": "EMT", "tier": "spec", "source": "Spec 26 05 33", "reason": "test setup"}),
+    )
+    .expect("rule");
+    let (_, fs) = screen(&mut s, &["E-METHOD"]);
+    assert!(by_run(&fs, &buried).iter().all(|f| f["verdict"] == "pass"), "{:?}", by_run(&fs, &buried));
+    assert!(by_run(&fs, &in_wall).iter().all(|f| f["verdict"] == "fail"), "{:?}", by_run(&fs, &in_wall));
+}
+
+/// A gridded wire-length table drawn far from the building: `headers` across the top, one
+/// row per conductor size (`#12 | 100' | 230'`), a column per voltage.
+fn drawn_volts_table(s: &mut Session, headers: &[&str], rows: &[Vec<String>]) {
+    let (x0, y0) = (3000.0, -400.0);
+    let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
+        s.execute("line", &json!({"points": [a, b]})).expect("line");
+    };
+    let w = 20.0 * headers.len() as f64;
+    let bottom = 2.0 - 5.0 * rows.len() as f64;
+    text_at(s, [x0 + 10.0, y0 + 10.0], "WIRE LENGTH TABLE", 2.0);
+    for i in 0..=rows.len() + 1 {
+        let yy = 7.0 - 5.0 * i as f64;
+        line(s, [x0, y0 + yy], [x0 + w, y0 + yy]);
+    }
+    for i in 0..=headers.len() {
+        let xx = 20.0 * i as f64;
+        line(s, [x0 + xx, y0 + 7.0], [x0 + xx, y0 + bottom]);
+    }
+    for (i, h) in headers.iter().enumerate() {
+        text_at(s, [x0 + 2.0 + 20.0 * i as f64, y0 + 4.0], h, 1.5);
+    }
+    for (r, row) in rows.iter().enumerate() {
+        for (i, c) in row.iter().enumerate() {
+            text_at(s, [x0 + 2.0 + 20.0 * i as f64, y0 - 1.0 - 5.0 * r as f64], c, 1.5);
+        }
+    }
+}
+
+fn vdrop_of(fs: &[Value], circuit: &str) -> Value {
+    of(fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == circuit).cloned().unwrap_or_default()
+}
+
+const SIZE_STEPS: [&str; 9] = ["#14", "#12", "#10", "#8", "#6", "#4", "#3", "#2", "#1"];
+
+fn feet(v: f64) -> String {
+    format!("{:.0}'", v.max(1.0))
+}
+
+#[test]
+fn a_length_tables_row_is_never_picked_at_an_assumed_voltage() {
+    // Q6460: a table by voltage only (120 V and 277 V columns) and a panel with no schedule:
+    // the circuits' breakers, poles and voltage aren't read. The 120 V column asks the next
+    // size up for the far circuit and the 277 V column keeps its own: which one applies isn't
+    // known, so no row may be chosen (unsure), never a pass or fail off the 120 V column.
+    let mut s = building(None, |_| {});
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = vdrop_of(&fs, "LP1-5");
+    let l = far["measured"]["length_ft"].as_f64().unwrap_or_default();
+    let have = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+    let k = SIZE_STEPS.iter().position(|x| *x == have).unwrap_or(1);
+    let up = SIZE_STEPS.get(k + 1).copied().unwrap_or("#1");
+    assert!(l > 20.0, "{far}");
+    drawn_volts_table(
+        &mut s,
+        &["CONDUCTOR", "120V", "277V"],
+        &[vec![have.clone(), feet(l - 15.0), feet(l + 80.0)], vec![up.to_string(), feet(l + 40.0), feet(l + 200.0)]],
+    );
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = vdrop_of(&fs, "LP1-5");
+    assert_eq!(far["verdict"], "unsure", "a row picked at an assumed voltage: {far}");
+    assert!(far["measured"].get("needed").is_none(), "{far}");
+    let why = far["measured"]["table_not_used"].as_str().unwrap_or_default();
+    assert!(why.contains("WIRE LENGTH") && why.contains("voltage isn't known"), "the table is read, and why it isn't used: {far}");
+    for f in of(&fs, "E-VDROP") {
+        assert_eq!(f["verdict"], "unsure", "no schedule: no breaker, no voltage: {f}");
+        assert!(f["measured"].get("needed").is_none(), "{f}");
+    }
+}
+
+#[test]
+fn a_circuit_whose_breaker_isnt_read_takes_a_table_row_only_where_both_its_panels_voltages_agree() {
+    // Q6460: LP1 is 120/208 V, but circuit 5's schedule row isn't read: one pole (120 V) or two
+    // (208 V) isn't known. Where the table's 120 V and 208 V columns ask the same size the
+    // answer stands; where they differ it is unsure.
+    let run = |table: &dyn Fn(f64, &str, &str) -> Vec<Vec<String>>| -> (Value, String, String) {
+        let mut s = building(Some(20), |_| {});
+        with_spec(&mut s, |sp| {
+            if let Some(c) = sp["mep"]["panel_schedules"][0]["circuits"].as_array_mut() {
+                c.truncate(2);
+            }
+        });
+        let (_, fs) = screen(&mut s, &["E-VDROP"]);
+        let far = vdrop_of(&fs, "LP1-5");
+        let l = far["measured"]["length_ft"].as_f64().unwrap_or_default();
+        assert!(l > 20.0, "{far}");
+        let have = far["measured"]["conductor"].as_str().unwrap_or_default().to_string();
+        let k = SIZE_STEPS.iter().position(|x| *x == have).unwrap_or(1);
+        let up = SIZE_STEPS.get(k + 1).copied().unwrap_or("#1").to_string();
+        drawn_volts_table(&mut s, &["CONDUCTOR", "120V", "208V"], &table(l, &have, &up));
+        let (_, fs) = screen(&mut s, &["E-VDROP"]);
+        (vdrop_of(&fs, "LP1-5"), have, up)
+    };
+    // Both columns keep its conductor: a pass, at either voltage.
+    let (agree, have, _) =
+        run(&|l, have, up| vec![vec![have.into(), feet(l + 50.0), feet(l + 100.0)], vec![up.into(), feet(l + 150.0), feet(l + 250.0)]]);
+    assert_eq!(agree["verdict"], "pass", "{agree}");
+    assert_eq!(agree["measured"]["needed"].as_str(), Some(have.as_str()), "{agree}");
+    assert_eq!(agree["measured"]["volts_either"], json!([120.0, 208.0]), "{agree}");
+    assert!(agree["measured"].get("volts").is_none(), "no one voltage was read: {agree}");
+    // 120 V asks the next size up, 208 V keeps it: unsure, never a fail off the 120 V column.
+    let (differ, _, _) =
+        run(&|l, have, up| vec![vec![have.into(), feet(l - 15.0), feet(l + 100.0)], vec![up.into(), feet(l + 150.0), feet(l + 250.0)]]);
+    assert_eq!(differ["verdict"], "unsure", "{differ}");
+    assert!(differ["measured"].get("needed").is_none(), "{differ}");
+    let why = differ["measured"]["table_not_used"].as_str().unwrap_or_default();
+    assert!(why.contains("120") && why.contains("208"), "{differ}");
 }

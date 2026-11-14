@@ -61,6 +61,168 @@ pub(crate) struct BackToBack {
     /// The kinds of box (its device's: `switch`) that keep their spot: the other moves.
     pub keep_kinds: Vec<String>,
     pub keep_source: String,
+    /// The remedy where nothing names one (`separate`, `putty`), and why.
+    pub remedy: String,
+    pub remedy_source: String,
+    /// The project rule that chooses it (its domain and key).
+    pub rule_domain: String,
+    pub rule_key: String,
+    /// Words naming the putty pads (or listed box inserts) in a note, a specification or the
+    /// project rule's value.
+    pub putty_words: Vec<String>,
+    /// Words naming the separation by distance (a rule's value; in the documents with a box and
+    /// a pair word beside them).
+    pub separate_words: Vec<String>,
+    pub box_words: Vec<String>,
+    pub pair_words: Vec<String>,
+    /// Words that forbid what the sentence names (`putty pads are not permitted`).
+    pub not_words: Vec<String>,
+    /// Why the pads, when the project chooses them.
+    pub putty_choice_source: String,
+    /// The project's choice for this build: every back-to-back pair takes the pads, at the drawn
+    /// spots (set by the caller, never read from the rules file).
+    #[serde(skip)]
+    pub pads: bool,
+    /// Most vertical clear distance between the two boxes' bodies at which they still count,
+    /// inches (0: their heights overlap; none: any heights in the wall both are hosted in).
+    pub max_vertical_in: Option<f64>,
+    pub vertical_source: String,
+    /// Words naming boxes back to back (`back-to-back`, `same stud cavity`) in a sentence that
+    /// forbids them (Q6553).
+    pub back_words: Vec<String>,
+    /// Words that forbid what a sentence names (`do not`, `shall not`, `not permitted`).
+    pub forbid_words: Vec<String>,
+    /// Words that allow it (a project rule's value: `permitted`).
+    pub allow_words: Vec<String>,
+    /// Words limiting a sentence to fire-rated walls, and words saying any wall.
+    pub fire_words: Vec<String>,
+    pub any_wall_words: Vec<String>,
+    /// The project rule (in `rule_domain`) that forbids or allows back-to-back boxes.
+    pub forbid_rule_key: String,
+    /// Why every pair is separated where the documents forbid back-to-back devices.
+    pub forbid_source: String,
+    /// The documents forbid back-to-back devices for this build: a pair no stud-bay move clears
+    /// tries the farther moves and the box that keeps its spot, never the pads by choice (set by
+    /// the caller, never read from the rules file).
+    #[serde(skip)]
+    pub forbidden: bool,
+}
+
+/// Where the documents forbid back-to-back devices (Q6553): the sentence that does, and whether
+/// it names fire-rated walls only (else every wall).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Forbid {
+    pub line: String,
+    pub rated_only: bool,
+}
+
+/// The remedy for boxes back to back in a rated wall (IBC 714.4.2 exceptions 1.1 and 1.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Remedy {
+    /// One box moved along its face until the pair is the code's distance apart.
+    Separate,
+    /// Listed putty pads (box inserts) on both boxes, at the drawn spots.
+    Putty,
+}
+
+impl Remedy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Remedy::Separate => "separate",
+            Remedy::Putty => "putty pads",
+        }
+    }
+}
+
+/// Most characters of a document looked at for the remedy (hostile files).
+const MAX_TEXT: usize = 4_000_000;
+
+/// The longest run between stops read as one sentence, bytes.
+const MAX_SENTENCE: usize = 1_200;
+
+fn has_any(up: &str, words: &[String]) -> bool {
+    words.iter().map(|w| w.trim()).any(|w| !w.is_empty() && up.contains(&w.to_ascii_uppercase()))
+}
+
+impl BackToBack {
+    /// The remedy a value names (a project rule's: `putty pads`, `separate`): none when it names
+    /// neither.
+    pub(crate) fn remedy_named(&self, value: &str) -> Option<Remedy> {
+        let up = value.to_ascii_uppercase();
+        if up.contains("PUTTY") || has_any(&up, &self.putty_words) {
+            return Some(if has_any(&up, &self.not_words) { Remedy::Separate } else { Remedy::Putty });
+        }
+        has_any(&up, &self.separate_words).then_some(Remedy::Separate)
+    }
+
+    /// Whether a sentence (or a project rule's value) forbids back-to-back boxes: it names them
+    /// back to back (or boxes in the same stud cavity) and forbids it, and names no putty pads (a
+    /// sentence about the pads is the remedy's). Its scope: fire-rated walls where it names them
+    /// and no wall of any kind, else every wall.
+    fn forbids(&self, sentence: &str) -> Option<bool> {
+        let up = sentence.to_ascii_uppercase();
+        let named = has_any(&up, &self.back_words) && has_any(&up, &self.box_words) && !has_any(&up, &self.putty_words) && !up.contains("PUTTY");
+        (named && has_any(&up, &self.forbid_words)).then(|| has_any(&up, &self.fire_words) && !has_any(&up, &self.any_wall_words))
+    }
+
+    /// The first sentence of a document's text (a general note, a keynote, a specification)
+    /// that forbids back-to-back devices.
+    pub(crate) fn forbid_in(&self, text: &str) -> Option<Forbid> {
+        let text: String = text.chars().take(MAX_TEXT).collect();
+        text.split(['.', ';'])
+            .take(200_000)
+            .flat_map(|s| if s.len() > MAX_SENTENCE { s.lines().map(str::to_string).collect::<Vec<_>>() } else { vec![s.to_string()] })
+            .take(400_000)
+            .find_map(|s| {
+                let line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+                let rated_only = self.forbids(&line)?;
+                Some(Forbid { line: line.chars().take(200).collect(), rated_only })
+            })
+    }
+
+    /// A project rule's value (`forbidden`, `not permitted in any wall`, `permitted`): forbidden
+    /// (and its scope), allowed, or neither named.
+    pub(crate) fn forbid_value(&self, value: &str) -> Option<Option<bool>> {
+        let up = value.to_ascii_uppercase();
+        if up.contains("FORBID") || has_any(&up, &self.forbid_words) {
+            return Some(Some(has_any(&up, &self.fire_words) && !has_any(&up, &self.any_wall_words)));
+        }
+        has_any(&up, &self.allow_words).then_some(None)
+    }
+
+    /// The remedy a document's text names, and the sentence that does: a sentence naming the
+    /// putty pads (one forbidding them names the separation), else one naming the separation of
+    /// boxes on opposite sides. Pads named anywhere win: a document that allows them keeps the
+    /// drawn spots.
+    pub(crate) fn remedy_in(&self, text: &str) -> Option<(Remedy, String)> {
+        let mut separate: Option<String> = None;
+        let mut forbidden: Option<String> = None;
+        let text: String = text.chars().take(MAX_TEXT).collect();
+        // A sentence runs on over the lines a page wraps it in; one longer than a paragraph
+        // (a table, a page with no stops) is read line by line.
+        let sentences = text.split(['.', ';']).take(200_000).flat_map(|s| {
+            if s.len() > MAX_SENTENCE {
+                s.lines().map(str::to_string).collect::<Vec<_>>()
+            } else {
+                vec![s.split_whitespace().collect::<Vec<_>>().join(" ")]
+            }
+        });
+        for sentence in sentences.take(400_000) {
+            let up = sentence.to_ascii_uppercase();
+            let cut = || sentence.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>();
+            if has_any(&up, &self.putty_words) {
+                if has_any(&up, &self.not_words) {
+                    forbidden.get_or_insert_with(cut);
+                    continue;
+                }
+                return Some((Remedy::Putty, cut()));
+            }
+            if separate.is_none() && has_any(&up, &self.separate_words) && has_any(&up, &self.box_words) && has_any(&up, &self.pair_words) {
+                separate = Some(cut());
+            }
+        }
+        forbidden.or(separate).map(|s| (Remedy::Separate, s))
+    }
 }
 
 /// A box as the clearance sees it (drawing units): its centre, its face's direction along and
@@ -110,6 +272,11 @@ pub(crate) struct Cleared {
     pub stuck: Vec<(usize, usize)>,
     /// Back-to-back pairs where a box kept its spot by the rules (the other moved, or pads).
     pub kept: usize,
+    /// Where the documents forbid back-to-back devices: pairs no move along their walls clears
+    /// (a review; the caller pads them where the wall is fire-rated, the code's protection).
+    pub unseparated: Vec<(usize, usize)>,
+    /// Pairs separated only by a move past the next stud bays or of a box that keeps its spot.
+    pub moved_farther: usize,
 }
 
 /// Most boxes looked at (hostile models).
@@ -127,7 +294,8 @@ fn overlaps(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64) -> bool {
 }
 
 /// How far apart along the wall `a` at `ca` and `b` at `cb` are, edge to edge, when they are
-/// on opposite faces of one wall the back-to-back rule applies to.
+/// on opposite faces of one wall the back-to-back rule applies to (each hosted in it at its own
+/// height: the caller gives a box a wall only where that wall stands at the box's height).
 fn apart_back_to_back(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> Option<f64> {
     if !(a.movable && b.movable && a.rated && a.wall.is_some() && a.wall == b.wall && a.out.dot(b.out) < -0.9) {
         return None;
@@ -139,12 +307,19 @@ fn apart_back_to_back(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> Option<
     Some(d.dot(a.along).abs() - (a.w + b.w) / 2.0)
 }
 
-/// The two boxes' conflict, if any.
-fn conflict(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64, apart: f64) -> Option<Why> {
+/// The vertical clear distance between `a` at `ca` and `b` at `cb` (0 where their heights overlap).
+fn vertical_gap(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3) -> f64 {
+    ((ca.z - cb.z).abs() - (a.h + b.h) / 2.0).max(0.0)
+}
+
+/// The two boxes' conflict, if any (`vertical`: the back-to-back rule's vertical reach, drawing
+/// units; none: any heights).
+fn conflict(a: &ClearBox, ca: Vec3, b: &ClearBox, cb: Vec3, gap: f64, apart: f64, vertical: Option<f64>) -> Option<Why> {
     if overlaps(a, ca, b, cb, gap) {
         return Some(Why::Overlap);
     }
-    (apart > 0.0 && apart_back_to_back(a, ca, b, cb).is_some_and(|e| e < apart - 1e-9)).then_some(Why::BackToBack)
+    let near_in_height = vertical.is_none_or(|v| vertical_gap(a, ca, b, cb) <= v + 1e-9);
+    (apart > 0.0 && near_in_height && apart_back_to_back(a, ca, b, cb).is_some_and(|e| e < apart - 1e-9)).then_some(Why::BackToBack)
 }
 
 /// The boxes near a point, by level and grid cell.
@@ -209,6 +384,7 @@ pub(crate) fn clear(
     }
     let gap = rule.gap_in.max(0.0) * upi;
     let apart = rule.back_to_back.min_apart_in.max(0.0) * upi;
+    let vertical = rule.back_to_back.max_vertical_in.filter(|v| v.is_finite()).map(|v| v.max(0.0) * upi);
     let step = rule.step_in.max(0.125) * upi;
     let steps = ((rule.max_move_in.max(0.0) * upi / step).floor() as usize).min(1_000);
     let b2b_move =
@@ -237,7 +413,7 @@ pub(crate) fn clear(
     let free = |grid: &Grid, at: &[Vec3], x: usize, p: Vec3| -> bool {
         let Some(bx) = boxes.get(x) else { return false };
         grid.near(&bx.level, p).into_iter().filter(|y| *y != x).all(|y| match (boxes.get(y), at.get(y)) {
-            (Some(by), Some(cy)) => conflict(bx, p, by, *cy, gap, apart).is_none(),
+            (Some(by), Some(cy)) => conflict(bx, p, by, *cy, gap, apart, vertical).is_none(),
             _ => true,
         })
     };
@@ -263,38 +439,51 @@ pub(crate) fn clear(
         others.sort_unstable();
         for j in others {
             let (Some(b), Some(&ci), Some(&cj)) = (boxes.get(j), at.get(i), at.get(j)) else { continue };
-            let Some(why) = conflict(a, ci, b, cj, gap, apart) else { continue };
+            let Some(why) = conflict(a, ci, b, cj, gap, apart, vertical) else { continue };
             let back = why == Why::BackToBack;
+            // The project's pads: both boxes stay where the documents put them.
+            if back && rule.back_to_back.pads {
+                out.putty.push((i, j));
+                continue;
+            }
             if back && (a.keep || b.keep) {
                 out.kept += 1;
             }
             // The smallest move of either (the later one first, then forward), clear of all,
             // along an unbroken stretch of its face: a direction ends at the first step off it.
-            let mut best: Option<(usize, usize, f64)> = None;
-            let mut open = [[true; 2]; 2];
-            'search: for k in 1..=(if back { b2b_steps } else { steps }) {
-                let s = step * k as f64;
-                for (xi, x) in [j, i].into_iter().enumerate() {
-                    let (Some(bx), Some(&cx)) = (boxes.get(x), at.get(x)) else { continue };
-                    if !bx.movable || (back && bx.keep) {
-                        continue;
-                    }
-                    for (di, dir) in [1.0, -1.0].into_iter().enumerate() {
-                        let Some(way) = open.get_mut(xi).and_then(|w| w.get_mut(di)) else { continue };
-                        if !*way {
+            let search = |grid: &Grid, at: &[Vec3], most: usize, keep_moves: bool| -> Option<(usize, usize, f64)> {
+                let mut open = [[true; 2]; 2];
+                for k in 1..=most {
+                    let s = step * k as f64;
+                    for (xi, x) in [j, i].into_iter().enumerate() {
+                        let (Some(bx), Some(&cx)) = (boxes.get(x), at.get(x)) else { continue };
+                        if !bx.movable || (back && bx.keep && !keep_moves) {
                             continue;
                         }
-                        let p = cx + Vec3::new(bx.along.x, bx.along.y, 0.0) * (dir * s);
-                        if !fits(x, p) {
-                            *way = false;
-                            continue;
-                        }
-                        if free(&grid, &at, x, p) && own_bay(&grid, &at, x, p) && lands(x, p) {
-                            best = Some((x, k, dir));
-                            break 'search;
+                        for (di, dir) in [1.0, -1.0].into_iter().enumerate() {
+                            let Some(way) = open.get_mut(xi).and_then(|w| w.get_mut(di)) else { continue };
+                            if !*way {
+                                continue;
+                            }
+                            let p = cx + Vec3::new(bx.along.x, bx.along.y, 0.0) * (dir * s);
+                            if !fits(x, p) {
+                                *way = false;
+                                continue;
+                            }
+                            if free(grid, at, x, p) && own_bay(grid, at, x, p) && lands(x, p) {
+                                return Some((x, k, dir));
+                            }
                         }
                     }
                 }
+                None
+            };
+            let mut best = search(&grid, &at, if back { b2b_steps } else { steps }, false);
+            // The documents forbid the pair (Q6553): past the next stud bays as far as a box
+            // moves, and the box that would keep its spot too, before anything is left.
+            if best.is_none() && back && rule.back_to_back.forbidden {
+                best = search(&grid, &at, steps, true);
+                out.moved_farther += usize::from(best.is_some());
             }
             match best {
                 Some((x, k, dir)) => {
@@ -308,6 +497,7 @@ pub(crate) fn clear(
                     }
                     out.moved.push(Moved { index: x, shift, why, from: if x == j { i } else { j } });
                 }
+                None if back && rule.back_to_back.forbidden => out.unseparated.push((i, j)),
                 None if why == Why::BackToBack => out.putty.push((i, j)),
                 None => out.stuck.push((i, j)),
             }
@@ -382,6 +572,30 @@ mod tests {
         assert!(m.shift.y < 0.0 && m.shift.x.abs() < 1e-9);
         let p = boxes[1].centre + Vec3::new(m.shift.x, m.shift.y, 0.0);
         assert!(!overlaps(&boxes[0], boxes[0].centre, &boxes[1], p, 0.25));
+    }
+
+    #[test]
+    fn back_to_back_boxes_count_at_heights_within_the_rules_vertical_reach() {
+        // A switch at 46 in and a receptacle at 18 in on the two faces of one rated wall, 1 in
+        // apart along it: one stud cavity, back to back at any heights (no vertical reach) ...
+        let a = wall_box(50.0, 2.0, 46.0, Vec2::new(0.0, 1.0), 7, true);
+        let b = wall_box(51.0, -2.0, 18.0, Vec2::new(0.0, -1.0), 7, true);
+        let c = clear(&[a.clone(), b.clone()], &rule(), 1.0, &|_, _| true, &|_, _| true);
+        assert_eq!(c.moved.len(), 1, "{c:?}");
+        // ... and not where the rule's reach says their heights must overlap or come close.
+        let mut r = rule();
+        r.back_to_back.max_vertical_in = Some(0.0);
+        let c = clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty() && c.putty.is_empty(), "{c:?}");
+        r.back_to_back.max_vertical_in = Some(24.0);
+        assert_eq!(clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true).moved.len(), 1);
+        // A box not hosted in the wall (no wall: above it) never counts.
+        let mut up = b.clone();
+        up.wall = None;
+        up.movable = false;
+        up.centre.z = 150.0;
+        let c = clear(&[a, up], &rule(), 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty() && c.putty.is_empty(), "{c:?}");
     }
 
     #[test]
@@ -532,6 +746,65 @@ mod tests {
     }
 
     #[test]
+    fn with_the_projects_putty_pads_a_back_to_back_pair_stays_and_an_overlap_still_moves() {
+        // Mirrored units: their receptacles back to back at one spot, the wall long enough to
+        // move one. With the pads chosen neither moves; a coincident pair still parts.
+        let a = wall_box(50.0, 2.0, 18.0, Vec2::new(0.0, 1.0), 7, true);
+        let b = wall_box(50.0, -2.0, 18.0, Vec2::new(0.0, -1.0), 7, true);
+        let mut r = field_rule();
+        assert_eq!(clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true).moved.len(), 1);
+        r.back_to_back.pads = true;
+        let c = clear(&[a.clone(), b.clone()], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert!(c.moved.is_empty(), "{c:?}");
+        assert_eq!(c.putty, vec![(0, 1)]);
+        let n = Vec2::new(0.0, 1.0);
+        let c = clear(&[wall_box(10.0, 0.0, 44.0, n, 1, true), wall_box(10.0, 0.0, 44.0, n, 1, true)], &r, 1.0, &|_, _| true, &|_, _| true);
+        assert_eq!((c.moved.len(), c.putty.len()), (1, 0), "{c:?}");
+    }
+
+    fn words() -> BackToBack {
+        let w = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        BackToBack {
+            putty_words: w(&["PUTTY PAD", "BOX INSERT"]),
+            separate_words: w(&["SEPARATE", "APART"]),
+            box_words: w(&["BOX", "OUTLET"]),
+            pair_words: w(&["OPPOSITE", "BACK TO BACK"]),
+            not_words: w(&["NOT PERMITTED"]),
+            ..BackToBack::default()
+        }
+    }
+
+    #[test]
+    fn the_remedy_is_read_from_a_documents_words_and_a_rules_value() {
+        let b = words();
+        // A specification paragraph and a general note, in either wording.
+        let spec =
+            "3.4 FIRESTOPPING\nA. Outlet boxes in rated walls: protect with listed putty pads where boxes on opposite sides are within 24 inches.";
+        let (r, line) = b.remedy_in(spec).unwrap_or((Remedy::Separate, String::new()));
+        assert_eq!(r, Remedy::Putty);
+        assert!(line.contains("putty pads") && !line.contains('\n'), "{line}");
+        assert_eq!(b.remedy_in("2. PROVIDE FIRE-RATED BOX INSERTS AT DEVICES IN DEMISING WALLS.").map(|x| x.0), Some(Remedy::Putty));
+        // Wrapped over two lines by the page.
+        let wrapped = "C. Where outlet boxes are installed on opposite sides of a rated wall, protect them with listed putty\n   pads (both boxes).";
+        assert_eq!(b.remedy_in(wrapped).map(|x| x.0), Some(Remedy::Putty));
+        // Separation, or the pads forbidden: separate.
+        let sep = "Boxes on opposite sides of rated walls shall be separated 24 in apart horizontally.";
+        assert_eq!(b.remedy_in(sep).map(|x| x.0), Some(Remedy::Separate));
+        assert_eq!(b.remedy_in("Putty pads are not permitted.").map(|x| x.0), Some(Remedy::Separate));
+        // Pads named anywhere win over a separation named first.
+        assert_eq!(b.remedy_in(&format!("{sep} Alternatively use listed putty pads.")).map(|x| x.0), Some(Remedy::Putty));
+        // Nothing about it: none. A separation of something that isn't a box pair: none.
+        assert!(b.remedy_in("Conduit shall be EMT. Separate the low voltage from power.").is_none());
+        assert!(b.remedy_in("").is_none());
+        // A rule's value.
+        assert_eq!(b.remedy_named("putty pads"), Some(Remedy::Putty));
+        assert_eq!(b.remedy_named("Separate"), Some(Remedy::Separate));
+        assert_eq!(b.remedy_named("whatever"), None);
+        // Hostile text: long, no breaks.
+        assert!(b.remedy_in(&"X".repeat(5_000_000)).is_none());
+    }
+
+    #[test]
     fn a_move_never_lands_on_a_third_box_and_hostile_input_is_harmless() {
         // Three boxes in a row on one face: the coincident pair's mover skips the taken spot.
         let n = Vec2::new(0.0, 1.0);
@@ -553,5 +826,64 @@ mod tests {
         let c = clear(&[bad.clone(), bad], &rule(), 1.0, &|_, _| true, &|_, _| true);
         assert!(c.moved.is_empty());
         assert!(clear(&boxes, &rule(), f64::NAN, &|_, _| true, &|_, _| true).moved.is_empty());
+    }
+
+    #[test]
+    fn the_documents_forbidding_back_to_back_devices_are_read_with_their_scope() {
+        // Q6553: the rules' words, read from a general note, a keynote or a specification.
+        let b = &super::super::rules().box_clear.back_to_back;
+        let any = "ELECTRICAL GENERAL NOTES\n4. DO NOT INSTALL DEVICES BACK-TO-BACK IN ANY WALL. OFFSET BOXES ONE STUD SPACE MINIMUM.";
+        let f = b.forbid_in(any).expect("a general note forbids");
+        assert!(!f.rated_only && f.line.contains("BACK-TO-BACK") && !f.line.contains('\n'), "{f:?}");
+        let wrapped = "7 OUTLET BOXES SHALL NOT BE MOUNTED BACK TO\nBACK IN DWELLING UNIT WALLS";
+        let w = b.forbid_in(wrapped).expect("a keynote wrapped over two lines forbids");
+        assert!(!w.rated_only && w.line.contains("BACK TO BACK"), "{w:?}");
+        let rated = b.forbid_in("3.2 B. Outlet boxes shall not be installed back-to-back in fire-rated walls.").expect("a spec forbids");
+        assert!(rated.rated_only, "its scope is the fire-rated walls: {rated:?}");
+        let both = b.forbid_in("Back-to-back outlet boxes in rated or non-rated walls are not permitted.").expect("forbids");
+        assert!(!both.rated_only, "{both:?}");
+        assert!(b.forbid_in("Boxes in the same stud cavity on opposite faces are prohibited.").is_some());
+        // Not a prohibition of the pair: the pads' sentence (the remedy's), an order to install,
+        // another subject.
+        assert!(b.forbid_in("Where outlet boxes are back to back, do not omit the listed putty pads.").is_none());
+        assert!(b.forbid_in("Install the boxes back to back where shown.").is_none());
+        assert!(b.forbid_in("Do not install conduit exposed in finished spaces.").is_none());
+        assert!(b.forbid_in(&"x".repeat(5_000_000)).is_none(), "hostile text is harmless");
+        // A project rule's value.
+        assert_eq!(b.forbid_value("forbidden"), Some(Some(false)));
+        assert_eq!(b.forbid_value("not permitted in fire-rated walls"), Some(Some(true)));
+        assert_eq!(b.forbid_value("permitted"), Some(None));
+        assert_eq!(b.forbid_value("putty pads"), None);
+    }
+
+    #[test]
+    fn where_the_documents_forbid_back_to_back_no_pair_takes_pads_by_choice() {
+        // Q6553: a pair the next stud bays don't clear moves farther, or the box that keeps its
+        // spot moves; only a pair nothing clears is left (a review), never padded here.
+        let rc = wall_box(50.0, 2.0, 18.0, Vec2::new(0.0, 1.0), 7, true);
+        let mut sw = wall_box(52.0, -2.0, 46.0, Vec2::new(0.0, -1.0), 7, true);
+        sw.keep = true;
+        let mut forbid = field_rule();
+        forbid.back_to_back.forbidden = true;
+        // The receptacle can't move: the switch does, the documents forbid the pair.
+        let short = |i: usize, p: Vec3| i != 0 || (44.0..=56.0).contains(&p.x);
+        let c = clear(&[rc.clone(), sw.clone()], &forbid, 1.0, &short, &|_, _| true);
+        assert!(c.putty.is_empty() && c.unseparated.is_empty(), "{c:?}");
+        assert_eq!((c.moved.len(), c.moved_farther), (1, 1), "{c:?}");
+        assert_eq!(c.moved[0].index, 1, "the switch moved: {c:?}");
+        let edge = apart_back_to_back(&rc, rc.centre, &sw, ends(&c, &sw, 1)).unwrap_or(0.0);
+        assert!(edge >= 24.0 - 1e-9, "{edge}");
+        // The first spot clear of furniture is past the next stud bays: farther, not pads.
+        let plain = wall_box(52.0, -2.0, 46.0, Vec2::new(0.0, -1.0), 7, true);
+        let far = |_: usize, p: Vec3| (p.x - 51.0).abs() > 34.0;
+        let c = clear(&[rc.clone(), plain.clone()], &field_rule(), 1.0, &|_, _| true, &far);
+        assert_eq!(c.putty, vec![(0, 1)], "without the prohibition: pads ({c:?})");
+        let c = clear(&[rc.clone(), plain], &forbid, 1.0, &|_, _| true, &far);
+        assert!(c.putty.is_empty() && c.unseparated.is_empty() && c.moved.len() == 1, "{c:?}");
+        assert!(moved_total(&c, c.moved[0].index) > 32.0, "{c:?}");
+        // Neither can move at all: left for review.
+        let none = |_: usize, _: Vec3| false;
+        let c = clear(&[rc, sw], &forbid, 1.0, &none, &|_, _| true);
+        assert_eq!((c.putty.len(), c.unseparated.clone()), (0, vec![(0, 1)]), "{c:?}");
     }
 }

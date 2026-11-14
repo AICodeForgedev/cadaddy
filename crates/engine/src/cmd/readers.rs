@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         // ── RFI reader ───────────────────────────────────────────────────
         CommandSpec::new("rfi.read", "Read RFIs from Prints", run_rfi_read)
-            .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20}")
+            .params("{apply?: bool (complete the objects the documents leave open with the build's proposals, marked unsure, and keep the RFIs in the spec)} → {built, counts: {by_kind: {}, by_severity: {}, by_step: {}}, items: first 20 (by the build step they block, then severity), total, headline (N things to ask before you build: X high), requirements: {requirements, ran, did_not_run, objects_checked, open_objects, findings, checks: [{id, object, ran, status, objects, met_by_documents, completed_by_rule, missing, findings, basis}]}, applied?, message?}: the inconsistencies of the model built from the set: the RFIs the build and the readers raised, and each object kind's requirements (a luminaire's circuit, type and control, a receptacle's circuit, a switch's load, equipment's circuit, a panel's feeder) measured over the model; with no model built yet it says so (the RFIs are what the build raises)")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
         CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
@@ -205,6 +205,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 equipment: f("equipment"),
                 near: String::new(),
                 derived: String::new(),
+                made: String::new(),
+                notes: Vec::new(),
                 keynote: f("keynote"),
                 located: String::new(),
                 keynotes: Vec::new(),
@@ -212,6 +214,15 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 drawn_at: None,
                 moved: String::new(),
                 connection: f("connection"),
+                fire_alarm: None,
+                symbol: None,
+                label_at: None,
+                spot: String::new(),
+                template: f("typical_view"),
+                circuit_basis: f("circuit_basis"),
+                circuit_review: String::new(),
+                hoistway: String::new(),
+                hoistway_view: String::new(),
             }
         })
         .collect();
@@ -610,7 +621,10 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
 pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy_walk3d::BuildingSpec) -> cadaddy_walk3d::Mep {
     let duct_bottom_ft = sp.mep.band_bottom_ft("duct").unwrap_or(10.0);
     let terminal_bottom_ft = sp.mep.band_bottom_ft("terminal").unwrap_or(8.5);
-    let equipment_height_ft = sp.mep.band_bottom_ft("equipment").unwrap_or(6.0);
+    // The project's equipment band is where floor-standing equipment's bottom is, never a height.
+    let equipment_bottom_ft = sp.mep.band_bottom_ft("equipment").filter(|b| b.is_finite() && *b >= 0.0);
+    let ceiling_ft = sp.level(level).map_or(8.0, |l| l.ceiling_ft);
+    let roof = super::schedequip::is_roof(level);
     let mut mep = cadaddy_walk3d::Mep::default();
     let mut sys_map: BTreeMap<String, MepSystem> = BTreeMap::new();
     for run in &net.runs {
@@ -653,29 +667,30 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         });
     }
     mep.systems = sys_map.into_values().collect();
     // Geometry noise in the traced centrelines (jogs, hooks, a bend in pieces) is no fitting.
     mep.runs = super::runtidy::tidy_runs(std::mem::take(&mut mep.runs), sp.units_per_foot);
     for dt in &net.terminals {
-        let sys_name = match dt.kind.as_str() {
-            "supply_diffuser" => "SA",
-            "return_grille" => "RA",
-            "exhaust_grille" => "EA",
-            _ => "M-DUCT",
-        };
+        // The type mark's letters say which air it moves (`SD`: supply, `RG`: return), over
+        // what its symbol looks like.
+        let (kind, sys_name) = terminal_kind_of(&dt.kind, &dt.mark);
         mep.terminals.push(MepTerminal {
             system: sys_name.to_string(),
             level: level.to_string(),
             at: [dt.at.x, dt.at.y],
-            size_in: [12.0, 12.0],
+            size_in: dt.size_in.filter(|s| s[0].is_finite() && s[0] > 0.0 && s[1].is_finite()).unwrap_or([12.0, 12.0]),
             bottom_ft: terminal_bottom_ft,
-            terminal_kind: dt.kind.clone(),
+            terminal_kind: kind,
             objects: Vec::new(),
             source_sheet: sheet.to_string(),
             made: Default::default(),
             basis: String::new(),
+            corrections: Vec::new(),
+            tag: dt.mark.clone(),
+            cfm: dt.cfm.filter(|c| c.is_finite() && *c > 0.0),
         });
     }
     for de in &net.equipment {
@@ -683,13 +698,36 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
         if !sheet.is_empty() {
             sources.insert("sheet".to_string(), sheet.to_string());
         }
+        // No height on the sheet: where its kind is mounted (M-EQUIP-MOUNT), else on the floor
+        // (or the project's equipment band), the usual height of its kind (Q6494).
+        let usual = cadaddy_mepfix::equip_reader::rule_size(&de.kind)[2];
+        let mount =
+            if roof { None } else { super::schedequip::mounting(&de.kind, &format!("{} {}", de.kind.replace('_', " "), de.tag), ceiling_ft, None) };
+        let (bottom_ft, height_ft) = match mount {
+            Some(m) => {
+                let h = m.height_ft.unwrap_or(usual);
+                sources.insert("elevation".to_string(), m.basis.clone());
+                sources.insert("height".to_string(), if m.height_ft.is_some() { m.basis } else { "rule: the usual height of its kind".to_string() });
+                (m.bottom_ft, h)
+            }
+            None => {
+                let b = equipment_bottom_ft.unwrap_or(0.0);
+                sources.insert(
+                    "elevation".to_string(),
+                    if equipment_bottom_ft.is_some() { format!("the project's equipment band, {b:.2} ft") } else { "on the floor".to_string() },
+                );
+                sources.insert("height".to_string(), "rule: the usual height of its kind".to_string());
+                (b, usual)
+            }
+        };
         mep.equipment.push(MepEquipment {
             tag: de.tag.clone(),
             kind: de.kind.clone(),
             level: level.to_string(),
             min: [de.min.x, de.min.y],
             max: [de.max.x, de.max.y],
-            height_ft: equipment_height_ft,
+            bottom_ft,
+            height_ft,
             systems: vec![match de.kind.as_str() {
                 "ahu" | "rtu" | "vav" => "SA".to_string(),
                 "exhaust_fan" => "EA".to_string(),
@@ -926,24 +964,65 @@ fn run_ceilasm_read(_s: &mut Session, p: &Value) -> Result<Value> {
 
 // ─── rfi.read ────────────────────────────────────────────────────────────────
 
-fn run_rfi_read(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = bool_or(p, "apply", false);
-
-    let project = match project(_s) {
-        Ok(p) => p,
-        Err(_) => {
-            return Ok(no_project("RFIs", json!({"counts": {"by_kind": {}, "by_severity": {}}, "items": []})));
-        }
+    // The RFIs are what the build raises on the objects it cannot complete (Q6619): with no model
+    // built there is nothing to read them from yet, and the answer says so instead of an empty list.
+    let built = super::bspec::current(s, "rfi.read").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+    let Some(sp) = built else {
+        let msg = "no model built from the set yet: the RFIs are what the build raises on each object it cannot complete from the documents; run the guided job (job.start {pdfs}) or build the model (bim.build), then rfi.read lists them";
+        let out = json!({"built": false, "counts": {"by_kind": {}, "by_severity": {}, "by_step": {}}, "items": [], "total": 0});
+        return Ok(match project(s) {
+            Ok(project) => {
+                let mut out = out;
+                out["sheets_read"] = json!(project.sheets.len());
+                out["message"] = json!(msg);
+                out["warnings"] = json!([msg]);
+                out
+            }
+            // No print set either: how to open one first.
+            Err(_) => {
+                let mut out = no_project("RFIs", out);
+                out["message"] = json!(format!("{msg}; {}", out["message"].as_str().unwrap_or("")));
+                out
+            }
+        });
     };
-
-    Ok(json!({
-        "counts": {"by_kind": {}, "by_severity": {}},
-        "items": [],
-        "total": 0,
-        "sheets_read": project.sheets.len(),
-        "apply": apply,
-        "message": "RFI reader wired; requires wall legend and classified sheets",
-    }))
+    let ev = super::requirements::evaluate(s.doc()?, Some(&sp));
+    let measured = super::requirements::summary(&ev);
+    let mut out = json!({"built": true, "apply": apply});
+    let sp = if apply {
+        out["applied"] = json!(super::requirements::apply(s, &ev)?);
+        super::bspec::current(s, "rfi.read")?.0
+    } else {
+        sp
+    };
+    // The spec's items, and (read only) the requirement items the build would raise now.
+    let mut list = cadaddy_walk3d::rfi::list(&sp);
+    for r in &ev.rfis {
+        if !list.iter().any(|x| x.id == r.id) {
+            list.push(r.clone());
+        }
+    }
+    super::requirements::sort_by_step(&mut list);
+    let rules = super::requirements::rules();
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_severity: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_step: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &list {
+        *by_kind.entry(r.kind_name().to_string()).or_default() += 1;
+        *by_severity.entry(r.severity.name().to_string()).or_default() += 1;
+        *by_step.entry(rules.step_of(r).to_string()).or_default() += 1;
+    }
+    let open: Vec<&cadaddy_walk3d::Rfi> = list.iter().filter(|r| r.status == cadaddy_walk3d::RfiStatus::Open).collect();
+    let high = open.iter().filter(|r| r.severity == cadaddy_walk3d::Severity::High).count();
+    out["counts"] = json!({"by_kind": by_kind, "by_severity": by_severity, "by_step": by_step});
+    out["items"] = json!(list.iter().take(20).map(super::requirements::item_json).collect::<Vec<_>>());
+    out["total"] = json!(list.len());
+    out["open"] = json!(open.len());
+    out["headline"] = json!(super::requirements::headline(open.len(), high));
+    out["requirements"] = measured;
+    Ok(out)
 }
 
 // ─── mep.equipment.read ──────────────────────────────────────────────────────
@@ -1170,6 +1249,12 @@ pub(crate) fn receptacle_item(tag: &str) -> String {
 pub(crate) fn device_kind(tag: &str) -> &'static str {
     cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", tag.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
+
+/// Properties a check gives one device, written at most.
+const MAX_DEVICE_NOTES: usize = 16;
+/// The properties a check gives a device it made (Q6612) that its built element carries too: how
+/// sure it is, why no engineer's sheet has it, what is proposed for it, the RFI asking about it.
+pub(crate) const CHECK_FIELDS: [&str; 6] = ["confidence", "not_on_electrical", "proposed_type", "proposed_circuit", "proposed_control", "rfi"];
 
 /// Devices listed at most per call, and read at most.
 const DEVICES_LISTED: usize = 500;
@@ -1460,6 +1545,15 @@ pub struct ReadDevice {
     /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// What it is by the documents when a check made it rather than a plan (`inferred`: only
+    /// another trade's sheet draws it, Q6612), its basis in `derived`. Empty: drawn, or derived
+    /// when `derived` is given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
+    /// Properties a check gives it (`confidence` unsure, `proposed_type`, `proposed_circuit`, `proposed_control`),
+    /// each with its value: written onto its element as rule values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<(String, String)>,
     /// The keynote its sheet tags it with (`E-9 keynote 4: <the note>`), when one is by its
     /// symbol and asks something of it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1486,6 +1580,96 @@ pub struct ReadDevice {
     /// it this luminaire. Empty: its plan draws the luminaire itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub connection: String,
+    /// A notification appliance the approved fire alarm shop drawings give (Q6495): its
+    /// address, circuit, candela, mounting and source, and the design device it superseded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_alarm: Option<FireAlarmFacts>,
+    /// A device found by its drawing on a plan (Q6484): the symbol table's entry it is a copy of,
+    /// how the print draws it and the library symbol it is shown with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<SymbolFacts>,
+    /// Made from a label (a circuit label, a switch designation, a fixture mark with no symbol
+    /// block): where that label is printed (drawing units), and how its spot was found from it
+    /// (the leader's end, the nearest symbol, or the label's own point: [`super::labelspot`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_at: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spot: String,
+    /// The typical room's view (its sheet and title) it was stamped from into a room of the view's
+    /// type. Empty: read for its own room (its floor's plan, or a view of its own room).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub template: String,
+    /// Where its circuit and switch leg came from when its typical view's labels gave way: its
+    /// room's own floor plan tags it (that floor's panel), the view's labels kept in the note.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit_basis: String,
+    /// Why its typical view's circuit label is asked: no schedule row or plan of its room's level
+    /// supports it (the view's panel feeds another floor).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub circuit_review: String,
+    /// Read off an elevator pit plan (`pit`) or a hoistway (shaft) plan (`top`): it belongs in the
+    /// hoistway's pit or at its top, not on the storey the view registered onto (Q6615); and
+    /// that view (its sheet, number and title).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hoistway: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hoistway_view: String,
+}
+
+/// What the symbol table says of a device found by its drawing ([`super::symtable`]).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SymbolFacts {
+    /// The table's entry (`legend:e-001:duplex-receptacle`, `library:duplex-receptacle`).
+    pub entry: String,
+    /// `documented` (the set's legend, an answer, a person) or `derived` (the shared library).
+    pub status: String,
+    /// The drawing as the print draws it: its shape ([`super::symtable::signature`]).
+    pub as_drawn: String,
+    /// What the print's drawing is: its legend row's words, else the library symbol's name.
+    pub drawn_as: String,
+    /// The library symbol it is shown with (its kind's universal drawing); empty: the set's own.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shown_as: String,
+    /// Where its print draws it: the sheet point of the drawing's middle.
+    #[serde(default)]
+    pub drawn_at: [f64; 2],
+    /// Quarter turns from the entry's drawing, and the cue that confirmed it on its plan.
+    #[serde(default)]
+    pub turn: u8,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cue: String,
+}
+
+/// What a fire alarm shop drawing says of one notification appliance ([`super::fashop`]).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FireAlarmFacts {
+    /// `P2.N3.07`, and its notification circuit `P2.N3`; an initiating device's loop address
+    /// (`L7.42`) and its loop (`L7`).
+    pub address: String,
+    pub circuit: String,
+    /// An initiating device on a signalling line circuit (its circuit is a loop), not an appliance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loop_device: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candela: Option<u32>,
+    /// `ceiling` or `wall` as its legend row says (empty: it doesn't).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mount: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(default)]
+    pub weatherproof: bool,
+    /// The shop drawing and page, and its plan's title.
+    pub source: String,
+    /// Its legend row's description, and how its row was told (its symbol, or inferred).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub row: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub row_basis: String,
+    /// The design plan's device it took the place of (its mark, sheet, spot, how far), empty
+    /// when the design shows none there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub design: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1658,6 +1842,14 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !dv.circuit.is_empty() {
             e.set("circuit", dv.circuit.clone(), "plan");
         }
+        // A typical view's copy: the view it came from; its circuit from its room's own floor plan
+        // (the view's labels in the note), or its view's label asked about.
+        if !dv.template.is_empty() {
+            e.set("typical_view", dv.template.clone(), "plan");
+        }
+        if !dv.circuit_basis.is_empty() {
+            e.set("circuit_basis", dv.circuit_basis.clone(), "plan");
+        }
         if !dv.leg.is_empty() {
             e.set("switch_leg", dv.leg.clone(), "plan");
         }
@@ -1685,6 +1877,28 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
+        // Found by its drawing (Q6484): the print's drawing kept beside the library symbol it is
+        // shown with, so a reviewer sees both.
+        if let Some(sym) = &dv.symbol {
+            let src = if sym.status == "derived" { "rule" } else { "legend" };
+            e.set("symbol_entry", sym.entry.clone(), src);
+            e.set("symbol_status", sym.status.clone(), src);
+            e.set("symbol_as_drawn", sym.as_drawn.clone(), "plan");
+            e.set("symbol_drawn_at", format!("{:.2},{:.2} on {}", sym.drawn_at[0], sym.drawn_at[1], dv.sheet), "plan");
+            e.set("symbol_turn", sym.turn.to_string(), "plan");
+            if !sym.shown_as.is_empty() {
+                e.set("symbol_shown_as", sym.shown_as.clone(), "rule");
+            }
+            e.set(
+                "symbol_note",
+                if sym.shown_as.is_empty() {
+                    format!("drawn on the print as {}, shown as drawn (the library draws no {kind})", sym.drawn_as)
+                } else {
+                    format!("drawn on the print as {}, shown as {}", sym.drawn_as, sym.shown_as)
+                },
+                "rule",
+            );
+        }
         // A typical room's device knows the room it was stamped into (its bath, its closet are
         // that room's, traced as a room or not).
         if !dv.room.is_empty() {
@@ -1693,8 +1907,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // Copied from the room it stacks with on another floor: said so, with the basis, so it
         // never passes for one its own floor's plans show.
         if !dv.derived.is_empty() {
-            e.set("status", super::waterfill::DERIVED, "rule");
+            e.set("status", if dv.made.trim().is_empty() { super::waterfill::DERIVED } else { dv.made.trim() }, "rule");
             e.set("basis", dv.derived.clone(), "rule");
+        }
+        for (k, v) in dv.notes.iter().take(MAX_DEVICE_NOTES) {
+            if !k.trim().is_empty() && !v.trim().is_empty() {
+                e.set(k.trim(), v.clone(), "rule");
+            }
         }
         // The keynote its sheet tags it with; a piece of equipment's receptacle takes what the
         // note asks of it (its rating, poles, orientation and place), the note its source.
@@ -1734,9 +1953,22 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                 );
             }
         }
+        // Its typical view's circuit label no schedule row or plan of its level supports: asked
+        // (beside any other question about it).
+        if !dv.circuit_review.is_empty() {
+            let review = match e.fields.get("review").map(|f| f.value.clone()).filter(|v| !v.is_empty()) {
+                Some(other) => format!("{other}; {}", dv.circuit_review),
+                None => dv.circuit_review.clone(),
+            };
+            e.set("review", review, "rule");
+        }
         // Its spot when another document's gives it (the electrical plan's spot kept in the note).
         if !dv.located.is_empty() {
             e.set("location_note", dv.located.clone(), "note");
+        }
+        // Made from a label: how its spot was found from the label (Q6337).
+        if !dv.spot.is_empty() {
+            e.set("location_basis", dv.spot.clone(), "rule");
         }
         // What the keynotes by its symbol ask of it (features, mounting, ganging, its
         // low-voltage conduit), each with the keynote as its source.
@@ -1763,6 +1995,43 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                 );
             }
         }
+        // A notification appliance the approved fire alarm shop drawing gives: its address,
+        // circuit, candela and mounting, the shop drawing its source; the design device it took
+        // the place of kept beside (Q6495).
+        if let Some(fa) = &dv.fire_alarm {
+            e.set("address", fa.address.clone(), "submittal");
+            e.set(if fa.loop_device { "slc_circuit" } else { "nac_circuit" }, fa.circuit.clone(), "submittal");
+            if let Some(cd) = fa.candela {
+                e.set("candela", format!("{cd} cd"), "submittal");
+            }
+            if !fa.mount.is_empty() {
+                e.set("mount", fa.mount.clone(), "submittal");
+            }
+            if !fa.model.is_empty() {
+                e.set("model", fa.model.clone(), "submittal");
+            }
+            if fa.weatherproof {
+                e.set("weatherproof", "yes", "submittal");
+            }
+            if !fa.row.is_empty() {
+                e.set("legend", fa.row.clone(), "submittal");
+                e.set("device_type", fa.row.to_ascii_lowercase(), "submittal");
+            }
+            e.set("shop_drawing", fa.source.clone(), "submittal");
+            e.set("position_provenance", "drawn", "submittal");
+            e.set("position_basis", format!("the approved fire alarm shop drawing {} supersedes the design symbols", fa.source), "submittal");
+            if !fa.row_basis.is_empty() {
+                e.set("kind_basis", fa.row_basis.clone(), "submittal");
+            }
+            if !fa.design.is_empty() {
+                e.set("design_device", fa.design.clone(), "plan");
+            }
+        }
+        // Read off an elevator pit or hoistway plan: its part of the hoistway (placed there below).
+        if !dv.hoistway.is_empty() {
+            e.set("hoistway_part", dv.hoistway.clone(), "plan");
+            e.set("hoistway_view", dv.hoistway_view.clone(), "plan");
+        }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {
             e.set("mount_height_in", format!("{h}"), "note");
@@ -1775,8 +2044,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         *by_level.entry(level).or_default() += 1;
         inserted += 1;
     }
+    // The devices of a hoistway's pit or top: there, not on the storey their view registered onto
+    // (Q6615).
+    let hoistway = super::hoistway::relocate(&mut sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
-    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level}))
+    Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level, "hoistway": hoistway}))
 }
 
 /// The devices an earlier read put in the drawing's model: how many, by level and type.
@@ -1826,6 +2098,32 @@ fn run_envelope_read(s: &mut Session, p: &Value) -> Result<Value> {
             "envelope reader wired; DXF sheet loading through the printset pipeline pending (Q5128)"
         },
     }))
+}
+
+/// An air terminal's kind and air system: by its type mark's letters
+/// (`equipment.air_device_system`: `SD-1` supply, `RG-1` return, `EG-1` exhaust), else by its
+/// symbol's kind (`supply_diffuser`, `return_grille`, `exhaust_grille`).
+pub(crate) fn terminal_kind_of(symbol_kind: &str, mark: &str) -> (String, &'static str) {
+    let by_symbol = match symbol_kind {
+        "supply_diffuser" => "SA",
+        "return_grille" => "RA",
+        "exhaust_grille" => "EA",
+        _ => "M-DUCT",
+    };
+    let letters: String = mark.trim().to_ascii_uppercase().chars().take_while(char::is_ascii_alphabetic).collect();
+    let by_mark = (!letters.is_empty()).then(|| cadaddy_mepfix::wordrules::pair_value("equipment.air_device_system", &letters)).flatten();
+    match by_mark {
+        Some(sys) if sys != by_symbol => {
+            let kind = match sys {
+                "SA" => "supply_diffuser",
+                "RA" => "return_grille",
+                "EA" => "exhaust_grille",
+                _ => symbol_kind,
+            };
+            (kind.to_string(), sys)
+        }
+        _ => (symbol_kind.to_string(), by_symbol),
+    }
 }
 
 #[cfg(test)]
@@ -1985,5 +2283,15 @@ mod tests {
         assert_eq!(d("LP-3,5"), None);
         assert_eq!(d("A"), None);
         assert_eq!(d("ab"), None);
+    }
+
+    #[test]
+    fn an_air_devices_mark_says_which_air_it_moves_over_its_symbol() {
+        assert_eq!(super::terminal_kind_of("return_grille", "SD-4"), ("supply_diffuser".to_string(), "SA"));
+        assert_eq!(super::terminal_kind_of("supply_diffuser", "RG-1"), ("return_grille".to_string(), "RA"));
+        assert_eq!(super::terminal_kind_of("supply_diffuser", "EG-1"), ("exhaust_grille".to_string(), "EA"));
+        // A mark whose letters say nothing (`A1`), or none: the symbol's kind.
+        assert_eq!(super::terminal_kind_of("return_grille", "A1"), ("return_grille".to_string(), "RA"));
+        assert_eq!(super::terminal_kind_of("exhaust_grille", ""), ("exhaust_grille".to_string(), "EA"));
     }
 }

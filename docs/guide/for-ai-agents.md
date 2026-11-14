@@ -216,6 +216,7 @@ named here, and one named here must not have one.
 - `validate.next`: the agent's half of a Validate run started in the app
 - `validate.packet`
 - `validate.prescreen`
+- `job.sheets.set`: corrections to the job's sheet index, by sheet number (MCP `guided_job` action `sheets_set`; in the Job panel the checkpoint is answered with `job.answer`)
 <!-- agent-only workflows: end -->
 
 ## MCP resources

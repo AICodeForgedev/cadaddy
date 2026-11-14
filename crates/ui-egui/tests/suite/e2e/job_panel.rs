@@ -154,3 +154,30 @@ fn a_job_runs_from_the_job_panel_and_shows_its_question_and_report() {
     assert!(e.shows("Whole report"), "{:?}", labels(&mut e));
     let _ = std::fs::remove_dir_all(&prints);
 }
+
+/// Q6619: a job that has built its model leads with what to ask before building, and opens the
+/// RFI list from there.
+#[test]
+fn a_built_job_leads_with_what_to_ask_before_building() {
+    use cadaddy_engine::cmd::guided::{GuidedJob, JobGoal, StageStatus};
+    use cadaddy_engine::walk3d::{BuildingSpec, Rfi, RfiKind};
+    let mut e = E2e::new();
+    let level = |name: &str, z: f64| serde_json::from_value(json!({"name": name, "elevation_ft": z, "height_ft": 10.0})).unwrap();
+    let mut sp = BuildingSpec { levels: vec![level("1", 0.0), level("2", 10.0)], ..BuildingSpec::default() };
+    let mut pour = Rfi::new(RfiKind::PourHold, "1", [0.0, 0.0], "stub-ups", "not confirmed before the pour", "");
+    pour.id = "RFI-901".into();
+    sp.rfis.push(pour);
+    let mut job = GuidedJob::new("Sample Prints", JobGoal::Bim);
+    for st in job.stages.iter_mut().filter(|st| st.status != StageStatus::Skipped) {
+        st.status = StageStatus::Done;
+    }
+    {
+        let d = e.app.session.doc_mut().unwrap();
+        d.building_spec = Some(sp.to_json()).into();
+        d.agent = Some(json!({ "guided_job": job }).to_string()).into();
+    }
+    e.menu("ui.panel.job");
+    assert!(e.shows("1 thing to ask before you build: 1 high"), "{:?}", labels(&mut e));
+    assert!(click_button(&mut e, "Open RFI List"), "{:?}", labels(&mut e));
+    assert_eq!(e.app.ui.dialog.as_deref(), Some("rfilist"));
+}

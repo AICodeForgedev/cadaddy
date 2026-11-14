@@ -50,6 +50,7 @@ pub(crate) fn dialog_refused() -> bool {
 pub mod aliasdlg;
 pub mod animation;
 pub mod annomon;
+pub mod asked;
 pub mod autosave;
 pub mod bedit;
 pub mod blockspalette;
@@ -65,11 +66,14 @@ pub mod credits;
 pub mod dialogs;
 pub mod docking;
 pub mod fault;
+pub mod framecost;
 pub mod hatchdlg;
 pub mod hyperlinks;
+pub mod kept;
 pub mod materials;
 mod mtext_editor;
 mod shaded;
+pub mod sheetload;
 pub mod snap3ui;
 pub mod spacemouse;
 // Report a Bug, Request a Feature, Donate.
@@ -85,6 +89,7 @@ pub mod activitypalette;
 pub mod agentdlg;
 pub mod agentpalette;
 pub mod authorpalette;
+pub mod bgread;
 pub mod bimpalette;
 pub mod busy;
 pub mod clashpalette;
@@ -95,6 +100,7 @@ pub mod drywallpalette;
 pub mod dwgpropsdlg;
 pub mod dyngrips;
 pub mod dyninput;
+pub mod dynres;
 pub mod exchangeloss;
 pub mod extractdlg;
 pub mod fieldview;
@@ -138,6 +144,7 @@ pub mod plotstyles;
 pub mod projrulespalette;
 pub mod quick;
 pub mod quickview;
+pub mod rail;
 pub mod renderwin;
 pub mod rfipalette;
 pub mod ribbon;
@@ -158,6 +165,7 @@ pub mod workspaces;
 pub mod autocomplete;
 pub mod debug_overlay;
 pub mod designcenter;
+pub mod devicelost;
 pub mod diag;
 pub mod etransmit;
 pub mod exchange;
@@ -342,7 +350,8 @@ impl Default for UiState {
             ribbon: true,
             ribbon_tab: "Home".into(),
             ribbon_recent: Vec::new(),
-            show_palettes: true,
+            // The palettes wait on the rail: the drawing gets the window.
+            show_palettes: false,
             show_toolbar: true,
             show_file_tabs: true,
             show_status_bar: true,
@@ -589,7 +598,9 @@ pub struct CadApp {
 }
 
 impl CadApp {
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, services: Services) -> Self {
+        // The interface holds a print set's open sheet and a few recent ones (Q6418).
+        session.sheets_on_demand = true;
         CadApp {
             system_languages: Vec::new(),
             system_animations: None,
@@ -795,9 +806,12 @@ impl CadApp {
     }
 
     /// Wait up to `timeout` for a long command running in the background to end (its follow-up
-    /// runs). True when none is left running.
+    /// runs), and the reads of the drawing dialogs asked for. True when none is left running.
     pub fn wait_for_work(&mut self, timeout: std::time::Duration) -> bool {
-        busy::wait(self, timeout)
+        // A dialog's read of the drawing too (`bgread`): the next frame shows its answer.
+        let started = web_time::Instant::now();
+        let done = busy::wait(self, timeout);
+        bgread::wait(timeout.saturating_sub(started.elapsed())) && done
     }
 
     /// The long command running in the background, if any.
@@ -818,6 +832,11 @@ impl CadApp {
         }
         if let Some(msg) = busy::refusal(self) {
             self.set_status(msg);
+            return;
+        }
+        // A command that may read the whole print set gets its sheets first, off the UI thread.
+        let n = name.to_string();
+        if sheetload::whole_set_first(self, name, move |app| app.start(&n)) {
             return;
         }
         // A long command without prompts runs at once: off the UI thread.
@@ -879,6 +898,15 @@ impl CadApp {
                 exchangeloss::take(self, true);
                 secureloaddlg::take(self, true);
                 return None;
+            }
+            // A command that may read the whole print set gets its sheets first, off the UI thread.
+            if cadaddy_engine::find_by_id_or_alias(&word).is_some() {
+                let line = text.to_string();
+                if sheetload::whole_set_first(self, &word, move |app| {
+                    app.cmdline(&line);
+                }) {
+                    return None;
+                }
             }
             // A long command (`job.start {...}`, or alone when it has no prompts) runs off the UI
             // thread; the window shows its progress with a Cancel (Q6269).
@@ -1166,6 +1194,12 @@ impl CadApp {
                 // A dynamic block's own drawing: ask whether to open it in the Block Editor.
                 if self.session.state().is_ok_and(|st| cadaddy_engine::blockedit::has_authoring_elements(&st.doc)) {
                     self.ui.dialog = Some("authoring".into());
+                } else if v.get("builtModel").and_then(Value::as_bool) == Some(true)
+                    && v.get("alreadyOpen").and_then(Value::as_bool) != Some(true)
+                    && let Ok(st) = self.session.state()
+                {
+                    // A built model opens on its plan, offering its 3D BIM view (Q6310).
+                    self.canvas.shade.offer_bim3d = Some(st.uid);
                 }
             }
         }
@@ -1221,6 +1255,11 @@ impl CadApp {
     /// Per-frame logic before layout.
     /// Record `ms` for the frame part `name` if it is its slowest yet ([`CadApp::slowest`]).
     fn note_time(&mut self, name: &'static str, ms: f64) {
+        // The logic's parts are parts of the frame too (`perf.sections`); the frame as a whole
+        // and the time between frames are not.
+        if !matches!(name, "betweenFrames" | "draw") {
+            framecost::add(name, ms);
+        }
         let e = self.slowest.entry(name).or_insert(0.0);
         if ms > *e {
             *e = ms;
@@ -1255,7 +1294,12 @@ impl CadApp {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // A lost graphics device takes no more drawing (see `devicelost`).
+        if self.lost_frame(ctx) {
+            return;
+        }
         let _busy = diag::busy("logic");
+        let t_start = now_ms();
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
         exchangeloss::poll_background(self);
         // A Script Editor script on its worker thread: its calls into the drawing run here.
@@ -1271,6 +1315,7 @@ impl CadApp {
         FILE_DIALOGS_OFF
             .store(cadaddy_engine::sysvars::get(&self.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0), std::sync::atomic::Ordering::Relaxed);
         let t0 = now_ms();
+        framecost::add("logicStart", t0 - t_start);
         if let Some(last) = self.last_frame_start {
             self.note_time("betweenFrames", t0 - last);
         }
@@ -1470,56 +1515,70 @@ impl CadApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if self.lost_frame(ui.ctx()) {
+            return;
+        }
         let _busy = diag::busy("draw");
         i18n::with_language(self.language(), || self.draw(ui));
+        // Lost while this frame was drawn: what it painted would go to the dead device.
+        self.lost_frame(ui.ctx());
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {
+        use framecost::time;
         let t0 = now_ms();
-        control::begin_frame(ui.ctx());
+        time("controlBegin", || control::begin_frame(ui.ctx()));
         let t = theme::Tokens::get();
         // With the ribbon, a menu bar sits above it (AutoCAD's MENUBAR 1); otherwise under the tool bar.
         if self.ui.ribbon && self.ui.in_window_menu {
-            menus::menu_bar(self, ui);
+            time("menuBar", || menus::menu_bar(self, ui));
         }
-        chrome::title_and_toolbar(self, ui);
+        time("titleAndToolbar", || chrome::title_and_toolbar(self, ui));
         if !self.ui.ribbon && self.ui.in_window_menu {
-            menus::menu_bar(self, ui);
+            time("menuBar", || menus::menu_bar(self, ui));
         }
         if self.ui.show_status_bar {
-            chrome::status_bar(self, ui);
+            time("statusBar", || chrome::status_bar(self, ui));
         }
         if self.ui.show_file_tabs {
-            chrome::file_tabs(self, ui);
+            time("fileTabs", || chrome::file_tabs(self, ui));
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
-        if has_doc && !self.ui.show_toolsets {
-            palettes::toolsets_strip(self, ui);
+        // The palette rail down the window's edge (Tool Sets is one of its buttons).
+        if has_doc {
+            time("rail", || rail::show(self, ui));
         }
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
-            if has_doc {
-                docking::show(self, ui);
-            } else {
-                chrome::start_page(self, ui);
-            }
+        time("docking", || {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                // Walk mode shows in the drawing's own tab (docking), the palettes beside it.
+                if has_doc {
+                    docking::show(self, ui);
+                } else {
+                    chrome::start_page(self, ui);
+                }
+            })
         });
-        tearoff::show_windows(self, ui.ctx());
-        dialogs::show(self, ui.ctx());
-        authorpalette::show(self, ui.ctx());
-        layers::off_prompt(self, ui.ctx());
-        palettes::patterns::prompt_picker(self, ui.ctx());
-        layouttabs::move_copy_dialog(self, ui.ctx());
-        matchpropdlg::show(self, ui.ctx());
-        renderwin::show(self, ui.ctx());
-        closing::prompt(self, ui.ctx());
-        busy::show(self, ui.ctx());
-        save_loss::prompt(self, ui.ctx());
-        autosave::show(self, ui.ctx());
-        autosave::gpu_notice(self, ui.ctx());
-        autosave::failure_notice(self, ui.ctx());
-        update::tick(self);
-        update::corner(self, ui.ctx());
+        let ctx = ui.ctx().clone();
+        time("dialogs", || {
+            tearoff::show_windows(self, &ctx);
+            dialogs::show(self, &ctx);
+            authorpalette::show(self, &ctx);
+            layers::off_prompt(self, &ctx);
+            palettes::patterns::prompt_picker(self, &ctx);
+            layouttabs::move_copy_dialog(self, &ctx);
+            matchpropdlg::show(self, &ctx);
+            renderwin::show(self, &ctx);
+        });
+        time("notices", || {
+            closing::prompt(self, &ctx);
+            busy::show(self, &ctx);
+            save_loss::prompt(self, &ctx);
+            autosave::show(self, &ctx);
+            autosave::gpu_notice(self, &ctx);
+            autosave::failure_notice(self, &ctx);
+            update::tick(self);
+            update::corner(self, &ctx);
+        });
         if let Some(url) = self.pending_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
@@ -1530,11 +1589,32 @@ impl CadApp {
             }
             self.last_dialog = self.ui.dialog.clone();
         }
-        control::observe_drawn(ui.ctx());
-        self.frame_ms = now_ms() - t0;
-        if self.debug_overlay {
-            debug_overlay::show(self, ui.ctx());
+        // The 2D canvas's moving scale: the settings, a forced one, full while a screenshot waits.
+        let full = !self.queued_shots.is_empty() || !self.pending_shots.is_empty();
+        let (on, fps, forced) = (self.session.settings.dynres, self.session.settings.dynres_fps, self.gpu_caps.dynamic_scale);
+        // The 3D views' (the shaded Model view and Walk): the same settings.
+        let set = |c: &mut dynres::Controller| {
+            c.configure(on, fps, forced);
+            c.full = full;
+        };
+        dynres::with(set);
+        dynres::with_3d(set);
+        if let Some(rs) = &self.wgpu_rs {
+            time("gpuFreeIdle", || gpu::free_idle_frames(rs));
+            time("gpuPassTimes", || gpu::read_pass_times(rs));
         }
+        time("controlObserve", || control::observe_drawn(ui.ctx()));
+        self.frame_ms = now_ms() - t0;
+        framecost::add("frame", self.frame_ms);
+        // The overlay shows the 2D draw statistics, so they are counted while it is up.
+        if self.debug_overlay && !self.canvas.stats.is_on() {
+            self.canvas.stats.set_on(true);
+        }
+        self.canvas.stats.frame_done(t0, self.frame_ms, self.canvas.draw_ms, gpu::take_slowest_upload());
+        if self.debug_overlay {
+            time("debugOverlay", || debug_overlay::show(self, ui.ctx()));
+        }
+        framecost::end_frame();
         self.note_time("draw", self.frame_ms);
         if startup::frame(self.frame_ms) {
             let report = startup::report();

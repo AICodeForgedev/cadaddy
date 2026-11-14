@@ -29,7 +29,7 @@ pub const NOTHING_READ: &str = "no rooms or room finish schedule have been read 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("finishes.takeoff", "Finish Takeoff from Prints", run)
-            .params("{dir?: folder of the print set's DXF sheets, paths?: [DXF sheet] (none: the open print set's DXF sheets), level?, room?: number, unit_type?, trade?: flooring|painting|ceilings|doors_frames_hardware|specialties|glazing, page?: 1-based (50 lines a page), rules?: [{names: [room name words], rule: text, items: [{description, quantity, category}]}] (the company's room-type standards; default the built-in table)} → {sheets_read, totals: [{trade, lines, quantity: {SF|LF|EA: n}, with_waste: {…}}], count, page, pages, lines: [{trade, description, room, room_name, level, qty, unit, with_waste, source, status, rule?, coats?, sheen?, unit_type?}], by_unit_type?: {type: [{trade, description, unit, quantity, with_waste, rooms}]}, missing: [why], message?}: the takeoff runs on what the readers read from the sheets, never on an answer key")
+            .params("{dir?: folder of the print set's DXF sheets, paths?: [DXF sheet] (none: the open print set's DXF sheets), level?, room?: number or name, unit_type?, trade?: flooring|painting|ceilings|doors_frames_hardware|specialties|glazing, page?: 1-based (50 lines a page), rules?: [{names: [room name words], rule: text, items: [{description, quantity, category}]}] (the company's room-type standards; default the built-in table)} → {sheets_read, totals: [{trade, lines, quantity: {SF|LF|EA: n}, with_waste: {…}}], count, page, pages, lines: [{trade, description, room, room_name, level, qty, unit, with_waste, source, status, rule?, coats?, sheen?, unit_type?}], by_unit_type?: {type: [{trade, description, unit, quantity, with_waste, rooms}]}, missing: [why], message?}: the takeoff runs on what the readers read from the sheets, never on an answer key")
             .noundo(),
     ]
 }
@@ -189,7 +189,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`trade` is one of flooring, painting, ceilings, doors_frames_hardware, specialties, glazing"));
     }
     let level = str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
-    let room = str_param(p, "room").map(str::trim).filter(|r| !r.is_empty()).map(str::to_string);
+    let room = number_or_name_param(p, "room");
     let unit_type = str_param(p, "unit_type").map(str::trim).filter(|u| !u.is_empty()).map(str::to_string);
 
     let paths = sheet_paths(s, p)?;
@@ -216,7 +216,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let keep = |i: &&TakeoffItem| {
         trade.as_deref().is_none_or(|t| i.trade == t)
             && level.as_deref().is_none_or(|l| i.level.eq_ignore_ascii_case(l))
-            && room.as_deref().is_none_or(|r| i.room.eq_ignore_ascii_case(r))
+            && room.as_deref().is_none_or(|r| i.room.eq_ignore_ascii_case(r) || i.room_name.eq_ignore_ascii_case(r))
             && unit_type.as_deref().is_none_or(|u| i.unit_type.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(u)))
     };
     let kept: Vec<&TakeoffItem> = tk.items.iter().filter(keep).collect();

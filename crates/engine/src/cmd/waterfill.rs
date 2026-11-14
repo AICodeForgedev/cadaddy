@@ -48,6 +48,16 @@ pub(crate) struct FillRules {
     /// Why a room no plan of its own floor furnishes takes the fixtures and room piping of the
     /// room it stands on (or under) on another floor.
     pub room_stack_basis: String,
+    /// A fixture in no room's outline within this of one (feet) is the nearest room's: its bath
+    /// beside the area its tag traced.
+    pub room_own_reach_ft: f64,
+    /// Why such a fixture is that room's.
+    pub room_own_basis: String,
+    /// A fixture derived from the room a room stacks with never goes within this (feet) of one of
+    /// its kind the room holds.
+    pub stack_clear_ft: f64,
+    /// Why a room holding a fixture of a kind takes no derived one of it.
+    pub stack_clear_basis: String,
     /// Why a main is carried on along its line to a branch.
     pub main_basis: String,
     /// Why a fixture's or a room's branch is teed off the nearest main of its system, at its size.
@@ -98,6 +108,14 @@ pub(crate) struct FillRules {
     /// would otherwise cross, and why.
     pub gear_clear_ft: f64,
     pub gear_clear_basis: String,
+    /// A main is carried on past its end only to a need a document draws ([`Need::drawn`]); one
+    /// no document draws (a derived or inferred terminal) takes a branch off the main's end
+    /// (Q6554: the duct fill-in, `M-BRANCH-DUCT` `main_to_drawn_only`).
+    pub main_to_drawn_only: bool,
+    /// A branch is never larger than the run it leaves (its largest side): a bigger need is cut
+    /// down to it, and why (Q6554: the duct fill-in, `M-BRANCH-DUCT` `branch_within_run_basis`).
+    /// Empty: a branch takes its own size.
+    pub branch_within_run_basis: String,
 }
 
 /// The dedicated space of a piece of electrical gear (NEC 110.26(E)(1)): its footprint (drawing
@@ -230,6 +248,9 @@ const MAX_ROOMS: usize = 1_000;
 const MAX_ITEMS: usize = 20_000;
 /// Rooms listed by name where they don't stack, at most.
 const MAX_LISTED: usize = 40;
+/// Two rooms of one type stack only when the larger is at most this many times the smaller's
+/// area: a closet or a service room whose tag reads as a unit's type is not that unit.
+const STACK_AREA_RATIO: f64 = 2.0;
 
 /// A room of a level: its type's words, its outline (drawing units) and a name to report it by.
 #[derive(Clone, Debug)]
@@ -434,9 +455,9 @@ fn lay_over(mine: &[Room<'_>], theirs: &[Room<'_>], upf: f64) -> Option<[f64; 2]
     })
 }
 
-/// Room by room of `here`, the room of `there` it stands on: one of its type at the same place
-/// once `there` is moved by `off` (each centre in the other's box), each used once. Its place
-/// in `there`.
+/// Room by room of `here`, the room of `there` it stands on: one of its type and about its size
+/// ([`STACK_AREA_RATIO`]) at the same place once `there` is moved by `off` (each centre in the
+/// other's box), each used once. Its place in `there`.
 fn pair_rooms(here: &[Room<'_>], there: &[Room<'_>], off: [f64; 2]) -> Vec<Option<usize>> {
     let mut used = vec![false; there.len()];
     here.iter()
@@ -446,6 +467,7 @@ fn pair_rooms(here: &[Room<'_>], there: &[Room<'_>], off: [f64; 2]) -> Vec<Optio
                 let c = [b.c[0] + off[0], b.c[1] + off[1]];
                 !used.get(j).copied().unwrap_or(true)
                     && a.r.words == b.r.words
+                    && a.area.max(b.area) <= STACK_AREA_RATIO * a.area.min(b.area)
                     && a.c[0] >= moved[0]
                     && a.c[0] <= moved[2]
                     && a.c[1] >= moved[1]
@@ -669,6 +691,8 @@ pub(crate) struct Need {
     pub segs: Vec<[[f64; 2]; 2]>,
     /// Where its size comes from (a drainage branch: the code's fixture drain or vent size).
     pub size_basis: String,
+    /// Whether a document draws what it serves ([`FillRules::main_to_drawn_only`]).
+    pub drawn: bool,
 }
 
 /// A fixture of a floor: its point, what to call it and the lines it takes.
@@ -760,7 +784,15 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
             } else {
                 (0.0, String::new())
             };
-            out.push(Need { system: sys.clone(), pts: vec![f.at], what: format!("fixture {}", f.what), size_in, segs: Vec::new(), size_basis });
+            out.push(Need {
+                system: sys.clone(),
+                pts: vec![f.at],
+                what: format!("fixture {}", f.what),
+                size_in,
+                segs: Vec::new(),
+                size_basis,
+                drawn: true,
+            });
         }
     }
     // The branches, grouped where their pieces touch.
@@ -810,6 +842,7 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
                 size_in: size,
                 segs,
                 size_basis: String::new(),
+                drawn: true,
             });
         }
     }
@@ -966,8 +999,17 @@ pub(crate) fn infer_clear(
             };
             let gap = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]) > joint;
             let size = if need.size_in > 0.0 { need.size_in } else { ru.branch_size_in };
+            // Never larger than the run it leaves (its largest side), where the rules say so.
+            let leaves = t.size_in[0].max(t.size_in[1]);
+            let cut = !ru.branch_within_run_basis.is_empty() && leaves.is_finite() && leaves > 0.0 && size > leaves + 1e-9;
+            let (size, cut) = if cut {
+                (leaves, format!("; {size}\" cut down to the {} it leaves: {}", size_words(t.size_in), ru.branch_within_run_basis))
+            } else {
+                (size, String::new())
+            };
             let branch = |what: &str| {
                 let sq = if squared { format!("; {}", ru.square_basis) } else { String::new() };
+                let sq = format!("{cut}{sq}");
                 if ru.drainage.iter().any(|d| d == sys) {
                     let size = if need.size_basis.is_empty() { String::new() } else { format!("; size: {}", need.size_basis) };
                     format!("inferred: {} ({sys} branch to {what}{size}){sq}", ru.drain_basis)
@@ -978,7 +1020,8 @@ pub(crate) fn infer_clear(
             // (Each run, and whether it is a main: off a branch, both legs are the branch.)
             let mut laid: Vec<(MepRun, bool)> = Vec::new();
             if gap(q, corner) {
-                laid.push(if off_main && !squared {
+                // A main is carried on only to what a document draws, where the rules say so.
+                laid.push(if off_main && !squared && (need.drawn || !ru.main_to_drawn_only) {
                     (lay(vec![q, corner], t.size_in, format!("inferred: {} ({sys} main carried on to {})", ru.main_basis, need.what)), true)
                 } else {
                     (lay(vec![q, corner], [size, 0.0], branch(&need.what)), false)
@@ -1027,6 +1070,11 @@ pub(crate) fn infer_clear(
     out
 }
 
+/// A run's size in words: `12x8"` (width × height), `6"` (round).
+fn size_words(z: [f64; 2]) -> String {
+    if z[1] > 0.0 { format!("{}x{}\"", z[0], z[1]) } else { format!("{}\"", z[0]) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1056,6 +1104,7 @@ mod tests {
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         }
     }
 

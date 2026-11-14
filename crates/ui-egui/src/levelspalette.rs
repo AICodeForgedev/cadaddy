@@ -53,11 +53,29 @@ fn read_report(r: Result<Value, String>) -> Vec<String> {
     }
 }
 
+/// The levels (`levels.list`), read once per drawing revision: the listing walks the model and
+/// reads the building spec, too much for every frame the palette is open (Q6482).
+type Listed = std::sync::Arc<((u64, u64), Value)>;
+
+fn listed(app: &mut CadApp, ctx: &egui::Context) -> Listed {
+    let id = egui::Id::new("levels-palette-listed");
+    let key = app.session.state().map_or((0, 0), |st| (st.uid, st.revision));
+    match ctx.data(|d| d.get_temp::<Listed>(id)) {
+        Some(l) if l.0 == key => l,
+        _ => {
+            let l: Listed = std::sync::Arc::new((key, app.session.execute("levels.list", &json!({})).unwrap_or(Value::Null)));
+            ctx.data_mut(|d| d.insert_temp(id, std::sync::Arc::clone(&l)));
+            l
+        }
+    }
+}
+
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let id = egui::Id::new("levels-palette-state");
     let mut st: State = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
-    let r = app.session.execute("levels.list", &json!({})).unwrap_or(Value::Null);
+    let listing = listed(app, ctx);
+    let r = &listing.1;
     let levels: Vec<Value> = r["levels"].as_array().cloned().unwrap_or_default();
     let datums: Vec<Value> = r["datums"].as_array().cloned().unwrap_or_default();
     let mut act: Option<Act> = None;

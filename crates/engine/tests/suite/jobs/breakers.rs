@@ -26,9 +26,26 @@ fn device(id: &str, kind: &str, x: f64, circuit: &str) -> Value {
 /// room panels U-101 and U-102 on a schedule `TYPICAL OF 3`, panel LP2 whose circuits are on
 /// its equipment record only, and a schedule for a panel P9 the model doesn't have.
 fn building() -> Session {
+    building_routed(false)
+}
+
+/// [`building`], its circuits routed when `route`.
+fn building_routed(route: bool) -> Session {
+    built(spec(), route)
+}
+
+/// A session with `spec` stored and built.
+fn built(spec: Value, route: bool) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
-    let spec = json!({
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({"route": route})).expect("build");
+    s
+}
+
+/// [`building`]'s spec.
+fn spec() -> Value {
+    json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
         "tags": [
@@ -92,10 +109,7 @@ fn building() -> Session {
                 {"panel": "P9", "source": "X-4", "circuits": [ckt("1", "PUMP", "15", 1, &[])]}
             ]
         }
-    });
-    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
-    s.execute("model.build", &json!({"route": false})).expect("build");
-    s
+    })
 }
 
 fn device_handles(s: &mut Session, circuit: &str) -> Vec<String> {
@@ -349,6 +363,34 @@ fn plan_circuits_and_schedule_rows_that_dont_meet_are_review_items() {
     assert_eq!(done["resolved"], plan["id"], "{done}");
 }
 
+/// Q6619: the plans and schedules that don't meet are objects the build can't complete; the
+/// requirements pass raises each as an RFI on its objects, measured over the step's objects.
+#[test]
+fn plan_circuits_and_rows_that_dont_meet_are_rfis_the_build_raises() {
+    let mut s = building();
+    let r = s.execute("rfi.read", &json!({"apply": true})).expect("rfi.read");
+    let check = |id: &str| r["requirements"]["checks"].as_array().unwrap().iter().find(|c| c["id"] == id).cloned().unwrap_or_default();
+    let sched = check("E-CIRCUIT-SCHEDULED");
+    assert_eq!(sched["ran"], true, "{sched}");
+    assert!(sched["findings"].as_u64().unwrap() >= 1 && sched["objects"].as_u64().unwrap() > 0, "{sched}");
+    assert!(check("E-BREAKER-LOAD")["findings"].as_u64().unwrap() >= 2, "{}", check("E-BREAKER-LOAD"));
+    let panels = check("E-SCHEDULE-PANEL");
+    assert_eq!(panels["findings"], 1, "{panels}");
+    assert_eq!(panels["objects"].as_u64().unwrap(), panels["met_by_documents"].as_u64().unwrap() + 1, "the schedules, one with no panel: {panels}");
+    assert_eq!(sched["objects"].as_u64().unwrap(), sched["met_by_documents"].as_u64().unwrap() + sched["missing"].as_u64().unwrap(), "{sched}");
+    let list = s.execute("rfi.list", &json!({"kind": "requirement"})).expect("list");
+    let items = list["items"].as_array().expect("items");
+    let lp19 = items.iter().find(|i| i["about"] == "panel LP1 circuit LP1-9").cloned().expect("LP1-9");
+    assert!(lp19["issue"].as_str().unwrap().contains("no breaker"), "{lp19}");
+    assert_eq!(lp19["before"], "rough_in");
+    assert_eq!(lp19["severity"], "high");
+    let lp23 = items.iter().find(|i| i["about"] == "panel LP2 circuit LP2-3").cloned().expect("LP2-3");
+    assert!(lp23["proposed"].as_str().unwrap().contains("spare"), "{lp23}");
+    // Raised again, nothing doubles.
+    s.execute("rfi.read", &json!({"apply": true})).expect("again");
+    assert_eq!(s.execute("rfi.list", &json!({"kind": "requirement"})).unwrap()["total"], list["total"]);
+}
+
 #[test]
 fn a_rebuild_replaces_the_breakers_and_keeps_the_count_index_true() {
     let mut s = building();
@@ -405,4 +447,376 @@ fn a_breaker_corrected_on_its_schedule_row_is_built_as_installed_the_printed_one
     s.execute("model.build", &json!({"route": false})).expect("build");
     let rtu = breakers_of(&mut s, "LP1").into_iter().find(|b| val(b, "circuit") == "LP1-3,5").unwrap_or(Value::Null);
     assert_eq!(val(&rtu, "design:trip_a"), "40", "{rtu}");
+}
+
+/// The circuit, panel and links of an element, compactly: `key=value` for each.
+fn links(s: &mut Session, h: &str) -> Value {
+    let p = props_of(s, h);
+    let keys = ["circuit", "panel", "fed_from", "fed_from_handle", "breaker_handle", "breaker", "circuit_description", "box", "connects", "fed_by"];
+    Value::Object(keys.iter().map(|k| (k.to_string(), p[*k]["value"].clone())).collect())
+}
+
+fn breaker_circuit(s: &mut Session, h: &str) -> Value {
+    let b = links(s, h)["breaker_handle"].as_str().unwrap_or_default().to_string();
+    if b.is_empty() { Value::Null } else { val(&props_of(s, &b), "circuit").clone() }
+}
+
+/// Q6501: a device copied from another and given a new circuit and panel by property keeps none
+/// of its source's derived links: its panel element, its breaker, its row and the feed walk all
+/// follow the new values (LP2's row 1, where the source's links named LP1, whose row 1 is
+/// lighting), at once and after a re-route; set back, the source's links come back.
+#[test]
+fn a_copied_device_given_a_new_circuit_and_panel_takes_its_new_panels_links() {
+    let mut s = building_routed(true);
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    let src = device_handles(&mut s, "LP1-2").into_iter().next().expect("a device on LP1-2");
+    let (lp1, lp2) = (panel_handle(&mut s, "LP1"), panel_handle(&mut s, "LP2"));
+    let before = links(&mut s, &src);
+    assert_eq!(before["fed_from_handle"], json!(lp1), "the source's link: {before:#}");
+    assert!(before["box"].is_string() && before["fed_by"].is_string(), "the source is routed: {before:#}");
+    // A copy: none of its source's place (its box, what it connects to, what feeds it); its
+    // circuit links its own, from its own circuit (the same panel and breaker here).
+    let copy =
+        s.execute("copy", &json!({"handles": [src], "delta": [0.0, 96.0]})).expect("copy")["handles"][0].as_str().expect("the copy").to_string();
+    let c = links(&mut s, &copy);
+    assert!(c["box"].is_null() && c["connects"].is_null() && c["fed_by"].is_null(), "a copy keeps its source's place: {c:#}");
+    assert_eq!(c["fed_from_handle"], json!(lp1), "{c:#}");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP1-2");
+    // A new circuit and panel: every derived link from them, at once.
+    s.execute("bim.props.set", &json!({"handles": [copy], "props": {"circuit": "LP2-1", "panel": "LP2"}})).expect("set");
+    let c = links(&mut s, &copy);
+    assert_eq!(c["fed_from_handle"], json!(lp2), "{c:#}");
+    assert_eq!(c["fed_from"], "panel LP2, circuit LP2-1", "{c:#}");
+    assert_eq!(c["circuit_description"], "OFFICE RCPT", "LP2's row 1, not LP1's row 2: {c:#}");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP2-1", "{c:#}");
+    // Routed again and the breakers built again: on LP2's circuit 1, reached through its raceway.
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP2-1");
+    let chain = s.execute("bim.chain", &json!({"handle": copy})).expect("chain");
+    assert_eq!(chain["source"]["handle"], json!(lp2), "{chain:#}");
+    let b = chain["breaker"]["handle"].as_str().unwrap_or_default().to_string();
+    assert_eq!(val(&props_of(&mut s, &b), "circuit"), "LP2-1", "{chain:#}");
+    // The source is as it was.
+    assert_eq!(links(&mut s, &src)["fed_from_handle"], json!(lp1));
+    assert_eq!(breaker_circuit(&mut s, &src), "LP1-2");
+    // The copy is a person's (Q6620): recorded as an added item, its properties its own (no
+    // override); set back, its links are LP1's again.
+    let list = s.execute("override.list", &json!({})).expect("list");
+    let mine: Vec<&str> =
+        list["overrides"].as_array().into_iter().flatten().filter(|o| o["element"] == json!(copy)).filter_map(|o| o["kind"].as_str()).collect();
+    assert_eq!(mine, ["add"], "{list:#}");
+    s.execute("bim.props.set", &json!({"handles": [copy], "props": {"circuit": "LP1-2", "panel": "LP1"}})).expect("set back");
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    let c = links(&mut s, &copy);
+    assert_eq!((&c["circuit"], &c["fed_from_handle"]), (&json!("LP1-2"), &json!(lp1)), "{c:#}");
+    assert_eq!(breaker_circuit(&mut s, &copy), "LP1-2");
+}
+
+/// Q6501: a circuit set without its panel takes the panel its label names, and the links follow.
+#[test]
+fn a_circuit_set_alone_takes_the_panel_its_label_names() {
+    let mut s = building();
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    let h = device_handles(&mut s, "LP1-9").into_iter().next().expect("a device on LP1-9");
+    s.execute("bim.props.set", &json!({"handles": [h], "key": "circuit", "value": "LP2-3"})).expect("set");
+    let c = links(&mut s, &h);
+    assert_eq!(c["panel"], "LP2", "{c:#}");
+    assert_eq!(c["fed_from_handle"], json!(panel_handle(&mut s, "LP2")), "{c:#}");
+    assert_eq!(c["circuit_description"], "WATER HEATER", "{c:#}");
+    assert_eq!(breaker_circuit(&mut s, &h), "LP2-3");
+}
+
+/// Q6501: a model saved with a panel link left from another panel (before links followed their
+/// circuit) is linked by its own panel when the breakers are built: never to the other panel's
+/// breaker of the same number.
+#[test]
+fn a_stale_panel_link_never_puts_a_device_on_another_panels_breaker() {
+    let mut s = building();
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    let h = device_handles(&mut s, "LP2-1").into_iter().next().expect("a device on LP2-1");
+    let lp1 = panel_handle(&mut s, "LP1");
+    {
+        let d = s.doc_mut().expect("doc");
+        let eh = cadaddy_engine::doc::Handle::parse_hex(&h).expect("handle");
+        d.modify_entity(eh, |e| {
+            let mut ps = cadaddy_engine::doc::props::read(&e.common.xdata);
+            ps.set("fed_from_handle", cadaddy_engine::doc::props::Prop::new(lp1.clone(), cadaddy_engine::doc::props::Source::computed()));
+            e.common.xdata = cadaddy_engine::doc::props::write(&e.common.xdata, &ps).into();
+        })
+        .expect("stale link");
+    }
+    s.execute("bim.breakers", &json!({})).expect("breakers");
+    assert_eq!(breaker_circuit(&mut s, &h), "LP2-1", "{:#}", links(&mut s, &h));
+}
+
+/// Q6319: a circuit label naming a panel no panel schedule, one-line or riser has (another
+/// trade's mark printed beside a thermostat, read as `QX-1`) is never a panel: no panel schedule
+/// lists it, its devices are fed from no panel (the label kept as printed, the design value
+/// beside), and each such panel is one review item. A panel only the one-line names is still a
+/// panel (its devices are on it, its missing schedule the review item it always was); equipment
+/// whose tag reads like a panel's is not one.
+#[test]
+fn a_circuit_label_naming_no_panel_of_the_documents_is_for_review_never_a_panel() {
+    let mut sp = spec();
+    let tags = sp["tags"].as_array_mut().expect("tags");
+    tags.push(device("device:L1:11", "thermostat", 110.0, "QX-1"));
+    tags.push(device("device:L1:12", "thermostat", 111.0, "ZT-2"));
+    tags.push(device("device:L1:13", "equipment_connection", 112.0, "ZT-2"));
+    tags.push(device("device:L1:14", "receptacle", 113.0, "DPX-3"));
+    tags.push(json!({"id": "circuit:L1:X-101:ZT-5", "kind": "circuit", "level": "L1", "at_ft": [114.0, 10.0], "fields": {
+        "circuit": {"value": "ZT-5", "source": "plan"}, "panel": {"value": "ZT", "source": "plan"}
+    }}));
+    // A heat pump whose tag reads like a panel's (`HP-`): equipment, never a panel.
+    sp["mep"]["equipment"]
+        .as_array_mut()
+        .expect("equipment")
+        .push(json!({"tag": "HP-7", "kind": "heat_pump", "level": "L1", "min": [1200, 300], "max": [1236, 336], "height_ft": 3, "bottom_ft": 0}));
+    // DPX: a panel the one-line feeds (no schedule printed for it).
+    sp["mep"]["feeders"].as_array_mut().expect("feeders").push(json!({"tag": "F2", "from": "MDP", "to": "DPX", "sets": 1, "phases": 3, "size": "#4", "material": "cu", "neutrals": 1, "grounds": 1, "ground_size": "#8", "conduits": 1, "conduit_in": 1.25, "entry": "top"}));
+    let mut s = built(sp, false);
+    // Built: the label as printed, what feeds it corrected, the design value beside.
+    let qx = device_handles(&mut s, "QX-1").into_iter().next().expect("the QX-1 device");
+    let p = props_of(&mut s, &qx);
+    assert_eq!(val(&p, "circuit"), "QX-1", "{p:#}");
+    assert!(val(&p, "fed_from").as_str().is_some_and(|f| f.contains("no panel of the documents")), "{p:#}");
+    assert_eq!(val(&p, "design:fed_from"), "panel QX, circuit QX-1", "{p:#}");
+    assert!(val(&p, "correction:fed_from").as_str().is_some_and(|c| c.contains("one-line")), "{p:#}");
+    let dpx = device_handles(&mut s, "DPX-3").into_iter().next().expect("the DPX-3 device");
+    assert_eq!(val(&props_of(&mut s, &dpx), "fed_from"), "panel DPX, circuit DPX-3");
+
+    // The breakers: one review item per panel only labels name, the circuit tag's too.
+    let r = s.execute("bim.breakers", &json!({"limit": 100})).expect("breakers");
+    assert_eq!(r["unknown_panels"], json!(["QX", "ZT"]), "{r:#}");
+    let ms = r["mismatches"].as_array().expect("mismatches");
+    let of = |panel: &str| ms.iter().filter(|m| m["panel"] == panel).cloned().collect::<Vec<_>>();
+    let zt = of("ZT");
+    assert_eq!(zt.len(), 1, "{zt:?}");
+    assert_eq!(
+        (zt[0]["kind"].clone(), zt[0]["devices"].clone(), zt[0]["circuit"].clone()),
+        (json!("unknown_panel"), json!(2), json!("ZT-2, ZT-5")),
+        "{zt:?}"
+    );
+    assert!(zt[0]["title"].as_str().is_some_and(|t| t.contains("no panel is made")), "{zt:?}");
+    assert_eq!(of("QX").first().map(|m| m["kind"].clone()), Some(json!("unknown_panel")));
+    // The one-line's panel: its schedule is what is missing, not the panel.
+    assert!(of("DPX").iter().all(|m| m["kind"] == "no_schedule") && !of("DPX").is_empty(), "{:?}", of("DPX"));
+    // Again: the same items, the design value never overwritten.
+    let again = s.execute("bim.breakers", &json!({"limit": 100})).expect("breakers again");
+    assert_eq!(again["unknown_panels"], json!(["QX", "ZT"]));
+    assert_eq!(val(&props_of(&mut s, &qx), "design:fed_from"), "panel QX, circuit QX-1");
+
+    // The panel schedule: no QX or ZT panel; their circuits under review.
+    let sc = s.execute("bim.schedule", &json!({"kind": "panel"})).expect("schedule");
+    let panels: Vec<&str> = sc["panels"].as_array().expect("panels").iter().filter_map(|p| p["panel"].as_str()).collect();
+    assert!(!panels.contains(&"QX") && !panels.contains(&"ZT") && !panels.contains(&"HP-7"), "{panels:?}");
+    assert!(panels.contains(&"LP1") && panels.contains(&"DPX"), "{panels:?}");
+    assert!(sc["rows"].as_array().expect("rows").iter().all(|r| r["panel"] != "QX" && r["panel"] != "ZT"), "{:#}", sc["rows"]);
+    let review: Vec<&str> = sc["review"].as_array().expect("review").iter().filter_map(|p| p["panel"].as_str()).collect();
+    assert_eq!(review, ["QX", "ZT"], "{:#}", sc["review"]);
+    assert!(sc["notes"].as_array().expect("notes").iter().any(|n| n.as_str().is_some_and(|n| n.contains("listed under review"))));
+
+    // In the review queue as conflicts.
+    let list = s.execute("review.list", &json!({"kind": "conflict", "limit": 50})).expect("list");
+    let item =
+        list["items"].as_array().expect("items").iter().find(|i| i["title"].as_str().is_some_and(|t| t.contains("QX-1"))).cloned().expect("QX item");
+    let next = s.execute("review.next", &json!({"id": item["id"]})).expect("next");
+    assert_eq!(next["item"]["detail"]["breakers"], "unknown_panel", "{next}");
+}
+
+/// Q6319: with no panel schedule, one-line, riser or gear in the documents, nothing says which
+/// panels exist: the panel schedule groups the circuits by the panel their labels name, as before.
+#[test]
+fn with_no_panel_documented_the_panel_schedule_groups_by_the_labels() {
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": [device("device:L1:1", "receptacle", 5.0, "PQ-1"), device("device:L1:2", "receptacle", 6.0, "PQ-1")]
+    });
+    let mut s = built(spec, false);
+    let h = device_handles(&mut s, "PQ-1").into_iter().next().expect("a PQ-1 device");
+    assert_eq!(val(&props_of(&mut s, &h), "fed_from"), "panel PQ, circuit PQ-1");
+    let sc = s.execute("bim.schedule", &json!({"kind": "panel"})).expect("schedule");
+    assert!(sc["panels"].as_array().expect("panels").iter().any(|p| p["panel"] == "PQ"), "{sc:#}");
+    assert!(sc.get("review").is_none(), "{sc:#}");
+}
+
+/// Q6350: a breaker's type comes from its schedule row when the row's codes name its protection;
+/// a row that names none is decided per circuit by what it serves, never one type for a whole
+/// panel. A guest unit's 120 V single-pole circuit is AFCI (NEC 210.12), a GFCI load with no
+/// receptacle to carry a GFCI device takes it at the breaker (dual-function in a unit), a
+/// two-pole is standard; a schedule that types its other rows keeps its printed type as design.
+#[test]
+fn a_breaker_row_without_a_type_code_is_typed_by_what_its_circuit_serves() {
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "unit_instances": [{"number": "N1", "type": "A"}, {"number": "N2", "type": "B"}],
+        "tags": [
+            device("device:L1:1", "gfci_receptacle", 5.0, "H-3"),
+            device("device:L1:2", "receptacle", 6.0, "H-1"),
+        ],
+        "mep": {
+            "equipment": [
+                {"tag": "H", "kind": "panel", "level": "L1", "min": [-24, 110], "max": [-4, 130], "height_ft": 4, "bottom_ft": 2},
+                {"tag": "K-N1", "kind": "panel", "level": "L1", "min": [300, 110], "max": [314, 114], "height_ft": 2, "bottom_ft": 4,
+                 "properties": {"PANEL": "K", "ROOM": "N1"}},
+                {"tag": "K-N2", "kind": "panel", "level": "L1", "min": [500, 110], "max": [514, 114], "height_ft": 2, "bottom_ft": 4,
+                 "properties": {"PANEL": "K", "ROOM": "N2"}},
+                {"tag": "EWC-1", "kind": "water_cooler", "level": "L1", "min": [40, 110], "max": [42, 112], "height_ft": 3, "bottom_ft": 0,
+                 "properties": {"PANEL": "H", "CIRCUIT": "5"}}
+            ],
+            "panel_schedules": [
+                {"panel": "K", "typical_of": 2, "source": "X-2",
+                 "header": {"volts/phase": "208Y/120V, 1PH, 3W"},
+                 "legend": {"AF": "ARC FAULT (COMBINATION)", "GF": "GROUND-FAULT, CLASS A", "LT": "HANDLE LOCK"},
+                 "circuits": [
+                     ckt("1", "ROOM RCPT", "20", 1, &["AF"]),
+                     ckt("2", "BATH RCPT", "20", 1, &["AF", "GF"]),
+                     ckt("3", "DESK RCPT", "20", 1, &[]),
+                     ckt("4", "DISHWASHER", "20", 1, &["LT"]),
+                     ckt("5", "ROOM HEAT PUMP", "20", 2, &[]),
+                     ckt("9", "WATER HEATER", "30", 1, &[])
+                 ]},
+                {"panel": "H", "source": "X-3",
+                 "header": {"volts/phase": "208Y/120V, 3PH, 4W"},
+                 "circuits": [
+                     ckt("1", "CORRIDOR RCPT", "20", 1, &[]),
+                     ckt("3", "VENDING RCPT", "20", 1, &[]),
+                     ckt("5", "DRINKING FOUNTAIN EWC-1", "20", 1, &[])
+                 ]}
+            ]
+        }
+    });
+    let mut s = built(spec, false);
+    let by_row = |bs: &[Value], n: &str| bs.iter().find(|b| val(b, "circuit_number") == n).cloned().unwrap_or_else(|| panic!("row {n}: {bs:?}"));
+    for unit in ["K-N1", "K-N2"] {
+        let bs = breakers_of(&mut s, unit);
+        let ty = |n: &str| val(&by_row(&bs, n), "type").as_str().unwrap_or_default().to_string();
+        // The row's codes decide where they name protection.
+        assert_eq!(ty("1"), "AFCI", "{unit}");
+        assert_eq!(ty("2"), "dual-function", "{unit}");
+        assert_eq!(val(&by_row(&bs, "1"), "type_basis"), "schedule");
+        // A unit's single-pole 120 V 20 A circuit with no code: AFCI by NEC 210.12, the printed
+        // standard kept as its design (the schedule types its other rows).
+        let desk = by_row(&bs, "3");
+        assert_eq!(val(&desk, "type"), "AFCI", "{desk}");
+        assert_eq!(val(&desk, "type_basis"), "circuit");
+        assert!(desk["type"]["source"].to_string().contains("210.12"), "{desk}");
+        assert_eq!(val(&desk, "design:type"), "standard", "{desk}");
+        assert_eq!(desk["design:type"]["source"]["kind"], "schedule", "{desk}");
+        // A dishwasher with no receptacle on its circuit: its GFCI at the breaker too.
+        assert_eq!(ty("4"), "dual-function", "{unit}");
+        // Two-pole (208 V) and a 30 A circuit: no AFCI rule; standard, no correction.
+        assert_eq!(ty("5"), "standard");
+        assert_eq!(ty("9"), "standard");
+        assert!(val(&by_row(&bs, "5"), "design:type").is_null());
+    }
+    // A house panel whose schedule types nothing: per circuit too, outside any unit.
+    let bs = breakers_of(&mut s, "H");
+    let ty = |n: &str| val(&by_row(&bs, n), "type").as_str().unwrap_or_default().to_string();
+    assert_eq!(ty("1"), "standard", "no unit, no GFCI load");
+    // A vending machine's GFCI receptacle carries its ground fault: the breaker is standard.
+    assert_eq!(ty("3"), "standard");
+    assert!(by_row(&bs, "3")["type_basis"]["note"].to_string().contains("receptacle"), "{bs:?}");
+    // A drinking fountain wired straight to its circuit: GFCI at the breaker (NEC 422.5).
+    assert_eq!(ty("5"), "GFCI");
+    assert!(val(&by_row(&bs, "5"), "design:type").is_null(), "an untyped schedule printed no type to keep");
+    // The report counts types by what they rest on.
+    let r = s.execute("bim.breakers", &json!({"rebuild": false})).expect("report");
+    let count = |ty: &str, basis: &str| {
+        r["by_basis"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["type"] == ty && b["basis"] == basis)
+            .map(|b| b["count"].as_u64().unwrap_or(0))
+            .sum::<u64>()
+    };
+    assert_eq!(count("AFCI", "schedule"), 2, "{r}");
+    assert_eq!(count("AFCI", "circuit"), 2, "{r}");
+    assert_eq!(count("dual-function", "circuit"), 2, "{r}");
+    assert_eq!(count("GFCI", "circuit"), 1, "{r}");
+    assert_eq!(r["types_corrected"], 4, "{r}");
+}
+
+/// Q6591: a panel schedule's header goes on its panel: bus, main, volts and phase, enclosure,
+/// AIC and mounting, and the schedule, each with the schedule as its source; a typical
+/// schedule's on each room panel of its type; the gear submittal's catalog parts the job keeps
+/// on the record are its product. Two header layouts; gear fed from a panel takes none of it.
+#[test]
+fn a_panel_schedules_header_goes_on_its_panels() {
+    let mut sp = spec();
+    let scheds = sp["mep"]["panel_schedules"].as_array_mut().expect("schedules");
+    scheds[0]["header"] = json!({"bus amps": "225A", "main size / type": "MLO", "mounting": "SURFACE",
+        "volts/phase": "208Y/120V, 3PH, 4W", "nema rating": "NEMA 1", "aic rating": "10,000", "ground bus": "YES"});
+    scheds[1]["header"] = json!({"bus rating": "125 A", "main": "100A MCB", "mtg": "RECESSED", "voltage": "120/240V", "phase": "1"});
+    let lp1 = sp["mep"]["equipment"].as_array_mut().expect("equipment").iter_mut().find(|e| e["tag"] == "LP1").expect("LP1");
+    lp1["properties"] = json!({"CATALOG_NUMBER": "QX30ML225, enclosure BX36, trim TR36S"});
+    lp1["sources"] = json!({"catalog_number": "panelboard submittal p.4"});
+    let mut s = built(sp, false);
+    // The job reads the gear submittals after the model is built: catalog parts its record takes
+    // then reach its element through the fill.
+    let mut now = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    let u = now["mep"]["equipment"].as_array_mut().expect("equipment").iter_mut().find(|e| e["tag"] == "U-101").expect("U-101");
+    u["properties"]["CATALOG_NUMBER"] = json!("LC24M125");
+    s.execute("bspec.set", &json!({"replace": true, "spec": now})).expect("spec again");
+    let fill = s.execute("bim.props.fill", &json!({})).expect("fill");
+    assert!(fill["filled"]["equipment"]["bus_amps"].as_u64().unwrap_or(0) >= 3, "{fill}");
+
+    let h = panel_handle(&mut s, "LP1");
+    let p = props_of(&mut s, &h);
+    let v = |p: &Value, k: &str| val(p, k).clone();
+    assert_eq!((v(&p, "bus_amps"), p["bus_amps"]["unit"].clone()), (json!(225), json!("A")), "{p:#}");
+    assert_eq!(
+        (v(&p, "main"), v(&p, "mounting"), v(&p, "voltage"), v(&p, "phase")),
+        (json!("MLO"), json!("surface"), json!("208Y/120V"), json!("3PH, 4W"))
+    );
+    assert_eq!((v(&p, "enclosure"), v(&p, "aic"), v(&p, "schedule")), (json!("NEMA 1"), json!("10,000"), json!("panel LP1 schedule (X-2)")));
+    assert_eq!(
+        (p["voltage"]["source"]["kind"].clone(), p["voltage"]["source"]["doc"].clone()),
+        (json!("schedule"), json!("panel LP1 schedule (X-2)"))
+    );
+    assert_eq!(v(&p, "catalog_number"), json!("QX30ML225, enclosure BX36, trim TR36S"));
+    assert_eq!(
+        (p["catalog_number"]["source"]["kind"].clone(), p["catalog_number"]["source"]["doc"].clone()),
+        (json!("submittal"), json!("panelboard submittal p.4"))
+    );
+
+    // The typical schedule's header on both room panels of its type, said typical.
+    for tag in ["U-101", "U-102"] {
+        let h = panel_handle(&mut s, tag);
+        let p = props_of(&mut s, &h);
+        assert_eq!((v(&p, "bus_amps"), v(&p, "main"), v(&p, "mounting")), (json!(125), json!("100A MCB"), json!("flush")), "{tag}: {p:#}");
+        assert_eq!((v(&p, "voltage"), v(&p, "phase")), (json!("120/240V"), json!("1PH")));
+        assert_eq!(v(&p, "schedule"), json!("panel U schedule (X-2), typical of 3"));
+        assert_eq!(v(&p, "catalog_number"), if tag == "U-101" { json!("LC24M125") } else { Value::Null }, "{tag}: {p:#}");
+        assert!(p["mounting"]["note"].as_str().is_some_and(|n| n.contains("RECESSED") && n.contains("every panel of its type")), "{p:#}");
+    }
+    // A damper's power box fed from LP1 and a rooftop unit: no panel header; a switchboard whose
+    // schedule prints none: its schedule only.
+    for tag in ["DPB-1", "RTU-1"] {
+        let h = panel_handle(&mut s, tag);
+        let p = props_of(&mut s, &h);
+        assert!(p["bus_amps"].is_null() && p["schedule"].is_null() && p["voltage"].is_null(), "{tag}: {p:#}");
+    }
+    let h = panel_handle(&mut s, "MDP");
+    let p = props_of(&mut s, &h);
+    assert_eq!(v(&p, "schedule"), json!("panel MDP schedule (X-2)"), "{p:#}");
+    assert!(p["bus_amps"].is_null(), "{p:#}");
+    // A panel whose circuits its own record holds: that is its schedule.
+    let h = panel_handle(&mut s, "LP2");
+    assert_eq!(v(&props_of(&mut s, &h), "schedule"), json!("panel LP2 schedule (X-3)"));
+
+    // Completeness counts them: every panel with a header has its fields.
+    let c = s.execute("bim.completeness", &json!({"kind": "panel"})).expect("completeness");
+    let f = &c["kinds"]["panel"]["fields"];
+    assert_eq!((f["bus_amps"]["documented"].as_u64(), f["schedule"]["documented"].as_u64()), (Some(3), Some(4)), "{c:#}");
+
+    // A person's value stays.
+    let h = panel_handle(&mut s, "LP1");
+    s.execute("bim.props.set", &json!({"handles": [h], "key": "mounting", "value": "flush"})).expect("set");
+    s.execute("bim.props.fill", &json!({})).expect("fill again");
+    assert_eq!(v(&props_of(&mut s, &h), "mounting"), json!("flush"));
 }

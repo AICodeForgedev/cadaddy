@@ -144,8 +144,18 @@ fn the_guard_fails_if_gpu_rs_goes_back_to_std_instant() {
     let text = std::fs::read_to_string(&gpu).unwrap();
     assert!(scan_text(&text).is_empty(), "gpu.rs is clean today");
     let timer = "let t0 = web_time::Instant::now();";
-    let at = text.lines().position(|l| l.trim() == timer).expect("the canvas callback's timer") + 1;
-    let back = text.replacen(timer, "let t0 = std::time::Instant::now();", 1);
+    // The first such timer not under `#[cfg(test)]` (the tiler's test-only timers come before it).
+    let all: Vec<&str> = text.lines().collect();
+    let idx = (0..all.len())
+        .find(|&i| all.get(i).is_some_and(|l| l.trim() == timer) && (i == 0 || all.get(i - 1).is_none_or(|p| p.trim() != "#[cfg(test)]")))
+        .expect("the canvas callback's timer");
+    let at = idx + 1;
+    let back: String = all
+        .iter()
+        .enumerate()
+        .map(|(i, l)| if i == idx { l.replacen(timer, "let t0 = std::time::Instant::now();", 1) } else { (*l).to_string() })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_eq!(scan_text(&back).iter().map(|h| h.line).collect::<Vec<_>>(), [at]);
     let lines = text.lines().count();
     let regressed = format!("{text}\nfn frame_start() -> std::time::Instant {{\n    std::time::Instant::now()\n}}\n");

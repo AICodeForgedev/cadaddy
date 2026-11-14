@@ -373,10 +373,14 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                     // With nothing to cancel, Esc leaves walk mode: the 3D view doesn't get keys
                     // while the command line has them.
                     let idle = app.cmd.buffer.is_empty() && !app.session.prompting();
+                    let selected = !app.session.selection().is_empty();
                     app.cmd.buffer.clear();
                     app.session.cancel();
                     if idle && app.walk.is_some() {
                         crate::walk::close(app);
+                    } else if idle && !selected {
+                        // In the 3D BIM view: one view up (Room, Floor, the whole building).
+                        crate::shaded::escape_up(app);
                     }
                 }
                 Key::Backspace => {

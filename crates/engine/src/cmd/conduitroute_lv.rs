@@ -338,7 +338,7 @@ fn parse_size(t: &str) -> Option<f64> {
 }
 
 /// The sentences of a paragraph (a full stop, semicolon or colon followed by a space ends one).
-fn sentences(text: &str) -> Vec<String> {
+pub(super) fn sentences(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let cs: Vec<char> = text.chars().take(20_000).collect();
@@ -1303,7 +1303,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
         // The rated walls the pathway crosses: a raceway's penetration (firestopped), or the
         // open cable's sleeve.
         for leg in &legs {
-            clashes += leg.blocked.len();
+            clashes += leg.blocked.len() + leg.crossings.len();
             if raceway {
                 penetrate(&mut penetrations, cx.rated, &dv.level, leg, &label, size, upf, floor, rl);
             } else {
@@ -1320,6 +1320,10 @@ pub(super) fn route(cx: &Ctx) -> Out {
                     }
                 }
             }
+        }
+        // Laid: the pathways and circuits after it keep clear of it (Q6552).
+        for run in runs.iter().filter(|x| x.top_ft.is_none()) {
+            field.lay_run(run, floor, upf, &label);
         }
         let ft: f64 = runs.iter().map(|x| run_ft(x, upf)).sum();
         let flat_ft: f64 = legs.iter().map(|l| poly_len(&l.pts) / upf).sum();

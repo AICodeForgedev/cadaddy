@@ -38,6 +38,12 @@ public enum FieldLimits {
     public static let maxPhotoBytes = 4 * 1024 * 1024
     /// Update manifest (`manifest.json` from the office): its size, packages listed, files per package.
     public static let maxManifestBytes: Int64 = 8 * 1024 * 1024
+    /// A building's package set (`building.json`): its size, levels, rooms, packages and graph elements.
+    public static let maxBuildingIndexBytes: Int64 = 512 * 1024 * 1024
+    public static let maxSetLevels = 200
+    public static let maxSetRooms = 20_000
+    public static let maxSetPackages = 25_000
+    public static let maxSetGraphElements = 2_000_000
     public static let maxManifestPackages = 2_000
     public static let maxManifestFilesPerPackage = 16
 }

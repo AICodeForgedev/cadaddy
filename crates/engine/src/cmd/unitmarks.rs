@@ -102,6 +102,14 @@ pub(crate) struct Template {
     text_h: f64,
     /// Whether its row is a low voltage device's (on no power circuit: no circuit label is its).
     pub low_voltage: bool,
+    /// The lettering drawn inside it (`SD` in a smoke detector's circle, `J` in a junction
+    /// box's), when its drawing is known by that too (Q6484): a copy is one only with those
+    /// letters inside. Empty: its linework alone.
+    pub letters: Vec<String>,
+    /// Whether its drawing is a plain outline (a triangle, a square, a lone circle: each side on
+    /// its outline, nothing inside), so plan linework draws it by chance (a door swing's end, a
+    /// column bubble, a section mark): a copy found on a plan counts only with a second cue.
+    pub simple: bool,
 }
 
 /// A legend symbol of fewer pieces than this is no drawing to look for (a lone circle is every
@@ -145,7 +153,75 @@ impl Template {
             return None;
         }
         let mid = Vec2::new((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
-        let pieces = drawn
+        let pieces: Vec<Piece> = drawn
+            .iter()
+            .map(|p| match *p {
+                Piece::Seg(a, b) => Piece::Seg(a - mid, b - mid),
+                Piece::Round(c, r) => Piece::Round(c - mid, r),
+            })
+            .collect();
+        let simple = outline_only(&pieces, size);
+        Some(Template {
+            row: row.trim().to_string(),
+            sheet: sheet.to_string(),
+            kind: kind.to_string(),
+            ifc: ifc.to_string(),
+            pieces,
+            size,
+            text_h,
+            low_voltage: false,
+            letters: Vec::new(),
+            simple,
+        })
+    }
+
+    /// As [`Template::new`], except that a circle with a stroke across it (an architect's can
+    /// light, `⊘`) is a drawing too, though it is two pieces: unlike a lone circle, a circle's
+    /// diameter drawn across it tells it apart (Q6612).
+    pub(crate) fn new_crossed(row: &str, sheet: &str, kind: &str, ifc: &str, drawn: &[Piece], text_h: f64) -> Option<Template> {
+        let usable_drawn: Vec<Piece> = drawn.iter().filter(|p| usable(p)).copied().collect();
+        let crossed = match usable_drawn.as_slice() {
+            [Piece::Round(c, r), Piece::Seg(a, b)] | [Piece::Seg(a, b), Piece::Round(c, r)] => {
+                let m = (*a + *b) * 0.5;
+                m.dist(*c) <= 0.35 * r && a.dist(*b) >= *r && a.dist(*b) <= 2.2 * r
+            }
+            _ => false,
+        };
+        if !crossed {
+            return Template::new(row, sheet, kind, ifc, drawn, text_h);
+        }
+        // Built as a lettered drawing is (one or two pieces), with no letters.
+        let mut tp = Template::drawing(row, sheet, kind, ifc, &usable_drawn, text_h, &["X".to_string()])?;
+        tp.letters.clear();
+        tp.simple = false;
+        Some(tp)
+    }
+
+    /// A symbol table's drawing (Q6484: the shared library's, a set's legend row's, an answer's):
+    /// as [`Template::new`], except that a drawing known by the lettering inside it too may be
+    /// one or two pieces (a circle with `SD` in it) or a plain box (a box with `J` in it).
+    pub(crate) fn drawing(row: &str, sheet: &str, kind: &str, ifc: &str, drawn: &[Piece], text_h: f64, letters: &[String]) -> Option<Template> {
+        let letters: Vec<String> =
+            letters.iter().map(|l| l.trim().to_ascii_uppercase()).filter(|l| !l.is_empty() && l.chars().count() <= 6).take(8).collect();
+        if letters.is_empty() {
+            return Template::new(row, sheet, kind, ifc, drawn, text_h);
+        }
+        if !(text_h.is_finite() && text_h > 0.0) {
+            return None;
+        }
+        let drawn: Vec<Piece> = drawn.iter().filter(|p| usable(p)).copied().take(MAX_TEMPLATE_PIECES + 1).collect();
+        if drawn.is_empty() || drawn.len() > MAX_TEMPLATE_PIECES {
+            return None;
+        }
+        let b = drawn.iter().map(piece_box).fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |a, q| {
+            [a[0].min(q[0]), a[1].min(q[1]), a[2].max(q[2]), a[3].max(q[3])]
+        });
+        let size = (b[2] - b[0]).max(b[3] - b[1]);
+        if !(size.is_finite() && size > 0.0) {
+            return None;
+        }
+        let mid = Vec2::new((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let pieces: Vec<Piece> = drawn
             .iter()
             .map(|p| match *p {
                 Piece::Seg(a, b) => Piece::Seg(a - mid, b - mid),
@@ -157,12 +233,56 @@ impl Template {
             sheet: sheet.to_string(),
             kind: kind.to_string(),
             ifc: ifc.to_string(),
+            simple: outline_only(&pieces, size),
             pieces,
             size,
             text_h,
             low_voltage: false,
+            letters,
         })
     }
+
+    /// Its pieces about the middle of their box.
+    pub(crate) fn pieces(&self) -> &[Piece] {
+        &self.pieces
+    }
+
+    /// Its box's larger side, in its own sheet's units.
+    pub(crate) fn size(&self) -> f64 {
+        self.size
+    }
+
+    /// The lettering height it was taken at.
+    pub(crate) fn text_h(&self) -> f64 {
+        self.text_h
+    }
+
+    /// A copy looked for `unit` times its own size (one sheet's units over its own sheet's):
+    /// [`find_symbols`] with a lettering height of 1 then looks for it at that size.
+    pub(crate) fn at_unit(&self, unit: f64) -> Option<Template> {
+        (unit.is_finite() && unit > 0.0).then(|| Template { text_h: 1.0 / unit, ..self.clone() })
+    }
+}
+
+/// Whether a drawing is a plain outline: each straight piece on its box's edges or a side of one
+/// closed outline of at most four sides with nothing inside (a triangle, a square), or one circle
+/// alone.
+fn outline_only(pieces: &[Piece], size: f64) -> bool {
+    let rounds: Vec<(Vec2, f64)> = pieces.iter().filter_map(|p| if let Piece::Round(c, r) = *p { Some((c, r)) } else { None }).collect();
+    let segs: Vec<(Vec2, Vec2)> = pieces.iter().filter_map(|p| if let Piece::Seg(a, b) = *p { Some((a, b)) } else { None }).collect();
+    if segs.is_empty() {
+        return rounds.len() <= 1;
+    }
+    if !rounds.is_empty() || segs.len() > 4 {
+        return false;
+    }
+    // Each end met by another side's end: one closed outline.
+    let eps = 4.0 * BOX_EDGE_SHARE * size;
+    segs.len() >= 3
+        && segs
+            .iter()
+            .enumerate()
+            .all(|(i, (a, b))| [a, b].iter().all(|p| segs.iter().enumerate().any(|(j, (c, d))| j != i && (p.dist(*c) <= eps || p.dist(*d) <= eps))))
 }
 
 /// A view's linework, by cells, to look the legend's symbols up in.
@@ -199,6 +319,28 @@ impl Scene {
         Scene { pieces, cell, grid }
     }
 
+    /// The pieces filed within `r` of `p` (each once), with their places.
+    fn near_idx(&self, p: Vec2, r: f64) -> Vec<(usize, &Piece)> {
+        let (x0, y0, x1, y1) = (
+            ((p.x - r) / self.cell).floor() as i64,
+            ((p.y - r) / self.cell).floor() as i64,
+            ((p.x + r) / self.cell).floor() as i64,
+            ((p.y + r) / self.cell).floor() as i64,
+        );
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_PIECE_CELLS {
+            return Vec::new();
+        }
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(v) = self.grid.get(&(x, y)) {
+                    seen.extend(v.iter().copied());
+                }
+            }
+        }
+        seen.into_iter().filter_map(|i| self.pieces.get(i).map(|q| (i, q))).collect()
+    }
+
     /// The pieces filed within `r` of `p` (each once).
     fn near(&self, p: Vec2, r: f64) -> Vec<&Piece> {
         let (x0, y0, x1, y1) = (
@@ -228,6 +370,8 @@ pub(crate) struct Found {
     pub at: Vec2,
     pub template: usize,
     pub size: f64,
+    /// How many quarter turns counter-clockwise from its template's drawing.
+    pub turn: u8,
 }
 
 /// How much larger or smaller than its legend drawing a symbol may be drawn.
@@ -288,12 +432,123 @@ fn drawn_at(tp: &Template, scene: &Scene, k: u8, s: f64, t: Vec2) -> bool {
     })
 }
 
+/// Whether each of the template's circles and lines (its straight pieces on one line taken
+/// together) is drawn by a piece of its own in the scene, at the turn, scale and place given: a
+/// drawing of three bars is no template of four, however near each other its bars are.
+fn drawn_apart(tp: &Template, scene: &Scene, k: u8, s: f64, t: Vec2) -> bool {
+    let tol = PIECE_TOL * tp.size * s;
+    let placed: Vec<Piece> = tp
+        .pieces
+        .iter()
+        .map(|p| match *p {
+            Piece::Round(c, r) => Piece::Round(t + quarter(c, k) * s, r * s),
+            Piece::Seg(a, b) => Piece::Seg(t + quarter(a, k) * s, t + quarter(b, k) * s),
+        })
+        .collect();
+    // The template's lines: its straight pieces grouped where they lie on one line.
+    let mut line_of: Vec<usize> = Vec::new();
+    let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
+    for p in &placed {
+        if let Piece::Seg(a, b) = *p {
+            let at = lines.iter().position(|(c, d)| parallel(b - a, *d - *c) && line_dist(a, *c, *d) <= tol && line_dist(b, *c, *d) <= tol);
+            match at {
+                Some(i) => line_of.push(i),
+                None => {
+                    lines.push((a, b));
+                    line_of.push(lines.len() - 1);
+                }
+            }
+        } else {
+            line_of.push(usize::MAX);
+        }
+    }
+    // Each line's, and each circle's, candidate scene pieces.
+    let mut wants: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); lines.len()];
+    let mut rounds: Vec<BTreeSet<usize>> = Vec::new();
+    for (p, li) in placed.iter().zip(line_of.iter()) {
+        match *p {
+            Piece::Round(c, r) => {
+                let c2: BTreeSet<usize> = scene
+                    .near_idx(c, tol)
+                    .into_iter()
+                    .filter(|(_, q)| matches!(**q, Piece::Round(qc, qr) if qc.dist(c) <= tol && (qr - r).abs() <= tol))
+                    .map(|(i, _)| i)
+                    .collect();
+                rounds.push(c2);
+            }
+            Piece::Seg(a, b) => {
+                let m = (a + b) * 0.5;
+                let c2 = scene
+                    .near_idx(m, tol)
+                    .into_iter()
+                    .filter(|(_, q)| matches!(**q, Piece::Seg(qa, qb) if parallel(qb - qa, b - a) && seg_dist(m, qa, qb) <= tol))
+                    .map(|(i, _)| i);
+                if let Some(w) = wants.get_mut(*li) {
+                    w.extend(c2);
+                }
+            }
+        }
+    }
+    let all: Vec<BTreeSet<usize>> = wants.into_iter().chain(rounds).collect();
+    distinct(&all)
+}
+
+/// The distance from `p` to the whole line through `a` and `b`.
+fn line_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let ab = b - a;
+    let l = ab.len();
+    if l <= 0.0 {
+        return p.dist(a);
+    }
+    ((p - a).cross(ab) / l).abs()
+}
+
+/// Whether each want can take a candidate no other want takes (a matching that covers them all).
+fn distinct(wants: &[BTreeSet<usize>]) -> bool {
+    if wants.len() > MAX_TEMPLATE_PIECES || wants.iter().any(BTreeSet::is_empty) {
+        return false;
+    }
+    let mut owner: HashMap<usize, usize> = HashMap::new();
+    fn take(w: usize, wants: &[BTreeSet<usize>], owner: &mut HashMap<usize, usize>, seen: &mut BTreeSet<usize>, depth: usize) -> bool {
+        if depth > MAX_TEMPLATE_PIECES {
+            return false;
+        }
+        let Some(cands) = wants.get(w) else { return false };
+        for &c in cands.iter().take(64) {
+            if !seen.insert(c) {
+                continue;
+            }
+            let free = match owner.get(&c).copied() {
+                None => true,
+                Some(o) => take(o, wants, owner, seen, depth + 1),
+            };
+            if free {
+                owner.insert(c, w);
+                return true;
+            }
+        }
+        false
+    }
+    (0..wants.len()).all(|w| take(w, wants, &mut owner, &mut BTreeSet::new(), 0))
+}
+
 /// Every place in the scene's `area` (`[x0, y0, x1, y1]`, lettered `text_h` high) where one of
 /// the templates is drawn: the template's largest circle (else its longest straight piece) laid
 /// on each circle (straight piece) of the scene that size or so, each quarter turn, then the rest
 /// checked. Where two templates are found at one place the one of more pieces stays (the more
 /// detailed symbol).
 pub(crate) fn find_symbols(templates: &[Template], scene: &Scene, area: [f64; 4], text_h: f64) -> Vec<Found> {
+    find_symbols_with(templates, scene, area, text_h, false)
+}
+
+/// [`find_symbols`], each template's circles and lines drawn by pieces of their own
+/// ([`drawn_apart`]): for a set's symbol table, whose library and legend drawings differ by a
+/// bar where a typical room's few views don't.
+pub(crate) fn find_symbols_apart(templates: &[Template], scene: &Scene, area: [f64; 4], text_h: f64) -> Vec<Found> {
+    find_symbols_with(templates, scene, area, text_h, true)
+}
+
+fn find_symbols_with(templates: &[Template], scene: &Scene, area: [f64; 4], text_h: f64, apart: bool) -> Vec<Found> {
     let inside = |p: Vec2| p.x >= area[0] && p.x <= area[2] && p.y >= area[1] && p.y <= area[3];
     let mut found: Vec<(Found, usize, f64)> = Vec::new();
     for (ti, tp) in templates.iter().enumerate() {
@@ -351,8 +606,8 @@ pub(crate) fn find_symbols(templates: &[Template], scene: &Scene, area: [f64; 4]
             if !inside(t) || found.iter().any(|(f, _, _)| f.template == ti && f.at.dist(t) <= 0.5 * tp.size * s) {
                 continue;
             }
-            if drawn_at(tp, scene, k, s, t) {
-                found.push((Found { at: t, template: ti, size: tp.size * s }, tp.pieces.len(), drawn_length(tp) * s));
+            if drawn_at(tp, scene, k, s, t) && (!apart || drawn_apart(tp, scene, k, s, t)) {
+                found.push((Found { at: t, template: ti, size: tp.size * s, turn: k }, tp.pieces.len(), drawn_length(tp) * s));
             }
         }
     }
@@ -390,6 +645,10 @@ pub(crate) struct View<'a> {
     pub rect: [f64; 4],
     pub texts: Vec<&'a TextItem>,
     pub read: Vec<&'a ReadDevice>,
+    /// Its straight pieces, for the leaders its labels are set on (none: no leader is followed).
+    pub leaders: Option<&'a super::labelspot::Leaders>,
+    /// Its short strokes, for switch symbols drawn as loose linework (Q6602; none: none looked for).
+    pub strokes: Option<&'a super::labelspot::Strokes>,
 }
 
 /// What the documents say the view's marks are: the fixture marks of the fixture schedule and
@@ -586,6 +845,17 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
     // printed by it that adds a leg letter to it (the reading kept the circuit, not its leg) and
     // no fixture's mark is printed over.
     let mut took: BTreeSet<usize> = BTreeSet::new();
+    // A read device made from a label (and moved to where the label points) holds that label.
+    for (j, dv) in view.read.iter().enumerate() {
+        let Some(p) = dv.label_at.map(|p| Vec2::new(p[0], p[1])) else { continue };
+        if let Some(i) =
+            circuits.iter().enumerate().position(|(i, (t, _, _))| !taken.get(i).copied().unwrap_or(true) && t.at.dist(p) <= LABEL_AT_EPS_H * t.height)
+            && let Some(slot) = taken.get_mut(i)
+        {
+            *slot = true;
+            took.insert(j);
+        }
+    }
     for exact in [true, false] {
         let mut named: Vec<(f64, usize, usize)> = Vec::new();
         for (j, dv) in view.read.iter().enumerate().filter(|(j, dv)| !dv.circuit.is_empty() && !took.contains(j)) {
@@ -734,42 +1004,99 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             continue;
         }
         let circuit = full(c, *leg);
-        let mut dv = match (mark_over(t), leg, &marks.leg_rule) {
-            (Some((m, kind)), _, _) => {
-                // The fixture is drawn where its mark and circuit are printed: by them.
-                new(
-                    &m.value.trim().to_ascii_uppercase(),
-                    t.at,
-                    kind,
-                    &format!("a fixture mark the fixture schedule or submittals list ({}) over its circuit", m.value.trim()),
-                )
-            }
-            (None, Some(_), Some((sheet, row))) => new("LUMINAIRE", t.at, "luminaire", &format!("{sheet} legend: {row}")),
+        // Where the device is drawn: where the label points, never the label itself (Q6337). Its
+        // mark over it, or a keynote's marker beside it, may carry the leader.
+        let over = mark_over(t);
+        let mut with: Vec<&TextItem> = over.iter().map(|(m, _)| *m).collect();
+        with.extend(texts.iter().copied().filter(|k| keynote_number(k) && beside(k, t)));
+        let (spot_at, spot) = super::labelspot::locate(t, &with, view.leaders, &[], 0.0);
+        // A symbol the leader ends on, read with no circuit, is the one it names.
+        if spot == super::labelspot::Spot::Leader
+            && let Some(o) = out
+                .iter_mut()
+                .enumerate()
+                .filter(|(j, o)| !unpowered.contains(j) && o.circuit.is_empty() && o.leg.is_empty())
+                .map(|(_, o)| o)
+                .filter(|o| at_of(o).dist(spot_at) <= super::labelspot::LEADER_SNAP_H * t.height)
+                .min_by(|a, b| at_of(a).dist(spot_at).total_cmp(&at_of(b).dist(spot_at)))
+        {
+            o.circuit = circuit;
+            o.label_at = Some([t.at.x, t.at.y]);
+            o.spot = spot.basis(&t.value, view.sheet);
+            continue;
+        }
+        // A leader onto a symbol the device reading read already (with its own circuit label
+        // beside it) names that device: no second one stacked on it.
+        if spot == super::labelspot::Spot::Leader
+            && view.read.iter().any(|dv| kind_of(dv) != "switch" && at_of(dv).dist(spot_at) <= super::labelspot::LEADER_SNAP_H * t.height)
+        {
+            continue;
+        }
+        let mut dv = match (over, leg, &marks.leg_rule) {
+            (Some((m, kind)), _, _) => new(
+                &m.value.trim().to_ascii_uppercase(),
+                spot_at,
+                kind,
+                &format!("a fixture mark the fixture schedule or submittals list ({}) over its circuit", m.value.trim()),
+            ),
+            (None, Some(_), Some((sheet, row))) => new("LUMINAIRE", spot_at, "luminaire", &format!("{sheet} legend: {row}")),
             _ => {
                 let near: Vec<&str> = texts.iter().filter(|o| o.at.dist(t.at) <= 4.0 * t.height).map(|o| o.value.as_str()).collect();
-                new(&receptacle_mark(&near), t.at, "receptacle", "a symbol only its circuit labels: a receptacle")
+                new(&receptacle_mark(&near), spot_at, "receptacle", "a symbol only its circuit labels: a receptacle")
             }
         };
         dv.circuit = circuit;
+        dv.label_at = Some([t.at.x, t.at.y]);
+        dv.spot = spot.basis(&t.value, view.sheet);
         out.push(dv);
     }
     // The switch designations no read switch took: one switch each, whatever letters it
     // carries (a switch read on its lettering is the one it names).
+    // (A read switch stands on its designation, or holds it as the label it was made from.)
+    let on_label = |dv: &ReadDevice, t: &TextItem| {
+        at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height || dv.label_at.is_some_and(|p| Vec2::new(p[0], p[1]).dist(t.at) <= LABEL_AT_EPS_H * t.height)
+    };
     for t in &texts {
         let named = switch_designations(&t.value);
-        if view.read.iter().any(|dv| !dv.leg.is_empty() && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height) {
+        if view.read.iter().any(|dv| !dv.leg.is_empty() && on_label(dv, t)) {
             continue;
         }
         for (tag, leg) in &named {
-            let have = view.read.iter().copied().chain(out.iter()).any(|dv| {
-                dv.leg == *leg && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height && (dv.tag == *tag || (tag.is_empty() && kind_of(dv) == "switch"))
-            });
+            let have = view
+                .read
+                .iter()
+                .copied()
+                .chain(out.iter())
+                .any(|dv| dv.leg == *leg && on_label(dv, t) && (dv.tag == *tag || (tag.is_empty() && kind_of(dv) == "switch")));
             if have || out.len() >= MAX_VIEW_MARKS {
                 continue;
             }
             let tag = if tag.is_empty() { "S".to_string() } else { tag.clone() };
-            let mut dv = new(&tag, t.at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
+            // The switch symbol drawn by it (one of the legend's, read with no designation yet)
+            // is the switch it names (Q6337): that one takes it, no second switch at the lettering.
+            if let Some(o) = out
+                .iter_mut()
+                .filter(|o| o.leg.is_empty() && o.label_at.is_none() && kind_of(o) == "switch")
+                .filter(|o| at_of(o).dist(t.at) <= LABEL_REACH_H * t.height)
+                .min_by(|a, b| at_of(a).dist(t.at).total_cmp(&at_of(b).dist(t.at)))
+            {
+                o.leg.clone_from(leg);
+                if super::readers::device_kind(&tag) != "device" || o.tag.trim().is_empty() || o.tag == "SWITCH" {
+                    o.tag.clone_from(&tag);
+                }
+                o.label_at = Some([t.at.x, t.at.y]);
+                o.spot = super::labelspot::Spot::Symbol.basis(&t.value, view.sheet);
+                continue;
+            }
+            // Else where a leader from it ends, else the switch symbol drawn by it that the import
+            // read as a big letter or left as loose linework (Q6602, none a device stands on);
+            // else (said so) its lettering.
+            let taken: Vec<Vec2> = view.read.iter().copied().chain(out.iter()).map(at_of).collect();
+            let (spot_at, spot) = super::labelspot::locate_switch(t, &view.texts, view.leaders, view.strokes, &taken);
+            let mut dv = new(&tag, spot_at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
             dv.leg.clone_from(leg);
+            dv.label_at = Some([t.at.x, t.at.y]);
+            dv.spot = spot.basis(&t.value, view.sheet);
             if super::readers::device_kind(&tag) == "device" {
                 dv.kind = "switch".into();
             }
@@ -777,6 +1104,18 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
         }
     }
     out
+}
+
+/// A label made a device it is printed at: within this share of its height of where it is.
+const LABEL_AT_EPS_H: f64 = 0.05;
+
+/// Whether a keynote's marker is printed beside a label, on its line (to its left or right, a
+/// couple of heights off at most): the label's leader may leave the marker.
+fn beside(marker: &TextItem, label: &TextItem) -> bool {
+    let h = label.height;
+    let (m, l) = (middle_of(marker), middle_of(label));
+    let half = 0.3 * h * label.value.trim().chars().count() as f64 + 0.3 * h * marker.value.trim().chars().count() as f64;
+    (m.y - l.y).abs() <= 0.6 * h && (m.x - l.x).abs() <= half + 2.5 * h
 }
 
 /// A receptacle's mark from what is printed by it: its designations (`GFCI`), else `REC`.
@@ -1032,7 +1371,15 @@ mod tests {
         scene.extend(light([300.0, 100.0]));
         let sc = Scene::new(scene, 10.0);
         let texts = [text("Q-2", [108.0, 98.0]), text("1", [299.0, 98.0]), text("QP1-5", [295.0, 110.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 400.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 400.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: None,
+            strokes: None,
+        };
         let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let found = find_symbols(&tps, &sc, view.rect, 4.0);
         assert_eq!(found.len(), 2, "both drawings match the legend's: {found:?}");
@@ -1043,12 +1390,155 @@ mod tests {
     }
 
     #[test]
+    fn a_label_on_a_leader_makes_its_device_at_the_leaders_end_never_at_the_label() {
+        // Q6337: a range receptacle's circuit `X-8` printed outside the room beside its keynote's
+        // marker `31`, its leader from the marker slanting to the cooktop wall at (60, 60); a
+        // receptacle's `X-4` with no leader and no symbol by it; a fixture `K2` over `X-1,a` on
+        // a leader with a level shoulder then a slant down to (158, 60).
+        let texts = [
+            text("X-8", [0.0, 100.0]),
+            text("31", [16.0, 100.0]),
+            text("X-4", [40.0, 150.0]),
+            text("K2", [120.0, 108.0]),
+            text("X-1,a", [120.0, 100.0]),
+        ];
+        let leaders = super::super::labelspot::Leaders::new(
+            vec![
+                (Vec2::new(23.5, 102.0), Vec2::new(32.0, 102.0)),
+                (Vec2::new(32.0, 102.0), Vec2::new(60.0, 60.0)),
+                (Vec2::new(141.0, 102.0), Vec2::new(150.0, 102.0)),
+                (Vec2::new(150.0, 102.0), Vec2::new(158.0, 60.0)),
+            ],
+            16.0,
+        );
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [-50.0, 0.0, 250.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: Some(&leaders),
+            strokes: None,
+        };
+        let marks = Marks { luminaires: ["K2".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let at = |c: &str| got.iter().find(|d| d.circuit == c).map(|d| ([d.at[0].round() as i64, d.at[1].round() as i64], d.spot.clone()));
+        let (p, why) = at("X-8").unwrap();
+        assert_eq!(p, [60, 60], "{got:?}");
+        assert!(why.starts_with("at the end of the leader from its label X-8"), "{why}");
+        let (p, _) = at("X-1,a").unwrap();
+        assert_eq!(p, [158, 60], "{got:?}");
+        // No leader, no symbol: at its label, said so for review.
+        let (p, why) = at("X-4").unwrap();
+        assert_eq!(p, [40, 150]);
+        assert!(why.contains("location to check"), "{why}");
+        // Each holds the label it was made from.
+        assert!(got.iter().all(|d| d.label_at.is_some()), "{got:?}");
+        // Read again with those as read devices (moved off their labels): no second device.
+        let again = View { read: got.iter().collect(), ..view };
+        assert!(read_view(&again, &[], &marks).is_empty());
+    }
+
+    #[test]
+    fn a_switch_designation_names_the_legend_switch_drawn_by_it_one_switch_not_two() {
+        // A legend switch drawn loose at (60, 60), its designation `D,b` printed beside it: one
+        // dimmer on leg b at the symbol, not a second switch on the lettering.
+        let sw = Symbol {
+            at: Vec2::new(60.0, 60.0),
+            size: 6.0,
+            kind: "switch".into(),
+            ifc: String::new(),
+            source: "E-0 legend: SWITCH".into(),
+            mark: None,
+            powered: true,
+        };
+        let texts = [text("D,b", [66.0, 66.0])];
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: None,
+            strokes: None,
+        };
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[sw], &marks);
+        let switches: Vec<(String, String, [i64; 2])> = got
+            .iter()
+            .filter(|d| kind_of(d) == "switch")
+            .map(|d| (d.tag.clone(), d.leg.clone(), [d.at[0].round() as i64, d.at[1].round() as i64]))
+            .collect();
+        assert_eq!(switches, [("SD".to_string(), "b".to_string(), [60, 60])], "{got:?}");
+    }
+
+    #[test]
+    fn a_switch_designation_by_an_s_drawn_as_loose_linework_makes_its_switch_on_the_s() {
+        // Q6602: `3,D,a` printed beside a switch's `S` drawn as loose strokes (no legend drawing of
+        // it, no letter read from it) about (60, 60); `c` beside an `S` a receptacle read already
+        // stands on, and `D,b` with nothing drawn by it.
+        let s_at = |c: [f64; 2]| -> EntityKind {
+            let (top, bottom) = (Vec2::new(c[0], c[1] + 3.5), Vec2::new(c[0], c[1] - 3.5));
+            let mut pts: Vec<Vec2> = (0..=10).map(|i| top + Vec2::from_angle((20.0 + 25.0 * f64::from(i)).to_radians()) * 3.5).collect();
+            pts.extend((1..=10).map(|i| bottom + Vec2::from_angle((90.0 - 25.0 * f64::from(i)).to_radians()) * 3.5));
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts.iter().map(|p| cadaddy_geom::PolyVertex { p: *p, bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect(),
+                closed: false,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        let objects = [s_at([60.0, 60.0]), s_at([140.0, 60.0])];
+        let strokes = super::super::labelspot::Strokes::of(objects.iter(), 4.0);
+        let texts = [text("3,D,a", [66.0, 58.0]), text("c", [146.0, 58.0]), text("D,b", [100.0, 160.0])];
+        let rec = read("REC", [140.0, 61.0], "Q-1", "");
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: vec![&rec],
+            leaders: None,
+            strokes: Some(&strokes),
+        };
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let mut switches: Vec<(String, String, [i64; 2])> = got
+            .iter()
+            .filter(|d| kind_of(d) == "switch")
+            .map(|d| (d.tag.clone(), d.leg.clone(), [d.at[0].round() as i64, d.at[1].round() as i64]))
+            .collect();
+        switches.sort();
+        assert_eq!(
+            switches,
+            [
+                ("S".to_string(), "c".to_string(), [146, 58]),
+                ("S3D".to_string(), "a".to_string(), [60, 60]),
+                ("SD".to_string(), "b".to_string(), [100, 160])
+            ],
+            "{got:?}"
+        );
+        let spot = |leg: &str| got.iter().find(|d| d.leg == leg).map(|d| d.spot.clone()).unwrap_or_default();
+        assert!(spot("a").starts_with("at the switch symbol drawn as linework nearest its label 3,D,a"), "{}", spot("a"));
+        assert!(spot("b").contains("location to check") && spot("c").contains("location to check"), "{got:?}");
+    }
+
+    #[test]
     fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
         // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
         // letter `d` printed over another circuit (`Q-11` with its legs `d,e`) is that circuit's
         // switch leg, though the letter is the same.
         let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: Vec::new(),
+            leaders: None,
+            strokes: None,
+        };
         let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let got = read_view(&view, &[], &marks);
         let luminaires: Vec<(String, String)> =
@@ -1102,7 +1592,15 @@ mod tests {
             read("REC", [104.0, 96.0], "Q-1", ""),
             read("REC", [60.0, 120.0], "Q-3", ""),
         ];
-        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: have.iter().collect() };
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [0.0, 0.0, 200.0, 200.0],
+            texts: texts.iter().collect(),
+            read: have.iter().collect(),
+            leaders: None,
+            strokes: None,
+        };
         let marks = Marks {
             luminaires: ["K2".to_string()].into(),
             wall_luminaires: BTreeSet::new(),

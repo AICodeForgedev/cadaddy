@@ -398,7 +398,6 @@ fn the_take_off_buys_what_the_code_rules_decided() {
     let a = tags.iter_mut().find(|t| t["fields"]["type"]["value"] == "A").unwrap();
     a["kind"] = json!("receptacle");
     a["fields"]["device_type"] = json!({"value": "GFCI receptacle", "source": "rule"});
-    let id = a["id"].as_str().unwrap().to_string();
     let sched = json!({"tags": tags, "mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
         "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
     s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
@@ -406,6 +405,8 @@ fn the_take_off_buys_what_the_code_rules_decided() {
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
+    // Its line lists its element (fix-bom-device-lines-ignore-element-edits).
+    let id = ha[0].clone();
     let item = |s: &mut Session| -> String {
         let b = s.execute("bim.bom", &json!({})).unwrap();
         let on = |l: &&Value| l["category"] == "devices" && l["elements"].as_array().is_some_and(|e| e.iter().any(|x| x == id.as_str()));
@@ -443,16 +444,24 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
-    assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
-    // The print's GFCI tag and what is built instead, side by side.
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["receptacle_type"]["value"], "standard");
+    // The breaker as built is a person's word; what the rule decides from it is the rule's.
+    assert_eq!(a["gfci"]["value"], "breaker", "{a:#}");
+    for k in ["gfci", "protected_by", "receptacle_type"] {
+        assert_eq!(a[k]["source"]["kind"], "rule", "{k}: {a:#}");
+    }
+    assert!(a["gfci"]["source"]["doc"].as_str().is_some_and(|d| d.contains("field report 2026-11-05")), "the breaker's source cited: {a:#}");
+    // The print's GFCI tag on that breaker: kept, redundant protection reported (allowed), nothing
+    // corrected (fix-coderules-drops-printed-gfci).
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "type_mark", "value": "GFCI"})).unwrap();
-    s.execute("bim.coderules", &json!({})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(r["gfci"]["redundant_protection"], 1, "{r:#}");
     let hs = find(&mut s, "device", json!({"type_mark": "GFCI"}));
     let a = get(&mut s, &hs[0]);
-    assert_eq!(a["design_value"]["value"], "GFCI", "{a:#}");
-    assert_eq!(a["corrected_value"]["value"], "standard");
-    assert!(a["correction_reason"]["value"].as_str().is_some_and(|r| r.contains("double protection")), "{a:#}");
-    assert_eq!(a["correction_rule"]["value"], "NEC 210.8");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI", "{a:#}");
+    assert_eq!(a["gfci"]["value"], "device", "{a:#}");
+    assert!(a["corrected_value"].is_null() && a["design_value"].is_null(), "{a:#}");
     // The panel's schedule says so too: what was built, and what was printed.
     let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
     let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
@@ -461,6 +470,52 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
     assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
     assert!(c("7")["protection"]["as_built"].is_null(), "a space has no breaker: {r:#}");
+}
+
+/// A receptacle the drawings tag GFCI on a dual-function breaker stays a GFCI device: redundant
+/// protection is allowed and reported for value engineering, never corrected to standard; the
+/// values the rule derives are the rule's, never a person's (fix-coderules-drops-printed-gfci).
+#[test]
+fn a_drawn_gfci_receptacle_on_a_gfci_breaker_stays_gfci() {
+    let mut s = plan();
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    let h = ha[0].clone();
+    s.execute("bim.props.set", &json!({"handle": h, "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.props.set", &json!({"handle": h, "key": "type_mark", "value": "GFCI"})).unwrap();
+    for run in 0..2 {
+        let r = s.execute("bim.coderules", &json!({})).unwrap();
+        assert_eq!(r["gfci"]["redundant_protection"], 1, "run {run}: {r:#}");
+        assert!(r["gfci"]["breaker"].is_null(), "not built standard: {r:#}");
+        assert_eq!(r["corrections"], 0, "{r:#}");
+        let red = &r["redundant_protection"][0];
+        assert_eq!(red["allowed"], true, "{r:#}");
+        assert!(red["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)), "{r:#}");
+        assert!(red["note"].as_str().is_some_and(|n| n.contains("redundant protection (allowed)")), "{r:#}");
+        let a = get(&mut s, &h);
+        assert_eq!(a["receptacle_type"]["value"], "GFCI", "the drawn device stays: {a:#}");
+        assert_eq!(a["gfci"]["value"], "device", "{a:#}");
+        assert!(a["protected_by"]["value"].as_str().is_some_and(|p| p.contains("breaker")), "{a:#}");
+        for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+            assert!(a[k].is_null(), "nothing corrected ({k}): {a:#}");
+        }
+        for k in ["gfci", "protected_by", "receptacle_type"] {
+            assert_ne!(a[k]["source"]["kind"], "user", "no person set {k}: {a:#}");
+        }
+        assert!(a["gfci"]["source"]["doc"].as_str().is_some_and(|d| d.contains("NEC 210.8") && d.contains("E-601")), "rule and row: {a:#}");
+    }
+    // Validate agrees: a pass, redundant protection allowed, not double protection to remove.
+    let v = s.execute("validate.prescreen", &json!({"rules": ["G-PRODUCT-CODE"], "all": true, "limit": 50})).unwrap();
+    let f = v["findings"]
+        .as_array()
+        .and_then(|fs| fs.iter().find(|f| f["handle"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(&h)) && f["check"] == "gfci"))
+        .cloned()
+        .unwrap_or_else(|| panic!("{v:#}"));
+    assert_eq!(f["verdict"], "pass", "{f:#}");
+    assert!(f["issue"].as_str().is_some_and(|i| i.contains("redundant protection (allowed)")), "{f:#}");
 }
 
 #[test]
@@ -720,9 +775,12 @@ fn ducts_terminals_and_equipment_carry_size_system_airflow_and_capacity() {
         if p["size"]["value"] == "12x8" {
             assert_eq!(p["size"]["source"]["kind"], "print", "a size read from a tag: {p:#}");
             assert_eq!(p["shape"]["value"], "rectangular");
-            // The route height was estimated: a default, never a reading.
+            // The route height was estimated: a default, never a reading. The plenum over the
+            // level's 9' ceiling is 6" under the next floor's slab (10' floor to floor), too
+            // shallow for the 8" deep duct: it hangs under the structure, below the ceiling, never
+            // up in the slab (M-TERMINAL-CEILING, Q6554).
             assert_eq!(p["elevation"]["source"]["kind"], "default", "{p:#}");
-            assert_eq!(p["elevation"]["value"], json!(8.5));
+            assert_eq!(p["elevation"]["value"], json!(8.83));
         }
     }
     let terminals = find(&mut s, "fixture", json!({"cfm": "exists"}));
@@ -821,6 +879,93 @@ fn a_door_takes_its_door_schedule_row() {
         assert_eq!(dp[key]["source"]["kind"], "schedule", "{key}: {dp:#}");
     }
     assert!(door_schedule_findings(&mut s).is_empty());
+}
+
+/// A door made like the build makes them in office 101's south wall, from `x0` to `x1` (inches);
+/// its handle and plan middle.
+fn door_from_to(s: &mut Session, x0: f64, x1: f64) -> (Handle, Vec2) {
+    let (door, _) = door_in_south_wall(s);
+    let d = s.doc_mut().expect("doc");
+    let mut e = (**d.entity(door).expect("door")).clone();
+    let EntityKind::Mesh(m) = &mut e.kind else { panic!("the build's wall is a mesh") };
+    let (lo, hi) = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.x), hi.max(v.x)));
+    for v in &mut m.vertices {
+        v.x = x0 + (v.x - lo) / (hi - lo) * (x1 - x0);
+    }
+    assert!(d.model.replace(e), "the door is in the model");
+    let at = cadaddy_engine::doc::entity_bounds(s.doc().expect("doc"), s.doc().expect("doc").entity(door).expect("door"), 0).center();
+    (door, at)
+}
+
+/// Q6454: a schedule tag names one opening. Of two doors within its reach the nearer takes its
+/// row; the other, with nothing printed by it, is numbered from its room and keeps its own
+/// width.
+#[test]
+fn a_schedule_tag_names_one_door_the_nearest() {
+    let mut s = plan();
+    // Door A 36" wide, middle 12" from the tag; door B 30" wide, 48" from it.
+    let (a, at_a) = door_from_to(&mut s, 42.0, 78.0);
+    let (b, at_b) = door_from_to(&mut s, 105.0, 135.0);
+    assert!((at_b.x - at_a.x - 60.0).abs() < 1e-6, "{at_a:?} {at_b:?}");
+    let schedule = json!({
+        "rows": [{"kind": "door", "mark": "7", "width_in": 36.0, "hardware": "HW-2"},
+                 {"kind": "door", "mark": "8", "width_in": 32.0, "hardware": "HW-3"}],
+        "tags": [{"mark": "7", "at": [at_a.x + 12.0, at_a.y]}]
+    });
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    let r = fill(&mut s);
+    let ap = get(&mut s, &a.hex());
+    assert_eq!(ap["number"]["value"], "7", "{ap:#}");
+    assert_eq!(ap["hardware_set"]["value"], "HW-2", "{ap:#}");
+    assert_eq!(ap["width"]["value"], json!(36.0), "{ap:#}");
+    let bp = get(&mut s, &b.hex());
+    assert_eq!(bp["number"]["value"], "101", "the room's only unnumbered door: {bp:#}");
+    assert_eq!(bp["number"]["source"]["kind"], "rule", "{bp:#}");
+    assert!(bp["hardware_set"].is_null(), "no row of its own: {bp:#}");
+    assert_eq!(bp["width"]["value"], json!(30.0), "{bp:#}");
+    assert_eq!(bp["width"]["source"]["kind"], "computed", "{bp:#}");
+    assert_eq!(r["doors"]["numbered_by_tag"], json!(1), "{r}");
+    assert_eq!(r["doors"]["with_schedule_row"], json!(1), "{r}");
+    assert_eq!(r["doors"]["numbered_by_room"], json!(1), "{r}");
+}
+
+/// Q6454: a schedule tag of another level names none of this level's doors, however near.
+#[test]
+fn a_schedule_tag_of_another_level_names_no_door() {
+    let mut s = plan();
+    let (b, at_b) = door_from_to(&mut s, 105.0, 135.0);
+    let schedule = json!({
+        "rows": [{"kind": "door", "mark": "8", "width_in": 32.0, "hardware": "HW-3"}],
+        "tags": [{"mark": "8", "level": "L2", "at": [at_b.x, at_b.y + 6.0]}]
+    });
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    fill(&mut s);
+    let bp = get(&mut s, &b.hex());
+    assert_eq!(bp["number"]["value"], "101", "{bp:#}");
+    assert!(bp["hardware_set"].is_null(), "{bp:#}");
+}
+
+/// Q6454: a number printed between two doors numbers the nearer one only, and its schedule tag
+/// (the same mark at the same place) is not taken again by the other.
+#[test]
+fn a_printed_door_number_names_one_door_the_nearest() {
+    let mut s = plan();
+    // The number 12" from door A's middle, 30" from door B's: within both doors' reach.
+    let (a, at_a) = door_from_to(&mut s, 42.0, 78.0);
+    let (b, at_b) = door_from_to(&mut s, 87.0, 117.0);
+    let at = [at_a.x + 12.0, at_a.y];
+    assert!(Vec2::new(at[0], at[1]).dist(at_b) <= 36.0);
+    text(&mut s, "A-ANNO", at, "7");
+    let schedule = json!({"rows": [{"kind": "door", "mark": "7", "width_in": 36.0, "hardware": "HW-2"}], "tags": [{"mark": "7", "at": at}]});
+    s.execute("bspec.set", &json!({"spec": {"schedule": schedule}})).expect("schedule");
+    fill(&mut s);
+    let ap = get(&mut s, &a.hex());
+    assert_eq!(ap["number"]["value"], "7", "{ap:#}");
+    assert_eq!(ap["number"]["source"]["kind"], "print", "{ap:#}");
+    assert_eq!(ap["hardware_set"]["value"], "HW-2", "{ap:#}");
+    let bp = get(&mut s, &b.hex());
+    assert_eq!(bp["number"]["value"], "101", "{bp:#}");
+    assert!(bp["hardware_set"].is_null(), "{bp:#}");
 }
 
 #[test]
@@ -1038,6 +1183,93 @@ fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
     assert!(e["placement"]["value"].as_str().is_some_and(|p| p.starts_with("review")), "{e:#}");
 }
 
+/// Two rooms inside 6" outer walls (x 0–40.5', y 0–10') split by a 6" partition; receptacles read
+/// on the outer walls' centrelines, where nothing (no symbol side, no circuit) says which face
+/// they serve, and one on the partition's.
+fn centreline_plan(extra: &[Value]) -> Session {
+    let mut d = Drawing::new_imperial();
+    let outer = [((0., 0.), (40.5, 0.)), ((40.5, 0.), (40.5, 10.)), ((40.5, 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let left = [((0.5, 0.5), (19.75, 0.5)), ((19.75, 0.5), (19.75, 9.5)), ((19.75, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let right = [((20.25, 0.5), (40.0, 0.5)), ((40.0, 0.5), (40.0, 9.5)), ((40.0, 9.5), (20.25, 9.5)), ((20.25, 9.5), (20.25, 0.5))];
+    for (a, b) in outer.into_iter().chain(left).chain(right) {
+        line(&mut d, "A-WALL", a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Centreline Devices", None);
+    text(&mut s, "A-ROOM-TAG", [110.0, 64.0], "OFFICE");
+    text(&mut s, "A-ROOM-TAG", [116.0, 52.0], "101");
+    text(&mut s, "A-ROOM-TAG", [350.0, 64.0], "STORAGE");
+    text(&mut s, "A-ROOM-TAG", [356.0, 52.0], "102");
+    let mut tags = vec![
+        device(10.0, 0.25, "S", "", "1F0"),
+        device(30.0, 9.75, "N", "", "1F1"),
+        device(0.25, 5.0, "W", "", "1F2"),
+        device(40.25, 5.0, "X", "", "1F3"),
+        device(20.0, 3.0, "P", "", "1F4"),
+    ];
+    tags.extend(extra.iter().cloned());
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": tags
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    s
+}
+
+/// A receptacle on an outer wall's centreline faces the room inside, never the outside past the
+/// wall's other face (Q6387): nothing said a side, so the side a room is on is the one it serves,
+/// said so on its placement; each is in its room, none in no room.
+#[test]
+fn a_device_on_an_outer_walls_centreline_faces_the_room_inside() {
+    let _g = serial();
+    let mut s = centreline_plan(&[]);
+    let r = fill(&mut s);
+    for (mark, room) in [("S", "101"), ("N", "102"), ("W", "101"), ("X", "102")] {
+        let el = device_of(&mut s, mark);
+        assert_eq!(el["room"]["value"], room, "{mark}: {el:#}\n{r:#}");
+        let placed = el["placement"]["value"].as_str().unwrap_or("");
+        assert!(placed.contains("the side a room or corridor is on"), "{mark}: {placed}");
+        assert!(el["room_review"].is_null(), "{mark}: {el:#}");
+    }
+    let p = device_of(&mut s, "P");
+    assert!(matches!(p["room"]["value"].as_str(), Some("101" | "102")), "the partition's: {p:#}");
+    assert!(r["devices_in_no_room"].as_object().is_none_or(|m| m.is_empty()), "{r:#}");
+    assert!(r["devices_in_no_room_listed"].as_array().is_some_and(Vec::is_empty), "{r:#}");
+}
+
+/// A device whose symbol the plan draws past an outer wall's outside face (an outside receptacle)
+/// stays on that face, as drawn, and is in no room: a finding with its reason on the device and
+/// in the fill's report, never '(no room)' silently (Q6387).
+#[test]
+fn a_device_on_no_rooms_face_is_a_finding_with_its_reason() {
+    use cadaddy_engine::cmd::propfill::{NO_ROOM_BEHIND, NO_ROOM_OFF_WALL, ROOM_REVIEW};
+    let _g = serial();
+    // O: 0.6' south of the south wall's outer face; F: a device of no known kind 5' out in the
+    // open, on no wall.
+    let mut s = centreline_plan(&[device(10.0, -0.6, "O", "", "1F5"), device(30.0, -5.0, "F", "", "1F6")]);
+    let r = fill(&mut s);
+    let o = device_of(&mut s, "O");
+    assert!(o["room"]["value"].is_null(), "outside: {o:#}");
+    assert!(o["face_normal"]["value"].as_str().is_some_and(|n| n.ends_with("-1.000")), "the drawn, outside face: {o:#}");
+    let review = o[ROOM_REVIEW]["value"].as_str().unwrap_or("");
+    assert!(review.starts_with("review: in no room") && review.contains("room 101 is behind its wall"), "{review}");
+    let f = device_of(&mut s, "F");
+    assert!(f[ROOM_REVIEW]["value"].as_str().is_some_and(|t| t.contains(NO_ROOM_OFF_WALL)), "{f:#}");
+    assert_eq!(r["devices_in_no_room"], json!({"L1": 2}), "{r:#}");
+    assert_eq!(r["devices_in_no_room_why"], json!({NO_ROOM_BEHIND: 1, NO_ROOM_OFF_WALL: 1}), "{r:#}");
+    let listed = r["devices_in_no_room_listed"].as_array().cloned().unwrap_or_default();
+    assert_eq!(listed.len(), 2, "{r:#}");
+    assert!(listed.iter().all(|x| x["handle"].is_string() && x["why"].is_string() && x["at_ft"].is_array()), "{r:#}");
+    // Listed where the plan has it.
+    let o_at = listed.iter().find(|x| x["why"].as_str().is_some_and(|w| w.contains("behind"))).and_then(|x| x["at_ft"].as_array().cloned());
+    assert!(o_at.is_some_and(|a| a.first().and_then(Value::as_f64).is_some_and(|x| (x - 10.0).abs() < 0.5)), "{r:#}");
+}
+
 /// A room's load center read beside its wall is hosted in it: recessed (its front flush with the
 /// wall's room face, its back in the wall), turned with the wall, the wall's handle on it; filed
 /// as electrical gear.
@@ -1062,6 +1294,106 @@ fn a_recessed_room_panel_is_built_in_its_wall() {
     assert!((b.max.y - 6.0).abs() < 0.01 && (b.min.y - 2.0).abs() < 0.01, "in the wall: {b:?}");
     assert!((b.max.x - b.min.x - 14.0).abs() < 0.01, "along the wall: {b:?}");
     assert!(panel.common.xdata.iter().any(|t| t.value.starts_with("prop:HOST_WALL=")), "{:?}", panel.common.xdata);
+}
+
+/// The built element tagged `tag`.
+fn tagged<'a>(d: &'a Drawing, tag: &str) -> &'a Entity {
+    let want = format!("tag:{tag}");
+    d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == want)).map(|e| e.as_ref()).expect("built")
+}
+
+fn prop_of(e: &Entity, key: &str) -> Option<String> {
+    let head = format!("prop:{key}=");
+    e.common.xdata.iter().find_map(|t| t.value.strip_prefix(&head).map(str::to_string))
+}
+
+/// A through-wall unit (a PTAC) whose plan symbol stands 8" in front of an outside wall is built
+/// through that wall (Q6546, M-THROUGH-WALL): hosted in it, its sleeve flush with the outside face
+/// and its cabinet projecting into the room, a sleeve and an outside grille built for the
+/// takeoff, the wall cut for the sleeve, its drawn place kept beside the seated one, and G-HOST
+/// judges it in its wall. One drawn where no outside wall is near is a review item, not a box
+/// floating in the room silently.
+#[test]
+fn a_ptac_drawn_in_front_of_an_outside_wall_is_built_through_it() {
+    let _g = serial();
+    let mut s = plan();
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(eq) = spec["mep"]["equipment"].as_array_mut() {
+        // Office 101's south wall is 0..6" (outside face y 0); the symbol 42" x 12", 8" in front of it.
+        eq.push(
+            json!({"tag": "U-1", "kind": "ptac", "level": "L1", "min": [60.0, 14.0], "max": [102.0, 26.0], "bottom_ft": 0.3333, "height_ft": 1.3333}),
+        );
+        // In the middle of office 102: no wall within reach.
+        eq.push(json!({"tag": "U-2", "kind": "ptac", "level": "L1", "min": [460.0, 50.0], "max": [502.0, 62.0], "bottom_ft": 0.3333, "height_ft": 1.3333}));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let d = s.doc().expect("doc");
+    let unit = tagged(d, "U-1");
+    let b = cadaddy_engine::doc::entity_bounds(d, unit, 0);
+    // From the outside face (y 0) 21" into the room (the rule's depth, no product data): through
+    // the 6" wall, its cabinet 15" past the room face; along the wall as drawn.
+    assert!(b.min.y.abs() < 0.01 && (b.max.y - 21.0).abs() < 0.01, "through the wall: {b:?}");
+    assert!((b.min.x - 60.0).abs() < 0.01 && (b.max.x - 102.0).abs() < 0.01, "along the wall as drawn: {b:?}");
+    let host = prop_of(unit, "HOST_WALL").expect("hosted");
+    let wall = d.model.iter().find(|e| e.handle.hex() == host).expect("its host wall is built");
+    assert_eq!(made_as(wall).as_deref(), Some("wall"));
+    assert!(prop_of(unit, "PLACEMENT").is_some_and(|p| p.starts_with("derived:") && p.contains("M-THROUGH-WALL")), "{:?}", unit.common.xdata);
+    assert!(unit.common.xdata.iter().any(|t| t.value == "status:derived"), "its place is derived: {:?}", unit.common.xdata);
+    // Its drawn place beside the seated one.
+    let ps = cadaddy_engine::doc::props::read(&unit.common.xdata);
+    assert_eq!(ps.get("design:location").map(|p| p.text()), Some("6.75, 1.67".to_string()), "{ps:?}");
+    assert_eq!(ps.get("location").map(|p| p.text()), Some("6.75, 0.88".to_string()), "{ps:?}");
+    // Its sleeve and grille: their own elements, in the wall.
+    for part in ["U-1 SLEEVE", "U-1 GRILLE"] {
+        let p = tagged(d, part);
+        let pb = cadaddy_engine::doc::entity_bounds(d, p, 0);
+        assert!(pb.min.y.abs() < 0.01 && pb.max.y <= 13.76, "{part} in the wall: {pb:?}");
+        assert_eq!(prop_of(p, "HOST_WALL").as_deref(), Some(host.as_str()), "{part}");
+        assert!(p.common.xdata.iter().any(|t| t.value == "status:derived"), "{part}: {:?}", p.common.xdata);
+    }
+    // The wall cut for the sleeve: no wall at the sleeve's middle at the unit's height, wall beside it.
+    let EntityKind::Mesh(m) = &wall.kind else { panic!("a wall mesh") };
+    // Inside the wall's solid: an odd number of its flat faces over the point (a vertical ray).
+    let solid_at = |x: f64, y: f64, z: f64| {
+        let over = m
+            .faces
+            .iter()
+            .filter(|f| {
+                let vs: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+                let flat = vs.len() >= 3 && vs.iter().all(|v| (v.z - vs[0].z).abs() < 1e-9);
+                let (x0, x1) = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.x), b.max(v.x)));
+                let (y0, y1) = vs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.y), b.max(v.y)));
+                flat && vs[0].z > z && x > x0 && x < x1 && y > y0 && y < y1
+            })
+            .count();
+        over % 2 == 1
+    };
+    assert!(!solid_at(81.0, 3.0, 12.0), "the sleeve's opening is cut");
+    assert!(solid_at(30.0, 3.0, 12.0) && solid_at(81.0, 3.0, 2.0) && solid_at(81.0, 3.0, 60.0), "the wall beside, under and over it stays");
+    // No outside wall near: built as drawn, a review item.
+    let u2 = tagged(d, "U-2");
+    assert!(prop_of(u2, "PLACEMENT").is_some_and(|p| p.starts_with("review:") && p.contains("no outside wall")), "{:?}", u2.common.xdata);
+    assert!(prop_of(u2, "HOST_WALL").is_none());
+    // The takeoff: its wall sleeve and outside grille, by the rule.
+    let t = s.execute("bim.takeoff", &json!({"keep": false})).expect("takeoff");
+    for what in ["Wall sleeve for ptac U-1", "Outside grille for ptac U-1"] {
+        let line = t["lines"].as_array().into_iter().flatten().find(|l| l["item"] == what);
+        let line = line.unwrap_or_else(|| panic!("{what} on the takeoff: {t:#}"));
+        assert_eq!((line["qty"].as_f64(), line["made"].as_str()), (Some(1.0), Some("derived")), "{line:#}");
+        assert!(line["size"].as_str().is_some_and(|z| z.starts_with("3'-6\" x 1'-4\" H")), "{line:#}");
+    }
+    // G-HOST: the unit through its wall passes.
+    let r = s.execute("validate.prescreen", &json!({"rules": ["G-HOST"], "all": true, "limit": 50})).expect("prescreen");
+    let host_hex = unit_handle(&mut s, "U-1");
+    let f = r["findings"].as_array().into_iter().flatten().find(|f| f["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&host_hex)));
+    let f = f.unwrap_or_else(|| panic!("a G-HOST finding for the unit: {r:#}"));
+    assert_eq!(f["verdict"], "pass", "{f:#}");
+    assert!(f["issue"].as_str().is_some_and(|i| i.contains("goes through")), "{f:#}");
+}
+
+fn unit_handle(s: &mut Session, tag: &str) -> String {
+    tagged(s.doc().expect("doc"), tag).handle.hex()
 }
 
 #[test]
@@ -1146,4 +1478,337 @@ fn a_casework_luminaire_takes_its_details_height_and_is_never_hung_from_the_ceil
     let x4 = luminaire(&mut s, "X4");
     assert_eq!(x4["mount_height"]["value"], json!(54.0), "the rules' casework height, not the ceiling: {x4:#}");
     assert_eq!(x4["mount_height"]["source"]["kind"], "default", "never presented as read: {x4:#}");
+}
+
+/// Office 101 under a 7'-11" ceiling and storage 102 under a 9'-0" one, a ceiling exhaust fan in
+/// each at its ceiling, and each fan's connection as the job leaves it: at the fan in plan, at
+/// the one height (`96`) the job fixed when it read it.
+fn fans_and_connections(s: &mut Session, ceilings: [f64; 2], fan_x: [f64; 2]) {
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    spec["rooms"] = json!([
+        {"name": "OFFICE", "number": "101", "level": "L1", "ceiling_ft": ceilings[0] / 12.0, "ceiling_source": "room RCP: test"},
+        {"name": "STORAGE", "number": "102", "level": "L1", "ceiling_ft": ceilings[1] / 12.0, "ceiling_source": "room RCP: test"}
+    ]);
+    let fan = |tag: &str, x: f64, bottom_in: f64| {
+        json!({"tag": tag, "kind": "exhaust_fan", "level": "L1", "min": [x, 50.0], "max": [x + 12.0, 62.0], "bottom_ft": bottom_in / 12.0,
+               "height_ft": 10.0 / 12.0, "title": "EXHAUST FAN", "systems": ["EA"], "sources": {"sheet": "M-101"}})
+    };
+    let eq = spec["mep"]["equipment"].as_array_mut().expect("equipment");
+    eq.retain(|e| e["kind"] != "exhaust_fan");
+    eq.push(fan("EF", fan_x[0], ceilings[0]));
+    eq.push(fan("EF", fan_x[1], ceilings[1]));
+    let tags = spec["tags"].as_array_mut().expect("tags");
+    tags.retain(|t| t["kind"] != "equipment_connection");
+    for (x, sym) in [(fan_x[0] + 6.0, "1E0"), (fan_x[1] + 6.0, "1E1")] {
+        let mut c = device(x / 12.0, 56.0 / 12.0, "EF", "LP1-7", sym);
+        c["kind"] = json!("equipment_connection");
+        c["fields"]["mount_height_in"] = json!({"value": "96", "source": "note"});
+        c["fields"]["mount_height_note"] = json!({"value": "connection to EF in the room's ceiling (M-101)", "source": "note"});
+        tags.push(c);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+}
+
+/// Each fan connection's box (bottom and top inches over the floor) and plan middle (inches), by
+/// its plan x.
+fn connections(s: &mut Session) -> Vec<(f64, f64, [f64; 2], Value)> {
+    let mut out: Vec<(f64, f64, [f64; 2], Value)> = find(s, "device", json!({"type_mark": "EF"}))
+        .iter()
+        .map(|h| {
+            let p = get(s, h);
+            let mid = p["mount_height"]["value"].as_f64().unwrap_or_else(|| panic!("height: {p:#}"));
+            let loc: Vec<f64> = p["location"]["value"].as_str().unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            let (x, y) = (loc.first().copied().unwrap_or(f64::NAN), loc.get(1).copied().unwrap_or(f64::NAN));
+            (mid - 2.0, mid + 2.0, [x * 12.0, y * 12.0], p)
+        })
+        .collect();
+    out.sort_by(|a, b| a.2[0].total_cmp(&b.2[0]));
+    out
+}
+
+/// The ceiling built over a plan point (inches over the floor): a luminaire hung there.
+fn ceiling_at(s: &mut Session, x_ft: f64, sym: &str) -> f64 {
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    let mut lum = device(x_ft, 3.0, "QX", "", sym);
+    lum["fields"]["mount"] = json!({"value": "ceiling", "source": "submittal"});
+    spec["tags"].as_array_mut().expect("tags").push(lum);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let q = device_of(s, "QX");
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    spec["tags"].as_array_mut().expect("tags").retain(|t| t["fields"]["type"]["value"] != "QX");
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    q["mount_height"]["value"].as_f64().unwrap_or_else(|| panic!("{q:#}"))
+}
+
+#[test]
+fn a_ceiling_fans_connection_is_above_the_ceiling_at_its_fan_and_follows_it() {
+    let _g = serial();
+    let mut s = plan();
+    fans_and_connections(&mut s, [95.0, 108.0], [100.0, 460.0]);
+    // The rooms' ceilings as built (what a connection must be above).
+    let built = [ceiling_at(&mut s, 106.0 / 12.0, "1E8"), ceiling_at(&mut s, 466.0 / 12.0, "1E9")];
+    assert_eq!(built, [95.0, 108.0], "the rooms' own ceilings are built");
+    s.execute("model.build", &json!({})).expect("build");
+    let check = |got: &[(f64, f64, [f64; 2], Value)], ceilings: [f64; 2], fan_x: [f64; 2]| {
+        assert_eq!(got.len(), 2, "{got:?}");
+        for ((bottom, top, at, p), (ceiling, x)) in got.iter().zip(ceilings.iter().zip(fan_x)) {
+            // On the hidden side of the ceiling, at its fan's housing (10" tall from the ceiling).
+            assert!(*bottom >= *ceiling, "above the {ceiling} in ceiling, not exposed under it: {bottom} to {top}: {p:#}");
+            assert!(*bottom <= ceiling + 10.0 && *top >= *ceiling, "beside the housing's height: {bottom} to {top}: {p:#}");
+            let off = Vec2::new(at[0].clamp(x, x + 12.0), at[1].clamp(50.0, 62.0)).dist(Vec2::new(at[0], at[1]));
+            assert!(off <= 12.0, "within 12 in of its fan in plan: {off} in at {at:?}: {p:#}");
+            assert_eq!(p["mount_height_from"]["value"], "equipment", "{p:#}");
+            assert!(
+                p["mount_height"]["source"]["doc"].as_str().is_some_and(|d| d.contains("E-CONN-CEILING-EQUIP"))
+                    || p["mount_height"]["note"].as_str().is_some_and(|n| n.contains("E-CONN-CEILING-EQUIP")),
+                "the rule its basis: {p:#}"
+            );
+            // The job's fixed height kept as the design value beside the built one.
+            assert_eq!(p["design:mount_height"]["value"], json!("96"), "{p:#}");
+            assert!(p["correction:mount_height"]["value"].as_str().is_some_and(|w| w.contains("E-CONN-CEILING-EQUIP")), "{p:#}");
+        }
+    };
+    let got = connections(&mut s);
+    check(&got, [95.0, 108.0], [100.0, 460.0]);
+    // The ceiling of 102 raised and the office's fan moved: each connection follows on the next build.
+    fans_and_connections(&mut s, [95.0, 117.0], [130.0, 460.0]);
+    let moved = connections(&mut s);
+    check(&moved, [95.0, 117.0], [130.0, 460.0]);
+    assert!(moved[1].0 > got[1].0 + 8.0 && moved[0].2[0] > got[0].2[0] + 20.0, "{got:?} {moved:?}");
+}
+
+// ─── Air terminals (Q6318) ──────────────────────────────────────────────────
+
+/// [`plan`] with its spec changed by `edit`, built again and filled.
+fn plan_edited(edit: impl FnOnce(&mut Value)) -> Session {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    edit(&mut sp);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    s
+}
+
+/// The one air terminal whose type mark is `mark`.
+fn terminal_of(s: &mut Session, mark: &str) -> Value {
+    let hs = find(s, "fixture", json!({"type_mark": mark}));
+    assert_eq!(hs.len(), 1, "one terminal {mark}: {hs:?}");
+    get(s, &hs[0])
+}
+
+/// A diffuser takes what its plan tag says (its type mark and airflow, over an airflow printed
+/// nearby), its type's row of the air device schedule, and the unit its duct leads to; the air
+/// schedule lists it under that unit, not as served by none.
+#[test]
+fn an_air_terminal_takes_its_tags_type_and_airflow_its_schedule_row_and_its_unit() {
+    let _g = serial();
+    let mut s = plan_edited(|sp| {
+        sp["mep"]["terminals"][0]["tag"] = json!("SD-4");
+        // A mark the schedule doesn't list (another tag read beside a symbol).
+        sp["mep"]["terminals"].as_array_mut().expect("terminals").push(
+            json!({"system": "SA", "level": "L1", "at": [60, 60], "size_in": [12, 12], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "X-01"}),
+        );
+        sp["mep"]["terminals"][0]["cfm"] = json!(260.0);
+        // The air handler at the run's end, on its system.
+        sp["mep"]["equipment"][0]["min"] = json!([1800, 520]);
+        sp["mep"]["equipment"][0]["max"] = json!([1860, 560]);
+        sp["mep"]["equipment"][0]["systems"] = json!(["SA"]);
+        sp["mep"]["air_device_schedule"] = json!([
+            {"tag": "SD-1", "properties": {"MODEL": "OTHER"}, "source": "M-601"},
+            {"tag": "SD-4", "properties": {"MANUFACTURER": "MAKER A", "MODEL": "CONE-9", "FACE SIZE (IN)": "24\"x24\"", "MOUNTING LOCATION": "CEILING"}, "source": "M-601"}
+        ]);
+    });
+    let t = terminal_of(&mut s, "SD-4");
+    assert_eq!(t["type_mark"]["source"]["kind"], "print", "{t:#}");
+    assert!(t["type_mark"].get("note").is_none(), "the schedule lists SD-4: {t:#}");
+    assert_eq!(t["cfm"]["value"], json!(260.0), "its tag's airflow over the 150 CFM printed by it: {t:#}");
+    assert_eq!(t["model"]["value"], "CONE-9", "{t:#}");
+    assert_eq!(t["model"]["source"]["kind"], "schedule");
+    assert_eq!(t["manufacturer"]["value"], "MAKER A");
+    assert_eq!(t["mounting"]["value"], "CEILING");
+    assert_eq!(t["face_size"]["value"], "24\"x24\"");
+    assert_eq!(t["served_by"]["value"], "AHU-1", "{t:#}");
+    assert_eq!(t["served_by"]["source"]["kind"], "computed");
+    assert!(t["served_by"]["note"].as_str().is_some_and(|n| n.contains("duct network")), "{t:#}");
+    let x = terminal_of(&mut s, "X-01");
+    assert!(x["type_mark"]["note"].as_str().is_some_and(|n| n.contains("not a mark of the air device schedule")), "{x:#}");
+    let air = s.execute("bim.schedule", &json!({"kind": "air"})).expect("air schedule");
+    let rows: Vec<Value> = air["rows"].as_array().cloned().unwrap_or_default().into_iter().filter(|r| r["type_mark"] == "SD-4").collect();
+    assert_eq!(rows.len(), 1, "{air:#}");
+    assert_eq!(rows[0]["unit"], "AHU-1", "{air:#}");
+    assert_eq!(rows[0]["type_mark"], "SD-4");
+    assert_eq!(rows[0]["cfm"], "260");
+}
+
+/// With no duct to a unit: an outdoor air unit whose schedule row says it serves the room's
+/// kind of room serves its supply diffuser (derived), a room's own exhaust fan its exhaust
+/// grille (inferred, by the trade practice rule); a supply diffuser no unit can be said to
+/// serve stays unserved, and an exhaust fan never serves a supply diffuser.
+#[test]
+fn a_terminal_no_duct_reaches_is_served_by_its_schedules_unit_or_its_rooms_own() {
+    let _g = serial();
+    let mut s = plan_edited(|sp| {
+        let systems = sp["mep"]["systems"].as_array_mut().expect("systems");
+        systems.push(json!({"name": "EA", "layer": "M-EXH", "kind": "duct", "size_in": [6, 6], "bottom_ft": 9}));
+        let terms = sp["mep"]["terminals"].as_array_mut().expect("terminals");
+        // Office 101 (x 0–20'): an exhaust grille and a supply diffuser; storage 102 (x 30–50'):
+        // a supply diffuser.
+        terms.push(json!({"system": "EA", "level": "L1", "at": [60, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "exhaust_grille", "tag": "EG-1"}));
+        terms.push(json!({"system": "SA", "level": "L1", "at": [180, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "SD-7"}));
+        terms.push(json!({"system": "SA", "level": "L1", "at": [480, 60], "size_in": [8, 8], "bottom_ft": 8, "terminal_kind": "supply_diffuser", "tag": "SD-1"}));
+        let eq = sp["mep"]["equipment"].as_array_mut().expect("equipment");
+        eq.push(json!({"tag": "EF-1", "kind": "exhaust_fan", "level": "L1", "min": [120, 80], "max": [140, 100], "height_ft": 1, "systems": ["EA"]}));
+        eq.push(json!({"tag": "OAU-3", "kind": "outdoor_air_unit", "level": "L1", "min": [2400, 400], "max": [2460, 440], "height_ft": 4,
+                       "properties": {"CFM": "900", "AREA SERVED": "STORAGE ROOMS"}, "sources": {"schedule": "M-601"}}));
+    });
+    let sd1 = terminal_of(&mut s, "SD-1");
+    assert_eq!(sd1["served_by"]["value"], "OAU-3", "{sd1:#}");
+    assert_eq!(sd1["served_by"]["source"]["kind"], "computed");
+    assert!(sd1["served_by"]["note"].as_str().is_some_and(|n| n.contains("schedule row") && n.contains("STORAGE")), "{sd1:#}");
+    let eg = terminal_of(&mut s, "EG-1");
+    assert_eq!(eg["served_by"]["value"], "EF-1", "{eg:#}");
+    assert_eq!(eg["served_by"]["source"]["kind"], "rule");
+    assert!(eg["served_by"]["note"].as_str().is_some_and(|n| n.starts_with("M-TERMINAL-ROOM-UNIT")), "{eg:#}");
+    let sd7 = terminal_of(&mut s, "SD-7");
+    assert!(sd7.get("served_by").is_none(), "no supply unit for office 101: {sd7:#}");
+    // With no air device schedule in the set, a mark is taken as printed.
+    assert!(sd7["type_mark"].get("note").is_none(), "{sd7:#}");
+    let r = s.execute("bim.props.check", &json!({"checks": ["terminal_unserved"]})).expect("check");
+    let unserved: Vec<String> = r["findings"].as_array().into_iter().flatten().filter_map(|f| f["message"].as_str().map(str::to_string)).collect();
+    assert!(unserved.iter().any(|m| m.contains("SD-7")) && !unserved.iter().any(|m| m.contains("SD-1") || m.contains("EG-1")), "{unserved:?}");
+}
+
+// ─── Through-wall units (Q6586) ─────────────────────────────────────────────
+
+/// Two 12' × 20' guest rooms side by side (101 x 0–12', 102 x 12.5–24.5'), a 7 7/8" exterior
+/// wall on the south and 6" walls elsewhere; in each room a through-wall unit (42" × 21.6",
+/// centred in the exterior wall's depth, 4" off the floor), a room panel of the typical panel U
+/// and a receptacle on it. Room 102 also has the unit's receptacle drawn (`unit_receptacle`):
+/// a device tagged with the unit's tag on the unit's 2-pole circuit. A condensing unit stands
+/// out on the site, in no room. Built, rooms traced, filled.
+fn unit_rooms(unit_receptacle: bool) -> (Session, Value) {
+    let mut d = Drawing::new_imperial();
+    let ext = 7.875 / 12.0;
+    // Outside faces.
+    for (a, b) in [((-0.5, -ext), (25.0, -ext)), ((25.0, -ext), (25.0, 20.5)), ((25.0, 20.5), (-0.5, 20.5)), ((-0.5, 20.5), (-0.5, -ext))] {
+        line(&mut d, "A-WALL", a, b);
+    }
+    // Inside faces of each room.
+    for x0 in [0.0, 12.5] {
+        let x1 = x0 + 12.0;
+        for (a, b) in [((x0, 0.0), (x1, 0.0)), ((x1, 0.0), (x1, 20.0)), ((x1, 20.0), (x0, 20.0)), ((x0, 20.0), (x0, 0.0))] {
+            line(&mut d, "A-WALL", a, b);
+        }
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    text(&mut s, "A-ROOM-TAG", [60.0, 130.0], "GUEST");
+    text(&mut s, "A-ROOM-TAG", [66.0, 118.0], "101");
+    text(&mut s, "A-ROOM-TAG", [210.0, 130.0], "GUEST");
+    text(&mut s, "A-ROOM-TAG", [216.0, 118.0], "102");
+    // The unit: 42" wide along the wall, 21.6" deep across it, centred in the wall (y −7 7/8"–0).
+    let unit = |x_mid: f64| {
+        let yc = -7.875 / 2.0;
+        json!({"tag": "PTAC-1", "kind": "ptac", "level": "L1", "min": [x_mid - 21.0, yc - 10.8], "max": [x_mid + 21.0, yc + 10.8],
+               "bottom_ft": 4.0 / 12.0, "height_ft": 16.0 / 12.0, "systems": ["M-DUCT"], "sources": {"schedule": "M-601"}})
+    };
+    let panel = |tag: &str, room: &str, x: f64| {
+        json!({"tag": tag, "kind": "panel", "level": "L1", "min": [x, 230.0], "max": [x + 14.0, 234.0], "height_ft": 2, "bottom_ft": 4,
+               "properties": {"PANEL": "U", "ROOM": room}})
+    };
+    let mut tags = vec![device(3.0, 19.5, "A", "U-1", "1F0"), device(15.5, 19.5, "A", "U-1", "1F1")];
+    if unit_receptacle {
+        // Under the unit, in its sub-base: on the 2-pole circuit the schedule gives the unit.
+        let mut r = device(20.5, 0.4, "PTAC", "U-13,15", "1F2");
+        r["fields"]["device_type"] = json!({"value": "receptacle", "source": "plan"});
+        tags.push(r);
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Exterior"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}],
+        "wall_types": [{"name": "Exterior", "thickness_in": 7.875}],
+        "tags": tags,
+        "mep": {
+            "systems": [{"name": "M-DUCT", "layer": "M-DUCT", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9}],
+            "equipment": [
+                unit(72.0), unit(222.0),
+                panel("U-101", "101", 20.0), panel("U-102", "102", 170.0),
+                {"tag": "CU-1", "kind": "condensing_unit", "level": "L1", "min": [480.0, 60.0], "max": [516.0, 96.0], "height_ft": 3}
+            ],
+            "panel_schedules": [{"panel": "U", "typical_of": 2, "source": "E-601", "circuits": [
+                {"number": "1", "description": "ROOM RCPT", "breaker": "20", "poles": 1, "source": "E-601"},
+                {"number": "13", "description": "PTAC", "breaker": "20", "poles": 2, "source": "E-601"}
+            ]}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({"route": false})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    let r = fill(&mut s);
+    (s, r)
+}
+
+/// The built equipment tagged `tag`, by its west edge.
+fn equipment_by_x(s: &mut Session, tag: &str) -> Vec<String> {
+    let d = s.doc().expect("doc");
+    let mut v: Vec<(f64, String)> = d
+        .model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::bimlook::made_tag(e, "tag") == Some(tag))
+        .map(|e| (cadaddy_engine::doc::entity_bounds(d, e, 0).min.x, e.handle.hex()))
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v.into_iter().map(|(_, h)| h).collect()
+}
+
+/// A unit set through an exterior wall (its middle in the wall, outside every room) takes the
+/// room on its service face, the room's own panel's circuit for it and that panel as its feed:
+/// from its receptacle in the room when the plans draw one, else from the room panel's schedule
+/// row for its kind. Equipment left in no room is a warning with its reason, never silent.
+#[test]
+fn a_unit_through_an_exterior_wall_takes_the_room_on_its_service_face_and_its_circuit() {
+    let _g = serial();
+    for drawn in [false, true] {
+        let (mut s, r) = unit_rooms(drawn);
+        let units = equipment_by_x(&mut s, "PTAC-1");
+        assert_eq!(units.len(), 2, "{r:#}");
+        let missing = find(&mut s, "equipment", json!({"room": "missing"}));
+        assert!(units.iter().all(|u| !missing.contains(u)), "drawn {drawn}: units in no room {missing:?}: {r:#}");
+        for (h, room) in units.iter().zip(["101", "102"]) {
+            let p = get(&mut s, h);
+            assert_eq!(p["room"]["value"], room, "{p:#}");
+            // Its room on its service face: the note says so while its middle is in the wall; a
+            // unit seated through the wall (Q6546) has its cabinet, and its middle, in that room.
+            let seated = p["location"]["note"].as_str().is_some_and(|v| v.starts_with("M-THROUGH-WALL"));
+            assert!(seated || p["room"]["note"].as_str().is_some_and(|n| n.contains("service face")), "{p:#}");
+            assert_eq!(p["circuit"]["value"], "U-13,15", "drawn {drawn}: {p:#}");
+            assert_eq!(p["panel"]["value"], "U", "{p:#}");
+            let feed = p["fed_from_handle"]["value"].as_str().unwrap_or_default().to_string();
+            let fp = get(&mut s, &feed);
+            assert!(
+                !feed.is_empty() && equipment_by_x(&mut s, &format!("U-{room}")) == vec![feed.clone()],
+                "fed from its room's panel: {p:#} {fp:#}"
+            );
+        }
+        // Room 102's unit: its receptacle's circuit when drawn, else the schedule row's.
+        let p = get(&mut s, &units[1]);
+        let how = p["circuit"]["note"].as_str().unwrap_or_default().to_string();
+        assert_eq!(how.contains("receptacle") || how.contains("connection"), drawn, "{p:#}");
+        if !drawn {
+            assert_eq!(p["circuit"]["source"]["kind"], "schedule", "{p:#}");
+        }
+        // The condensing unit outside is in no room: a warning with its reason.
+        let cu = equipment_by_x(&mut s, "CU-1");
+        let listed = r["equipment_in_no_room_listed"].as_array().cloned().unwrap_or_default();
+        assert!(
+            listed.iter().any(|x| cu.first().is_some_and(|h| x["handle"] == h.as_str()) && x["why"].as_str().is_some_and(|w| !w.is_empty())),
+            "{r:#}"
+        );
+        assert!(!listed.iter().any(|x| units.iter().any(|u| x["handle"] == u.as_str())), "{r:#}");
+        assert_eq!(r["equipment_in_no_room"]["L1"], 1, "{r:#}");
+    }
 }

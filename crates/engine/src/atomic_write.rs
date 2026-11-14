@@ -65,6 +65,7 @@ impl Pending {
     /// the usual creation mode).
     pub fn create(path: &Path, permissions: Option<Permissions>) -> io::Result<Pending> {
         let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        std::fs::create_dir_all(&dir)?;
         let (file, tmp) = create_temp(&dir, permissions.as_ref())?;
         let pending = Pending { file: Some(file), tmp, path: path.to_path_buf(), dir };
         if let (Some(permissions), Some(file)) = (permissions, &pending.file) {
@@ -154,6 +155,15 @@ fn create_exclusive(path: &Path, permissions: Option<&Permissions>) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creates_missing_parent_directories() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-aw-mkdir-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+        let dest = dir.join("new_folder").join("out.bin");
+        write_atomic(&dest, b"created").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"created");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn replaces_contents_atomically() {

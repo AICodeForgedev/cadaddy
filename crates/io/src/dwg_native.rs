@@ -36,11 +36,13 @@ pub(crate) fn tag(g: &Group) -> Tag {
     Tag::new(g.code, value)
 }
 
-/// An entity's record: `0 NAME` and its groups.
+/// An entity's record: `0 NAME` and its groups, its text in DXF's caret codes as the bridge's
+/// DXF has it ([`crate::dxf_read::mtext_dxf::dwg_text`]).
 fn record(e: &Entity) -> Vec<Tag> {
     let mut out = Vec::with_capacity(e.groups.len() + 1);
     out.push(Tag::s(0, e.name.clone()));
     out.extend(e.groups.iter().map(tag));
+    crate::dxf_read::mtext_dxf::dwg_text(&mut out, false);
     out
 }
 

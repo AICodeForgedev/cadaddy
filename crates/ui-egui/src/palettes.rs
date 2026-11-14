@@ -325,21 +325,6 @@ pub(crate) fn swatch(p: &egui::Painter, r: Rect, c: Color) {
     p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Inside);
 }
 
-/// The strip collapsed Tool Sets leave on the left edge, like a collapsed palette title bar:
-/// without it the only way back was Window > Tool Sets (#1095). The whole strip expands them.
-pub fn toolsets_strip(app: &mut CadApp, ui: &mut egui::Ui) {
-    let t = Tokens::get();
-    egui::Panel::left("cc_toolsets_strip").exact_size(22.0).resizable(false).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
-        let r = ui.max_rect();
-        let resp = ui.interact(r, ui.id().with("ts_expand"), Sense::click());
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.top() + 14.0), vec2(14.0, 14.0)), Icon::ChevronRight, false);
-        icons::describe_control(ui, &resp, "Expand Tool Sets", None, false);
-        if resp.on_hover_text(crate::tl!("Tool Sets")).clicked() {
-            let _ = app.run("ui.toggle.toolsets", json!({"on": true}));
-        }
-    });
-}
-
 pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
     if !app.ui.show_palettes {
         return;
@@ -1395,7 +1380,8 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         // user's (bim.props.set) and survives a rebuild.
         if let Some(kind) = cadaddy_engine::cmd::elemprops::element_kind(&e) {
             group(ui, "BIM Properties");
-            let upf = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()).map_or(12.0, |sp| sp.units_per_foot);
+            // Read once per spec text, not parsed out of the whole building spec every frame.
+            let upf = cadaddy_engine::cmd::fidelity::units_per_foot(d);
             let eff = cadaddy_engine::cmd::elemprops::effective(&e, &kind, upf);
             prop_row(ui, "Kind", |ui| read_only(ui, &kind));
             let mut keys: Vec<String> = eff.iter().map(|(k, _, _)| k.clone()).collect();

@@ -82,6 +82,89 @@ fn a_spanning_tree_joins_every_device_once() {
     assert!(spanning_tree(&pts, 9).is_empty());
 }
 
+/// Each box's way back to the root along `tree` (plan, square), the farthest.
+fn farthest(pts: &[Vec2], root: usize, tree: &[(usize, usize)]) -> f64 {
+    let mut back = vec![f64::NAN; pts.len()];
+    back[root] = 0.0;
+    for (u, v) in tree {
+        back[*v] = back[*u] + manhattan(pts[*u], pts[*v]);
+    }
+    assert!(back.iter().all(|b| b.is_finite()), "every box reached: {tree:?}");
+    back.iter().copied().fold(0.0, f64::max)
+}
+
+#[test]
+fn a_branching_tree_keeps_the_farthest_box_nearer_than_the_chain_within_its_joints() {
+    // Q6340: eight boxes round a 30' x 14' room (sheet inches), the homerun's box at a corner.
+    let ft = [(2.0, 7.0), (10.0, 7.0), (18.0, 7.0), (26.0, 7.0), (28.0, 0.0), (26.0, -7.0), (18.0, -7.0), (10.0, -7.0)];
+    let pts: Vec<Vec2> = ft.iter().map(|(x, y)| Vec2::new(x * UPF, y * UPF)).collect();
+    // The chain: weight 0 with one joint at the root and two at each box is the spanning tree.
+    assert_eq!(branch_tree(&pts, &[], 0, 1, 2, 0.0), spanning_tree(&pts, 0));
+    let chain = spanning_tree(&pts, 0);
+    let (rj, bj, w) = rules().route.branching();
+    assert_eq!((rj, bj), (2, 3), "rules data");
+    let br = branch_tree(&pts, &[], 0, rj, bj, w);
+    assert_eq!(br.len(), pts.len() - 1);
+    let mut joints = vec![0usize; pts.len()];
+    for (a, b) in &br {
+        joints[*a] += 1;
+        joints[*b] += 1;
+    }
+    assert!(joints[0] <= rj && joints.iter().skip(1).all(|j| *j <= bj), "{joints:?}");
+    let (c, b) = (farthest(&pts, 0, &chain) / UPF, farthest(&pts, 0, &br) / UPF);
+    // Chained: 58 ft round the room in plan; branched both ways from the corner: 38 ft.
+    assert!((c - 58.0).abs() < 1e-6, "the chain goes round the room: {c}");
+    assert!((b - 38.0).abs() < 1e-6, "branched {b} vs chained {c}");
+    assert!(branch_tree(&pts, &[], 9, rj, bj, w).is_empty());
+    // Each box's drop counted: a deep branch costs its drops, so the tree is shallower still.
+    let rises = vec![7.75 * UPF; pts.len()];
+    let deep = |t: &[(usize, usize)]| {
+        let mut depth = vec![0usize; pts.len()];
+        for (a, b) in t {
+            depth[*b] = depth[*a] + 1;
+        }
+        depth.into_iter().max().unwrap_or(0)
+    };
+    let low = branch_tree(&pts, &rises, 0, rj, bj, w);
+    assert_eq!(low.len(), pts.len() - 1);
+    assert!(deep(&low) <= deep(&br) && deep(&low) < deep(&chain), "{low:?} / {br:?}");
+    let _ = branch_tree(&[Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0)], &[f64::NAN, -1.0], 0, 2, 3, f64::NAN);
+}
+
+fn breaker_table() -> super::super::wiretable::LengthTable {
+    use super::super::wiretable::{Band, LengthTable};
+    let b = |size: &str, max_ft: f64| Band { amps: Some(20.0), volts: Some(120.0), size: size.into(), max_ft };
+    LengthTable { sheet: "X-1".into(), title: "VOLTAGE DROP SCHEDULE".into(), bands: vec![b("12", 50.0), b("10", 100.0), b("8", 150.0)] }
+}
+
+#[test]
+fn the_documents_length_table_sizes_by_breaker_and_voltage_else_the_drop_decides() {
+    let rl = rules();
+    let t = vec![breaker_table()];
+    let (s, why) = table_size(&t, 80.0, Some(20.0), 120.0, 4.0, rl).expect("sized");
+    assert_eq!(s, "10");
+    assert!(why.contains("VOLTAGE DROP SCHEDULE on X-1") && why.contains("20 A / 120 V"), "{why}");
+    // No breaker read: the usual 20 A, said.
+    let (s, why) = table_size(&t, 40.0, None, 120.0, 4.0, rl).expect("sized");
+    assert_eq!(s, "12");
+    assert!(why.contains("breaker not read"), "{why}");
+    // A 30 A circuit or a 277 V one: no row, the drop decides.
+    assert!(table_size(&t, 40.0, Some(30.0), 120.0, 4.0, rl).is_none());
+    assert!(table_size(&t, 40.0, Some(20.0), 277.0, 4.0, rl).is_none());
+    // Past its reach: its largest size, or the drop's when that is larger.
+    let (s, why) = table_size(&t, 300.0, Some(20.0), 120.0, 1.0, rl).expect("sized");
+    assert_eq!(s, "8", "{why}");
+    assert!(why.contains("engineer confirms"), "{why}");
+    let (s, _) = table_size(&t, 300.0, Some(20.0), 120.0, 16.0, rl).expect("sized");
+    assert!(rl.vdrop.sizes.iter().position(|x| *x == s) > rl.vdrop.sizes.iter().position(|x| x == "8"), "{s}");
+    // How far a size reaches: the table's, else the drop's (3% at 16 A, 120 V on #12: 56.9 ft).
+    let sup = size::supply(1, None, "P", rl);
+    assert_eq!(reach_ft("10", &t, Some(20.0), &sup, 16.0, rl).map(|r| r.0), Some(100.0));
+    let (r, by) = reach_ft("12", &[], Some(20.0), &sup, 16.0, rl).expect("reach");
+    assert!((r - 56.9).abs() < 0.2 && by.contains("210.19"), "{r} {by}");
+    assert!(reach_ft("12", &[], None, &sup, 0.0, rl).is_none());
+}
+
 #[test]
 fn a_homerun_follows_the_corridor_lanes() {
     // An L corridor: along x (y 480..576) and down along y at its east end (x 1104..1200).
@@ -194,6 +277,86 @@ fn hostile_inputs_do_not_panic() {
     let _ = spanning_tree(&[Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0)], 0);
 }
 
+/// A 3/4" raceway routed before, laid along `pts` with its centre `z` over the floor (sheet
+/// inches, the floor at 0).
+fn laid(field: &Field, pts: &[[f64; 2]], z: f64) {
+    let run = super::printcond::run(BRANCH_SYSTEM, "L1", "", pts.to_vec(), 0.75, z / UPF);
+    field.lay_run(&run, 0.0, UPF, "LP1-1");
+}
+
+/// The clearance between the outsides of two 3/4" raceways `dz` (vertically) or `dy` apart.
+fn outside_gap(d: f64) -> f64 {
+    d.abs() - 0.375 - 0.375
+}
+
+#[test]
+fn a_route_across_a_raceway_laid_before_passes_over_it_a_tier_up() {
+    let field = Field::new(Vec::new(), UPF);
+    laid(&field, &[[-240.0, 60.0], [240.0, 60.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &tiers(), 0.375, &field, UPF, &[], rules());
+    assert!(leg.crossings.is_empty() && leg.blocked.is_empty(), "{leg:?}");
+    assert_eq!(leg.pts, vec![Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0)]);
+    assert_eq!(leg.z, vec![115.0]);
+    assert!(outside_gap(115.0 - 111.0) >= rules().clearance_in("conduit"));
+    // Nothing laid: the lowest tier, as before.
+    let free = Field::new(Vec::new(), UPF);
+    assert_eq!(route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &tiers(), 0.375, &free, UPF, &[], rules()).z, vec![111.0]);
+}
+
+#[test]
+fn a_route_alongside_a_raceway_laid_before_with_no_tier_free_runs_in_the_lane_beside_it() {
+    let field = Field::new(Vec::new(), UPF);
+    // Between the leg's boxes, along its line (never over the boxes themselves: a rise there
+    // would meet it).
+    laid(&field, &[[24.0, 0.0], [216.0, 0.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), &[111.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.crossings.is_empty() && leg.blocked.is_empty(), "{leg:?}");
+    assert!(square(&leg), "{leg:?}");
+    // Side by side: the clearance between the outsides, a lane over, never a detour round it.
+    let off = leg.pts.iter().map(|p| p.y).fold(0.0, |m: f64, y| if y.abs() > m.abs() { y } else { m });
+    assert!(outside_gap(off) >= rules().clearance_in("conduit") && off.abs() <= 6.0, "{leg:?}");
+    assert!(leg.pts.iter().filter(|p| (p.y - off).abs() < 1e-9).count() == 2, "{leg:?}");
+}
+
+#[test]
+fn raceways_meeting_at_their_box_are_not_a_crossing() {
+    let field = Field::new(Vec::new(), UPF);
+    // One raceway ends at the box at the origin; the next leaves it the other way.
+    laid(&field, &[[-120.0, 0.0], [0.0, 0.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(120.0, 0.0), &tiers(), 0.375, &field, UPF, &[], rules());
+    assert!(leg.crossings.is_empty(), "{leg:?}");
+    assert_eq!(leg.z, vec![111.0]);
+}
+
+#[test]
+fn a_crossing_no_tier_or_lane_clears_is_listed_for_the_field() {
+    let field = Field::new(Vec::new(), UPF);
+    laid(&field, &[[-2400.0, 60.0], [2400.0, 60.0]], 111.0);
+    let leg = route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &[111.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert_eq!(leg.crossings.len(), 1, "{leg:?}");
+    let x = leg.crossings.first().expect("crossing");
+    assert_eq!(x.other, "LP1-1");
+    assert!((x.at.y - 60.0).abs() < 1.0 && (x.at.z - 111.0).abs() < 1e-9, "{x:?}");
+}
+
+#[test]
+fn hostile_laid_raceways_do_not_panic() {
+    let field = Field::new(Vec::new(), UPF);
+    laid(&field, &[[f64::NAN, 0.0], [1e300, -1e300]], f64::INFINITY);
+    laid(&field, &[[-1e18, 0.0], [1e18, 0.0]], 111.0);
+    laid(&field, &[], 111.0);
+    field.lay_piece(Vec3::new(0.0, 0.0, f64::NAN), Vec3::new(1.0, 1.0, 1.0), f64::NAN, "");
+    let _ = route_leg(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), &tiers(), 0.375, &field, UPF, &[], rules());
+    let _ = field.crosses_laid(Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 1e300), 111.0, -1.0, &[], f64::NAN, "", UPF, rules());
+    let _ = shifted(&[Vec2::new(0.0, 0.0)], 5, 1.0, 0.1);
+    let _ = shifted(&[Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)], 0, f64::NAN, 0.1);
+    // The shared empty field lays nothing.
+    let empty = Field::default();
+    laid(&empty, &[[-240.0, 60.0], [240.0, 60.0]], 111.0);
+    assert!(empty.crosses_laid(Vec2::new(0.0, 0.0), Vec2::new(0.0, 120.0), 111.0, 0.375, &[], 4.0, "", UPF, rules()).is_none());
+}
+
 /// I-joists along y (from y = -240 to 240) every 24" from x = 0 to 240, 2.5" wide, their depth
 /// from 112" to 124" (sheet inches); or trusses there from 112" to 136".
 fn joisted(truss: bool) -> Field {
@@ -210,7 +373,7 @@ fn joisted(truss: bool) -> Field {
                     system: "11 7/8\" I-joist".into(),
                     trade: "framing",
                 },
-                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 2.5, truss },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 2.5, kind: if truss { FrameKind::Truss } else { FrameKind::IJoist } },
             )
         })
         .collect();
@@ -279,6 +442,144 @@ fn a_truss_is_passed_between_its_chords_never_bored() {
     assert!(pass.iter().all(|h| h.dia_in == 0.0));
 }
 
+/// Q6622: [`joisted`] with a rim board along x at the joists' end (y = 240), 1 1/4" thick, the
+/// joists' depth (112" to 124"), and (`sawn`) the joists 2x sawn lumber 9 1/4" deep.
+fn rimmed(sawn: bool) -> Field {
+    let (top, kind) = if sawn { (121.25, FrameKind::SawnJoist) } else { (124.0, FrameKind::IJoist) };
+    let mut members: Vec<(Obs, Frame)> = (0..=10)
+        .map(|k| {
+            let x = 24.0 * f64::from(k);
+            (
+                Obs {
+                    handle: Handle(0x55),
+                    lo: Vec3::new(x - 0.75, -240.0, 112.0),
+                    hi: Vec3::new(x + 0.75, 240.0, top),
+                    category: FRAMING.into(),
+                    system: "joist".into(),
+                    trade: "framing",
+                },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, kind },
+            )
+        })
+        .collect();
+    members.push((
+        Obs {
+            handle: Handle(0x56),
+            lo: Vec3::new(-12.0, 239.375, 112.0),
+            hi: Vec3::new(252.0, 240.625, top),
+            category: FRAMING.into(),
+            system: "rim board".into(),
+            trade: "framing",
+        },
+        Frame { a: Vec2::new(-12.0, 240.0), b: Vec2::new(252.0, 240.0), t: 1.25, kind: FrameKind::Rim },
+    ));
+    Field::with_framing(Vec::new(), members, UPF)
+}
+
+#[test]
+fn a_rim_board_is_bored_only_by_its_rule_and_never_run_along() {
+    let field = rimmed(false);
+    // Out across the rim in the bay at x = 12: a 1-1/8" hole in its middle is within a third of
+    // its 12" depth and 1" off its edges.
+    let (a, b) = (Vec2::new(12.0, 200.0), Vec2::new(12.0, 280.0));
+    let holes = field.framing(a, b, 118.0, 0.375, UPF, rules()).expect("through the rim's middle");
+    assert_eq!(holes.len(), 1, "{holes:?}");
+    assert_eq!(holes[0].kind, FrameKind::Rim);
+    assert_eq!(rules().framing.item(holes[0].kind, holes[0].dia_in), "Bored hole through rim board");
+    // Too near its bottom edge (the hole's bottom at 112.94", 1" asks 113"); a 4" raceway's
+    // 4-3/8" hole is over a third of its depth.
+    assert!(matches!(field.framing(a, b, 113.5, 0.375, UPF, rules()), Err((_, EDGE))));
+    assert!(matches!(field.framing(a, b, 118.0, 2.0, UPF, rules()), Err((_, TOO_BIG))));
+    // Along the rim, inside it: stopped; the router keeps the run in the bays, off the rim.
+    let along = field.framing(Vec2::new(26.0, 240.0), Vec2::new(46.0, 240.0), 118.0, 0.375, UPF, rules());
+    assert!(matches!(along, Err((_, IN_JOIST))), "{along:?}");
+    // The bays beside a point by the rim are the joists' (the rim is no bay's side).
+    let (n, bays) = field.bays_near(Vec2::new(30.0, 236.0), UPF).expect("bays");
+    assert!(n.y.abs() < 1e-9 && bays.iter().all(|c| ((c - 12.0) % 24.0).abs() < 1e-6), "{n:?} {bays:?}");
+    // A run between two points beside the rim is routed clear of it.
+    let leg = route_leg(Vec2::new(30.0, 236.0), Vec2::new(200.0, 236.0), &[118.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    for (w, z) in leg.pts.windows(2).zip(&leg.z) {
+        let [p, q] = w else { continue };
+        assert!(field.framing(*p, *q, *z, 0.375, UPF, rules()).is_ok(), "{leg:?}");
+    }
+}
+
+#[test]
+fn a_sawn_joist_is_bored_by_its_own_rule_not_the_i_joists() {
+    // 2x10 (9 1/4"): a third is 3.08"; 2" off its edges (114" to 119.25").
+    let field = rimmed(true);
+    let (a, b) = (Vec2::new(12.0, 0.0), Vec2::new(60.0, 0.0));
+    let holes = field.framing(a, b, 116.625, 0.375, UPF, rules()).expect("its middle");
+    assert_eq!(holes.len(), 2);
+    assert!(holes.iter().all(|h| h.kind == FrameKind::SawnJoist));
+    assert_eq!(rules().framing.item(FrameKind::SawnJoist, 1.125), "Bored hole through sawn joist");
+    // 1-5/8" in from its bottom: an I-joist's web takes it, a sawn joist's 2" edge rule does not.
+    assert!(matches!(field.framing(a, b, 114.2, 0.375, UPF, rules()), Err((_, EDGE))));
+    assert!(matches!(field.framing(a, b, 116.625, 1.5, UPF, rules()), Err((_, TOO_BIG))));
+    // The kinds are read by the words bim.clash reads them by.
+    assert_eq!(FrameKind::of("joist", "2x10 joist"), FrameKind::SawnJoist);
+    assert_eq!(FrameKind::of("joist", "11 7/8\" I-joist"), FrameKind::IJoist);
+    assert_eq!(FrameKind::of("joist", "floor truss"), FrameKind::Truss);
+    assert_eq!(FrameKind::of("rim", "11 7/8\" rim board"), FrameKind::Rim);
+}
+
+#[test]
+fn an_in_wall_leg_runs_in_its_walls_middle_where_the_studs_are_bored() {
+    // A wall 7 1/4" thick along x from 0 to 120 (y 0 to 7.25), 10' high; a box set in it at
+    // y = 1 (its face to -y) and one round the corner in a wall along y (x 120 to 127.25).
+    let walls: Vec<crate::cmd::propfill::WallPiece> = vec![
+        (
+            Some("L1".into()),
+            Handle(0x60),
+            vec![Vec2::new(0.0, 0.0), Vec2::new(127.25, 0.0), Vec2::new(127.25, 7.25), Vec2::new(0.0, 7.25)],
+            [0.0, 120.0],
+        ),
+        (
+            Some("L1".into()),
+            Handle(0x61),
+            vec![Vec2::new(120.0, 0.0), Vec2::new(127.25, 0.0), Vec2::new(127.25, 120.0), Vec2::new(120.0, 120.0)],
+            [0.0, 120.0],
+        ),
+    ];
+    let (fy, fx) = (Vec2::new(0.0, -1.0), Vec2::new(-1.0, 0.0));
+    let m = wall_middle(&walls, "L1", Vec2::new(30.0, 1.0), fy, 24.0, UPF).expect("in the wall");
+    assert!((m.x - 30.0).abs() < 1e-9 && (m.y - 3.625).abs() < 1e-9, "{m:?}");
+    assert!(wall_middle(&walls, "L2", Vec2::new(30.0, 1.0), fy, 24.0, UPF).is_none());
+    assert!(wall_middle(&walls, "L1", Vec2::new(30.0, 20.0), fy, 24.0, UPF).is_none(), "no wall there");
+    assert!(wall_middle(&walls, "L1", Vec2::new(30.0, 1.0), fy, 200.0, UPF).is_none(), "over the wall's top");
+    // Two boxes in the one wall: up out of each, across into the middle, along it, back across.
+    let (pts, bot) = through_wall_middle(
+        &[[30.0, 1.0], [30.0, 1.0], [90.0, 1.0], [90.0, 1.0]],
+        &[1.5, 2.5, 1.5],
+        (Some(m), Some(fy)),
+        (wall_middle(&walls, "L1", Vec2::new(90.0, 1.0), fy, 30.0, UPF), Some(fy)),
+        UPF,
+    )
+    .expect("moved");
+    assert_eq!(pts, vec![[30.0, 1.0], [30.0, 1.0], [30.0, 3.625], [90.0, 3.625], [90.0, 1.0], [90.0, 1.0]]);
+    assert_eq!(bot, vec![1.5, 2.5, 2.5, 2.5, 1.5]);
+    // Round the corner: along each wall's middle to where they meet.
+    let mb = wall_middle(&walls, "L1", Vec2::new(121.0, 60.0), fx, 30.0, UPF).expect("the other wall");
+    assert!((mb.x - 123.625).abs() < 1e-9, "{mb:?}");
+    let (pts, _) = through_wall_middle(
+        &[[30.0, 1.0], [30.0, 1.0], [121.0, 1.0], [121.0, 60.0], [121.0, 60.0]],
+        &[1.5, 2.5, 2.5, 1.5],
+        (Some(m), Some(fy)),
+        (Some(mb), Some(fx)),
+        UPF,
+    )
+    .expect("moved");
+    assert_eq!(pts.get(3), Some(&[123.625, 3.625]), "{pts:?}");
+    // No wall middle, or no in-wall shape: unchanged.
+    assert!(
+        through_wall_middle(&[[0.0, 0.0], [0.0, 0.0], [9.0, 0.0], [9.0, 0.0]], &[1.0, 2.0, 1.0], (None, Some(fy)), (Some(m), Some(fy)), UPF)
+            .is_none()
+    );
+    assert!(through_wall_middle(&[[0.0, 0.0], [9.0, 0.0]], &[1.0], (Some(m), Some(fy)), (Some(m), Some(fy)), UPF).is_none());
+    let _ = wall_middle(&walls, "L1", Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0), f64::NAN, UPF);
+}
+
 /// Q6314: a top floor's run across the roof trusses, a few feet in from their ends, goes up
 /// between the chords and straight across: a pass through an open web bores nothing, so it is
 /// no labor, and the run never goes round the trusses' ends (past the walls they bear on).
@@ -297,7 +598,7 @@ fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
                     system: "roof truss".into(),
                     trade: "framing",
                 },
-                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, truss: true },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 1.5, kind: FrameKind::Truss },
             )
         })
         .collect();
@@ -314,9 +615,9 @@ fn a_run_across_trusses_by_their_ends_passes_their_webs_never_round_the_ends() {
 #[test]
 fn hostile_framing_never_panics() {
     let bad = vec![
-        (duct(f64::NAN, 0.0, 1.0, 1.0, 0.0, 1.0), Frame { a: Vec2::new(f64::NAN, 0.0), b: Vec2::new(1.0, 1.0), t: 1.0, truss: false }),
-        (duct(-1e18, -1e18, 1e18, 1e18, 0.0, 1.0), Frame { a: Vec2::new(-1e18, 0.0), b: Vec2::new(1e18, 0.0), t: 1e9, truss: false }),
-        (duct(0.0, 0.0, 0.0, 0.0, 0.0, 1.0), Frame { a: Vec2::new(0.0, 0.0), b: Vec2::new(0.0, 0.0), t: 2.5, truss: true }),
+        (duct(f64::NAN, 0.0, 1.0, 1.0, 0.0, 1.0), Frame { a: Vec2::new(f64::NAN, 0.0), b: Vec2::new(1.0, 1.0), t: 1.0, kind: FrameKind::IJoist }),
+        (duct(-1e18, -1e18, 1e18, 1e18, 0.0, 1.0), Frame { a: Vec2::new(-1e18, 0.0), b: Vec2::new(1e18, 0.0), t: 1e9, kind: FrameKind::IJoist }),
+        (duct(0.0, 0.0, 0.0, 0.0, 0.0, 1.0), Frame { a: Vec2::new(0.0, 0.0), b: Vec2::new(0.0, 0.0), t: 2.5, kind: FrameKind::Truss }),
     ];
     let field = Field::with_framing(Vec::new(), bad, UPF);
     let _ = field.framing(Vec2::new(0.0, 0.0), Vec2::new(1e300, 0.0), 0.5, 0.375, UPF, rules());
@@ -740,6 +1041,7 @@ fn hole(member: usize, along_in: f64, raceway_in: f64, end_ft: f64) -> Bored {
         raceway_in,
         end_ft,
         design: String::new(),
+        kind: FrameKind::IJoist,
     }
 }
 
@@ -802,12 +1104,43 @@ fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() 
         feeders: BTreeSet::new(),
         cable: Vec::new(),
         minimum: None,
+        no_device: BTreeSet::new(),
+        keynote_taken: BTreeSet::new(),
     };
     let gone = estimates_routed_elsewhere(&sp, &routed);
     assert_eq!(gone.iter().map(String::as_str).collect::<Vec<_>>(), ["circuit:L1:E-601:LP1-7", "circuit:L1:room-SUITE TYPE 2:U-3"], "{gone:?}");
     assert_eq!(circuit_key("circuit:Level 1:E-101:LP1-3@P2~sw3"), Some(("level 1".into(), "E-101".into(), "LP1-3".into())));
     assert_eq!(circuit_key("device:L1:3"), None);
     assert_eq!(circuit_key("circuit:L1:E-101:"), None);
+}
+
+/// Q6489: a circuit the routing found no device of keeps no estimated route (even when nothing
+/// else was routed), its tag says it is not routed, and what went is kept for the next routing.
+#[test]
+fn a_circuit_with_no_device_built_keeps_no_estimated_route() {
+    let est = |id: &str| {
+        let mut r = crate::cmd::printcond::run(crate::cmd::printcond::CIRCUIT_SYSTEM, "Roof", "E-9", vec![[0.0, 0.0], [816.0, 0.0]], 0.75, 8.25);
+        r.id = format!("{id}#1");
+        r
+    };
+    let tag = |id: &str| ElementTag { id: id.into(), kind: "circuit".into(), level: "Roof".into(), ..Default::default() };
+    let mut sp = BuildingSpec::default();
+    sp.mep.runs = vec![est("circuit:Roof:E-9:PA-3"), est("circuit:Roof:E-9:PA-7")];
+    sp.tags = vec![tag("circuit:Roof:E-9:PA-3"), tag("circuit:Roof:E-9:PA-7")];
+    let routed = Routed { no_device: BTreeSet::from(["circuit:Roof:E-9:PA-3".to_string()]), ..Routed::default() };
+    let replaced = apply(&mut sp, &routed);
+    let ids: Vec<&str> = sp.mep.runs.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["circuit:Roof:E-9:PA-7#1"], "the other circuit's estimate stays");
+    let t = sp.tags.iter().find(|t| t.id == "circuit:Roof:E-9:PA-3").expect("tag");
+    assert_eq!(t.fields.get("route").map(|f| f.value.as_str()), Some("not routed"));
+    assert!(t.fields.get(NOT_ROUTED).is_some_and(|f| f.value.starts_with(NO_DEVICE_REASON)), "{t:?}");
+    assert_eq!(t.issues, ["no_device_built"]);
+    assert_eq!(replaced.runs.len(), 1);
+    assert_eq!(replaced.tags.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["circuit:Roof:E-9:PA-3"]);
+    assert!(replaced.tags.iter().all(|t| t.issues.is_empty()), "the tag as read is kept");
+    // Applied again (a routed spec routed again): marked once.
+    apply(&mut sp, &routed);
+    assert_eq!(sp.tags.iter().filter(|t| t.issues.iter().any(|i| i == "no_device_built")).count(), 1);
 }
 
 #[test]
@@ -838,24 +1171,18 @@ fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
     let (at, face, z0) = (Vec2::new(0.0, 1.0), Some(Vec2::new(0.0, 1.0)), 111.0);
     let (_, _, blocked) = rise_point(at, 4.0, face, z0, 0.375, &field, UPF, &[], rules());
     assert_eq!(blocked, Some(0), "the unit is over the box and along its wall");
-    let (q, z, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[Handle(0x55)], rules());
+    let (q, z, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[Handle(0x55)], "", rules());
     assert_eq!(blocked, None);
     assert!(q.x.abs() > 21.0 + 3.0 && (q.y - 1.0).abs() < 1e-9, "beside the unit, along its wall: {q:?}");
     assert!((z - 2.5).abs() < 1e-9, "out of the box's side, 1-1/2 in under its top: {z}");
-    let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
+    let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], "", rules());
     assert_eq!(blocked, Some(0));
 }
 
-/// Q6347: a feeder from the ground floor's switchboard to a panel two floors up, routed and cut
-/// into pieces: its takeoff has the buried raceway only under the slab (and its stub-up), the
-/// above-grade raceway rising on every level it passes and running on the panel's level, one
-/// coupling where the riser passes each floor, a firestop at each floor, and its conductors
-/// along the whole route on each level.
-#[test]
-fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level() {
-    let mut s = crate::Session::empty();
-    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
-    let spec = json!({
+/// The feeder riser job of [`a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level`]:
+/// three storeys, a switchboard on the ground floor, a panel on it and one two floors up.
+fn feeder_riser_spec() -> Value {
+    json!({
         "version": 1, "units_per_foot": 12,
         "levels": [
             {"name": "Ground", "elevation_ft": 0, "height_ft": 11, "ceiling_ft": 9, "region": [0, 0, 1200, 1200]},
@@ -879,7 +1206,19 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
                          "neutral_size": "3/0", "grounds": 1, "ground_size": "#6", "conduits": 1, "conduit_in": 3, "entry": "top", "from_entry": "bottom",
                          "source": "riser diagram"}]
         }
-    });
+    })
+}
+
+/// Q6347: a feeder from the ground floor's switchboard to a panel two floors up, routed and cut
+/// into pieces: its takeoff has the buried raceway only under the slab (and its stub-up), the
+/// above-grade raceway rising on every level it passes and running on the panel's level, one
+/// coupling where the riser passes each floor, a firestop at each floor, and its conductors
+/// along the whole route on each level.
+#[test]
+fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_level() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
+    let spec = feeder_riser_spec();
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
     let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
     let (runs, left) = super::gearbuild::feeder_runs(&sp);
@@ -940,6 +1279,45 @@ fn a_feeder_to_an_upper_floor_is_taken_off_buried_rising_and_across_level_by_lev
     assert!(wire("Middle") >= 4.0 * 10.0 - 0.1, "three hots and a neutral up the storey: {lines:#?}");
 }
 
+/// Q6453: a mezzanine over another corner of the building, its floor inside the riser's span,
+/// takes no piece of the feeder's riser: the middle floor's piece is its whole storey, no
+/// coupling or firestop at the mezzanine's floor, none of the raceway counted on it.
+#[test]
+fn a_mezzanine_away_from_a_feeder_riser_takes_no_piece_coupling_or_firestop_of_it() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Riser", None);
+    let mut spec = feeder_riser_spec();
+    if let Some(levels) = spec.pointer_mut("/levels").and_then(Value::as_array_mut) {
+        levels.push(json!({"name": "Mezz", "elevation_ft": 16, "height_ft": 5, "ceiling_ft": 4, "region": [6000, 0, 6300, 300]}));
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    let (runs, left) = super::gearbuild::feeder_runs(&sp);
+    assert!(left.is_empty(), "{left:?}");
+    assert!(!runs.iter().any(|r| r.level == "Mezz"), "{runs:#?}");
+    sp.mep.runs = runs;
+    s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::to_value(&sp).unwrap()})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    let t = s.execute("conduit.takeoff", &json!({"price": false})).unwrap();
+    let lines = t["lines"].as_array().cloned().unwrap_or_default();
+    let qty = |level: &str, kind: &str| {
+        lines.iter().filter(|l| l["level"] == json!(level) && l["kind"] == json!(kind)).map(|l| l["qty"].as_f64().unwrap_or(0.0)).sum::<f64>()
+    };
+    assert_eq!((qty("Mezz", "conduit"), qty("Mezz", "firestop")), (0.0, 0.0), "{lines:#?}");
+    assert!((qty("Middle", "conduit") - 10.0).abs() < 0.05, "the middle floor's whole storey: {lines:#?}");
+    assert_eq!((qty("Middle", "firestop"), qty("Upper", "firestop")), (1.0, 1.0), "{lines:#?}");
+    let d = s.doc().unwrap();
+    let joints = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("coupling") && p.get("joint").map(Prop::text).as_deref() == Some("floor"))
+        .count();
+    assert_eq!(joints, 2, "{lines:#?}");
+}
+
 /// Q6314: a top floor (floor 0, top 96") under 24" roof trusses bearing on its walls (96" to
 /// 120") routes up through their webs, as it does through the floor above's joists in the
 /// storey's height; framing far above (another storey's) is not over it.
@@ -953,4 +1331,204 @@ fn a_top_floors_tiers_go_up_into_the_roof_trusses_bearing_on_its_walls() {
     // Framing a storey up (bearing 10' over this storey's top) is not this level's.
     assert_eq!(framing_tier_top(0.0, 96.0, 216.0, 240.0, keep, UPF), None);
     assert_eq!(framing_tier_top(0.0, 96.0, f64::NAN, f64::NAN, keep, UPF), None);
+}
+
+// ─── Q6557: box fill counted from the built pieces ───────────────────────────
+
+/// A box mesh from `lo` to `hi` (inches).
+fn cube(lo: [f64; 3], hi: [f64; 3]) -> cadaddy_doc::Mesh {
+    let v = |x: f64, y: f64, z: f64| Vec3::new(x, y, z);
+    let vertices = vec![
+        v(lo[0], lo[1], lo[2]),
+        v(hi[0], lo[1], lo[2]),
+        v(hi[0], hi[1], lo[2]),
+        v(lo[0], hi[1], lo[2]),
+        v(lo[0], lo[1], hi[2]),
+        v(hi[0], lo[1], hi[2]),
+        v(hi[0], hi[1], hi[2]),
+        v(lo[0], hi[1], hi[2]),
+    ];
+    let f = |a: u32, b: u32, c: u32, d: u32| cadaddy_doc::MeshFace { v: vec![a, b, c, d], hidden: 0 };
+    cadaddy_doc::Mesh {
+        vertices,
+        faces: vec![f(0, 3, 2, 1), f(4, 5, 6, 7), f(0, 1, 5, 4), f(1, 2, 6, 5), f(2, 3, 7, 6), f(3, 0, 4, 7)],
+        ..Default::default()
+    }
+}
+
+/// A branch piece in the model: its atom kind, its properties and its body.
+fn branch_piece(d: &mut Drawing, kind: &str, size: &str, kv: &[(&str, String)], mesh: cadaddy_doc::Mesh) -> Handle {
+    let mut ps = props::Props::default();
+    ps.set(crate::cmd::mepatoms::ATOM_KEY, Prop::new(kind, props::Source::computed()));
+    ps.set("size", Prop::new(size, props::Source::computed()));
+    for (k, v) in kv {
+        ps.set(k, Prop::new(v.as_str(), props::Source::computed()));
+    }
+    let id = format!("x/{kind}{}", d.model.handles().len());
+    let tags = crate::cmd::mepatoms::build::mep_tags("L1", Handle(0x500), BRANCH_SYSTEM, kind, size, kind, &id);
+    let xdata = props::write(&tags, &ps);
+    d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() }, EntityKind::Mesh(mesh))
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// A device's box at (x, y) inches, `z0`..`z0 + 4` high, `side` inches square.
+fn device_box(d: &mut Drawing, of: &str, size: &str, cu: f64, x: f64, y: f64, z0: f64, side: f64) -> Handle {
+    let h = side / 2.0;
+    branch_piece(d, "box", size, &[("box_of", of.into()), ("cubic_in", format!("{cu}"))], cube([x - h, y - h, z0], [x + h, y + h, z0 + 2.125]))
+}
+
+/// A run of one stick from `a` to `b` (inches) in a raceway of `size`, with `hots` conductors of
+/// `wire` and a ground.
+fn wired_run(d: &mut Drawing, run: &str, circuit: &str, size: &str, a: [f64; 3], b: [f64; 3], hots: usize, wire: &str) {
+    let at = |p: [f64; 3]| format!("{},{},{}", p[0], p[1], p[2]);
+    let kv = |extra: Vec<(&'static str, String)>| -> Vec<(&'static str, String)> {
+        let mut v = vec![("run", run.to_string()), ("circuit", circuit.to_string())];
+        v.extend(extra);
+        v
+    };
+    branch_piece(d, "conduit", size, &kv(vec![("start", at(a)), ("end", at(b)), ("type", "EMT".into())]), crate::cmd::wallgen::empty_mesh());
+    for i in 0..hots {
+        let role = if i == 1 { "neutral" } else { "phase A" };
+        branch_piece(d, "wire", &format!("#{wire}"), &kv(vec![("conductor", role.into())]), crate::cmd::wallgen::empty_mesh());
+    }
+    branch_piece(d, "wire", &format!("#{wire}"), &kv(vec![("conductor", "ground".into())]), crate::cmd::wallgen::empty_mesh());
+}
+
+fn text_of(d: &Drawing, h: Handle, k: &str) -> String {
+    d.model.get(h).map(|e| props::read(&e.common.xdata)).and_then(|p| p.get(k).map(Prop::text)).unwrap_or_default()
+}
+
+#[test]
+fn a_box_raceways_drop_through_holds_their_conductors_and_is_built_bigger() {
+    // Two receptacles stacked in a wall at (240, 120): the lower one's homerun (6#12) and two
+    // more of its runs drop from the ceiling and land in the upper box first, with the upper
+    // device's own run: 12#12 + the grounds + a yoke = 33.75 cu in in a 4" square (30.3). The
+    // routing booked only the upper device's own 2#12 to its box; the pieces hold all twelve.
+    let mut d = Drawing::default();
+    let upper = device_box(&mut d, "1A2", "4\" square", 30.3, 240.0, 120.0, 60.0, 4.0);
+    let lower = device_box(&mut d, "1A3", "4\" square, 2-1/8\" deep", 54.0, 240.0, 120.0, 40.0, 4.0);
+    let top = [240.0, 120.0, 62.125];
+    wired_run(&mut d, "home#1", "LP9-1,3,5", "1/2\"", [240.0, 120.0, 108.0], top, 6, "12");
+    wired_run(&mut d, "LP9-1#1", "LP9-1", "1/2\"", top, [300.0, 120.0, 108.0], 2, "12");
+    wired_run(&mut d, "LP9-5#tap", "LP9-5", "1/2\"", [200.0, 120.0, 108.0], top, 2, "12");
+    // The upper device's own run, down to the lower box.
+    wired_run(&mut d, "LP9-3#tap", "LP9-3", "1/2\"", [240.0, 120.0, 60.0], [240.0, 120.0, 42.125], 2, "12");
+    let pending = json!({"box_fill": {"pending": [
+        {"device": "1A2", "kind": "receptacle", "level": "L1", "circuit": "LP9-3", "yoke": true, "conductors": [[2, "12"]]},
+        {"device": "1A3", "kind": "receptacle", "level": "L1", "circuit": "LP9-1", "yoke": true, "conductors": [[6, "12"], [2, "12"], [2, "12"], [2, "12"]]}
+    ]}});
+    for _ in 0..2 {
+        let mut report = pending.clone();
+        check_box_fill(&mut d, &mut report);
+        let bf = &report["box_fill"];
+        assert_eq!(bf["checked"].as_u64(), Some(2), "{bf}");
+        assert_eq!(bf["from_pieces"].as_u64(), Some(2), "{bf}");
+        let over = bf["over"].as_array().cloned().unwrap_or_default();
+        assert_eq!(over.len(), 1, "{bf}");
+        let o = &over[0];
+        assert_eq!(o["box"], json!(upper.hex()), "{o}");
+        assert_eq!((o["needed_cu_in"].as_f64(), o["runs"].as_u64(), o["counted_from"].as_str()), (Some(33.75), Some(4), Some("pieces")), "{o}");
+        assert_eq!(o["corrected"], json!(true), "{o}");
+        assert_eq!(text_of(&d, upper, "size"), "4-11/16\" square, 2-1/8\" deep");
+        assert_eq!(text_of(&d, upper, "cubic_in"), "42");
+        assert_eq!(text_of(&d, upper, "design:cubic_in"), "30.3", "the design box kept");
+        assert!(text_of(&d, upper, "correction:size").starts_with("E-BOX-FILL"));
+        // The lower box: its own run only (2#12 + G + yoke) in 54 cu in.
+        assert_eq!(text_of(&d, lower, "design:cubic_in"), "");
+    }
+}
+
+#[test]
+fn a_junction_box_past_the_largest_ring_is_built_as_a_pull_box() {
+    // A junction box (no device) where five runs of 6#8 meet: 30#8 + G = 93 cu in, more than a
+    // 4-11/16" square with its ring (63). The field sets a 6" x 6" x 4" box (144 cu in).
+    let mut d = Drawing::default();
+    let jb = branch_piece(&mut d, "box", "4\" square", &[("cubic_in", "30.3".into())], cube([118.0, 118.0, 100.0], [122.0, 122.0, 102.125]));
+    for (i, x) in [0.0, 60.0, 180.0, 240.0, 120.0].iter().enumerate() {
+        let far = if i == 4 { [120.0, 60.0, 101.0] } else { [*x, 120.0, 101.0] };
+        wired_run(&mut d, &format!("r{i}"), "LP9-7", "3/4\"", far, [120.0, 120.0, 101.0], 6, "8");
+    }
+    let mut report = json!({"box_fill": {"pending": []}});
+    check_box_fill(&mut d, &mut report);
+    let bf = &report["box_fill"];
+    assert_eq!((bf["checked"].as_u64(), bf["corrected"].as_u64()), (Some(1), Some(1)), "{bf}");
+    assert_eq!(bf["over"][0]["needed_cu_in"].as_f64(), Some(93.0), "{bf}");
+    assert_eq!(text_of(&d, jb, "size"), "6\" x 6\" x 4\" pull box");
+    assert_eq!(text_of(&d, jb, "cubic_in"), "144");
+    assert!(text_of(&d, jb, "correction:cubic_in").contains("314.16(A)(1)"), "{}", text_of(&d, jb, "correction:cubic_in"));
+}
+
+#[test]
+fn a_device_box_a_large_homerun_lands_in_gets_a_pull_box_by_314_28() {
+    // A 1-1/4" homerun with 2#3 + 2#6 lands in a receptacle's 4-11/16" square box: with #4 and
+    // larger, NEC 314.28 asks a box 8 x 1-1/4 = 10" long (6 x 1-1/4 + 1/2 = 8" for the angle).
+    // The field sets a 10" x 10" x 4" pull box beside it, the receptacle fed from it.
+    let mut d = Drawing::default();
+    let bx = device_box(&mut d, "1C4", "4-11/16\" square", 42.0, 240.0, 120.0, 40.0, 4.6875);
+    let top = [240.0, 120.0, 42.125];
+    branch_piece(
+        &mut d,
+        "conduit",
+        "1-1/4\"",
+        &[("run", "home#9".into()), ("circuit", "LP9-2,4".into()), ("start", "240,120,108".into()), ("end", "240,120,42.125".into())],
+        crate::cmd::wallgen::empty_mesh(),
+    );
+    for (size, role) in [("#3", "phase A"), ("#3", "phase B"), ("#6", "phase A"), ("#6", "neutral"), ("#6", "ground")] {
+        branch_piece(
+            &mut d,
+            "wire",
+            size,
+            &[("run", "home#9".into()), ("circuit", "LP9-2,4".into()), ("conductor", role.into())],
+            crate::cmd::wallgen::empty_mesh(),
+        );
+    }
+    wired_run(&mut d, "LP9-2#1", "LP9-2", "1/2\"", top, [300.0, 120.0, 108.0], 2, "12");
+    let mut report = json!({"box_fill": {"pending": [{"device": "1C4", "kind": "receptacle", "level": "L1", "circuit": "LP9-2", "yoke": true, "conductors": [[2, "12"]]}]}});
+    check_box_fill(&mut d, &mut report);
+    let o = &report["box_fill"]["over"][0];
+    assert_eq!((o["pull_length_in"].as_f64(), o["corrected"].as_bool()), (Some(10.0), Some(true)), "{o}");
+    assert!(text_of(&d, bx, "size").starts_with("10\" x 10\" x 4\" pull box beside the receptacle's"), "{}", text_of(&d, bx, "size"));
+    assert_eq!(text_of(&d, bx, "length_in"), "10");
+    assert_eq!(text_of(&d, bx, "design:length_in"), "4.69");
+    assert!(text_of(&d, bx, "correction:length_in").contains("314.28"), "{}", text_of(&d, bx, "correction:length_in"));
+}
+
+/// Q6631: a leg's change of tier at a corner (a crossing taking the next tier, Q6552) never goes
+/// down through a joist's depth: `seat` counts one it can't avoid, and `route_leg` takes a shape
+/// whose tiers change in a bay instead.
+#[test]
+fn a_change_of_tier_never_goes_through_a_joists_depth() {
+    // I-joists along y every 24" (112" to 124"), a duct under them across the bay east of x = 24
+    // at the lower tier; tiers under the joists (108") and through their webs (118").
+    let joists = rimmed(false);
+    let r = 0.375;
+    let tiers = [108.0, 118.0];
+    let low_duct = duct(28.0, -2.0, 40.0, 2.0, 104.0, 110.0);
+    let framed: Vec<(Obs, Frame)> = joists.obs.iter().enumerate().filter_map(|(i, o)| joists.frames.get(&i).map(|f| (o.clone(), *f))).collect();
+    let rebuilt = |extra: Vec<Obs>| Field::with_framing(extra, framed.clone(), UPF);
+    let field = rebuilt(vec![low_duct.clone()]);
+    // A vertical piece in a joist, under it, and in the bay beside it.
+    assert!(field.framing_column(Vec2::new(48.0, 0.0), 108.0, 118.0, r).is_some());
+    assert!(field.framing_column(Vec2::new(48.0, 0.0), 100.0, 108.0, r).is_none(), "wholly under the joist");
+    assert!(field.framing_column(Vec2::new(36.0, 0.0), 108.0, 118.0, r).is_none(), "in the bay");
+    // East along y = 0 over the duct (118", through the webs) to the joist at x = 48, then north
+    // along it under the joists (108"): the step down at the corner is in the joist.
+    let l = seat(&[Vec2::new(12.0, 0.0), Vec2::new(48.0, 0.0), Vec2::new(48.0, 60.0)], &tiers, r, &field, UPF, &[], "", rules());
+    assert_eq!(l.z, vec![118.0, 108.0], "{l:?}");
+    assert!(l.blocked.is_empty(), "{l:?}");
+    assert_eq!(l.through, 1, "the step at the corner goes through the joist: {l:?}");
+    // With the way north at x = 12 shut at every tier, the router takes a shape whose change of
+    // tier is in a bay.
+    let field = rebuilt(vec![low_duct, duct(8.0, 20.0, 16.0, 40.0, 96.0, 130.0)]);
+    let leg = route_leg(Vec2::new(12.0, 0.0), Vec2::new(48.0, 60.0), &tiers, r, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty() && leg.through == 0, "{leg:?}");
+    assert!(square(&leg), "{leg:?}");
+    for (i, p) in leg.pts.iter().enumerate().skip(1).take(leg.z.len().saturating_sub(1)) {
+        let (za, zb) = (leg.z[i - 1], leg.z[i]);
+        assert!(field.framing_column(*p, za, zb, r).is_none(), "the change of tier at {p:?} is in a joist: {leg:?}");
+    }
+    for (w, z) in leg.pts.windows(2).zip(&leg.z) {
+        let [p, q] = w else { continue };
+        assert!(field.framing(*p, *q, *z, r, UPF, rules()).is_ok(), "{leg:?}");
+    }
 }

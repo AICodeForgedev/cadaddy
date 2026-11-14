@@ -73,12 +73,19 @@ fn printed(name: &str) -> Set {
 /// A session on the read-back sheet: one level, the sheet as its reference plan, and the job's
 /// record of where the sheet's page is (`pdfs`: the folder it names).
 fn session(set: &Set, pdfs: &Path, edit: impl FnOnce(&mut Drawing, [f64; 4])) -> Session {
+    session_with(set, pdfs, &[], edit)
+}
+
+/// [`session`], the job's sheet index holding `more` sheets too (only the index has them).
+fn session_with(set: &Set, pdfs: &Path, more: &[Value], edit: impl FnOnce(&mut Drawing, [f64; 4])) -> Session {
     let mut d = set.d.clone();
     edit(&mut d, set.region);
+    let mut index = vec![json!({"number": "A-101", "title": "FLOOR PLAN - LEVEL 1", "file": "Sample Set.pdf", "page": 1, "type": "plan"})];
+    index.extend(more.iter().cloned());
     let job = json!({"guided_job": {
         "id": "J-1", "goal": "bim", "created": "2026-01-01T00:00:00Z", "pdfs_path": pdfs.to_string_lossy(),
         "stages": [], "rules": [], "audit": [], "question_seq": 0,
-        "sheets": {"sheets": [{"number": "A-101", "title": "FLOOR PLAN - LEVEL 1", "file": "Sample Set.pdf", "page": 1, "type": "plan"}]},
+        "sheets": {"sheets": index},
         "sheet_regions": [{"number": "A-101", "level": "L1", "rect": set.region}]
     }});
     d.agent = Some(job.to_string()).into();
@@ -183,4 +190,73 @@ fn the_prints_folder_can_be_given_and_a_missing_page_is_said() {
     assert!(
         s.execute("validate.packet", &json!({"area": {"area": [1, 1, 5, 5], "level": "L1"}, "out_dir": out.to_string_lossy(), "prints": 7})).is_err()
     );
+}
+
+/// A one-page letter PDF of `content` with font /F1 (Helvetica).
+fn pdf_page(content: &str) -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for off in offsets {
+        pdf.extend(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+#[test]
+fn a_notes_page_shown_as_its_pdf_page_prints_every_line() {
+    let set = printed("notes-page");
+    // A general notes sheet only the job's index has: each line on a white box of its own (as
+    // CAD sets print text masks), painted box, line, box, line. Read with the import's masks,
+    // the boxes merge into one mask at the last box's place, over the lines painted before it.
+    let mut content = String::new();
+    for k in 0..4 {
+        let y = 500 - 20 * k;
+        content.push_str(&format!(
+            "1 g 68 {} 420 22 re f 0 g BT /F1 12 Tf 72 {y} Td ({}. PROVIDE BLANK COVER PLATES AT UNUSED BOXES) Tj ET\n",
+            y - 5,
+            k + 1
+        ));
+    }
+    std::fs::write(set.dir.join("Sample Notes.pdf"), pdf_page(&content)).unwrap();
+    let notes = json!({"number": "G-001", "title": "GENERAL NOTES", "file": "Sample Notes.pdf", "page": 1, "type": "general_notes"});
+    let mut s = session_with(&set, &set.dir, &[notes], |_, _| {});
+    let out = folder("notes-page-out");
+    let m = packet(&mut s, &set, &out, json!({}));
+    let c = m["prints"].as_array().unwrap().iter().find(|c| c["sheet"] == "G-001").unwrap_or_else(|| panic!("the notes page: {m:#}"));
+    assert_eq!(c["placed_by"], "pdf_page", "{c}");
+    let img = image::open(out.join(c["file"].as_str().unwrap())).unwrap().to_rgba8();
+    let r: Vec<f64> = c["sheet_rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let ppu = c["px_per_unit"].as_f64().unwrap();
+    // Ink along each line (page inches: the page is read at 1 unit an inch).
+    for k in 0..4 {
+        let y = f64::from(500 - 20 * k) / 72.0 + 0.06;
+        let row = ((r[3] - y) * ppu).round() as i64;
+        let ink = (((1.1 - r[0]) * ppu) as i64..((5.0 - r[0]) * ppu) as i64)
+            .filter(|x| {
+                (row - 4..=row + 4).any(|yy| {
+                    yy >= 0
+                        && *x >= 0
+                        && (*x as u32) < img.width()
+                        && (yy as u32) < img.height()
+                        && img.get_pixel(*x as u32, yy as u32).0.iter().take(3).map(|v| u32::from(*v)).sum::<u32>() < 300
+                })
+            })
+            .count();
+        assert!(ink > 20, "note {} prints ({ink} inked columns) in {}", k + 1, c["file"]);
+    }
+    let _ = std::fs::remove_dir_all(out);
 }

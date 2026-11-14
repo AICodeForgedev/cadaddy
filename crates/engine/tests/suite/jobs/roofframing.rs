@@ -391,3 +391,35 @@ fn an_unframed_sloped_roof_is_a_constant_slab_closed_down_to_its_walls() {
     assert!(near(z(m).1, 120.0 + 480.0 * s), "{:?}", z(m));
     assert_eq!(roof_issues(&mut ses), Vec::<String>::new());
 }
+
+/// fix-roof-deck-thickness-fixed: the deck is as thick as the spec's framing says (the roof
+/// plans' sheathing note, or a project rule), not always the rule's 1.5": a 3/4" deck on 24"
+/// trusses bearing at 18' tops out at 18' + 24 3/4", the members their full 24" under it, and the
+/// trade pieces' roof sheathing is that deck.
+#[test]
+fn a_framed_roofs_deck_is_as_thick_as_its_framing_says() {
+    let mut framing = trusses();
+    framing[0]["deck_in"] = json!(0.75);
+    framing[0]["deck_status"] = json!("read");
+    let mut s = building(18.0, None, framing, json!([]));
+    let mut sp = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    for l in sp["levels"].as_array_mut().unwrap().iter_mut().filter(|l| l["name"] == "Roof") {
+        l["elevation_ft"] = json!(18.0 + 24.75 / 12.0);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let roof = &made(&s, "roof")[0].0;
+    let (lo, hi) = z(roof);
+    assert!(near(lo, 240.0) && near(hi, 240.75), "deck {lo}..{hi}");
+    for (m, _) in made(&s, "roof-framing") {
+        let (lo, hi) = z(&m);
+        assert!(near(lo, 216.0) && near(hi, 240.0), "member {lo}..{hi}");
+    }
+    let walls = made(&s, "roof-wall");
+    let (lo, hi) = z(&walls[0].0);
+    assert!(near(lo, 216.0) && near(hi, 240.75), "roof wall {lo}..{hi}");
+    let rules = s.execute("bim.atoms.rules", &json!({"section": "framing"})).unwrap();
+    let sheathing = &rules["rules"]["framing"]["roof_sheathing_in"];
+    assert_eq!(sheathing["value"], json!(0.75), "{rules}");
+    assert!(sheathing["source"].as_str().unwrap_or_default().contains("S-1"), "{sheathing}");
+}

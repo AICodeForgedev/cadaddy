@@ -1,0 +1,66 @@
+{
+  "source": "trade practice and the building code: what the trades install inside or through the building's assemblies on purpose is construction, not a clash (Q6621)",
+  "runs": ["duct", "pipe", "conduit", "tray", "cable", "wire", "fitting"],
+  "runs_source": "a run and its fittings: the pieces a trade drops down a wall's cavity, stacks in a wall, lays in a floor's bays or takes through an assembly",
+  "supports": ["support"],
+  "supports_source": "a strap, hanger or support is fastened to the building by definition",
+  "gear_pieces": ["breaker"],
+  "gear_pieces_source": "a breaker stands inside its panel: where the panel meets something, the panel's clash says so",
+  "hosts": ["wall", "floor", "roof", "ceiling", "slab"],
+  "cavity_hosts": ["wall", "floor", "roof", "slab"],
+  "cavity_source": "trade practice: in-wall drops and stacks, runs in a floor's joist bays and raceways embedded in a slab are how the trades install them (the framing members are judged by their own hole rules)",
+  "walls": ["wall"],
+  "casework": ["casework", "furniture"],
+  "casework_guests": ["device", "box", "terminal", "conduit", "cable", "wire", "pipe", "fitting"],
+  "casework_source": "trade practice: a device or box set in or at casework is mounted in the casework's face or the wall behind it, as its layout places it; the drop feeding it and a sink's supplies and trap run in the wall behind it or the cabinet's base (a duct is not set in casework)",
+  "through_wall_words": ["PTAC", "PACKAGED TERMINAL", "THROUGH WALL", "THROUGH-WALL", "THRU-WALL", "THRU WALL", "WALL SLEEVE", "SIDEWALL", "SIDE WALL", "LOUVER"],
+  "through_wall_source": "trade practice: a packaged terminal unit, a sidewall fan or a louver is set through its wall in a sleeve or framed opening",
+  "recessed_source": "a schedule's MOUNTING (or the equipment's own words) that sets it into its wall (wordrules equipment.in_wall_mounting_words); a can deeper than its wall comes out of the far face, a real conflict",
+  "penetrations": [
+    {
+      "host": ["floor", "slab"],
+      "firestop": "between_storeys",
+      "seal": "none for fire (a floor on grade): the vapor retarder or waterproofing sealed round the item",
+      "seal_firestop": "a listed through-penetration firestop system where the floor/ceiling assembly is rated, else the annular space filled with an approved material",
+      "sleeve": "a sleeve, cored or cut opening sized for the item and its seal",
+      "by_category": {
+        "pipe": "a pipe sleeve (a cored hole or cast-in sleeve in concrete, a cut hole in a framed floor)",
+        "duct": "a framed opening (a fire damper or a rated shaft where the floor is rated, IBC 717)",
+        "conduit": "a cored or cut hole (a raceway needs no sleeve)",
+        "cable": "a bored hole",
+        "wire": "a bored hole"
+      },
+      "source": "IBC 714.5 (rated floor/ceiling assemblies) and 714.6 (unrated floors: annular space sealed); NEC 300.21 for electrical; IPC 305 for piping"
+    },
+    {
+      "host": ["wall"],
+      "firestop": "rated",
+      "seal": "no firestop (the wall's type has no fire rating): the opening closed by the finish",
+      "seal_firestop": "a listed through-penetration firestop system for the wall's rating",
+      "sleeve": "a bored hole in a framed wall, a sleeve or cored hole through concrete or masonry",
+      "by_category": {
+        "duct": "a framed opening (a fire damper where the wall is rated, IBC 717)",
+        "equipment": "the unit's wall sleeve in a framed opening"
+      },
+      "source": "IBC 714.4 (penetrations of fire-resistance-rated walls); NEC 300.21 for electrical; IPC 305 for piping"
+    },
+    {
+      "host": ["roof"],
+      "firestop": "never",
+      "seal": "roof flashing round the item (a pipe boot, a curb or a pitch pocket) by the roofer",
+      "seal_firestop": "",
+      "sleeve": "a cut opening in the deck, flashed",
+      "by_category": {},
+      "source": "IBC 1503.2 (flashing at roof penetrations)"
+    },
+    {
+      "host": ["ceiling"],
+      "firestop": "never",
+      "seal": "a membrane penetration: the ceiling closed round the item (a rated ceiling membrane is sealed as its floor/ceiling assembly's listing says)",
+      "seal_firestop": "",
+      "sleeve": "a cut opening in the ceiling",
+      "by_category": {},
+      "source": "IBC 714.5 (membrane penetrations of rated floor/ceiling assemblies)"
+    }
+  ]
+}

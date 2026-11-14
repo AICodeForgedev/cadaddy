@@ -1,7 +1,7 @@
 //! Drawing → DXF (AC1015 / R2000 structure, readable by every DXF consumer since 2000). Later
-//! versions keep that structure (the groups they add are optional, DXF Reference) and differ in
-//! `$ACADVER`, from 2004 in the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller
-//! picks the text encoding) and MULTILEADER entities (older files get LEADER + MTEXT).
+//! versions keep that structure and differ in `$ACADVER`, from 2004 in CLASS instance counts and
+//! the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller picks the text encoding) and
+//! MULTILEADER entities (older files get LEADER + MTEXT).
 
 use std::collections::HashMap;
 
@@ -37,8 +37,8 @@ struct W<'o> {
     pstyles: HashMap<String, String>,
     /// Upper-case layer name → its LAYER table record handle (group 331 of viewports).
     layers: HashMap<String, String>,
-    /// Persistent reactors of boundary objects: each source object of an associative hatch →
-    /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
+    /// Persistent reactors of source geometry: the associative hatches and DIMASSOC objects
+    /// that follow it (groups `{ACAD_REACTORS 330 …}`).
     reactors: HashMap<Handle, Vec<String>>,
     /// Upper-case material name → its MATERIAL object handle (group 347 of layers and objects).
     materials: HashMap<String, String>,
@@ -47,6 +47,16 @@ struct W<'o> {
     kept: std::collections::BTreeMap<String, u64>,
     /// Handles taken (every object's, and kept ones already written).
     used: std::collections::HashSet<u64>,
+    /// TEXT, attribute and dimension strings as they are, not with the file's `^ ` and `^I`
+    /// escapes: the DWG bridge's DXF (its DXF reader takes carets and tabs as they are).
+    plain_text: bool,
+}
+
+impl W<'_> {
+    /// A single-line string (TEXT, ATTDEF/ATTRIB, DIMENSION) as this file writes it.
+    fn line(&self, s: &str) -> String {
+        if self.plain_text { s.to_string() } else { crate::dxf_read::mtext_dxf::encode_line(s) }
+    }
 }
 
 impl W<'_> {
@@ -67,6 +77,7 @@ impl W<'_> {
             materials: HashMap::new(),
             kept: std::collections::BTreeMap::new(),
             used: std::collections::HashSet::new(),
+            plain_text: false,
         }
     }
     /// Streaming: hand the records made so far to the receiver. Called between records, once
@@ -305,6 +316,11 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// A VIEWPORT's frozen layers in group 341, as an R2000 DXF has them; otherwise 331 (DXF 2004
+    /// and later, and the DWG bridge, which reads only 331).
+    frozen_341: bool,
+    /// MTEXT columns as the legacy groups 75..79 even from R2018 (the groups AutoLISP lists).
+    legacy_columns: bool,
     /// Write texts' fields as FIELD objects (a whole drawing; entity records alone keep the codes).
     write_fields: bool,
     /// The FIELD objects of the texts written so far, for the OBJECTS section.
@@ -484,6 +500,7 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("CMLJUST", 70),
     ("CMLSCALE", 40),
     ("TEXTSTYLE", 7),
+    ("CTABLESTYLE", 7),
     ("CLAYER", 8),
     ("CELTYPE", 6),
     ("CECOLOR", 62),
@@ -508,6 +525,7 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("PLINEWID", 40),
     ("CELWEIGHT", 370),
     ("LWDISPLAY", 290),
+    ("PSTYLEMODE", 290),
     ("INSUNITS", 70),
     ("MEASUREMENT", 70),
     ("PSLTSCALE", 70),
@@ -682,6 +700,10 @@ fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, rea
     }
     if let Some(v) = transparency_440(e.common.transparency) {
         w.i(440, v);
+    }
+    // ByBlock is the plot style name type 1 (ByLayer, 0, is the default and left out).
+    if e.common.plot_style.trim().eq_ignore_ascii_case("byblock") {
+        w.i(380, 1);
     }
     // A material other than ByLayer: its MATERIAL object.
     if let Some(h) = e.common.material.as_deref().and_then(|m| w.materials.get(&m.trim().to_ascii_uppercase())).cloned() {
@@ -1073,13 +1095,25 @@ fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
         vertical: ts.vertical,
     };
     let q = cadaddy_fonts::baseline_start(&cadaddy_fonts::TextFont::resolve(&ts.font), &t.value, &p);
-    if q.is_finite() { Vec3::new(q.x, q.y, a.z) } else { t.insert }
+    // Justification recalculates the baseline in XY; group 10 keeps its own elevation.
+    if q.is_finite() { Vec3::new(q.x, q.y, t.insert.z) } else { t.insert }
 }
 
 fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
-    w.p(10, text_insert(d, t));
+    let attdef = attdef_prompt.is_some();
+    // An attribute definition with no default value is drawn as its tag, whatever its prompt: the
+    // baseline start AutoCAD stored is judged against the tag's width too. A stored point that is
+    // close to the empty text's own start is kept as it is, so the font's width of the tag never
+    // moves it.
+    let own = text_insert(d, t);
+    let insert = match attrib {
+        Some((a, _)) if attdef && t.value.is_empty() && own != t.insert => text_insert(d, &Text { value: a.tag.clone(), ..t.clone() }),
+        _ => own,
+    };
+    w.p(10, insert);
     w.f(40, t.height);
-    w.s(1, &t.value);
+    let value = w.line(&t.value);
+    w.s(1, value);
     if t.rotation != 0.0 {
         w.f(50, t.rotation.to_degrees());
     }
@@ -1112,11 +1146,12 @@ fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)
     }
     match attrib {
         Some((a, target)) => {
-            w.s(100, if attdef_prompt.is_some() { "AcDbAttributeDefinition" } else { "AcDbAttribute" });
+            w.s(100, if attdef { "AcDbAttributeDefinition" } else { "AcDbAttribute" });
             if target >= Version::R2010 {
                 w.i(280, 0);
             }
             if let Some(prompt) = attdef_prompt {
+                let prompt = w.line(prompt);
                 w.s(3, prompt);
             }
             w.s(2, &a.tag);
@@ -1145,6 +1180,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             thickness(w, e);
             w.p(10, l.a);
             w.p(11, l.b);
+            world_extrusion(w, e);
         }
         EntityKind::Point(p) => {
             w.s(0, "POINT");
@@ -1364,7 +1400,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.f(40, t.height);
             w.f(41, t.width);
             w.i(71, i64::from(t.attach));
-            w.i(72, 1);
+            // Drawing direction: 5, by style.
+            w.i(72, 5);
             // Long contents go in 250-char 3-chunks, the remainder in 1. Fields show their values.
             let contents = f.as_ref().map_or(t.contents.as_str(), |f| f.0.as_str());
             let chunks = crate::dxf_read::mtext_dxf::chunks(&crate::dxf_read::mtext_dxf::encode_contents(contents));
@@ -1397,7 +1434,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(45, bg.scale);
                 w.i(441, bg.transparency);
             }
-            w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
+            w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t, cx.target >= Version::R2018 && !cx.legacy_columns));
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
@@ -1464,6 +1501,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // The text's middle as the file gave it, also when the text is not placed by hand: the
             // program that drew it knows its text style better than the dimension's geometry here.
             // (A dimension made here has no block yet, and its middle is not set: calculated.)
+            // Group 12: a block read from a file keeps the dimension's moved-by offset (AutoCAD
+            // draws the block translated by it); regenerated geometry already sits where the
+            // definition points place it, so it writes no offset.
+            if dm.block.is_some() && dm.insertion_point.is_finite() && dm.insertion_point != Vec3::ZERO {
+                w.p(12, dm.insertion_point);
+            }
             let stored = dm.block.is_some() && dm.text_mid.is_finite() && dm.text_mid != Vec3::ZERO;
             w.p(11, if dm.user_text_pos || stored { dm.text_mid } else { g.text_pos.to3(0.0) });
             let ty: i64 = match dm.kind {
@@ -1485,7 +1528,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.f(42, measured);
             if !dm.text.is_empty() {
                 // A line break is `\P` in a DXF string (a raw one would end the line).
-                w.s(1, dm.text.replace('\n', "\\P"));
+                let text = w.line(&dm.text.replace('\n', "\\P"));
+                w.s(1, text);
             }
             w.s(3, &dm.style);
             if dm.text_rotation != 0.0 {
@@ -1732,10 +1776,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             }
             w.i(75, i64::from(h.style));
             w.i(76, 1);
+            // Angle, scale and double flag are written for solid fills too, as read (AutoCAD and
+            // other writers keep them on SOLID hatches; readers ignore them there).
+            w.f(52, h.angle.to_degrees());
+            w.f(41, h.scale);
+            w.i(77, 0);
             if !h.solid {
-                w.f(52, h.angle.to_degrees());
-                w.f(41, h.scale);
-                w.i(77, 0);
                 // The lines read from the file, else the library's pattern of that name.
                 let lines = if h.pattern_lines.is_empty() {
                     cadaddy_doc::library::pattern_for(d, &h.pattern).map(|p| p.lines).unwrap_or_default()
@@ -1787,23 +1833,25 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // 340 entity, 131072 = off.
             let clip = v.clip.filter(|h| *h != e.handle && d.entity(*h).is_some());
             let flags = 32768 | if v.locked { 16384 } else { 0 } | if clip.is_some() { 65536 } else { 0 } | if v.on { 0 } else { 131072 };
+            // AutoCAD's frozen-layer list, before group 90 as in the DXF Reference: one pointer per
+            // layer, to its LAYER record (331; 341 in an R2000 DXF). A name with no record goes in
+            // CADaddy's xdata below, so no stale copy of the list outlives an edit in AutoCAD.
+            let mut unrecorded: Vec<String> = Vec::new();
+            for name in &v.frozen_layers {
+                match w.layers.get(&name.to_ascii_uppercase()).cloned() {
+                    Some(h) => w.s(if cx.frozen_341 { 341 } else { 331 }, h),
+                    None => unrecorded.push(name.clone()),
+                }
+            }
             w.i(90, flags);
             if let Some(h) = clip {
                 w.s(340, h.hex());
             }
-            // AutoCAD's frozen-layer list: one soft pointer per layer, to its LAYER record. Other
-            // programs read only this; CADaddy prefers its own xdata below when present.
-            for name in &v.frozen_layers {
-                if let Some(h) = w.layers.get(&name.to_ascii_uppercase()).cloned() {
-                    // Group 331: a layer frozen in this viewport (DXF Reference).
-                    w.s(331, h);
-                }
-            }
-            // One CADaddy xdata group holds both lists: readers stop at the first group of an app.
-            if !v.frozen_layers.is_empty() || !v.layer_colors.is_empty() || !v.layer_linetypes.is_empty() || !v.layer_lineweights.is_empty() {
+            // One CADaddy xdata group holds the lists: readers stop at the first group of an app.
+            if !unrecorded.is_empty() || !v.layer_colors.is_empty() || !v.layer_linetypes.is_empty() || !v.layer_lineweights.is_empty() {
                 w.s(1001, dxf_ext::APP);
-                if !v.frozen_layers.is_empty() {
-                    w.xdata(dxf_ext::frozen_xdata(&v.frozen_layers));
+                if !unrecorded.is_empty() {
+                    w.xdata(dxf_ext::frozen_xdata(&unrecorded));
                 }
                 if !v.layer_colors.is_empty() {
                     w.xdata(dxf_ext::layer_colors_xdata(&v.layer_colors));
@@ -1904,9 +1952,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
     }
 }
 
-/// `$DWGCODEPAGE`: before 2007 the code page read from the file when CADaddy knows it (the text
-/// is ASCII with `\U+XXXX` escapes, right in any code page, but the file keeps its declared one);
-/// otherwise, and from 2007 (UTF-8 text), `ANSI_1252`.
+/// `$DWGCODEPAGE`: before 2007 the code page read from the file when CADaddy knows it, in which
+/// a saved file's text is written (characters outside it as `\U+XXXX` escapes); otherwise, and
+/// from 2007 (UTF-8 text), `ANSI_1252`.
 pub(crate) fn code_page(d: &Drawing, version: Version) -> String {
     let read = d.header.get("DWGCODEPAGE").and_then(HVal::as_str).map(str::trim).unwrap_or_default();
     let known = read.is_ascii() && read.len() <= 32 && cadaddy_dxf::decode_code_page(b"", read).is_some();
@@ -1998,6 +2046,24 @@ fn is_default_extrusion(n: Vec3) -> bool {
 /// the default direction (0, 0, 1) is left out.
 fn extrusion(w: &mut W, n: Vec3) {
     if !is_default_extrusion(n) {
+        w.p(210, n);
+    }
+}
+
+/// The extrusion (210) of an entity whose points are world coordinates, when it is not the Z axis.
+fn world_extrusion(w: &mut W, e: &Entity) {
+    // Zero and non-finite vectors are not a direction: nothing is written. `Vec3::normalized` would
+    // also drop a tiny one (its zero threshold is the drawing tolerance) and turn infinity into NaN.
+    let v = e.common.extrusion;
+    let max = v.x.abs().max(v.y.abs()).max(v.z.abs());
+    if !v.is_finite() || max == 0.0 {
+        return;
+    }
+    // Scaled by the largest component first: the length of a huge one would overflow to infinity.
+    let v = Vec3::new(v.x / max, v.y / max, v.z / max);
+    let len = v.len();
+    let n = Vec3::new(v.x / len, v.y / len, v.z / len);
+    if n != Vec3::Z {
         w.p(210, n);
     }
 }
@@ -2439,13 +2505,24 @@ fn sheet_first(l: &Layout) -> Vec<&Entity> {
     all().filter(sheet).chain(all().filter(|e| !sheet(e))).collect()
 }
 
+/// Paper units per paper-space unit of layout `l`: its custom plot scale, so the sheet is as
+/// large in paper space as it plots. 1 when it is scaled to fit or the scale is unusable.
+fn sheet_scale(l: &cadaddy_doc::Layout) -> f64 {
+    let s = l.page.scale;
+    if l.page.scale_to_fit || !(s.is_finite() && (1e-6..=1e6).contains(&s)) { 1.0 } else { s }
+}
+
 /// The paper-space viewport (id 1) of the layout whose first viewport is `e`, if it needs one
 /// ([`paper_views`]): the whole sheet, viewed 1:1. Marked with CADaddy xdata so that our reader
 /// leaves it implicit again.
 fn paper_view(w: &mut W, d: &Drawing, e: &Entity, owner: &str, cx: &Ctx) {
     let Some(l) = cx.paper_views.get(&e.handle).and_then(|i| d.layouts.get(*i)) else { return };
-    let (size, center) =
-        cadaddy_render::paper::sheet(d, &l.name).map_or((Vec2::new(12.0, 9.0), Vec2::new(6.0, 4.5)), |s| (s.size, s.bounds().center()));
+    // The sheet as large in paper space as it plots: its custom plot scale (groups 142/143)
+    // shrinks it (a 420 mm sheet at 49.6 mm per unit is 8.47 units wide).
+    let (size, center) = cadaddy_render::paper::sheet(d, &l.name).map_or((Vec2::new(12.0, 9.0), Vec2::new(6.0, 4.5)), |s| {
+        let size = s.size / sheet_scale(l);
+        (size, s.origin + size * 0.5)
+    });
     let h = w.h();
     w.s(0, "VIEWPORT");
     w.s(5, h);
@@ -2469,13 +2546,25 @@ fn paper_view(w: &mut W, d: &Drawing, e: &Entity, owner: &str, cx: &Ctx) {
 /// The VPORT table: the `*Active` model space tiles (one viewport on the extents when there is no
 /// tiled configuration) and the saved configurations, each tile a record, the current one first.
 fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
-    let single = VportTile {
-        min: Vec2::ZERO,
-        max: Vec2::new(1.0, 1.0),
-        center: if ext.is_empty() { Vec2::new(6.0, 4.5) } else { ext.center() },
-        height: if ext.is_empty() { 9.0 } else { (ext.height() * 1.1).max(1e-6) },
-        aspect: 1.6,
+    // An untiled view's twist: the lone `*Active` tile the editor keeps for it.
+    let twist = d
+        .vports
+        .iter()
+        .find(|c| c.is_active() && c.tiles.len() == 1)
+        .and_then(|c| c.tiles.first())
+        .map_or(0.0, |t| cadaddy_geom::norm_angle(t.twist));
+    // The extents fitted as the turned view sees them.
+    let (center, height) = if ext.is_empty() {
+        (Vec2::new(6.0, 4.5), 9.0)
+    } else if twist == 0.0 {
+        (ext.center(), (ext.height() * 1.1).max(1e-6))
+    } else {
+        let corners = [ext.min, Vec2::new(ext.max.x, ext.min.y), ext.max, Vec2::new(ext.min.x, ext.max.y)];
+        let r = Bounds2::from_points(corners.map(|p| p.rotate(twist)));
+        let height = r.height() * 1.1;
+        (r.center().rotate(-twist), if height.is_finite() { height.max(1e-6) } else { 9.0 })
     };
+    let single = VportTile { min: Vec2::ZERO, max: Vec2::new(1.0, 1.0), center, height, aspect: 1.6, twist };
     let tiled = d.vports.iter().find(|c| c.is_active() && c.tiles.len() > 1);
     let mut records: Vec<(&str, &VportTile)> = match tiled {
         Some(c) => c.tiles.iter().map(|t| (VportConfig::ACTIVE, t)).collect(),
@@ -2501,6 +2590,8 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.f(41, if t.aspect.is_finite() && t.aspect > 0.0 { t.aspect } else { 1.0 });
         w.f(42, 50.0);
         w.f(50, d.header.f64("SNAPANG", 0.0));
+        // View twist (degrees), within one turn so a hostile value writes a sane angle.
+        w.f(51, if t.twist.is_finite() { cadaddy_geom::norm_angle(t.twist).to_degrees() } else { 0.0 });
     }
     w.s(0, "ENDTAB");
 }
@@ -2556,7 +2647,6 @@ pub(crate) fn bridge_job(dwg: Version) -> crate::dxf_post::Job {
 }
 
 /// The DXF the DWG bridge converts to a `dwg` version DWG ([`dwg_bridge_from`]).
-#[cfg(test)]
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>, usize) {
     let views = Views::of(d);
     let mut plan = crate::dxf_post::Plan::new(&views, bridge_job(dwg));
@@ -2728,16 +2818,27 @@ impl<'a> Views<'a> {
     }
 }
 
+/// What a pass of [`emit`] leaves.
+pub(crate) struct Emitted {
+    /// The next free handle.
+    pub seed: u64,
+    /// Persistent reactors the writer planned, by source: also for sources it doesn't write
+    /// itself (entities of types CADaddy doesn't model), which [`crate::dxf_raw::Finisher`] puts
+    /// back.
+    pub reactors: HashMap<Handle, Vec<String>>,
+}
+
 /// Make the drawing's DXF records, declaring `version` in `$ACADVER`, with what `target` (the
 /// version the file ends up in: `version`, or the DWG version the bridge writes) has, handing
 /// them to `out` as they are made (the post-passes come after: [`crate::dxf_post`]). The handle
-/// seed is left `0` for them; the next free handle is returned.
-pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, bridge: bool, out: Records) -> u64 {
+/// seed is left `0` for them; the next free handle is returned, with the reactors planned.
+pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, bridge: bool, out: Records) -> Emitted {
     let d: &Drawing = v.committed();
     // Structural handles start above every entity handle.
     let mut w = W::new(d.handseed.max(0x100).saturating_add(0x1000));
     w.out = Some(out);
     w.reactors = hatch_reactors(d);
+    w.plain_text = bridge;
     w.kept = (*d.kept_handles).clone();
     w.used = std::iter::once(&d.model)
         .chain(d.layouts.iter().map(|l| &l.entities))
@@ -2791,7 +2892,8 @@ pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, brid
             (n, h, b)
         })
         .collect();
-    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, bridge, write_fields: true, ..Ctx::default() };
+    let frozen_341 = version < Version::R2004 && !bridge;
+    let mut cx = Ctx { paper_views: paper_views(d), target, dwg, bridge, write_fields: true, frozen_341, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
@@ -2939,7 +3041,20 @@ pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, brid
             if let EntityKind::Dimension(dm) = &e.kind {
                 let (flags, refs) = std_assoc_refs(d, dm);
                 if !refs.is_empty() {
-                    cx.assoc.insert(e.handle, AssocObj { xdict: w.h(), handle: w.h(), flags, refs });
+                    let assoc = AssocObj { xdict: w.h(), handle: w.h(), flags, refs };
+                    // Source geometry must name the DIMASSOC as well, or other readers do not
+                    // follow later edits. Both objects of an intersection need the reactor.
+                    for source in assoc.refs.iter().flat_map(|r| std::iter::once(r.main).chain(r.other)) {
+                        // common_x already gives the dimension its own DIMASSOC reactor.
+                        if source == e.handle {
+                            continue;
+                        }
+                        let reactors = w.reactors.entry(source).or_default();
+                        if !reactors.contains(&assoc.handle) {
+                            reactors.push(assoc.handle.clone());
+                        }
+                    }
+                    cx.assoc.insert(e.handle, assoc);
                 }
             }
         }
@@ -3900,7 +4015,7 @@ pub(crate) fn emit(v: &Views, version: Version, target: Version, dwg: bool, brid
     w.s(0, "ENDSEC");
     w.s(0, "EOF");
     w.flush();
-    w.next
+    Emitted { seed: w.next, reactors: w.reactors }
 }
 
 /// A TABLESTYLE object (DXF Reference, OBJECTS: TABLESTYLE): margins, title/header
@@ -4066,10 +4181,18 @@ pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
 /// INSERT; a POLYLINE's VERTEXes and SEQEND follow it), each as [`entity_groups`] gives one.
 pub fn entity_records(d: &Drawing, e: &Entity) -> Vec<(String, Vec<Tag>)> {
     let mut w = W::new(d.handseed.max(0x100).saturating_add(0x1000));
-    let cx = Ctx { target: Version::R2018, ..Ctx::default() };
+    let cx = Ctx { target: Version::R2018, legacy_columns: true, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadaddy_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
-    cadaddy_dxf::records(&w.t).into_iter().map(|(k, tags)| (k, tags.into_iter().filter(|t| t.code != 330).collect())).collect()
+    cadaddy_dxf::records(&w.t)
+        .into_iter()
+        .map(|(k, tags)| {
+            let mut tags: Vec<Tag> = tags.into_iter().filter(|t| t.code != 330).collect();
+            // Strings as AutoLISP sees them: `10^2`, not the file's `10^ 2`.
+            crate::dxf_read::mtext_dxf::map_text_groups(&k, &mut tags, crate::dxf_read::mtext_dxf::decode_line);
+            (k, tags)
+        })
+        .collect()
 }
 
 /// One exact hatch boundary edge (DXF Reference): 72 edge type, then the edge's data. A clockwise

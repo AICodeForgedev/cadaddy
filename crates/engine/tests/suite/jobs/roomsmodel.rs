@@ -454,3 +454,165 @@ fn rooms_joined_by_an_open_passage_end_where_their_walls_end() {
         assert!(area > 0.85 * 231.0 * 348.0 / 144.0 && area < 1.1 * 237.0 * 348.0 / 144.0, "room {number}: {area} sf: {list}");
     }
 }
+
+/// A 60' × 30' floor (inches) whose north side steps in 6' round a storefront 18' wide (a canopy
+/// over the entry, open to the north, x 240–456, y 288–360), its storefront wall with a 3'-6"
+/// door gap; a corridor along the south behind a 4" partition with a door; the rest one room.
+fn canopy_notch_floor(s: &mut Session) {
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    let outer = [[0.0, 0.0], [720.0, 0.0], [720.0, 360.0], [456.0, 360.0], [456.0, 288.0], [240.0, 288.0], [240.0, 360.0], [0.0, 360.0]];
+    let inner = [[6.0, 6.0], [714.0, 6.0], [714.0, 354.0], [462.0, 354.0], [462.0, 282.0], [234.0, 282.0], [234.0, 354.0], [6.0, 354.0]];
+    for ring in [outer, inner] {
+        for k in 0..ring.len() {
+            let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
+            // The storefront's door gap, x 324–366.
+            if a[1] == b[1] && (a[1] == 288.0 || a[1] == 282.0) {
+                line(s, a, [366.0, a[1]]);
+                line(s, [324.0, a[1]], b);
+            } else {
+                line(s, a, b);
+            }
+        }
+    }
+    // The corridor's partition at y 96–100, a 3' door at x 600–636.
+    for y in [96.0, 100.0] {
+        line(s, [6.0, y], [600.0, y]);
+        line(s, [636.0, y], [714.0, y]);
+    }
+    s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    text(s, [300.0, 50.0], "CORRIDOR");
+    text(s, [100.0, 200.0], "CAFE");
+    text(s, [100.0, 170.0], "190");
+}
+
+/// Q6342: a room traced on its storey's floor stops at the storefront: the canopy notch outside
+/// it (open to the outside, taken into the building's shell, floor no label traced) is not the
+/// room's, though it lies behind the room's own door.
+#[test]
+fn a_room_stops_at_its_storefront_not_at_the_canopy_outside_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    canopy_notch_floor(&mut s);
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels, "stack": true})).unwrap();
+    let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    spec["rooms"] = json!([{"name": "CAFE", "number": "190"}, {"name": "CORRIDOR", "number": "100"}]);
+    spec["circulation"] =
+        json!([{"kind": "corridor", "level": "Level 1", "name": "CORRIDOR", "at": [300.0, 50.0], "rects": [[[6.0, 6.0], [714.0, 96.0]]]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": true})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    let room = rooms.iter().find(|x| x["number"] == json!("190")).unwrap_or_else(|| panic!("{list} {r}"));
+    // Inside its walls: 59' × 15'-2" north of the corridor, and the 19' and 21' wings each side of
+    // the notch, 6' deep; the notch (18' × 6', 108 sf) not.
+    let want = (708.0 * 182.0 + 228.0 * 72.0 + 252.0 * 72.0) / 144.0;
+    let area = room["areaSqFt"].as_f64().unwrap();
+    assert!(area > 0.9 * want && area < want + 30.0, "{area} sf, not {want:.0}: {list}");
+    let top = room["outline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p[0].as_f64().is_some_and(|x| x > 250.0 && x < 446.0))
+        .filter_map(|p| p[1].as_f64())
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!(top < 290.0, "the room reaches y {top} over the canopy: {list}");
+}
+
+/// A small building (inches), 40' × 24', 6" outside walls with a 10' opening in the south wall
+/// (x 60–180: a service opening, or a storefront whose glazing reads as no window), a 4"
+/// partition at x 238–242 with a 3' door (its leaf drawn standing open) between the two rooms,
+/// and a dimension string along the south side whose extension lines cross the wall. No corridor,
+/// stair or hoistway: the storey has a shell and no circulation.
+fn small_shell_floor(s: &mut Session) {
+    s.execute("layer.current", &json!({"name": "A-WALL"})).unwrap();
+    // South wall, both faces, broken for the opening.
+    for y in [0.0, 6.0] {
+        let x0 = if y == 0.0 { 0.0 } else { 6.0 };
+        let x1 = if y == 0.0 { 480.0 } else { 474.0 };
+        line(s, [x0, y], [60.0, y]);
+        line(s, [180.0, y], [x1, y]);
+    }
+    line(s, [60.0, 0.0], [60.0, 6.0]);
+    line(s, [180.0, 0.0], [180.0, 6.0]);
+    for (a, b) in [([0.0, 288.0], [480.0, 288.0]), ([6.0, 282.0], [474.0, 282.0])] {
+        line(s, a, b);
+    }
+    for (a, b) in [([0.0, 0.0], [0.0, 288.0]), ([6.0, 6.0], [6.0, 282.0]), ([480.0, 0.0], [480.0, 288.0]), ([474.0, 6.0], [474.0, 282.0])] {
+        line(s, a, b);
+    }
+    // The partition with its door, x 238–242, the door y 120–156.
+    for x in [238.0, 242.0] {
+        line(s, [x, 6.0], [x, 120.0]);
+        line(s, [x, 156.0], [x, 282.0]);
+    }
+    s.execute("arc", &json!({"center": [240.0, 120.0], "radius": 36.0, "start": 0.0, "end": 90.0})).unwrap();
+    line(s, [240.0, 120.0], [276.0, 120.0]);
+    // A dimension string 3' south of the building, its extension lines up across the wall.
+    s.execute("layer.new", &json!({"name": "A-ANNO-DIMS", "current": true})).unwrap();
+    line(s, [0.0, -36.0], [480.0, -36.0]);
+    for x in [0.0, 60.0, 180.0, 240.0, 480.0] {
+        line(s, [x, -42.0], [x, 12.0]);
+    }
+    s.execute("layer.current", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    for (x, name, number) in [(80.0, "SERVICE", "100"), (330.0, "OFFICE", "101")] {
+        text(s, [x, 180.0], name);
+        text(s, [x, 150.0], number);
+    }
+}
+
+/// Q6413: a small building with no corridor, stair or hoistway still traces its rooms on its
+/// floor, inside its shell, doors shut: a room open to the outside through an opening its walls
+/// leave in the outside wall is built at its size inside the walls (not dropped as a tag "not
+/// inside built walls", nor traced round its tag through the opening).
+#[test]
+fn a_small_buildings_rooms_are_traced_on_its_floor_without_circulation() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    small_shell_floor(&mut s);
+    let levels = json!([{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0, "region": L1}]);
+    s.execute("bspec.draft", &json!({"store": true, "levels": levels})).unwrap();
+    let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+    spec["rooms"] = json!([{"name": "SERVICE", "number": "100"}, {"name": "OFFICE", "number": "101"}]);
+    // The guided job keeps the storey's shell (its walls close round the building); no
+    // circulation is traced on it.
+    spec["shells"] = json!({"Level 1": [[0.0, 0.0, 480.0, 288.0]]});
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = list["rooms"].as_array().unwrap();
+    // Each room inside its walls: 19'-4" × 23' west, 19'-4" × 23' east (the door's opening and
+    // the outside opening shut at their walls' faces, give or take the wall's depth).
+    for number in ["100", "101"] {
+        let room = rooms.iter().find(|x| x["number"] == json!(number)).unwrap_or_else(|| panic!("room {number}: {list} {r}"));
+        let area = room["areaSqFt"].as_f64().unwrap();
+        let want = 232.0 * 276.0 / 144.0;
+        assert!(area > 0.9 * want && area < 1.1 * want, "room {number}: {area} sf, not about {want:.0}: {list}");
+    }
+    assert_eq!(rooms.len(), 2, "{list}");
+    assert!(!r["notes"].to_string().contains("not inside built walls"), "{r}");
+}
+
+/// Q6365: linework read as letters on a print (`JL TL YL KJ`, `Kkkkkkkk`) is no room's name. Read
+/// first in its room, it kept the room from its numbered tag's name; alone with a number, it
+/// named that room. The plan's own tag names its room; a junk label names none.
+#[test]
+fn linework_read_as_letters_names_no_room() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    floor(&mut s, 0.0, 0.0, 1.0, &["JL TL YL KJ", "TAKEOUT", "102"], &["Kkkkkkkkkkkkkkkkkkkkkk", "48"]);
+    draft(&mut s);
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms: Vec<(String, String)> = list["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| (x["name"].as_str().unwrap_or("").to_string(), x["number"].as_str().unwrap_or("").to_string()))
+        .collect();
+    assert!(rooms.iter().any(|(n, m)| n.eq_ignore_ascii_case("takeout") && m == "102"), "the tag names its room: {rooms:?} {r}");
+    assert!(!rooms.iter().any(|(n, _)| n.to_ascii_uppercase().contains("YL") || n.to_ascii_uppercase().contains("KKK")), "{rooms:?}");
+}

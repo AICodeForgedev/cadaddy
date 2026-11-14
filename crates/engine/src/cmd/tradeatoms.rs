@@ -19,6 +19,12 @@
 //!   openings taken out; corner bead at outside corners and free ends, tape by the joints the
 //!   layout makes, joint compound and screws by their rules; ceilings the same.
 //! - **Insulation**: a batt in each stud bay (its R-value by the cavity), boards by the sheet.
+//! - **Cladding** (`walls::cladding`): each exterior finish layer of a wall type over its face's
+//!   net area: stucco by the panel between its control joints with its lath, weather barrier,
+//!   screed, casing beads and corner aids; siding by the course; panels and EIFS boards by the
+//!   sheet; masonry veneer by the course with its ties (the masonry trade's); any other finish
+//!   layer by area. What a layer implies (the lath and barrier stucco needs) is laid in by rule
+//!   and marked inferred unless the assembly lists it itself.
 //! - **Firestopping** (`openings`): one system at each place a pipe, duct, conduit or cable
 //!   piece passes through a fire-rated wall.
 //! - **Finishes** (`rooms`): paint per surface and coat, flooring per room by its finish (pieces
@@ -55,12 +61,13 @@ mod rooms;
 mod walls;
 
 pub(crate) use docs::Fact;
+pub(crate) use walls::{jambs_of, off_jambs, studs_of};
 
 /// The rules data.
 const RULES: &str = include_str!("tradeatoms.json");
 /// The trades, in the order a report lists them.
 pub(crate) const TRADES: &[&str] =
-    &["concrete", "framing", "masonry", "drywall", "insulation", "firestopping", "finishes", "openings", "specialties"];
+    &["concrete", "framing", "masonry", "drywall", "insulation", "cladding", "firestopping", "finishes", "openings", "specialties"];
 /// Most pieces one build makes, elements looked at (hostile models).
 const MAX_PIECES: usize = 1_500_000;
 const MAX_ELEMENTS: usize = 2_000_000;
@@ -72,15 +79,15 @@ const LAYER_PREFIX: &str = "3D-Atoms-";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.atoms.build", "Lay Out Trade Pieces", run_build).long()
-            .params("{trades?: [concrete|framing|masonry|drywall|insulation|firestopping|finishes|openings|specialties] (default all)} → {pieces, byTrade: {trade: {kind: n}}, ms, notes, indexRows}: the built model's walls, floors, ceilings, rooms, doors and windows laid out again as their trades' pieces (model.build does this itself); the pieces of the trades named are replaced, the count index rebuilt"),
+            .params("{trades?: [concrete|framing|masonry|drywall|insulation|cladding|firestopping|finishes|openings|specialties] (default all)} → {pieces, byTrade: {trade: {kind: n}}, ms, notes, indexRows}: the built model's walls, floors, ceilings, rooms, doors and windows laid out again as their trades' pieces (model.build does this itself); the pieces of the trades named are replaced, the count index rebuilt"),
         CommandSpec::new("bim.atoms.report", "Trade Pieces Report", run_report)
             .params("{level?, trade?, group_by?: kind|item (default kind)} → {levels: [{level, trades: [{trade, rows: [{kind, item?, count, pieces?, length_ft, area_sf?, volume_cf?, volume_cy?, weight_lb?}], waste_factor?}]}], totals: {trade: {kind: {count, pieces?, length_ft, area_sf?, volume_cy?, weight_lb?, with_waste?: {pieces, area_sf?, volume_cy?}}}}, compare: [{what, documents, source, model, model_query, difference_pct?}], answer_ms: {query: ms}, rules_from: {documents, defaults, project}}: per level and trade the pieces and their totals from the count index, beside the quantities the documents give")
             .noundo(),
         CommandSpec::new("bim.atoms.rules", "Trade Piece Rules", run_rules)
-            .params("{section?: framing|drywall|insulation|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
+            .params("{section?: framing|drywall|insulation|cladding|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
             .noundo(),
         CommandSpec::new("bim.atoms.docs", "Read Trade Documents", run_docs).params(
-            "{paths: [file or folder] or one path (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
+            "{paths: [file or folder] or one path (submittals, specification sections; PDF or text), store?: bool (default true: add the facts to the ones the building spec keeps for the layouts; a fact read replaces only a kept one of the same key and scope, and a document read again its own earlier facts), replace?: bool (default false: true clears every kept fact first), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}], stored, kept?: n (the facts the spec keeps now)}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
         ),
     ]
 }
@@ -247,6 +254,11 @@ impl Rules {
         }
     }
 
+    /// What set `path`'s value: `documents` or `project`; None for the data's default.
+    pub(crate) fn origin(&self, path: &str) -> Option<&'static str> {
+        self.from.get(path).copied()
+    }
+
     /// Whether `path`'s value is the data's default (not the documents' or the project's).
     pub(crate) fn is_default(&self, path: &str) -> bool {
         !self.from.contains_key(path)
@@ -281,7 +293,8 @@ pub(crate) fn trade_eq(want: &str, have: &str) -> bool {
         "structure" | "structural" | "reinforcement" | "rebar" | "pt" => "concrete",
         "gypsum" | "gyp" | "board" | "sheetrock" => "drywall",
         "studs" | "carpentry" | "rough carpentry" | "wood" => "framing",
-        "cmu" | "block" => "masonry",
+        "cmu" | "block" | "brick" | "veneer" => "masonry",
+        "stucco" | "plaster" | "lath" | "siding" | "eifs" | "exterior finish" | "weather barrier" | "wrb" => "cladding",
         "firestop" => "firestopping",
         "paint" | "flooring" | "finish" => "finishes",
         "doors" | "windows" | "hardware" => "openings",
@@ -348,6 +361,8 @@ pub(crate) struct Piece {
     pub links: Vec<usize>,
     /// Elements it connects to (a host's neighbours, a penetrating pipe).
     pub touches: Vec<Handle>,
+    /// Laid in by a rule where no document lists it: the rule (its provenance is inferred).
+    pub inferred: Option<String>,
     /// A body that is not boxes (a slab's outline, a room's floor).
     pub custom: Option<Mesh>,
 }
@@ -372,6 +387,8 @@ pub(crate) struct Batch {
     pub notes: Vec<String>,
     /// Trades left out (with why), for the report.
     pub missing: BTreeMap<String, String>,
+    /// Counts a layout keeps for its notes (what it moved or framed, and why).
+    pub tally: BTreeMap<String, usize>,
 }
 
 impl Batch {
@@ -447,6 +464,7 @@ fn trade_color(trade: &str) -> u8 {
         "masonry" => 22,
         "drywall" => 254,
         "insulation" => 50,
+        "cladding" => 32,
         "firestopping" => 1,
         "finishes" => 151,
         "openings" => 130,
@@ -457,7 +475,9 @@ fn trade_color(trade: &str) -> u8 {
 /// A piece's body (sheet units).
 fn body(p: &Piece) -> Mesh {
     if let Some(m) = p.custom.as_ref().filter(|m| !m.faces.is_empty() && m.vertices.iter().all(|v| v.is_finite())) {
-        return m.clone();
+        // A body shaped by its builder (a floor finish over its room): the seams inside its flat
+        // surfaces (a straight run of its outline in pieces, a triangulated top) don't draw.
+        return super::bspec::seamless(m.clone());
     }
     let mut m = super::wallgen::empty_mesh();
     for b in p.blocks.iter().filter(|b| b.ok()).take(MAX_BLOCKS) {
@@ -507,6 +527,10 @@ pub(crate) fn emit(d: &mut Drawing, batch: &Batch) -> Emitted {
             t(1000, format!("type:{}", p.item)),
             t(1000, format!("size:{}", p.size)),
         ];
+        let mut tags = tags;
+        if let Some(basis) = &p.inferred {
+            tags.extend(super::provenance::tags(cadaddy_walk3d::Made::Inferred, basis));
+        }
         let ps = piece_props(p);
         let xdata = props::write(&tags, &ps);
         match d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
@@ -672,8 +696,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
     let rules = Rules::of(d, sp);
     let want = |t: &str| only.is_none_or(|o| o.contains(t));
     let mut batch = Batch::default();
-    let ctx = Ctx::new(d, sp);
-    if want("framing") || want("drywall") || want("insulation") || want("masonry") || want("finishes") {
+    let ctx = Ctx::new(d, sp, want("framing"));
+    if want("framing") || want("drywall") || want("insulation") || want("masonry") || want("cladding") || want("finishes") {
         walls::lay_out(d, sp, &rules, &ctx, &mut batch, &want);
     }
     if want("concrete") || want("framing") {
@@ -702,7 +726,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
 /// router (Q6152): the raceways keep to its bays and bore its web only where the hole rules allow.
 #[derive(Clone, Debug)]
 pub(crate) struct Member {
-    /// `joist` or `truss`.
+    /// `joist`, `truss` or `rim`.
     pub kind: &'static str,
     pub item: String,
     /// The level whose floor it frames (a truss: the top storey's), and that floor's element.
@@ -727,11 +751,12 @@ const MAX_MEMBERS: usize = 400_000;
 /// pieces are made.
 pub(crate) fn framing_members(d: &Drawing, sp: &BuildingSpec) -> Vec<Member> {
     let rules = Rules::of(d, sp);
-    let ctx = Ctx { upf: upf_of(sp), rooms: Vec::new(), devices: Vec::new() };
+    let ctx = Ctx { upf: upf_of(sp), rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::default() };
     let mut batch = Batch::default();
     floors::lay_out(d, sp, &rules, &ctx, &mut batch, &|t: &str| t == "framing");
     let mut out = Vec::new();
-    for p in batch.pieces.iter().filter(|p| matches!(p.kind, "joist" | "truss")) {
+    // The rim boards too (Q6622): a run across the floor's edge bores them by their own rule.
+    for p in batch.pieces.iter().filter(|p| matches!(p.kind, "joist" | "truss" | "rim")) {
         let source = match (&p.source.doc, p.source.kind) {
             (Some(doc), k) => format!("{}: {doc}", k.as_str()),
             (None, k) => k.as_str().to_string(),
@@ -765,6 +790,127 @@ pub(crate) struct Ctx {
     pub rooms: Vec<RoomEl>,
     /// Devices and casework: level, kind, centre, handle.
     pub devices: Vec<(String, String, Vec3, Handle)>,
+    /// What the other trades set inside the walls (boxes, devices, equipment): the stud layout
+    /// stands its studs beside them (Q6623).
+    pub in_wall: InWallIndex,
+}
+
+/// A thing another trade sets in a wall: what it is, its body's points and its box.
+#[derive(Clone, Debug)]
+pub(crate) struct InWall {
+    pub what: String,
+    pub pts: Vec<Vec3>,
+    pub lo: Vec3,
+    pub hi: Vec3,
+}
+
+/// Most points of one in-wall thing's body looked at, and most things kept (hostile models).
+const MAX_IN_WALL_PTS: usize = 512;
+const MAX_IN_WALL: usize = 400_000;
+/// The index's cell, feet.
+const IN_WALL_CELL_FT: f64 = 10.0;
+
+/// The in-wall things by level and plan cell.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct InWallIndex {
+    pub items: Vec<InWall>,
+    cells: HashMap<(String, i64, i64), Vec<usize>>,
+    cell: f64,
+}
+
+impl InWallIndex {
+    fn new(items: Vec<(String, InWall)>, upf: f64) -> InWallIndex {
+        let cell = (IN_WALL_CELL_FT * upf).max(1e-6);
+        let mut out = InWallIndex { items: Vec::new(), cells: HashMap::new(), cell };
+        for (level, it) in items.into_iter().take(MAX_IN_WALL) {
+            let i = out.items.len();
+            let key = level.to_ascii_lowercase();
+            for (cx, cy) in Self::span(cell, Vec2::new(it.lo.x, it.lo.y), Vec2::new(it.hi.x, it.hi.y)) {
+                out.cells.entry((key.clone(), cx, cy)).or_default().push(i);
+            }
+            out.items.push(it);
+        }
+        out
+    }
+
+    /// The cells a plan box covers (none when it is not finite or covers too many).
+    fn span(cell: f64, lo: Vec2, hi: Vec2) -> Vec<(i64, i64)> {
+        let c = |v: f64| (v / cell).floor();
+        let (x0, y0, x1, y1) = (c(lo.x), c(lo.y), c(hi.x), c(hi.y));
+        if ![x0, y0, x1, y1].iter().all(|v| v.is_finite() && v.abs() < 1e12) || (x1 - x0 + 1.0) * (y1 - y0 + 1.0) > 4096.0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let (x0, y0, x1, y1) = (x0 as i64, y0 as i64, x1 as i64, y1 as i64);
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                out.push((x, y));
+            }
+        }
+        out
+    }
+
+    /// The things of `level` whose box meets the plan box `lo`..`hi`.
+    pub(crate) fn near(&self, level: &str, lo: Vec2, hi: Vec2) -> Vec<&InWall> {
+        let key = level.to_ascii_lowercase();
+        let mut idx: Vec<usize> =
+            Self::span(self.cell, lo, hi).into_iter().filter_map(|(x, y)| self.cells.get(&(key.clone(), x, y))).flatten().copied().collect();
+        idx.sort_unstable();
+        idx.dedup();
+        idx.into_iter()
+            .filter_map(|i| self.items.get(i))
+            .filter(|it| it.hi.x >= lo.x && it.lo.x <= hi.x && it.hi.y >= lo.y && it.lo.y <= hi.y)
+            .collect()
+    }
+}
+
+/// Whether `e` may be a thing set in a wall, by its part alone: a run's piece only when it is a box,
+/// its ring or a conduit stick (a stick standing in the wall); the wire, cable, fittings and
+/// straps of a run never (a quick test before [`in_wall_thing`] reads it).
+fn in_wall_kind(e: &cadaddy_doc::Entity) -> bool {
+    match super::bimlook::made_tag(e, "part").and_then(|p| p.strip_prefix("atom:")) {
+        Some(atom) => matches!(atom, "box" | "ring" | "conduit"),
+        None => true,
+    }
+}
+
+/// `e` as a thing another trade sets in a wall: an outlet or junction box, a device, a piece of
+/// equipment, a terminal, a conduit standing in the wall; never a run along or across it (a run
+/// across a stud bores it: the hole rules judge it).
+fn in_wall_thing(e: &cadaddy_doc::Entity) -> Option<InWall> {
+    let (trade, category, _, _) = super::bimwork::classify(e)?;
+    if !matches!(trade, "mechanical" | "plumbing" | "electrical" | "fire" | "lowvoltage") {
+        return None;
+    }
+    let what = match category.as_str() {
+        "conduit" => {
+            let ps = props::read(&e.common.xdata);
+            if ps.get("vertical").map(Prop::text).as_deref() != Some("true") {
+                return None;
+            }
+            "conduit".to_string()
+        }
+        "pipe" | "duct" | "cable" | "wire" | "tray" | "support" | "fitting" | "breaker" | "grounding" => return None,
+        "equipment" => super::bimlook::made_tag(e, "part")
+            .and_then(|p| p.strip_prefix("equipment:"))
+            .map_or_else(|| "equipment".to_string(), |k| k.replace('_', " ")),
+        c => c.to_string(),
+    };
+    let EntityKind::Mesh(m) = &e.kind else { return None };
+    let mut pts: Vec<Vec3> = m.vertices.iter().filter(|v| v.is_finite()).take(MAX_IN_WALL_PTS).copied().collect();
+    let first = *pts.first()?;
+    // Its box from every point (a big body's points past the cap still count).
+    let (lo, hi) = m.vertices.iter().filter(|v| v.is_finite()).take(super::mepatoms::MAX_ELEMENTS).fold((first, first), |(lo, hi), p| {
+        (Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)), Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)))
+    });
+    // A body of more points than are kept is taken as its box's corners.
+    if m.vertices.len() > MAX_IN_WALL_PTS {
+        pts.clear();
+        for i in 0..8u8 {
+            pts.push(Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }));
+        }
+    }
+    Some(InWall { what, pts, lo, hi })
 }
 
 /// A built room element.
@@ -780,13 +926,23 @@ pub(crate) struct RoomEl {
 }
 
 impl Ctx {
-    fn new(d: &Drawing, sp: &BuildingSpec) -> Ctx {
+    /// `framing`: the stud layout is laid, so what stands in the walls is looked up too.
+    fn new(d: &Drawing, sp: &BuildingSpec, framing: bool) -> Ctx {
         let upf = upf_of(sp);
         let mut rooms = Vec::new();
         let mut devices = Vec::new();
+        let mut in_wall: Vec<(String, InWall)> = Vec::new();
         for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some()).take(MAX_ELEMENTS) {
             let part = super::wallgen::made_as(e).unwrap_or_default();
             let level = super::bspec::made_level(e).unwrap_or_default();
+            if framing
+                && matches!(part.as_str(), "mep" | "device")
+                && in_wall.len() < MAX_IN_WALL
+                && in_wall_kind(e)
+                && let Some(it) = in_wall_thing(e)
+            {
+                in_wall.push((level.clone(), it));
+            }
             match part.as_str() {
                 "room" => {
                     let EntityKind::Mesh(m) = &e.kind else { continue };
@@ -797,8 +953,17 @@ impl Ctx {
                     let z = m.vertices.first().map_or(0.0, |v| v.z);
                     let tag = |k: &str| super::bimlook::made_tag(e, k).unwrap_or_default().to_string();
                     let ps = props::read(&e.common.xdata);
-                    let finish = ps.get("finish").map(Prop::text).filter(|f| !f.is_empty()).unwrap_or_else(|| tag("finish"));
-                    rooms.push(RoomEl { level, name: tag("name"), number: tag("number"), finish, outline, z, handle: e.handle });
+                    // Its floor finish as its properties say (`floor_finish`: a person's, the
+                    // finish schedule's), else as the build tagged it.
+                    let finish = ["floor_finish", "finish"]
+                        .iter()
+                        .find_map(|k| ps.get(k).map(Prop::text).filter(|f| !f.trim().is_empty()))
+                        .unwrap_or_else(|| tag("finish"));
+                    // Its name and number as corrected (a person's, a later reader's), else as the
+                    // build labelled it (Q6593).
+                    let name = super::bspec::room_value(e, "name").unwrap_or_default();
+                    let number = super::bspec::room_value(e, "number").unwrap_or_default();
+                    rooms.push(RoomEl { level, name, number, finish, outline, z, handle: e.handle });
                 }
                 "device" | "casework" => {
                     let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
@@ -814,7 +979,8 @@ impl Ctx {
                 _ => {}
             }
         }
-        Ctx { upf, rooms, devices }
+        let in_wall = InWallIndex::new(in_wall, upf);
+        Ctx { upf, rooms, devices, in_wall }
     }
 
     /// The room of a level a plan point is in.
@@ -824,13 +990,7 @@ impl Ctx {
 
     /// A room's label: its name and number.
     pub(crate) fn room_label(r: &RoomEl) -> String {
-        match (r.name.trim(), r.number.trim()) {
-            ("", "") => String::new(),
-            (n, "") => n.to_string(),
-            ("", k) => k.to_string(),
-            (n, k) if n.contains(k) => n.to_string(),
-            (n, k) => format!("{n} {k}"),
-        }
+        super::bspec::room_full_label(&r.name, &r.number)
     }
 }
 
@@ -883,12 +1043,30 @@ fn waste_of(r: &Rules, trade: &str) -> Option<(f64, String)> {
         "drywall" => "drywall.waste_factor",
         "insulation" => "insulation.waste_factor",
         "masonry" => "masonry.waste_factor",
+        "cladding" => "cladding.waste_factor",
         "concrete" => "concrete.waste_factor",
         "finishes" => "finishes.flooring_waste_factor",
         _ => return None,
     };
     let f = r.num(path, 0.0);
     (f > 0.0 && f < 1.0).then(|| (f, r.source_text(path)))
+}
+
+/// Whether a trade's waste factor applies to a kind of piece (the rules' `takeoff.waste_kinds`).
+fn takes_waste(r: &Rules, kind: &str) -> bool {
+    r.words("takeoff.waste_kinds").iter().any(|k| k.eq_ignore_ascii_case(kind))
+}
+
+/// The waste factor on a kind of a trade's pieces, and its source; none where the trade has no
+/// waste factor or the kind takes none (Q6527: the takeoff's waste is the report's).
+pub(crate) fn piece_waste(r: &Rules, trade: &str, kind: &str) -> Option<(f64, String)> {
+    if takes_waste(r, kind) { waste_of(r, trade) } else { None }
+}
+
+/// Whether a kind of piece is bought by the piece: its takeoff line counts it though it carries
+/// a length or area (the rules' `takeoff.by_the_piece`).
+pub(crate) fn by_the_piece(r: &Rules, kind: &str) -> bool {
+    r.words("takeoff.by_the_piece").iter().any(|k| k.eq_ignore_ascii_case(kind))
 }
 
 fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
@@ -955,7 +1133,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         let mut m = serde_json::Map::new();
         for (kind, tally) in kinds {
             let mut j = super::mepatoms::tally_json(tally);
-            let buys = matches!(kind.as_str(), "sheet" | "pour" | "batt" | "board" | "cmu" | "flooring");
+            let buys = takes_waste(&rules, kind);
             if let Some((f, _)) = waste.as_ref().filter(|_| buys) {
                 let r2 = |v: f64| (v * 100.0).round() / 100.0;
                 let mut w = json!({"pieces": (tally.pieces() * (1.0 + f)).ceil()});
@@ -1043,14 +1221,16 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`paths` is empty: give the submittal and specification files or folders"));
     }
     let store = bool_or(p, "store", true);
+    let replace = bool_or(p, "replace", false);
     let show = p.get("show_text").and_then(Value::as_u64).map_or(0, |n| n.min(20_000) as usize);
     let read = docs::read(s, &paths, show);
     if read.files.is_empty() && read.unread.is_empty() {
         return Err(bad(CMD, "no PDF or text files at the paths given"));
     }
+    let mut kept = None;
     if store {
         let (mut sp, _) = super::bspec::current(s, CMD)?;
-        docs::store(&mut sp, &read);
+        kept = Some(docs::store(&mut sp, &read, replace));
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         s.touch();
     }
@@ -1065,6 +1245,9 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
         "unread": read.unread,
         "stored": store,
     });
+    if let Some(n) = kept {
+        out["kept"] = json!(n);
+    }
     fit(&mut out, "facts");
     Ok(out)
 }
@@ -1073,7 +1256,7 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
 /// of what was read.
 pub(crate) fn read_documents(s: &mut Session, sp: &mut BuildingSpec, paths: &[String]) -> String {
     let read = docs::read(s, paths, 0);
-    docs::store(sp, &read);
+    docs::store(sp, &read, false);
     let mut by = BTreeMap::<&str, usize>::new();
     for f in &read.facts {
         *by.entry(f.trade.as_str()).or_default() += 1;
@@ -1200,6 +1383,24 @@ pub(crate) fn lead_num(v: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6410: a piece whose builder shapes its body (a floor finish over its room) draws its
+    /// outline, not the seams inside its flat surfaces.
+    #[test]
+    fn a_shaped_body_draws_no_seam_inside_a_flat_surface() {
+        use cadaddy_doc::{MeshFace, MeshKind};
+        let v = |x: f64, y: f64| Vec3::new(x, y, 0.0);
+        // A flat square split into two triangles along its diagonal.
+        let m = Mesh {
+            vertices: vec![v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            faces: vec![MeshFace { v: vec![0, 1, 2], hidden: 0 }, MeshFace { v: vec![0, 2, 3], hidden: 0 }],
+            kind: MeshKind::Polyface,
+        };
+        assert_eq!(m.edges().len(), 5);
+        let mut p = Piece::new("finishes", "flooring", "carpet", "Level 1", Source::computed());
+        p.custom = Some(m);
+        assert_eq!(body(&p).edges().len(), 4, "the square's outline only");
+    }
 
     #[test]
     fn rules_read_and_cite_their_sources() {

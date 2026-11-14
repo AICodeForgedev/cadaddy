@@ -245,6 +245,29 @@ fn an_untitled_enlarged_plan_finds_its_overall_plan_by_the_grid() {
     assert_eq!(l.double_counted, 0);
 }
 
+/// A core plan an open corridor splits into two blocks of linework, titled under its lower
+/// block only, is one view (Q6549): the devices of its upper part are its own, counted, and
+/// placed by its registration like the rest, never left on a sheet that lines up with nothing.
+#[test]
+fn an_enlarged_plan_split_by_a_corridor_is_one_view_with_all_its_devices() {
+    let e3 = linkset::enlarged_sheet_split();
+    let read = printlinks::read_page(&e3, "E-3");
+    let core = read.views.iter().find(|v| v.number == "1").and_then(|v| v.region);
+    assert!(core.is_some_and(|r| r[1] < 4.0 && r[3] >= 20.0), "{:#?}", read.views);
+    let (sheets, pages) = with_e3(e3);
+    let l = printlinks::link_set(&sheets, &pages);
+    assert_eq!(l.enlarged.len(), 1, "{:#?}", l.enlarged);
+    let e = &l.enlarged[0];
+    assert!(e.registered, "{e:#?}");
+    assert_eq!((e.overall_sheet.as_str(), e.method.as_str(), e.scale), ("E-1", "grids", Some(2.0)));
+    assert_eq!((e.devices, e.overall_ignored), (5, 3), "{e:#?}");
+    // The upper part's devices land in the boundary on E-1 like the lower part's.
+    for (on_e3, on_e1) in [([10.0, 14.0], [11.0, 9.0]), ([18.0, 19.0], [15.0, 11.5])] {
+        let at = e.place(on_e3).unwrap_or_default();
+        assert!((at[0] - on_e1[0]).abs() < 1e-6 && (at[1] - on_e1[1]).abs() < 1e-6, "{at:?}");
+    }
+}
+
 /// The devices of one enlarged plan, as a reader of the JSON answer finds them: the entries
 /// whose `on_sheet` is the enlarged sheet and whose `detail` is its view number.
 fn devices_of(l: &SheetLinks, sheet: &str, detail: &str) -> u64 {
@@ -592,6 +615,47 @@ fn an_enlarged_plan_with_no_grid_tag_or_box_registers_by_the_walls_both_draw() {
     // Its devices count once: the overall plan's 3 copies in its outline are left out.
     assert_eq!((e.devices, e.overall_ignored), (5, 3), "{e:#?}");
     assert_eq!(l.double_counted, 0);
+}
+
+/// Placed by its walls alone, an enlarged plan goes onto the plan of its level its walls agree
+/// with most (Q6549): the callout's trade plan leaves out a closet of the core, the level's
+/// architectural plan draws every wall of it (drawn 40 units to the right), so it registers there.
+#[test]
+fn an_enlarged_plan_placed_by_walls_alone_takes_the_plan_whose_walls_agree_most() {
+    let (sheets, mut pages) = walled_set();
+    let e1 = pages.iter().find(|p| p.sheet.number == "E-1").map(|p| p.read.lines.clone()).unwrap_or_default();
+    // A second closet in the core (E-1 units: x 9.5..11, y 6..7.5) the enlarged plan and the
+    // architectural plan draw and the trade plan doesn't.
+    let seg = |horiz: bool, at: f64, lo: f64, hi: f64| cadaddy_mepfix::linefit::AxisSeg { horiz, at, lo, hi };
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        p.read.lines.extend([seg(true, 8.0, 7.0, 10.0), seg(false, 10.0, 8.0, 11.0)]);
+    }
+    // The architectural plan: all of the floor's walls, 40 units to the right.
+    let scale = pages.iter().find(|p| p.sheet.number == "E-1").map_or(0.0, |p| p.read.scale);
+    let mut arch = printlinks::read_page(&cadaddy_doc::Drawing::default(), "A-101");
+    arch.scale = scale;
+    arch.lines = e1
+        .iter()
+        .map(|s| {
+            let mut t = *s;
+            if t.horiz {
+                (t.lo, t.hi) = (t.lo + 40.0, t.hi + 40.0);
+            } else {
+                t.at += 40.0;
+            }
+            t
+        })
+        .chain([seg(true, 6.0, 49.5, 51.0), seg(false, 51.0, 6.0, 7.5)])
+        .collect();
+    pages.push(LinkPage { sheet: sheets.iter().find(|s| s.number == "A-101").cloned().unwrap_or_default(), read: arch });
+    let l = printlinks::link_set(&sheets, &pages);
+    let e = &l.enlarged[0];
+    assert!(e.registered, "{e:#?}");
+    assert_eq!((e.method.as_str(), e.overall_sheet.as_str()), ("lines", "A-101"), "{e:#?}");
+    for p in [[6.0, 6.0], [20.0, 20.0]] {
+        let at = e.place(p).expect("placed");
+        assert!((at[0] - (p[0] / 2.0 + 46.0)).abs() < 0.05 && (at[1] - (p[1] / 2.0 + 2.0)).abs() < 0.05, "{p:?} -> {at:?}");
+    }
 }
 
 #[test]

@@ -45,7 +45,9 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
     // tests/gear.rs, tests/labels.rs, tests/concrete.rs and mepfix tests/ugsheets.rs; the equipment
     // and lighting kinds from the guided job's submittal and lighting checks: engine equipsub and
     // lightsched tests; the method choice from the job's value engineering: engine valueeng; the
-    // documents' conflicts from the job's lighting checks: engine lighting.)
+    // documents' conflicts from the job's lighting checks: engine lighting; an unnumbered room
+    // from the model's build: engine room_number_prop; an object a requirement of its kind leaves
+    // incomplete from the job's requirements pass: engine requirements.)
     for k in RfiKind::ALL.into_iter().filter(|k| {
         !matches!(
             k,
@@ -61,6 +63,8 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
                 | RfiKind::Lighting
                 | RfiKind::MethodChoice
                 | RfiKind::Conflict
+                | RfiKind::RoomUnnumbered
+                | RfiKind::Requirement
         )
     }) {
         assert!(seen.contains(&k), "{k:?} never found on seeds 1–6");

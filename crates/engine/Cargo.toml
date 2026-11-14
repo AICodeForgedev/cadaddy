@@ -41,6 +41,9 @@ cadaddy-rhai-bridge = { path = "../rhai-bridge" }
 cadaddy-mepfix = { path = "../mepfix" }
 # A job's checkpoint state read without its drawing (`cdy::agent`); already below mepfix.
 cadaddy-io = { workspace = true }
+# The sheet-index packet's contact sheet: page pictures tiled into one PNG (already the
+# renderer's image codec).
+image = { workspace = true }
 
 # The local time-zone offset on Windows (no /etc/localtime there): FIELD dates and the Drawing
 # Recovery times were UTC. MIT OR Apache-2.0; only its clock.

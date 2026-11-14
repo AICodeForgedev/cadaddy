@@ -1,7 +1,9 @@
 //! MTEXT specifics of DXF (DXF Reference, MTEXT): control characters in the contents written
 //! as a caret and a letter (`^I` a tab, `^J` a line feed, `^ ` a caret), and the column groups
 //! 75 (type), 76 (count), 78 (flow reversed), 79 (auto height), 48 (width), 49 (gutter) and
-//! 50 (column heights, after the column type; before it, 50 is the rotation).
+//! 50 (column heights, after the column type; before it, 50 is the rotation). TEXT, ATTDEF,
+//! ATTRIB and DIMENSION strings use the same encoding ([`encode_line`]): AutoCAD reads a bare
+//! `^2` in `10^2` as a control character.
 
 use cadaddy_doc::{MText, MTextColumnType, MTextColumns};
 use cadaddy_dxf::Tag;
@@ -12,6 +14,15 @@ const MAX_COLUMNS: usize = 1_000;
 /// Decode the contents' `^I` (tab), `^J` (line feed) and `^ ` (caret). Other carets stay as
 /// they are (older files write stacked tolerances `\S+0.1^-0.1;` with a bare caret).
 pub(crate) fn decode_contents(s: &str) -> String {
+    decode(s, true)
+}
+
+/// A single-line string as read: [`decode_contents`] without line feeds (`^J` stays as it is).
+pub(crate) fn decode_line(s: &str) -> String {
+    decode(s, false)
+}
+
+fn decode(s: &str, line_feeds: bool) -> String {
     if !s.contains('^') {
         return s.to_string();
     }
@@ -25,7 +36,7 @@ pub(crate) fn decode_contents(s: &str) -> String {
         match it.peek().copied() {
             Some(' ') => out.push('^'),
             Some('I') => out.push('\t'),
-            Some('J') => out.push('\n'),
+            Some('J') if line_feeds => out.push('\n'),
             _ => {
                 out.push('^');
                 continue;
@@ -37,12 +48,10 @@ pub(crate) fn decode_contents(s: &str) -> String {
 }
 
 /// The caret codes of the DXF the DWG bridge writes from a DWG, put right before the groups are
-/// read. The bridge escapes a caret as `^ ` and then also the caret of the code it made from a
-/// control character: an MTEXT tab comes out as `^ I` and a line feed as `^ J` (a tab in TEXT,
-/// attribute, dimension and multileader text comes out as itself, a typed `^I` as `^ I`). Observed on files
-/// from AutoCAD and from CADaddy. MTEXT groups get the single-escaped codes [`decode_contents`]
-/// reads; the other text groups lose the escape of their carets. A typed `^I` in MTEXT cannot be
-/// told from a tab in the bridge's output and reads as a tab.
+/// read. MTEXT contents come escaped once (the bridge writes them from their values, so a typed
+/// `^I` stays text and a tab a tab), and TEXT, attribute and dimension text keep the bridge's
+/// `^ ` escapes for [`decode_line`]; a dimension's style name and multileader text lose the
+/// escape of their carets.
 pub(crate) fn bridge_carets_undone(tags: &mut [Tag]) {
     let mut kind = String::new();
     for t in tags.iter_mut() {
@@ -50,38 +59,20 @@ pub(crate) fn bridge_carets_undone(tags: &mut [Tag]) {
             kind = t.str();
             continue;
         }
-        let mtext = kind == "MTEXT" && matches!(t.code, 1 | 3);
-        let plain = (matches!(kind.as_str(), "TEXT" | "ATTRIB" | "ATTDEF" | "DIMENSION") && matches!(t.code, 1 | 3))
-            || (kind == "MULTILEADER" && t.code == 304);
-        if !(mtext || plain) {
+        // MTEXT contents come from the bridge as written (its `mtext_contents`), escaped once, and
+        // the strings `decode_line` reads (TEXT, ATTRIB, ATTDEF and DIMENSION text, an ATTDEF's
+        // prompt) keep the bridge's `^ ` escapes, as a DXF file has them; a DIMENSION's style
+        // name (3) and a multileader's text lose theirs.
+        let plain = (kind == "DIMENSION" && t.code == 3) || (kind == "MULTILEADER" && t.code == 304);
+        if !plain {
             continue;
         }
         let s = t.str();
         if !s.contains('^') {
             continue;
         }
-        let fixed = if mtext { single_escaped(&s) } else { s.replace("^ ", "^") };
-        *t = Tag::s(t.code, fixed);
+        *t = Tag::s(t.code, s.replace("^ ", "^"));
     }
-}
-
-/// `^ I` and `^ J` as `^I` and `^J`, scanning from the left so `^ ^ I` keeps its first caret.
-fn single_escaped(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(c) = rest.chars().next() {
-        if let Some(tail) = rest.strip_prefix("^ I") {
-            out.push_str("^I");
-            rest = tail;
-        } else if let Some(tail) = rest.strip_prefix("^ J") {
-            out.push_str("^J");
-            rest = tail;
-        } else {
-            out.push(c);
-            rest = rest.get(c.len_utf8()..).unwrap_or_default();
-        }
-    }
-    out
 }
 
 /// Encoded contents split into the 250-character strings of MTEXT's 3 and 1 groups, never
@@ -100,6 +91,81 @@ pub(crate) fn chunks(encoded: &str) -> Vec<String> {
         start = end;
     }
     out
+}
+
+/// A single-line string (TEXT, ATTDEF/ATTRIB, DIMENSION) for a DXF file: a caret as `^ ` and a
+/// tab as `^I`, read back by [`decode_line`]. It holds no line break (the writer makes it a
+/// space).
+pub(crate) fn encode_line(s: &str) -> String {
+    s.replace('^', "^ ").replace('\t', "^I")
+}
+
+/// Apply `f` ([`encode_line`] or [`decode_line`]) to the groups of a `kind` record that hold
+/// an encoded string: the text (1), and an ATTDEF's prompt (3). An embedded MTEXT (from group 101)
+/// has its own and is left alone. AutoLISP's entget and entmake/entmod use it.
+pub(crate) fn map_text_groups(kind: &str, tags: &mut [Tag], f: fn(&str) -> String) {
+    let kind = kind.to_ascii_uppercase();
+    if !matches!(kind.as_str(), "TEXT" | "ATTRIB" | "ATTDEF" | "DIMENSION") {
+        return;
+    }
+    for t in tags.iter_mut().take_while(|t| t.code != 101) {
+        if t.code == 1 || (t.code == 3 && kind == "ATTDEF") {
+            *t = Tag::s(t.code, f(&t.str()));
+        }
+    }
+}
+
+/// Which text a group of a `kind` record holds, the groups [`decode_contents`] and
+/// [`decode_line`] read: MTEXT's own contents (1 and 3, before an embedded object), the line of
+/// TEXT, ATTRIB, ATTDEF and DIMENSION (1, and an ATTDEF's prompt 3), and a multiline attribute's
+/// embedded contents (1 and 3 after its group 101). `embedded`: the group comes after a 101.
+fn text_group(kind: &str, code: i32, embedded: bool) -> Option<TextGroup> {
+    match (kind, code, embedded) {
+        ("MTEXT", 1 | 3, false) | ("ATTRIB" | "ATTDEF", 1 | 3, true) => Some(TextGroup::Contents),
+        ("TEXT" | "ATTRIB" | "ATTDEF" | "DIMENSION", 1, false) | ("ATTDEF", 3, false) => Some(TextGroup::Line),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TextGroup {
+    Contents,
+    Line,
+}
+
+/// The text groups of DXF records as a DWG holds them (`to_dwg`), or back. A DWG stores a text
+/// value as its characters (the Open Design Specification's TV strings; an AutoCAD DWG's MTEXT
+/// has a tab character where its DXF has `^I`); the caret codes are DXF's way of writing control
+/// characters and a caret in a group (DXF Reference, MTEXT). So CADaddy's own DWG codec, which
+/// encodes the DXF writer's groups and decodes into groups for the DXF reader, turns them into
+/// characters before writing ([`decode_contents`], [`decode_line`]) and back after reading
+/// ([`encode_contents`], [`encode_line`]), as the DWG bridge does: a tab stays a tab and a typed
+/// `^I` stays the two characters, whichever of them wrote or reads the file.
+pub(crate) fn dwg_text(tags: &mut [Tag], to_dwg: bool) {
+    let mut kind = String::new();
+    let mut embedded = false;
+    for t in tags.iter_mut() {
+        if t.code == 0 {
+            kind = t.str().trim().to_ascii_uppercase();
+            embedded = false;
+            continue;
+        }
+        if t.code == 101 {
+            embedded = true;
+            continue;
+        }
+        let Some(group) = text_group(&kind, t.code, embedded) else { continue };
+        let s = t.str();
+        let text = match (group, to_dwg) {
+            (TextGroup::Contents, true) => decode_contents(&s),
+            (TextGroup::Line, true) => decode_line(&s),
+            (TextGroup::Contents, false) => encode_contents(&s),
+            (TextGroup::Line, false) => encode_line(&s),
+        };
+        if text != s.as_str() {
+            *t = Tag::s(t.code, text);
+        }
+    }
 }
 
 /// Encode the contents for a DXF string: a tab as `^I`, a line feed as `^J`, a caret as `^ `;
@@ -122,7 +188,7 @@ pub(crate) fn encode_contents(s: &str) -> String {
 }
 
 /// The MTEXT's own tags: up to an embedded object (group 101), whose groups reuse MTEXT's codes.
-fn own(tags: &[Tag]) -> &[Tag] {
+pub(crate) fn own(tags: &[Tag]) -> &[Tag] {
     let end = tags.iter().position(|t| t.code == 101).unwrap_or(tags.len());
     tags.get(..end).unwrap_or(tags)
 }
@@ -140,16 +206,22 @@ fn finite(v: f64) -> f64 {
 
 /// The columns of an MTEXT, and the column width (group 48) when there are columns.
 pub(crate) fn read_columns(tags: &[Tag]) -> Option<(MTextColumns, f64)> {
-    let tags = own(tags);
-    let start = tags.iter().position(|t| t.code == 75)?;
-    let kind = match tags.get(start).map(Tag::i64) {
+    let own_all = tags;
+    // An application-defined group in the record may hold any code, 50 included.
+    let tags: Vec<&Tag> = super::outside_app(own(tags)).map(|(_, t)| t).collect();
+    let Some(start) = tags.iter().position(|t| t.code == 75) else { return read_embedded_columns(own_all) };
+    let kind = match tags.get(start).map(|t| t.i64()) {
         Some(1) => MTextColumnType::Static,
         Some(2) => MTextColumnType::Dynamic,
         _ => return None,
     };
     let cols = tags.get(start..).unwrap_or_default();
-    let first = |code: i32| cols.iter().find(|t| t.code == code);
-    let heights: Vec<f64> = cols.iter().filter(|t| t.code == 50).take(MAX_COLUMNS).map(|t| finite(t.f64()).max(0.0)).collect();
+    let first = |code: i32| cols.iter().find(|t| t.code == code).copied();
+    // The first 50 is the number of heights that follow, unless the file predates the count
+    // (CADaddy's earlier files wrote the n heights of group 76 alone).
+    let fifties = cols.iter().filter(|t| t.code == 50);
+    let counted = first(76).is_some_and(|t| fifties.clone().count() as i64 - 1 == t.i64());
+    let heights: Vec<f64> = fifties.skip(usize::from(counted)).take(MAX_COLUMNS).map(|t| finite(t.f64()).max(0.0)).collect();
     let count = first(76).map(Tag::i64).unwrap_or(heights.len() as i64).clamp(1, MAX_COLUMNS as i64);
     let auto_height = first(79).map(Tag::i64).unwrap_or(0) != 0;
     let defined = tags.iter().find(|t| t.code == 46).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0);
@@ -167,12 +239,81 @@ pub(crate) fn read_columns(tags: &[Tag]) -> Option<(MTextColumns, f64)> {
     Some((c, first(48).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0)))
 }
 
-/// The column groups of an MTEXT with columns.
-pub(crate) fn column_tags(t: &MText) -> Vec<Tag> {
+/// The columns of an R2018 MTEXT, from its embedded object (group 101), whose groups reuse
+/// MTEXT's codes: 71 type, 72 count, 44 column width, 45 gutter, 73 auto height, 74 flow
+/// reversed, 46 heights. The column width is also the MTEXT's width.
+fn read_embedded_columns(tags: &[Tag]) -> Option<(MTextColumns, f64)> {
+    let obj = tags.get(tags.iter().position(|t| t.code == 101)? + 1..)?;
+    let first = |code: i32| obj.iter().find(|t| t.code == code);
+    let kind = match first(71).map(Tag::i64) {
+        Some(1) => MTextColumnType::Static,
+        Some(2) => MTextColumnType::Dynamic,
+        _ => return None,
+    };
+    let heights: Vec<f64> = obj.iter().filter(|t| t.code == 46).take(MAX_COLUMNS).map(|t| finite(t.f64()).max(0.0)).collect();
+    let auto_height = first(73).map(Tag::i64).unwrap_or(0) != 0;
+    let manual = kind == MTextColumnType::Dynamic && !auto_height;
+    // The column height: the entity's own 46 (defined height), else the object's 41 or first 46.
+    let own_46 = own(tags).iter().find(|t| t.code == 46).map(|t| finite(t.f64()).max(0.0));
+    let defined = [own_46, first(41).map(|t| finite(t.f64())), heights.first().copied()].into_iter().flatten().find(|h| *h > 0.0).unwrap_or(0.0);
+    // A dynamic auto-height object stores 0 columns in 72: the count follows from the total width
+    // (42 = n * 44 + (n - 1) * 45).
+    let [width, gutter, total] = [44, 45, 42].map(|g| first(g).map_or(0.0, |t| finite(t.f64())));
+    let count = match first(72).map(Tag::i64) {
+        Some(n) if n > 0 => n,
+        Some(_) if width + gutter > 0.0 && total > 0.0 => ((total + gutter) / (width + gutter)).round().clamp(1.0, MAX_COLUMNS as f64) as i64,
+        _ => 1,
+    };
+    let c = MTextColumns {
+        kind,
+        count: u16::try_from(count.clamp(1, MAX_COLUMNS as i64)).unwrap_or(1),
+        gutter: first(45).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0),
+        height: if manual { heights.iter().copied().fold(0.0, f64::max) } else { defined },
+        auto_height,
+        heights: if manual { heights } else { Vec::new() },
+        flow_reversed: first(74).map(Tag::i64).unwrap_or(0) != 0,
+    };
+    Some((c, first(44).map(|t| finite(t.f64()).max(0.0)).unwrap_or(0.0)))
+}
+
+/// The column groups of an MTEXT with columns: the legacy groups 75/76/78/79/48/49/50 before
+/// R2018, an embedded object (group 101) from R2018 on, which reads those as the entity's own.
+pub(crate) fn column_tags(t: &MText, embedded: bool) -> Vec<Tag> {
     let Some(c) = &t.columns else { return Vec::new() };
     let manual = c.kind == MTextColumnType::Dynamic && !c.auto_height;
     let heights: Vec<f64> = if manual { c.heights.clone() } else { vec![c.height; usize::from(c.count.max(1))] };
     let count = if manual { heights.len().max(1) } else { usize::from(c.count.max(1)) };
+    if embedded {
+        let (sin, cos) = t.rotation.sin_cos();
+        let total_width = t.width * count as f64 + c.gutter * (count as f64 - 1.0);
+        // The column height (static, and dynamic with auto height) is the entity's group 46.
+        let height = if manual { heights.iter().copied().fold(0.0, f64::max) } else { c.height };
+        let mut v = vec![
+            Tag::f(46, height),
+            Tag::s(101, "Embedded Object"),
+            Tag::i(70, 1),
+            Tag::f(10, cos),
+            Tag::f(20, sin),
+            Tag::f(30, 0.0),
+            Tag::f(11, t.insert.x),
+            Tag::f(21, t.insert.y),
+            Tag::f(31, t.insert.z),
+            Tag::f(40, t.width),
+            Tag::f(41, height),
+            Tag::f(42, total_width),
+            Tag::f(43, height),
+            Tag::i(71, if c.kind == MTextColumnType::Dynamic { 2 } else { 1 }),
+            Tag::i(72, count as i64),
+            Tag::f(44, t.width),
+            Tag::f(45, c.gutter),
+            Tag::i(73, i64::from(c.auto_height)),
+            Tag::i(74, i64::from(c.flow_reversed)),
+        ];
+        if manual {
+            v.extend(heights.into_iter().map(|h| Tag::f(46, h)));
+        }
+        return v;
+    }
     let mut v = vec![
         Tag::i(75, if c.kind == MTextColumnType::Dynamic { 2 } else { 1 }),
         Tag::i(76, count as i64),
@@ -181,6 +322,10 @@ pub(crate) fn column_tags(t: &MText) -> Vec<Tag> {
         Tag::f(48, t.width),
         Tag::f(49, c.gutter),
     ];
+    // No count for an empty list: a lone 50 = 0 would read back as one height of 0.
+    if !heights.is_empty() {
+        v.push(Tag::i(50, heights.len() as i64));
+    }
     v.extend(heights.into_iter().map(|h| Tag::f(50, h)));
     v
 }
@@ -205,20 +350,28 @@ mod chunk_tests {
     fn the_bridges_escapes_are_undone_per_entity() {
         let mut tags = vec![
             Tag::s(0, "MTEXT"),
-            Tag::s(1, "a^ Ib^ Jc^ d^ ^ Ie"),
+            Tag::s(1, "a^Ib^Jc^ d^ ^ Ie"),
             Tag::s(0, "TEXT"),
             Tag::s(1, "a^ Ib\tc"),
             Tag::s(0, "MULTILEADER"),
             Tag::s(304, "x^ J"),
+            Tag::s(0, "DIMENSION"),
+            Tag::s(1, "<>^ 2"),
+            Tag::s(3, "ISO^ 25"),
             Tag::s(0, "LINE"),
             Tag::s(1, "keep^ I"),
         ];
         bridge_carets_undone(&mut tags);
         let got: Vec<String> = tags.iter().map(Tag::str).collect();
-        assert_eq!(got[1], "a^Ib^Jc^ d^ ^Ie");
-        assert_eq!(decode_contents(&got[1]), "a\tb\nc^d^\te");
-        assert_eq!(got[3], "a^Ib\tc");
+        // MTEXT contents come escaped once: a tab, a line feed, then the typed carets.
+        assert_eq!(got[1], "a^Ib^Jc^ d^ ^ Ie");
+        assert_eq!(decode_contents(&got[1]), "a\tb\nc^d^^Ie");
+        // TEXT and dimension text keep `^ ` for decode_line.
+        assert_eq!(got[3], "a^ Ib\tc");
+        assert_eq!(decode_line(&got[3]), "a^Ib\tc");
         assert_eq!(got[5], "x^J");
-        assert_eq!(got[7], "keep^ I");
+        assert_eq!(got[7], "<>^ 2");
+        assert_eq!(got[8], "ISO^25");
+        assert_eq!(got[10], "keep^ I");
     }
 }

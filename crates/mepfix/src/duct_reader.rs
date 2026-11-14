@@ -56,12 +56,86 @@ pub struct DetectedFitting {
 }
 
 /// A detected terminal device.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DetectedTerminal {
     /// `supply_diffuser`, `return_grille`, `exhaust_grille`.
     pub kind: String,
     pub at: Vec2,
     pub confidence: f64,
+    /// Its plan tag's type mark (`SD-4`, the air device schedule's row), empty when its tag has
+    /// none.
+    pub mark: String,
+    /// Its plan tag's (neck) size, inches: `[w, h]`, or `[d, 0]` round.
+    pub size_in: Option<[f64; 2]>,
+    /// Its plan tag's airflow, CFM.
+    pub cfm: Option<f64>,
+}
+
+/// What an air device's plan tag says: its type mark, size and airflow. The tag is the mark
+/// with the lines stacked on it (`SD-4` over `10"x6"` over `260`, as a mechanical legend shows
+/// the type, size and CFM), or one line (`SD-4 10x6 260 CFM`). A bare number is an airflow
+/// only in a stack under (or over) a mark.
+pub fn tag_block(texts: &[(String, Vec2, String, f64)], i: usize) -> (String, Option<[f64; 2]>, Option<f64>) {
+    let Some((t0, at0, _, h0)) = texts.get(i) else { return (String::new(), None, None) };
+    let h = if h0.is_finite() && *h0 > 0.0 { *h0 } else { 1.0 };
+    let mut mark = t0.split_whitespace().find(|w| is_terminal_tag(w) && !w.to_ascii_uppercase().contains("CFM")).unwrap_or("").to_ascii_uppercase();
+    let mut size = parse_size(t0);
+    let mut cfm = cfm_value(t0);
+    // The lines stacked on it, nearest first: as tall as it, in line with it, a line or two
+    // above or below; a line that is another air device's mark starts another tag.
+    let mut stack: Vec<(f64, &str)> = texts
+        .iter()
+        .enumerate()
+        .filter(|(j, (t, at, _, th))| {
+            *j != i && (at.x - at0.x).abs() <= 3.0 * h && (at.y - at0.y).abs() <= 3.6 * h && (at.y - at0.y).abs() >= 0.5 * h && t.len() <= 24 && {
+                let r = th / h;
+                (0.6..=1.6).contains(&r)
+            }
+        })
+        .map(|(_, (t, at, ..))| ((at.y - at0.y).abs(), t.as_str()))
+        .collect();
+    stack.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, t) in stack.into_iter().take(4) {
+        let other_mark = t.split_whitespace().any(|w| is_terminal_tag(w) && !w.to_ascii_uppercase().contains("CFM"));
+        if other_mark {
+            if mark.is_empty() {
+                mark = t.split_whitespace().find(|w| is_terminal_tag(w)).unwrap_or("").to_ascii_uppercase();
+                continue;
+            }
+            break;
+        }
+        if size.is_none() {
+            size = parse_size(t);
+            if size.is_some() {
+                continue;
+            }
+        }
+        if cfm.is_none() {
+            cfm = cfm_value(t).or_else(|| (!mark.is_empty()).then(|| bare_airflow(t)).flatten());
+        }
+    }
+    (mark, size, cfm)
+}
+
+/// An airflow in a text: `150 CFM`, `CFM: 150`, `1,480CFM`.
+pub fn cfm_value(t: &str) -> Option<f64> {
+    let up = t.to_ascii_uppercase();
+    let at = up.find("CFM")?;
+    let before: String = up.get(..at).unwrap_or("").trim_end().chars().rev().take_while(|c| c.is_ascii_digit() || *c == ',').collect();
+    let before: String = before.chars().rev().filter(|c| *c != ',').collect();
+    let after: String = up.get(at + 3..).unwrap_or("").trim_start_matches([':', '=', ' ']).chars().take_while(char::is_ascii_digit).collect();
+    let n: f64 = if before.is_empty() { after.parse().ok()? } else { before.parse().ok()? };
+    (n.is_finite() && (10.0..=100_000.0).contains(&n)).then_some(n)
+}
+
+/// A line that is only a whole number of an air device's airflow (`260`, `1,480`).
+fn bare_airflow(t: &str) -> Option<f64> {
+    let t = t.trim();
+    if t.is_empty() || !t.chars().all(|c| c.is_ascii_digit() || c == ',') || t.starts_with('0') {
+        return None;
+    }
+    let n: f64 = t.replace(',', "").parse().ok()?;
+    (10.0..=20_000.0).contains(&n).then_some(n)
 }
 
 /// A detected equipment box.
@@ -232,22 +306,56 @@ fn text_entities(d: &Drawing) -> Vec<(String, Vec2, String, f64)> {
     pen_texts(d, false)
 }
 
+/// The most attribute letterings [`pen_texts`] takes from block references (hostile drawings).
+const MAX_ATTRIB_TEXTS: usize = 50_000;
+
 /// [`text_entities`], without the words of a screened background when `bg` (a print's room
 /// names and furniture labels under a trade's plan: [`screened_background`]). A print's hidden
 /// text (its searchable words, never painted) has no pen: it stays.
+///
+/// The visible attribute lettering of the model's block references is printed lettering too:
+/// a PDF import folds a symbol drawn again and again into a block (`PDF-SYM-n`) and keeps the
+/// tag printed beside each one (`RG-7`, `SD-5`) as that reference's attribute, not as text.
+/// An attribute is in its own layer and colour where it has them, else in its reference's.
 fn pen_texts(d: &Drawing, bg: bool) -> Vec<(String, Vec2, String, f64)> {
+    pen_texts_owned(d, bg).into_iter().map(|(t, at, layer, h, _)| (t, at, layer, h)).collect()
+}
+
+/// [`pen_texts`], each with the block reference whose attribute it is (none for text): the
+/// import keeps a symbol's tag with that symbol, so an attribute tags its own symbol only.
+fn pen_texts_owned(d: &Drawing, bg: bool) -> Vec<(String, Vec2, String, f64, Option<cadaddy_doc::Handle>)> {
     let mut out = Vec::new();
+    let mut attribs = 0usize;
     for e in d.model.iter() {
+        if let EntityKind::Insert(ins) = &e.kind {
+            for a in ins.attribs.iter().filter(|a| !a.invisible) {
+                if attribs >= MAX_ATTRIB_TEXTS {
+                    break;
+                }
+                let t = &a.text;
+                let layer = a.props.layer.as_deref().unwrap_or(&e.common.layer);
+                let color = a.props.color.unwrap_or(e.common.color);
+                if (bg && crate::sheet_reader::screened_pen(d, layer, color)) || cadaddy_io::pdf_read::is_ocr_style(&t.style) {
+                    continue;
+                }
+                let at = t.align_pt.unwrap_or(t.insert).xy();
+                if at.is_finite() && !t.value.trim().is_empty() {
+                    attribs += 1;
+                    out.push((t.value.clone(), at, layer.to_string(), t.height, Some(e.handle)));
+                }
+            }
+            continue;
+        }
         if bg && !e.common.layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER) && crate::sheet_reader::screened(d, e) {
             continue;
         }
         if let EntityKind::Text(t) = &e.kind {
-            if t.style.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_TEXT_STYLE) {
+            if cadaddy_io::pdf_read::is_ocr_style(&t.style) {
                 continue;
             }
             let at = t.align_pt.unwrap_or(t.insert).xy();
             if at.is_finite() && !t.value.trim().is_empty() {
-                out.push((t.value.clone(), at, e.common.layer.to_string(), t.height));
+                out.push((t.value.clone(), at, e.common.layer.to_string(), t.height, None));
             }
         }
     }
@@ -810,14 +918,16 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
     };
-    // On a sheet of any layer (a PDF import) every symbol needs its tag beside it.
-    let mut device_rects: Vec<(Vec2, Vec2, bool)> = device_rects.into_iter().map(|(lo, hi, _)| (lo, hi, all_layers)).collect();
+    // On a sheet of any layer (a PDF import) every symbol needs its tag beside it. (Each box
+    // with the block reference it is drawn by, if any: a symbol's attribute tags it alone.)
+    let mut device_rects: Vec<(Vec2, Vec2, bool, Option<cadaddy_doc::Handle>)> =
+        device_rects.into_iter().map(|(lo, hi, _)| (lo, hi, all_layers, None)).collect();
     // A PDF import folds a symbol drawn many times into a block (`PDF-SYM-n`): its box and
     // lines count as drawn where each insert puts them, with its tag beside it. A CAD sheet's
     // device blocks on the DEVICE layer are symbols by their layer.
     let pick = |e: &cadaddy_doc::Entity, block: &str| all_layers || is_pdf_symbol(block) || e.common.layer.eq_ignore_ascii_case("DEVICE");
     let (sym_rects, sym_lines) = insert_geometry(d, &pick);
-    device_rects.extend(sym_rects.into_iter().map(|(lo, hi, block)| (lo, hi, all_layers || is_pdf_symbol(&block))));
+    device_rects.extend(sym_rects.into_iter().map(|(lo, hi, block, owner)| (lo, hi, all_layers || is_pdf_symbol(&block), Some(owner))));
     // The boxes only their outline drawn in pieces makes (an equipment's frame may be one too).
     let mut pieced: Vec<(Vec2, Vec2)> = Vec::new();
     if all_layers {
@@ -830,17 +940,17 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             }
             let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
             if let Some((lo, hi)) = as_box(&pts, p.closed) {
-                device_rects.push((lo, hi, true));
+                device_rects.push((lo, hi, true, None));
             } else if let Some((lo, hi)) = outline_box(&pts, p.closed) {
-                device_rects.push((lo, hi, true));
+                device_rects.push((lo, hi, true, None));
                 pieced.push((lo, hi));
             }
         }
     }
     device_lines.extend(sym_lines.iter().filter(pen_line));
 
-    let mut candidates: Vec<(Vec2, Vec2, &str, bool)> = Vec::new();
-    for (min, max, needs_tag) in &device_rects {
+    let mut candidates: Vec<(Vec2, Vec2, &str, bool, Option<cadaddy_doc::Handle>)> = Vec::new();
+    for (min, max, needs_tag, owner) in &device_rects {
         let w = max.x - min.x;
         let h = max.y - min.y;
 
@@ -891,7 +1001,7 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         } else if has_diag && internal.len() >= 2 {
             // Check for inner rectangle (supply diffuser has one).
             let inner_rects =
-                device_rects.iter().filter(|(mi, ma, _)| mi.x > min.x + 0.5 && ma.x < max.x - 0.5 && mi.y > min.y + 0.5 && ma.y < max.y - 0.5);
+                device_rects.iter().filter(|(mi, ma, ..)| mi.x > min.x + 0.5 && ma.x < max.x - 0.5 && mi.y > min.y + 0.5 && ma.y < max.y - 0.5);
             if inner_rects.count() > 0 || inner_frame(&internal, *min, *max) { "supply_diffuser" } else { "exhaust_grille" }
         } else if has_horiz && internal.len() >= 2 {
             "return_grille"
@@ -899,17 +1009,53 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             continue;
         };
 
-        candidates.push((*min, *max, kind, *needs_tag));
+        candidates.push((*min, *max, kind, *needs_tag, *owner));
     }
-    // Repeated cells of a hatch or pattern (a ceiling grid, tile, louvre or brick fill) are
-    // not air devices: a cell with two or more same-size cells beside it is part of a pattern.
-    let near = pattern_neighbours(&candidates.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>());
     // On a sheet of any layer (a PDF import), a symbol is an air device only with its tag
     // beside it (`CD-1`, `RG-2`, `150 CFM`, as the air device schedule names them).
     // A box drawn in pieces with an equipment mark (`EF` over its number) right by it, nearer
     // than any air device's tag, is that equipment, whatever tag a grille beside it carries.
-    let (tags, equipment_marks): (Vec<(Vec2, f64)>, Vec<Vec2>) = if candidates.iter().any(|c| c.3) {
-        let texts = pen_texts(d, bg);
+    // Every sheet's tags, for what each air device's tag says (its type, size and airflow).
+    // A symbol's attribute is its own tag (the import kept the lettering beside each copy of
+    // the symbol with it): it tags no other box, as a callout bubble's sheet number tags none.
+    let (texts, owners): (Vec<(String, Vec2, String, f64)>, Vec<Option<cadaddy_doc::Handle>>) =
+        pen_texts_owned(d, bg).into_iter().map(|(t, at, layer, h, owner)| ((t, at, layer, h), owner)).unzip();
+    let tags_box = |j: usize, owner: Option<cadaddy_doc::Handle>| owners.get(j).copied().flatten().is_none_or(|o| Some(o) == owner);
+    let tag_ix: Vec<usize> = texts.iter().enumerate().filter(|(_, (t, ..))| is_terminal_tag(t)).map(|(i, _)| i).take(MAX_TERMINALS * 4).collect();
+    // A callout's sheet number and a room's boxed number look like marks: no air device's tag.
+    let boxes: Vec<(Vec2, Vec2)> = candidates.iter().map(|c| (c.0, c.1)).collect();
+    let not_tags = lettering_of_callouts_and_boxes(d, &texts, &owners, &tag_ix, &segs, &boxes);
+    // An attribute is the lettering the import found nearest a copy of the symbol: it is the
+    // symbol's tag when it is an air device's mark by its letters, not a callout's sheet number
+    // or a room's number the symbol happened to stand by (plain lettering by it may be its tag).
+    let tag_ix: Vec<usize> = tag_ix
+        .into_iter()
+        .filter(|j| !not_tags.contains(j))
+        .filter(|j| owners.get(*j).copied().flatten().is_none() || texts.get(*j).is_some_and(|(t, ..)| air_device_mark(t)))
+        .collect();
+    // A symbol the import kept with an air device's mark as its own tag is that air device,
+    // however its face is drawn (a wall register at a duct's end, its outline in strokes): its
+    // box is the symbol's extent, its kind its mark's air system (an attribute left in
+    // `tag_ix` is an air device's mark by its letters).
+    if all_layers {
+        for &j in &tag_ix {
+            let Some(o) = owners.get(j).copied().flatten() else { continue };
+            if candidates.iter().any(|c| c.4 == Some(o)) {
+                continue;
+            }
+            let Some((lo, hi)) = symbol_extent(d, o) else { continue };
+            let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+            if w.max(h) < 0.5 || w > 200.0 || h > 200.0 {
+                continue;
+            }
+            let kind = texts.get(j).map_or("supply_diffuser", |(t, ..)| kind_of_mark(t));
+            candidates.push((lo, hi, kind, true, Some(o)));
+        }
+    }
+    // Repeated cells of a hatch or pattern (a ceiling grid, tile, louvre or brick fill) are
+    // not air devices: a cell with two or more same-size cells beside it is part of a pattern.
+    let near = pattern_neighbours(&candidates.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>());
+    let (tags, equipment_marks): (Vec<(usize, Vec2, f64)>, Vec<Vec2>) = if candidates.iter().any(|c| c.3) {
         let marks = crate::wordrules::words("equipment.marks");
         let equipment_mark = |t: &str| {
             let up = t.trim().to_ascii_uppercase();
@@ -918,13 +1064,15 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             marks.contains(&letters.as_str()) && rest.chars().all(|c| c.is_ascii_digit())
         };
         (
-            texts.iter().filter(|(t, ..)| is_terminal_tag(t)).map(|(_, at, _, h)| (*at, h.max(0.0))).collect(),
+            tag_ix.iter().filter_map(|j| texts.get(*j).map(|(_, at, _, h)| (*j, *at, h.max(0.0)))).collect(),
             texts.iter().filter(|(t, ..)| equipment_mark(t)).map(|(_, at, ..)| *at).take(MAX_TERMINALS).collect(),
         )
     } else {
         (Vec::new(), Vec::new())
     };
-    for (i, (min, max, kind, needs_tag)) in candidates.iter().enumerate() {
+    // Each device read, with the tag it took (and how far from it) where it needed one.
+    let mut read: Vec<(DetectedTerminal, Option<(usize, f64)>)> = Vec::new();
+    for (i, (min, max, kind, needs_tag, owner)) in candidates.iter().enumerate() {
         if near.get(i).copied().unwrap_or(0) >= 2 {
             continue;
         }
@@ -936,8 +1084,9 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         }
         if *needs_tag {
             let size = (max.x - min.x).max(max.y - min.y);
-            let tagged = tags.iter().any(|(at, h)| box_gap(*at, *min, *max) <= size * 1.5 + h * 6.0);
-            let nearest_tag = tags.iter().map(|(at, _)| box_gap(*at, *min, *max)).fold(f64::INFINITY, f64::min);
+            let mine = || tags.iter().filter(|(j, ..)| tags_box(*j, *owner));
+            let tagged = mine().any(|(_, at, h)| box_gap(*at, *min, *max) <= size * 1.5 + h * 6.0);
+            let nearest_tag = mine().map(|(_, at, _)| box_gap(*at, *min, *max)).fold(f64::INFINITY, f64::min);
             let equipment = pieced.iter().any(|(lo, hi)| lo == min && hi == max)
                 && equipment_marks.iter().any(|at| box_gap(*at, *min, *max) < nearest_tag.min(size));
             if !tagged || equipment {
@@ -947,15 +1096,205 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         // One device drawn by two paths (a print's box often comes as two overlapping ones).
         let at = (*min + *max) * 0.5;
         let size = (max.x - min.x).max(max.y - min.y);
-        if terminals.iter().any(|t: &DetectedTerminal| t.kind == *kind && t.at.dist(at) <= 0.25 * size) {
+        if read.iter().any(|(t, _)| t.kind == *kind && t.at.dist(at) <= 0.25 * size) {
             continue;
         }
-        terminals.push(DetectedTerminal { kind: (*kind).into(), at, confidence: 0.7 });
-        if terminals.len() >= MAX_TERMINALS {
+        // Its tag: the nearest air device tag in a tag's reach of it.
+        let reach = |h: f64| size * 1.5 + h.max(0.0) * 6.0;
+        let tag = tag_ix
+            .iter()
+            .filter(|j| tags_box(**j, *owner))
+            .filter_map(|j| texts.get(*j).map(|(_, p, _, h)| (*j, box_gap(*p, *min, *max), *h)))
+            .filter(|(_, gap, h)| *gap <= reach(*h))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(j, gap, _)| (j, gap));
+        let (mark, size_in, cfm) = tag.map(|(j, _)| tag_block(&texts, j)).unwrap_or_default();
+        read.push((DetectedTerminal { kind: (*kind).into(), at, confidence: 0.7, mark, size_in, cfm }, tag.filter(|_| *needs_tag)));
+        if read.len() >= MAX_TERMINALS {
             break;
         }
     }
+    // A tag names one air device: of the boxes that took the same tag (the pieces one symbol
+    // is drawn in, a duct's end or a neighbour's frame beside it), the one nearest the tag is
+    // the device. A tag that says it stands for several (`TYP`, `TYP OF 4`) names each.
+    let mut nearest: BTreeMap<usize, (usize, f64)> = BTreeMap::new();
+    for (k, (_, tag)) in read.iter().enumerate() {
+        if let Some((j, gap)) = tag
+            && nearest.get(j).is_none_or(|(_, g)| gap < g)
+        {
+            nearest.insert(*j, (k, *gap));
+        }
+    }
+    for (k, (t, tag)) in read.into_iter().enumerate() {
+        let named = tag.is_none_or(|(j, _)| nearest.get(&j).is_some_and(|(first, _)| *first == k) || tag_says_several(&texts, j));
+        if named {
+            terminals.push(t);
+        }
+    }
     terminals
+}
+
+/// The extent of the PDF symbol block reference `o` (a `PDF-SYM-n` of at most 64 pieces), where
+/// it is placed.
+fn symbol_extent(d: &Drawing, o: cadaddy_doc::Handle) -> Option<(Vec2, Vec2)> {
+    let e = d.model.get(o)?;
+    let EntityKind::Insert(ins) = &e.kind else { return None };
+    if !is_pdf_symbol(&ins.block) || ins.cols > 1 || ins.rows > 1 {
+        return None;
+    }
+    let block = d.block(&ins.block)?;
+    if block.entities.len() > 64 {
+        return None;
+    }
+    let (base, at, sc, (sn, cs)) = (block.base.xy(), ins.insert.xy(), ins.scale, ins.rotation.sin_cos());
+    let place = |p: Vec2| {
+        let q = Vec2::new((p.x - base.x) * sc.x, (p.y - base.y) * sc.y);
+        Vec2::new(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs)
+    };
+    let mut pts: Vec<Vec2> = Vec::new();
+    for be in block.entities.iter() {
+        match &be.kind {
+            EntityKind::Line(l) => pts.extend([place(l.a.xy()), place(l.b.xy())]),
+            EntityKind::LwPolyline(p) => pts.extend(p.vertices.iter().map(|v| place(v.p))),
+            EntityKind::Circle(c) => {
+                let r = c.radius * sc.x.abs().max(sc.y.abs());
+                let m = place(c.center.xy());
+                pts.extend([Vec2::new(m.x - r, m.y - r), Vec2::new(m.x + r, m.y + r)]);
+            }
+            _ => {}
+        }
+    }
+    let pts: Vec<Vec2> = pts.into_iter().filter(|p| p.is_finite()).collect();
+    let lo = Vec2::new(pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min), pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min));
+    let hi = Vec2::new(pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max));
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
+/// Whether `mark` (`SD-5`, `RG7`) is an air device's by its letters (rule data
+/// `equipment.air_device_system`).
+fn air_device_mark(mark: &str) -> bool {
+    let letters: String = mark.trim().to_ascii_uppercase().chars().take_while(char::is_ascii_alphabetic).collect();
+    is_terminal_tag(mark) && crate::wordrules::pair_value("equipment.air_device_system", &letters).is_some()
+}
+
+/// An air device's kind by its mark's letters and the air system they name (rule data
+/// `equipment.air_device_system`: `SD` supply, `RG` return, `EG` exhaust); supply otherwise.
+fn kind_of_mark(mark: &str) -> &'static str {
+    let letters: String = mark.trim().to_ascii_uppercase().chars().take_while(char::is_ascii_alphabetic).collect();
+    match crate::wordrules::pair_value("equipment.air_device_system", &letters) {
+        Some("RA") => "return_grille",
+        Some("EA") => "exhaust_grille",
+        _ => "supply_diffuser",
+    }
+}
+
+/// The most round outlines [`lettering_of_callouts_and_boxes`] looks at (hostile drawings).
+const MAX_ROUND_LOOK: usize = 20_000;
+
+/// Of the lettering `ix` that looks like air device marks, what is a callout's or a room's
+/// (drafting convention), by its index in `texts`:
+/// - lettering in a callout bubble, a round outline with a divider across its middle (detail
+///   over sheet, `3` over `X-6`), drawn on the sheet or in the lettering's own symbol (a PDF
+///   import folds a bubble drawn again and again into one, its sheet number its attribute);
+/// - lettering in a closed box drawn just around it, no air device's symbol (`boxes`): a room's
+///   number (`C-07` under its name) or a door's.
+fn lettering_of_callouts_and_boxes(
+    d: &Drawing,
+    texts: &[(String, Vec2, String, f64)],
+    owners: &[Option<cadaddy_doc::Handle>],
+    ix: &[usize],
+    segs: &[LineSeg],
+    boxes: &[(Vec2, Vec2)],
+) -> std::collections::BTreeSet<usize> {
+    let mut out = std::collections::BTreeSet::new();
+    if ix.is_empty() {
+        return out;
+    }
+    // A bubble: a round outline, and a straight piece across its middle, level, from side to side.
+    let split = |c: Vec2, r: f64, lines: &[(Vec2, Vec2)]| {
+        lines.iter().any(|(a, b)| {
+            let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+            (a.y - b.y).abs() <= 0.1 * r
+                && ((a.y + b.y) * 0.5 - c.y).abs() <= 0.35 * r
+                && lo <= c.x - 0.6 * r
+                && hi >= c.x + 0.6 * r
+                && hi - lo <= 2.6 * r
+        })
+    };
+    let rounds: Vec<(Vec2, f64)> = d
+        .model
+        .iter()
+        .filter_map(|e| crate::sheet_reader::round_shape(&e.kind))
+        .map(|(c, r)| (Vec2::new(c[0], c[1]), r))
+        .take(MAX_ROUND_LOOK)
+        .collect();
+    let frames = rectangles_all(d);
+    // The sheet's level straight pieces (a bubble's divider is one).
+    let level: Vec<(Vec2, Vec2)> = segs.iter().filter(|s| (s.a.y - s.b.y).abs() <= 0.02 * (s.a.x - s.b.x).abs()).map(|s| (s.a, s.b)).collect();
+    for &j in ix {
+        let Some((t, at, _, h)) = texts.get(j) else { continue };
+        let h = h.max(1e-6);
+        let w = 0.7 * h * t.trim().chars().count() as f64;
+        let mid = Vec2::new(at.x + 0.5 * w, at.y + 0.5 * h);
+        let in_bubble = |c: Vec2, r: f64| mid.dist(c) < r && r < 8.0 * h;
+        // The bubbles drawn on the sheet.
+        let mut callout = rounds.iter().filter(|(c, r)| in_bubble(*c, *r)).any(|(c, r)| split(*c, *r, &level));
+        // The bubble of the lettering's own symbol.
+        if !callout
+            && let Some(o) = owners.get(j).copied().flatten()
+            && let Some(e) = d.model.get(o)
+            && let EntityKind::Insert(ins) = &e.kind
+            && let Some(block) = d.block(&ins.block)
+        {
+            let (base, p0, sc, (sn, cs)) = (block.base.xy(), ins.insert.xy(), ins.scale, ins.rotation.sin_cos());
+            let place = |p: Vec2| {
+                let q = Vec2::new((p.x - base.x) * sc.x, (p.y - base.y) * sc.y);
+                Vec2::new(p0.x + q.x * cs - q.y * sn, p0.y + q.x * sn + q.y * cs)
+            };
+            let k = sc.x.abs().max(sc.y.abs());
+            let lines: Vec<(Vec2, Vec2)> = block
+                .entities
+                .iter()
+                .take(64)
+                .flat_map(|be| match &be.kind {
+                    EntityKind::Line(l) => vec![(place(l.a.xy()), place(l.b.xy()))],
+                    EntityKind::LwPolyline(p) => p.vertices.windows(2).map(|w| (place(w[0].p), place(w[1].p))).collect(),
+                    _ => Vec::new(),
+                })
+                .collect();
+            callout = block.entities.iter().take(64).filter_map(|be| crate::sheet_reader::round_shape(&be.kind)).any(|(c, r)| {
+                let (c, r) = (place(Vec2::new(c[0], c[1])), r * k);
+                in_bubble(c, r) && split(c, r, &lines)
+            });
+        }
+        let boxed = frames.iter().any(|(lo, hi, _)| {
+            let (bw, bh) = (hi.x - lo.x, hi.y - lo.y);
+            mid.x > lo.x
+                && mid.x < hi.x
+                && mid.y > lo.y
+                && mid.y < hi.y
+                && bw >= 0.5 * w
+                && bw <= w + 3.0 * h
+                && bh >= h
+                && bh <= 3.0 * h
+                && !boxes.iter().any(|(a, b)| a.dist(*lo) < 1e-6 && b.dist(*hi) < 1e-6)
+        });
+        if callout || boxed {
+            out.insert(j);
+        }
+    }
+    out
+}
+
+/// Whether the air device tag `i` says it stands for several devices: `TYP` (typical) in its
+/// own lettering or in a line of its stack (`TYP`, `(TYP OF 4)`, `TYP. 3 PLACES`).
+fn tag_says_several(texts: &[(String, Vec2, String, f64)], i: usize) -> bool {
+    let Some((_, at, _, h)) = texts.get(i) else { return false };
+    let h = h.max(1e-6);
+    texts.iter().any(|(t, p, _, oh)| {
+        let typ = t.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphabetic()).any(|w| w == "TYP" || w == "TYPICAL");
+        typ && (oh - h).abs() <= 0.5 * h && (p.y - at.y).abs() <= 4.0 * h && p.x > at.x - 10.0 * h && p.x < at.x + 12.0 * h
+    })
 }
 
 /// The most inserts whose blocks [`insert_geometry`] looks into.
@@ -969,7 +1308,7 @@ fn is_pdf_symbol(block: &str) -> bool {
 /// The closed four-sided boxes (with their block's name) and straight lines of each picked
 /// (`pick(layer, block)`) model-space insert's block, where the insert puts them (one level deep; arrays and blocks of more than 64 objects are left
 /// out: a symbol is a few strokes).
-fn insert_geometry(d: &Drawing, pick: &dyn Fn(&cadaddy_doc::Entity, &str) -> bool) -> (Vec<(Vec2, Vec2, String)>, Vec<LineSeg>) {
+fn insert_geometry(d: &Drawing, pick: &dyn Fn(&cadaddy_doc::Entity, &str) -> bool) -> (Vec<(Vec2, Vec2, String, cadaddy_doc::Handle)>, Vec<LineSeg>) {
     let (mut rects, mut lines) = (Vec::new(), Vec::new());
     for e in d.model.iter() {
         let EntityKind::Insert(ins) = &e.kind else { continue };
@@ -1004,7 +1343,7 @@ fn insert_geometry(d: &Drawing, pick: &dyn Fn(&cadaddy_doc::Entity, &str) -> boo
                         continue;
                     }
                     if let Some((lo, hi)) = as_box(&pts, p.closed).or_else(|| outline_box(&pts, p.closed)) {
-                        rects.push((lo, hi, ins.block.clone()));
+                        rects.push((lo, hi, ins.block.clone(), e.handle));
                     }
                     let n = pts.len();
                     let m = if p.closed { n } else { n.saturating_sub(1) };
@@ -1254,11 +1593,10 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
                     && !t.split_whitespace().any(|w| w.eq_ignore_ascii_case("ROOM"))
                     && !names_a_room(&texts, *j)
             })
-            .map(|(_, t)| t)
-            .min_by(|(_, a, _, _), (_, b, _, _)| a.dist(center).total_cmp(&b.dist(center)));
+            .min_by(|(_, (_, a, _, _)), (_, (_, b, _, _))| a.dist(center).total_cmp(&b.dist(center)));
 
         let (tag_text, kind) = match tag {
-            Some((t, _, _, _)) => {
+            Some((j, (t, _, _, _))) => {
                 let up = t.to_ascii_uppercase();
                 // A `word:` entry is a whole word of the tag, any other a part of it.
                 let has = |w: &str| match w.strip_prefix("word:") {
@@ -1273,7 +1611,13 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
                 } else {
                     "unknown"
                 };
-                (t.clone(), k.to_string())
+                // Its letters with its number printed under them (`AHU` over `1`) are the
+                // whole tag, as the text-only reading below takes them: one tag, not two.
+                let t = match stacked_number(&texts, j) {
+                    Some((n, _)) => format!("{}-{n}", t.trim().trim_end_matches(['-', ' '])),
+                    None => t.clone(),
+                };
+                (t, k.to_string())
             }
             None => continue,
         };
@@ -2432,6 +2776,21 @@ mod tests {
     }
 
     #[test]
+    fn a_boxed_unit_tagged_letters_over_number_is_one_unit_by_its_whole_tag() {
+        // A unit's outline (60 x 36) with its tag inside it, `AHU` over `1` (Q6579): the box's
+        // reading and the text-only reading are one unit, `AHU-1`, not `AHU` and `AHU-1`.
+        let mut p = Print::new().with_both_pens();
+        let corners = [[300.0, 300.0], [360.0, 300.0], [360.0, 336.0], [300.0, 336.0]];
+        let vertices = corners.iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
+        let outline = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+        p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), outline).expect("unit");
+        p.text(false, "TEXT", "AHU", [326.0, 318.0], 4.0);
+        p.text(false, "TEXT", "1", [329.0, 311.0], 4.0);
+        let got: Vec<(String, String)> = detect_equipment(&p.d, true, false).iter().map(|e| (e.kind.clone(), e.tag.clone())).collect();
+        assert_eq!(got, [("ahu".to_string(), "AHU-1".to_string())]);
+    }
+
+    #[test]
     fn a_grille_needs_its_tag_on_a_pdf_sheet() {
         // Two grilles 10 ft apart: one with its tag and airflow beside it, one with nothing.
         let texts = [("RG-1", [40.0, 4.0]), ("150 CFM", [40.0, -6.0])];
@@ -2447,6 +2806,221 @@ mod tests {
         // A CAD sheet's device layer is symbols by layer: no tag needed.
         let d = grille_sheet("DEVICE", &[[0.0, 0.0], [120.0, 0.0]], false, &[]);
         assert_eq!(detect_terminals(&d, false, false).len(), 2);
+    }
+
+    #[test]
+    fn a_grille_keeps_what_its_tag_says_its_type_size_and_airflow() {
+        // Three ways a plan tags an air device: the legend's stack of mark, neck size and a bare
+        // airflow (under it, or over it); one line with the airflow in CFM; a mark alone.
+        let texts = [
+            ("SD-4", [40.0, 4.0]),
+            ("10\"x6\"", [39.0, -1.0]),
+            ("260", [41.0, -6.0]),
+            ("1,480", [436.0, 10.0]),
+            ("RG-1", [440.0, 4.0]),
+            ("10\"Ø", [440.0, -1.0]),
+            ("EG-3 6x6 75 CFM", [840.0, 4.0]),
+            ("CD-4", [1240.0, 4.0]),
+        ];
+        let d = grille_sheet("M-HVAC", &[[0.0, 0.0], [400.0, 0.0], [800.0, 0.0], [1200.0, 0.0]], true, &texts);
+        let mut got: Vec<(String, Option<[f64; 2]>, Option<f64>)> =
+            detect_terminals(&d, true, false).into_iter().map(|t| (t.mark, t.size_in, t.cfm)).collect();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            got,
+            vec![
+                ("CD-4".to_string(), None, None),
+                ("EG-3".to_string(), Some([6.0, 6.0]), Some(75.0)),
+                ("RG-1".to_string(), Some([10.0, 0.0]), Some(1480.0)),
+                ("SD-4".to_string(), Some([10.0, 6.0]), Some(260.0)),
+            ]
+        );
+    }
+
+    /// A print's grille folded by the PDF import into a symbol block (`PDF-SYM-n`, a box with
+    /// bars across it), placed at `at` with `tag` as its attribute (`grey`: in the screened pen;
+    /// `hidden`: an invisible attribute).
+    fn symbol_grille(d: &mut Drawing, at: [f64; 2], tag: Option<(&str, [f64; 2], bool, bool)>) {
+        let name = "PDF-SYM-7";
+        if !d.blocks.contains_key(name) {
+            let mut b = cadaddy_doc::Block::new(name);
+            let h = 12.0;
+            let corners = [[-h, -h], [h, -h], [h, h], [-h, h]];
+            let vertices = corners.iter().map(|p| cadaddy_geom::PolyVertex::new(Vec2::new(p[0], p[1]))).collect();
+            let kind = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+            b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: cadaddy_doc::Common::default(), kind });
+            for k in [-0.5, 0.0, 0.5] {
+                let kind =
+                    EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(-h, k * h, 0.0), b: cadaddy_geom::Vec3::new(h, k * h, 0.0) });
+                b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: cadaddy_doc::Common::default(), kind });
+            }
+            d.blocks.insert(name.into(), std::sync::Arc::new(b));
+        }
+        symbol_insert(d, name, at, tag);
+    }
+
+    /// A reference to the symbol block `name` at `at`, with `tag` as its attribute (as in
+    /// [`symbol_grille`]).
+    fn symbol_insert(d: &mut Drawing, name: &str, at: [f64; 2], tag: Option<(&str, [f64; 2], bool, bool)>) {
+        let attribs = tag
+            .map(|(v, p, grey, hidden)| cadaddy_doc::Attrib {
+                tag: "TAG".into(),
+                text: cadaddy_doc::Text {
+                    insert: cadaddy_geom::Vec3::new(p[0], p[1], 0.0),
+                    align_pt: None,
+                    height: 4.0,
+                    value: v.into(),
+                    rotation: 0.0,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: cadaddy_doc::HAlign::Left,
+                    valign: cadaddy_doc::VAlign::Baseline,
+                },
+                invisible: hidden,
+                constant: false,
+                prompt: String::new(),
+                props: cadaddy_doc::AttribProps {
+                    color: grey.then_some(cadaddy_color::Color::True(cadaddy_color::Rgb(171, 171, 171))),
+                    ..Default::default()
+                },
+                multiline: None,
+                modes: cadaddy_doc::AttribModes::default(),
+            })
+            .into_iter()
+            .collect();
+        let ins = cadaddy_doc::Insert {
+            block: name.into(),
+            insert: cadaddy_geom::Vec3::new(at[0], at[1], 0.0),
+            scale: cadaddy_geom::Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs,
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        };
+        let common = cadaddy_doc::Common { layer: "PDF-GEOMETRY".into(), ..Default::default() };
+        d.add(&cadaddy_doc::Space::Model, common, EntityKind::Insert(ins)).expect("insert");
+    }
+
+    /// The tags of grilles a PDF import folded into a symbol are the symbols' attributes: each
+    /// grille is read with its tag (its mark, and the size and airflow printed under it as
+    /// lettering). A symbol with no tag, an invisible attribute or, over a screened background,
+    /// a grey one (the architecture's lettering) has no tag.
+    #[test]
+    fn a_symbols_tag_kept_as_its_attribute_is_its_tag() {
+        let mut p = Print::new().with_both_pens();
+        symbol_grille(&mut p.d, [0.0, 0.0], Some(("RG-7", [16.0, 4.0], false, false)));
+        symbol_grille(&mut p.d, [400.0, 0.0], Some(("SD-4", [416.0, 4.0], false, false)));
+        p.text(false, "TEXT", "10\"x6\"", [415.0, -1.0], 4.0);
+        p.text(false, "TEXT", "260", [417.0, -6.0], 4.0);
+        symbol_grille(&mut p.d, [800.0, 0.0], None);
+        symbol_grille(&mut p.d, [1200.0, 0.0], Some(("RG-2", [1216.0, 4.0], false, true)));
+        symbol_grille(&mut p.d, [1600.0, 0.0], Some(("RG-3", [1616.0, 4.0], true, false)));
+        // A grille drawn as plain linework beside a callout bubble the import folded into a
+        // symbol (its circle and divider, the sheet number `X-6` as its attribute): the bubble's
+        // attribute is the bubble's, no tag of the grille.
+        p.barred_box(false, [2000.0, 0.0], 12.0);
+        let mut bubble = cadaddy_doc::Block::new("PDF-SYM-8");
+        let circle = EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::ZERO, radius: 8.0 });
+        bubble.entities.push(cadaddy_doc::Entity { handle: p.d.new_handle(), common: cadaddy_doc::Common::default(), kind: circle });
+        let divider = EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(-8.0, 0.0, 0.0), b: cadaddy_geom::Vec3::new(8.0, 0.0, 0.0) });
+        bubble.entities.push(cadaddy_doc::Entity { handle: p.d.new_handle(), common: cadaddy_doc::Common::default(), kind: divider });
+        p.d.blocks.insert("PDF-SYM-8".into(), std::sync::Arc::new(bubble));
+        symbol_insert(&mut p.d, "PDF-SYM-8", [2030.0, 0.0], Some(("X-6", [2024.0, -6.0], false, false)));
+        let mut got: Vec<(String, [f64; 2], String, Option<[f64; 2]>, Option<f64>)> =
+            detect_terminals(&p.d, true, false).into_iter().map(|t| (t.kind, [t.at.x.round(), t.at.y.round()], t.mark, t.size_in, t.cfm)).collect();
+        got.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]));
+        assert_eq!(
+            got,
+            vec![
+                ("return_grille".to_string(), [0.0, 0.0], "RG-7".to_string(), None, None),
+                ("return_grille".to_string(), [400.0, 0.0], "SD-4".to_string(), Some([10.0, 6.0]), Some(260.0)),
+            ]
+        );
+    }
+
+    /// A tag names one air device: two grilles' boxes beside one tag are one grille, the box
+    /// nearest the tag (the other a piece of it or a neighbour's); a tag that says `TYP` names
+    /// each of them.
+    #[test]
+    fn a_tag_names_one_air_device_unless_typical() {
+        let mut p = Print::new().with_both_pens();
+        p.barred_box(false, [0.0, 0.0], 8.0);
+        p.barred_box(false, [20.0, 0.0], 8.0);
+        p.text(false, "TEXT", "RG-7", [-4.0, 12.0], 4.0);
+        p.barred_box(false, [600.0, 0.0], 8.0);
+        p.barred_box(false, [620.0, 0.0], 8.0);
+        p.text(false, "TEXT", "RG-2", [604.0, 12.0], 4.0);
+        p.text(false, "TEXT", "(TYP)", [604.0, 17.0], 4.0);
+        let mut got: Vec<(String, [f64; 2])> =
+            detect_terminals(&p.d, true, false).into_iter().map(|t| (t.mark, [t.at.x.round(), t.at.y.round()])).collect();
+        got.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]));
+        assert_eq!(got, vec![("RG-7".to_string(), [0.0, 0.0]), ("RG-2".to_string(), [600.0, 0.0]), ("RG-2".to_string(), [620.0, 0.0])]);
+    }
+
+    /// A symbol the import kept with an air device's mark as its tag is that device however its
+    /// face is drawn (a wall register: a plain box at a duct's end, no bars). Lettering in a
+    /// callout bubble (`3` over `X-6`) and a room's boxed number (`C-07`) look like marks but
+    /// tag no grille beside them.
+    #[test]
+    fn a_tagged_register_is_read_and_callouts_and_room_numbers_tag_nothing() {
+        let mut p = Print::new().with_both_pens();
+        let mut reg = cadaddy_doc::Block::new("PDF-SYM-9");
+        let vertices =
+            [[-2.0, -8.0], [2.0, -8.0], [2.0, 8.0], [-2.0, 8.0]].iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
+        let face = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+        reg.entities.push(cadaddy_doc::Entity { handle: p.d.new_handle(), common: cadaddy_doc::Common::default(), kind: face });
+        p.d.blocks.insert("PDF-SYM-9".into(), std::sync::Arc::new(reg));
+        symbol_insert(&mut p.d, "PDF-SYM-9", [0.0, 0.0], Some(("SD-5", [-30.0, 20.0], false, false)));
+        p.text(false, "TEXT", "14\"x6\"", [-31.0, 15.0], 4.0);
+        p.text(false, "TEXT", "350", [-29.0, 10.0], 4.0);
+        // A grille, a callout bubble drawn on the sheet just by it.
+        p.barred_box(false, [400.0, 0.0], 8.0);
+        let bubble = EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(425.0, 0.0, 0.0), radius: 9.0 });
+        p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), bubble).expect("bubble");
+        p.line(false, [416.0, 0.0], [434.0, 0.0]);
+        p.text(false, "TEXT", "3", [423.5, 2.0], 4.0);
+        p.text(false, "TEXT", "X-6", [420.8, -6.0], 4.0);
+        // A grille the import kept with a callout's sheet number nearest it as its attribute,
+        // its own tag printed a little farther off: the tag is its.
+        symbol_grille(&mut p.d, [1200.0, 0.0], Some(("X-7", [1214.0, -2.0], false, false)));
+        p.text(false, "TEXT", "RG-5", [1216.0, 9.0], 4.0);
+        // A grille, a room's number in its box just by it.
+        p.barred_box(false, [800.0, 0.0], 8.0);
+        let vertices =
+            [[812.0, -3.0], [830.0, -3.0], [830.0, 6.0], [812.0, 6.0]].iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
+        let tag_box = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+        p.d.add(&cadaddy_doc::Space::Model, Print::common(true, "PDF-GEOMETRY"), tag_box).expect("tag box");
+        p.text(false, "TEXT", "C-07", [813.0, -1.0], 4.0);
+        let mut got: Vec<(String, [f64; 2], String, Option<[f64; 2]>, Option<f64>)> =
+            detect_terminals(&p.d, true, false).into_iter().map(|t| (t.kind, [t.at.x.round(), t.at.y.round()], t.mark, t.size_in, t.cfm)).collect();
+        got.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]));
+        assert_eq!(
+            got,
+            vec![
+                ("supply_diffuser".to_string(), [0.0, 0.0], "SD-5".to_string(), Some([14.0, 6.0]), Some(350.0)),
+                ("return_grille".to_string(), [1200.0, 0.0], "RG-5".to_string(), None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bare_number_is_an_airflow_only_in_a_marks_stack() {
+        let t = |v: &[(&str, [f64; 2])]| -> Vec<(String, Vec2, String, f64)> {
+            v.iter().map(|(s, at)| ((*s).to_string(), Vec2::new(at[0], at[1]), String::new(), 4.0)).collect()
+        };
+        // A room number under an airflow line is no airflow of a mark; a number far below the
+        // mark is not its tag's.
+        assert_eq!(tag_block(&t(&[("150 CFM", [0.0, 0.0]), ("917", [0.0, -5.0])]), 0), (String::new(), None, Some(150.0)));
+        assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("300", [0.0, -40.0])]), 0), ("SD-1".to_string(), None, None));
+        assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("0300", [0.0, -5.0])]), 0).2, None);
+        // The next tag's mark ends the stack: its airflow is not this one's.
+        assert_eq!(tag_block(&t(&[("SD-1", [0.0, 0.0]), ("RG-2", [0.0, -5.0]), ("200", [0.0, -10.0])]), 0).2, None);
+        assert_eq!(cfm_value("CFM: 200"), Some(200.0));
+        assert_eq!(cfm_value("1,200 CFM"), Some(1200.0));
     }
 
     #[test]

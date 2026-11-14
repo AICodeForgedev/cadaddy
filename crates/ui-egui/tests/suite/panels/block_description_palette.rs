@@ -11,6 +11,8 @@ use serde_json::json;
 /// Block "Door", described "Hinged door", open in the Block Editor.
 fn palettes() -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    // The palettes view drawn directly shows while its switch is on (off by default: the rail).
+    app.ui.show_palettes = true;
     let l = app.run("line", json!({ "points": [[0, 0], [2, 0]] })).unwrap();
     app.run("block", json!({ "name": "Door", "base": [0, 0], "handles": l["handles"], "description": "Hinged door" })).unwrap();
     app.run("bedit", json!({ "name": "Door" })).unwrap();

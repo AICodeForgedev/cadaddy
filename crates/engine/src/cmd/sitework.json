@@ -28,7 +28,8 @@
     "area_ratio_max": 1.4,
     "scale_tolerance": 0.2,
     "on_wall_ft": 3.0,
-    "source": "the building outline the site plan draws, laid on the model's footprint: turned square to the model by its longest walls, the turn its walls' best fit, centred on the footprint; when the outline and the footprint differ in size the site plan is placed by its outline's centre and said so"
+    "on_wall_min": 0.5,
+    "source": "the building outline the site plan draws, laid on the model's footprint: turned square to the model by its longest walls, the turn its walls' best fit, centred on the footprint; it counts as laid on the building only when at least on_wall_min of its corners land within on_wall_ft of the model's walls (on a paper-size sheet the scale is solved to make the sizes equal, so the size is no test there); when the outline and the footprint differ in size, or its corners miss the walls, the site plan is placed by its outline's centre and said so"
   },
   "equipment": [
     {"kind": "transformer", "words": ["TRANSFORMER", "XFMR"], "height_in": 66.0, "max_ft": 16.0},

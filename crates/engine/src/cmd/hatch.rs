@@ -40,6 +40,14 @@ pub(super) fn outline_tol(ext: Bounds2) -> f64 {
     (ext.width() + ext.height()).max(1e-9) / 20000.0
 }
 
+/// Whether an object bounds an area: shown by its own flag and its layer (on, thawed) and, with
+/// `isolation`, not hidden by object isolation. HATCH and BOUNDARY trace what the view shows; the
+/// model's traces ([`loops_at_lazy`]: rooms, ceilings) read the drawing, and a view's isolation
+/// (HIDEOBJECTS, a clash shown alone) hides no wall from them.
+fn bounds_areas(d: &Drawing, e: &Entity, isolation: bool) -> bool {
+    if isolation { d.is_visible(e) } else { e.common.visible && d.layer(&e.common.layer).is_none_or(cadaddy_doc::Layer::visible) }
+}
+
 /// Tessellated outlines of every visible curve in the space (hatch boundary candidates), each
 /// with the handle of the object it came from.
 fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> (Vec<Vec<Vec2>>, Vec<Handle>) {
@@ -240,7 +248,8 @@ pub(crate) fn island_style(t: &str) -> Option<u8> {
 
 /// Every object's outline in one space, made once: for finding many boundaries in the same
 /// drawing (one per room name on a plan) without outlining every object again for each search
-/// window of each point. What a window holds is exactly what [`outlines`] gives for it.
+/// window of each point. What a window holds is exactly what [`outlines`] gives for it, objects
+/// hidden by object isolation included ([`bounds_areas`]).
 pub(crate) struct Outlines {
     space: Space,
     ext: Bounds2,
@@ -268,6 +277,17 @@ pub(crate) struct Outlines {
     searches: std::cell::RefCell<std::collections::HashMap<Vec<usize>, std::rc::Rc<WindowSearch>>>,
     /// The outline points the kept searches were made from (what their memory follows).
     searches_points: std::cell::Cell<usize>,
+    /// Searches of larger windows on a grid ([`Outlines::shared_search`]), by window size and
+    /// cell; None: that window can't answer (too dense, or its ends not all snapped).
+    shared: std::cell::RefCell<std::collections::HashMap<(u64, i64, i64), Option<std::rc::Rc<WindowSearch>>>>,
+    /// The kept shared searches oldest first, and the outline points they were made from.
+    shared_order: std::cell::RefCell<std::collections::VecDeque<((u64, i64, i64), usize)>>,
+    shared_points: std::cell::Cell<usize>,
+    /// Window searches made so far, and how many of them were shared ones.
+    made: std::cell::Cell<(usize, usize)>,
+    /// Whether shared searches answer big windows (always; off only to test them against each
+    /// window's own search).
+    share: bool,
 }
 
 /// A window's outlines' owners, and its search ([`cadaddy_geom::region::Searcher`]).
@@ -281,6 +301,15 @@ struct WindowSearch {
 const WINDOW_SEARCHES_KEPT: usize = 256;
 const WINDOW_SEARCH_POINTS_KEPT: usize = 500_000;
 
+/// Shared window searches kept at once, and the outline points they may be made from in all:
+/// past either, the oldest are let go.
+const SHARED_SEARCHES_KEPT: usize = 512;
+const SHARED_SEARCH_POINTS_KEPT: usize = 1_500_000;
+
+/// The fewest items a window holds for a shared search to answer it: a smaller window is
+/// searched alone at once (what a shared one saves is the work on the many items of a big one).
+const SHARED_MIN_ITEMS: usize = 200;
+
 impl Outlines {
     pub(crate) fn new(s: &Session) -> Result<Outlines> {
         let d = s.doc()?;
@@ -290,7 +319,8 @@ impl Outlines {
         let mut items = Vec::new();
         if let Some(store) = d.space(&space) {
             for e in store.iter() {
-                if !d.is_visible(e) || matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Dimension(_))
+                if !bounds_areas(d, e, false)
+                    || matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Dimension(_))
                 {
                     continue;
                 }
@@ -305,7 +335,7 @@ impl Outlines {
         }
         let mut objects = Vec::new();
         if let Some(store) = d.space(&space) {
-            for e in store.iter().filter(|e| d.is_visible(e)) {
+            for e in store.iter().filter(|e| bounds_areas(d, e, false)) {
                 objects.push((entity_bounds(d, e, 0), e.handle));
             }
         }
@@ -333,7 +363,77 @@ impl Outlines {
             any_infinite,
             searches: Default::default(),
             searches_points: Default::default(),
+            shared: Default::default(),
+            shared_order: Default::default(),
+            shared_points: Default::default(),
+            made: Default::default(),
+            share: true,
         })
+    }
+
+    /// Window searches made so far, and how many of them were shared ([`Outlines::shared_search`]).
+    pub(crate) fn searches_made(&self) -> (usize, usize) {
+        self.made.get()
+    }
+
+    /// One more window search made (`shared`: a shared one).
+    fn count_made(&self, shared: bool) {
+        let (n, k) = self.made.get();
+        self.made.set((n.saturating_add(1), k.saturating_add(usize::from(shared))));
+    }
+
+    /// The search of a larger window holding the window `r` each way round `p`, made once for
+    /// every point near `p`: the window three cells of `r` wide, on a grid of cells `r` wide from
+    /// the drawing's corner, round the cell `p` is in (it holds `p`'s window whole). A room trace
+    /// searches each of its names from up to a dozen points, in windows doubling to its reach,
+    /// and each point's windows are its own: the names of a plan whose rooms don't close (a door
+    /// drawn as its swing alone) searched windows a plan wing wide again for every point (most of
+    /// the minutes a print set's trace took, Q6388). With every end snapped the same way in any
+    /// window holding what lies near it ([`cadaddy_geom::region::snap_ends_local`]) and no gaps
+    /// bridged (`gap` within `tol`: a bridge is the nearest of all the window's ends), the larger
+    /// window's area round `p` is the window's own whenever it lies inside the window, and reaches
+    /// out of the window whenever the window's does ([`loops_at_with`]). None: a window can't be
+    /// answered so (gaps bridged, too dense, or its ends not all snapped).
+    fn shared_search(&self, p: Vec2, r: f64, snap: f64, tol: f64, gap: f64) -> Option<std::rc::Rc<WindowSearch>> {
+        if gap > tol || !(r.is_finite() && r > 0.0) || !p.is_finite() || self.ext.is_empty() {
+            return None;
+        }
+        let o = self.ext.min;
+        let (i, j) = (((p.x - o.x) / r).floor(), ((p.y - o.y) / r).floor());
+        // A point vastly off the drawing (no cell worth keeping).
+        if !(i.abs() < 1e9 && j.abs() < 1e9) {
+            return None;
+        }
+        let key = (r.to_bits(), i as i64, j as i64);
+        if let Some(kept) = self.shared.borrow().get(&key) {
+            return kept.clone();
+        }
+        let window = Bounds2::new(Vec2::new(o.x + (i - 1.0) * r, o.y + (j - 1.0) * r), Vec2::new(o.x + (i + 2.0) * r, o.y + (j + 2.0) * r));
+        let picked = self.picked(&window);
+        let (polys, owners) = self.outlines_of(&picked);
+        let made = cadaddy_geom::region::snap_ends_local(&polys, snap, tol).and_then(|polys| {
+            let points: usize = polys.iter().map(Vec::len).sum();
+            let searcher = cadaddy_geom::region::Searcher::new(&polys, tol, gap);
+            self.count_made(true);
+            (!searcher.is_complex()).then(|| (std::rc::Rc::new(WindowSearch { owners, searcher }), points))
+        });
+        let points = made.as_ref().map_or(0, |(_, n)| *n);
+        let made = made.map(|(m, _)| m);
+        if points > SHARED_SEARCH_POINTS_KEPT {
+            return made;
+        }
+        let mut shared = self.shared.borrow_mut();
+        let mut order = self.shared_order.borrow_mut();
+        while !order.is_empty() && (order.len() >= SHARED_SEARCHES_KEPT || self.shared_points.get() + points > SHARED_SEARCH_POINTS_KEPT) {
+            if let Some((old, n)) = order.pop_front() {
+                shared.remove(&old);
+                self.shared_points.set(self.shared_points.get().saturating_sub(n));
+            }
+        }
+        shared.insert(key, made.clone());
+        order.push_back((key, points));
+        self.shared_points.set(self.shared_points.get() + points);
+        made
     }
 
     /// The items in window `n` (infinite ones in every window), in drawing order.
@@ -373,9 +473,12 @@ impl Outlines {
             return std::rc::Rc::clone(w);
         }
         let (polys, owners) = self.outlines_of(&picked);
-        let polys = cadaddy_geom::region::snap_ends(&polys, snap, tol);
+        // Every end snapped as a larger window snaps it (a shared search answers the same); a
+        // window too dense for that snaps what the pairwise budget reaches, as before.
+        let polys = cadaddy_geom::region::snap_ends_local(&polys, snap, tol).unwrap_or_else(|| cadaddy_geom::region::snap_ends(&polys, snap, tol));
         let points: usize = polys.iter().map(Vec::len).sum();
         let made = std::rc::Rc::new(WindowSearch { owners, searcher: cadaddy_geom::region::Searcher::new(&polys, tol, gap) });
+        self.count_made(false);
         if points > WINDOW_SEARCH_POINTS_KEPT {
             return made;
         }
@@ -529,6 +632,16 @@ pub(crate) fn loops_at_lazy_within(s: &Session, p: Vec2, cache: &mut Option<Outl
     Ok(loops)
 }
 
+/// The error of a boundary search that stopped at its reach ([`loops_at_lazy_within`]): what lies
+/// farther was never searched, so the area may still close out there.
+const BEYOND_REACH: &str = "Valid hatch boundary not found within reach.";
+
+/// Whether a boundary search ended at its reach, not at the drawing's edge: "not searched
+/// farther", never "not there".
+pub(crate) fn beyond_reach(e: &EngineError) -> bool {
+    matches!(e, EngineError::Other(m) if m == BEYOND_REACH)
+}
+
 /// The error of a boundary search too dense to finish.
 fn too_dense() -> EngineError {
     EngineError::Other(
@@ -542,6 +655,8 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     let space = s.space();
     // A cache made for another space can't answer for this one.
     let cache = cache.filter(|c| c.space == space);
+    // The model's traces (with the outlines made once) read past a view's object isolation.
+    let isolation = cache.is_none();
     let ext = cache.map_or_else(|| d.extents(&space), |c| c.ext);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
     let gap = gap_tolerance(d);
@@ -560,6 +675,10 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
         return Err(EngineError::Other("Valid hatch boundary not found.".into()));
     }
     let mut r = (span / 4096.0).max(gap * 4.0).max(tol * 1e6);
+    // The last window searched is the reach itself (not the last doubling short of it), and no
+    // window is wider: a first window past the reach (vast extents) is the reach.
+    let reach = reach.filter(|m| m.is_finite() && *m > 0.0);
+    let mut at_reach = false;
     let inside = |w: &Bounds2, b: &cadaddy_geom::region::Boundary| {
         let bb = Bounds2::from_points(b.outer.iter().copied());
         bb.min.x > w.min.x && bb.min.y > w.min.y && bb.max.x < w.max.x && bb.max.y < w.max.y
@@ -569,8 +688,12 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // held), so it finds the same: not searched again.
     let mut last: Option<(usize, std::rc::Rc<WindowSearch>, Option<cadaddy_geom::region::Boundary>)> = None;
     let (owners, found) = loop {
-        if reach.is_some_and(|m| r > m) {
-            return Err(EngineError::Other("Valid hatch boundary not found within reach.".into()));
+        if let Some(m) = reach.filter(|m| r >= *m) {
+            if at_reach {
+                return Err(EngineError::Other(BEYOND_REACH.into()));
+            }
+            r = m;
+            at_reach = true;
         }
         let near = Bounds2::new(p - Vec2::new(r, r), p + Vec2::new(r, r));
         // A window holding every outline searches what the whole drawing would.
@@ -593,6 +716,33 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
                 }
             }
             let n = picked.len();
+            // A big window: the shared search of a larger one round it answers for it when the
+            // area round the point lies inside this window (by more than the snap: no end that
+            // bounds it snaps otherwise in this window), or reaches out of it.
+            if let Some(w) = window.filter(|_| n >= SHARED_MIN_ITEMS && c.share)
+                && let Some(shared) = c.shared_search(p, r, outline_tol(ext), tol, gap)
+            {
+                let margin = outline_tol(ext) + tol;
+                let well_inside = |b: &cadaddy_geom::region::Boundary| {
+                    let bb = Bounds2::from_points(b.outer.iter().copied());
+                    bb.min.x > w.min.x + margin && bb.min.y > w.min.y + margin && bb.max.x < w.max.x - margin && bb.max.y < w.max.y - margin
+                };
+                match shared.searcher.at(p) {
+                    Search::Found(b) if well_inside(&b) => break (shared.owners.clone(), Some(b)),
+                    Search::Found(b) if !inside(&w, &b) => {
+                        last = None;
+                        r *= 2.0;
+                        continue;
+                    }
+                    Search::Missing => {
+                        last = None;
+                        r *= 2.0;
+                        continue;
+                    }
+                    // Inside it within the snap: this window's own search says.
+                    _ => {}
+                }
+            }
             // A line that ends on a flattened curve (an ellipse) can stop short of its chords.
             let searched = c.search_of(picked, outline_tol(ext), tol, gap);
             match (window, searched.searcher.at(p)) {
@@ -652,7 +802,7 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // Islands: closed objects entirely inside the outer loop that don't contain the pick point.
     {
         for &(eb, e) in &candidates {
-            if !d.is_visible(e) {
+            if !bounds_areas(d, e, isolation) {
                 continue;
             }
             if !ob.contains_box(&eb) {
@@ -685,7 +835,7 @@ fn loops_at_with(s: &Session, p: Vec2, cache: Option<&Outlines>, reach: Option<f
     // around it, as AutoCAD does, instead of running over the words.
     {
         for &(eb, e) in &candidates {
-            if !d.is_visible(e)
+            if !bounds_areas(d, e, isolation)
                 || !matches!(&e.kind, EntityKind::Text(t) if !t.value.trim().is_empty())
                     && !matches!(&e.kind, EntityKind::MText(m) if !m.contents.trim().is_empty())
             {
@@ -1557,6 +1707,131 @@ mod tests {
         let room = loops_at_lazy_within(&s, Vec2::new(560.0, 72.0), &mut cache, Some(2000.0)).expect("the closed room");
         let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
         assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
+    }
+
+    /// A view's object isolation hides walls from HATCH (it traces what the view shows) but not
+    /// from the model's traces: a room with a hidden wall and a hidden island still closes, with
+    /// its island.
+    #[test]
+    fn model_traces_read_past_object_isolation() {
+        let mut s = Session::new();
+        for (a, b) in [([0, 0], [120, 0]), ([120, 0], [120, 144]), ([120, 144], [0, 144]), ([0, 144], [0, 0])] {
+            s.execute("line", &json!({ "points": [a, b] })).unwrap();
+        }
+        s.execute("rectang", &json!({ "p1": [80, 100], "p2": [100, 120] })).unwrap();
+        let hidden: Vec<Handle> = {
+            let d = s.doc().unwrap();
+            d.model.iter().enumerate().filter(|(i, _)| *i == 0 || *i == 4).map(|(_, e)| e.handle).collect()
+        };
+        s.doc_mut().unwrap().hidden_objects.extend(hidden);
+        let p = Vec2::new(30.0, 30.0);
+        let shown = loops_at(&s, p).map(|l| l.len()).unwrap_or(0);
+        assert_eq!(shown, 0, "HATCH finds no boundary past the hidden wall");
+        let mut cache = None;
+        let room = loops_at_lazy(&s, p, &mut cache).expect("the room closes on its hidden wall");
+        let b = Bounds2::from_points(room.iter().find(|l| l.outer).map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 120.0).abs() < 1e-6 && (b.height() - 144.0).abs() < 1e-6, "{b:?}");
+        assert_eq!(room.iter().filter(|l| !l.outer).count(), 1, "the hidden island is still an island");
+    }
+
+    /// The last window searched is the reach itself, not the last doubling short of it: a room
+    /// whose walls lie 1,500" from the point is found with a reach of 1,600" (the doublings go
+    /// 1,250" then 2,500"), and stopping short says so (beyond reach, not "not there").
+    #[test]
+    fn the_last_window_searched_is_the_reach_itself() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [-20000, -20000], "p2": [20000, 20000] })).unwrap();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [3000, 3000] })).unwrap();
+        let mut cache = None;
+        let at = Vec2::new(1500.0, 1500.0);
+        let room = loops_at_lazy_within(&s, at, &mut cache, Some(1600.0)).expect("the room, within reach");
+        let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 3000.0).abs() < 1e-6, "{b:?}");
+        let mut cache = None;
+        let short = loops_at_lazy_within(&s, at, &mut cache, Some(1400.0));
+        let Err(e) = short else { panic!("walls beyond the reach: {short:?}") };
+        assert!(beyond_reach(&e), "{e}");
+        // A reach narrower than the first window (vast extents) is searched, not skipped.
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [120, 120] })).unwrap();
+        s.execute("line", &json!({ "points": [[4.0e7, 0], [4.0e7 + 12.0, 0]] })).unwrap();
+        let mut cache = None;
+        let room = loops_at_lazy_within(&s, Vec2::new(60.0, 60.0), &mut cache, Some(1800.0)).expect("the room");
+        let b = Bounds2::from_points(room.first().map(|l| l.vertices.iter().map(|v| v.p).collect::<Vec<_>>()).unwrap_or_default());
+        assert!((b.width() - 120.0).abs() < 1e-6, "{b:?}");
+    }
+
+    /// A row of rooms off a corridor, every third one open to it (its door drawn without a
+    /// leaf), with tiled floors, dashed lines, an island and a partition stopping a hair short of
+    /// a wall: the shared searches of larger windows answer every point (in the rooms, on their
+    /// clutter, in the corridor, off the plan; with and without a reach) as each window's own
+    /// search does, with fewer searches made (Q6388; how much faster a whole floor traces:
+    /// tests/roomtracespeed.rs).
+    #[test]
+    fn shared_window_searches_answer_as_each_windows_own() {
+        let mut s = Session::new();
+        let line = |s: &mut Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({ "points": [a, b] })).unwrap();
+        };
+        let (w, d) = (150.0, 300.0);
+        for i in 0..30 {
+            let x = f64::from(i) * w;
+            // The corridor wall with a 36" door gap, the party wall, the outer wall.
+            line(&mut s, [x, d], [x + 12.0, d]);
+            line(&mut s, [x + 48.0, d], [x + w, d]);
+            line(&mut s, [x + w, 0.0], [x + w, d]);
+            line(&mut s, [x, 0.0], [x + w, 0.0]);
+            if i % 3 != 0 {
+                line(&mut s, [x + 12.0, d], [x + 12.0, d - 36.0]);
+                line(&mut s, [x + 12.0, d - 36.0], [x + 48.0, d]);
+            }
+            // A tiled corner, a dashed soffit, a table (an island).
+            for k in 1..8 {
+                let t = f64::from(k) * 10.0;
+                line(&mut s, [x + 60.0 + t, 1.0], [x + 60.0 + t, 79.0]);
+                line(&mut s, [x + 61.0, t], [x + 139.0, t]);
+            }
+            for k in 0..10 {
+                let t = x + 4.0 + f64::from(k) * 9.0;
+                line(&mut s, [t, d - 60.0], [t + 6.0, d - 60.0]);
+            }
+            s.execute("rectang", &json!({ "p1": [x + 20.0, 120.0], "p2": [x + 60.0, 160.0] })).unwrap();
+            // A closet partition stopping 0.1" short of the party wall (snapped onto it).
+            line(&mut s, [x + 100.0, 200.0], [x + w - 0.1, 200.0]);
+            line(&mut s, [x + 100.0, 200.0], [x + 100.0, 0.0]);
+        }
+        line(&mut s, [0.0, 0.0], [0.0, d]);
+        line(&mut s, [0.0, d + 72.0], [30.0 * w, d + 72.0]);
+        let mut points = Vec::new();
+        for i in 0..30 {
+            let x = f64::from(i) * w;
+            for (dx, dy) in [(30.0, 220.0), (75.0, 40.0), (65.5, 5.5), (40.0, 140.0), (120.0, 230.0), (125.0, 100.0), (30.0, d + 36.0)] {
+                points.push(Vec2::new(x + dx, dy));
+            }
+        }
+        points.push(Vec2::new(-300.0, 150.0));
+        points.push(Vec2::new(2250.0, 5000.0));
+        let mut made = Vec::new();
+        for reach in [Some(1800.0), Some(600.0), None] {
+            let mut shared = Some(Outlines::new(&s).unwrap());
+            let mut own = Some(Outlines { share: false, ..Outlines::new(&s).unwrap() });
+            let mut found = 0;
+            for p in &points {
+                let a = loops_at_lazy_within(&s, *p, &mut shared, reach).map_err(|e| e.to_string());
+                let b = loops_at_lazy_within(&s, *p, &mut own, reach).map_err(|e| e.to_string());
+                assert_eq!(a, b, "at {p:?}, reach {reach:?}");
+                found += usize::from(a.is_ok());
+            }
+            let (a, b) = (shared.as_ref().map(Outlines::searches_made), own.as_ref().map(Outlines::searches_made));
+            made.push((reach, found, a, b));
+        }
+        // Rooms found and open ones not (the corridor and the open rooms reach out).
+        assert!(made.iter().all(|(_, found, ..)| (60..=180).contains(found)), "{made:?}");
+        for (reach, _, a, b) in &made {
+            let (Some((a, a_shared)), Some((b, b_shared))) = (a, b) else { panic!("{made:?}") };
+            assert_eq!(*b_shared, 0, "{reach:?}");
+            assert!(*a_shared > 0 && a < b, "{reach:?}: {a} searches ({a_shared} shared) against {b}");
+        }
     }
 
     /// A plan smaller than the reach (a level's footprint under a room trace's 150 ft) caps the

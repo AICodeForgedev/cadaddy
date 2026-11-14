@@ -10,13 +10,18 @@
     {
       "id": "S-ROOF-FRAMING",
       "trade": "structural",
-      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members; min_span_ft, the shortest piece kept)",
+      "fills": "a roof level's framing where the roof plans name trusses or joists: the members across the roof's short way at their spacing, as deep as the notes say, bearing on the walls at the level's elevation (its top of plate or truss bearing), the deck on them, the outside walls carried up round them to the deck or the parapet (numbers: spacing_in and depth_in when a note gives none; chord_in, a member's width; deck_in, the deck and roofing over the members when no roof sheathing or deck note gives its thickness (deck_words name the deck in a note, deck_not_words mark another deck's note, deck_stop_words start its fastening, deck_min_in..deck_max_in the thicknesses a deck can be); min_span_ft, the shortest piece kept)",
       "basis": "trade practice: pre-engineered wood roof trusses (and open-web joists) are set at 24\" on centre across the building's short way, bearing on the outside walls' top plate, at least 24\" deep for a flat or low-slope roof; the sheathing and roofing go on their top chords, and the outside walls (or a parapet) close the truss space round the edge",
       "member_words": {"truss": ["TRUSS", "TRUSSES"], "joist": ["JOIST", "JOISTS"]},
       "spacing_in": 24.0,
       "depth_in": 24.0,
       "chord_in": 3.5,
       "deck_in": 1.5,
+      "deck_words": ["SHEATHING", "DECK", "DECKING", "PLYWOOD", "OSB"],
+      "deck_not_words": ["FLOOR", "FLOORS", "SUBFLOOR", "WALL", "WALLS", "STAIR", "STAIRS", "BALCONY", "BALCONIES"],
+      "deck_stop_words": ["NAIL", "SCREW", "STAPLE", "FASTEN", "EDGE"],
+      "deck_min_in": 0.25,
+      "deck_max_in": 3.5,
       "min_span_ft": 2.0
     },
     {
@@ -33,10 +38,44 @@
       "non_bearing_words": ["NON-BEARING", "NONBEARING", "NON BEARING", "NON-LOAD", "NON LOAD"]
     },
     {
+      "id": "A-FLOOR-ASSEMBLY",
+      "trade": "architectural",
+      "fills": "what each level's floor element is built of and how thick: a slab its slab notes' (or the design's) thickness; a framed floor its topping and deck, the joists under it their own members (words: slab_marks, a slab's thickness written before one of them, slab_lead, one written after it; separators, the words between a layered note's layers, top to bottom; lead_words, words a layer's thickness may follow (`NOMINAL 3/4\"`); name_skip and name_stop, the words a layer's name drops before it and ends at; topping_words, deck_words, member_words, what a layer is; skip_words, a layer naming a spacing or fastening, not a thickness; numbers: the inches a layer of each kind may be; a framed floor's deck its notes don't give is the trade rules' subfloor, framing.subfloor_in)",
+      "basis": "trade practice: a floor is built as its documents describe it, per level: a slab on grade or a structural slab is its noted thickness; a wood-framed floor is a topping (gypsum concrete or another poured underlayment) on a sheathing deck on joists or floor trusses, the deck the floor's surface under the topping and the joists their own members under it; a 3/4\" (23/32\") rated sheathing is the usual deck where the notes give none; where nothing gives the floor its build-up the build's default slab is used and marked a default",
+      "slab_marks": ["\" SLAB", "\" THICK SLAB", "\" THK SLAB", "\" THK. SLAB", "\" CONCRETE SLAB", "\" CONC. SLAB", "\" CONC SLAB", "\" PT SLAB", "\" P.T. SLAB", "\" POST-TENSIONED SLAB", "\" POST TENSIONED SLAB", "\" STRUCTURAL SLAB", "\" SLAB ON GRADE", "\" S.O.G."],
+      "slab_lead": ["SLAB THICKNESS", "SLAB THK"],
+      "separators": [" ON ", " OVER "],
+      "lead_words": ["NOMINAL", "NOM.", "MIN.", "MINIMUM", "APPROX.", "TYP.", "(", "NEW", "+/-"],
+      "name_skip": ["THICK", "THK.", "THK", "DEEP", "NOMINAL", "NOM.", "MIN."],
+      "name_stop": [",", ";", "(", "@", " SPACED", " AT ", " O.C.", " OC", " U.N.O", " UNO", " TYP"],
+      "topping_words": ["GYPSUM CONCRETE", "GYP CONCRETE", "GYP. CONCRETE", "GYPCRETE", "GYP-CRETE", "GYPSUM CEMENT", "GYPSUM UNDERLAYMENT", "UNDERLAYMENT", "TOPPING", "LIGHTWEIGHT CONCRETE", "LT. WT. CONCRETE", "LEVELING COMPOUND"],
+      "deck_words": ["SHEATHING", "SUBFLOOR", "SUB-FLOOR", "PLYWOOD", "OSB", "FLOOR DECK", "DECKING", "T&G"],
+      "member_words": ["JOIST", "TRUSS", "TRUSSES"],
+      "skip_words": ["@", "O.C.", " OC", "NAIL", "SPACING", "SCREW", "EDGE", "GLUE"],
+      "slab_in": [3.0, 16.0],
+      "topping_in": [0.25, 4.0],
+      "deck_in": [0.375, 2.0],
+      "member_in": [5.0, 48.0],
+      "max_notes": 400
+    },
+    {
       "id": "A-ROOF-SLOPED-DECK",
       "trade": "architectural",
       "fills": "a sloped roof's deck (or an unframed roof's slab): one thickness normal to its slope, its underside parallel to its top, on the framing's top chords, which follow the slope along and across the members; an unframed sloped roof whose underside rises over the walls under it has the outside walls carried up to it",
       "basis": "trade practice: a wood or metal roof deck is a sheet of one thickness laid on the framing, the sloped joists or truss top chords setting the slope; only a flat structure with tapered fill or tapered insulation is a wedge, and that is its own layer; the outside walls close the space under a sloped roof's high side"
+    },
+    {
+      "id": "E-GEAR-DRAWN",
+      "trade": "electrical",
+      "fills": "where a panelboard or switchboard stands when a plan draws it: the rectangle its label sits on or beside (numbers: label_reach_h text heights plus reach_ft feet from the label; a footprint depth_in and length_in in range, its long side at least min_ratio times its depth; panel_height_in and switchboard_height_in when no submittal gives the box)",
+      "basis": "trade practice: the electrician sets gear where the plans draw it, the drawn rectangle its footprint and the wall it touches the one it hangs or stands on; a schedule's LOCATION only names the room, so it places only gear no plan draws (and that placement is proposed)",
+      "reach_ft": 1.0,
+      "label_reach_h": 3.0,
+      "depth_in": [3, 54],
+      "length_in": [10, 480],
+      "min_ratio": 1.5,
+      "panel_height_in": 48,
+      "switchboard_height_in": 90
     },
     {
       "id": "E-RCP-LIGHT",
@@ -90,6 +129,30 @@
       "basis": "trade practice: a circuit's devices are joined device to device in a square tree above the ceiling, the homerun takes the corridor to its panel's top entry (rules: conduitroute.json; fill and box fill per NEC Ch. 9 and 314.16)"
     },
     {
+      "id": "FA-NAC-CHAIN",
+      "trade": "fire alarm",
+      "fills": "a notification appliance circuit's cable: the drawings show the appliances (and the shop drawings their circuit and address), not the wiring between them",
+      "basis": "trade practice: each NAC is one power-limited cable chained appliance to appliance from its power supply or the control panel, in address order where the shop drawings give it, else nearest neighbour; a circuit is closed where its load passes the output's rating at 80% or its voltage drop leaves the last appliance under 16 V (Class B, the end-of-line device at the last appliance; NFPA 72 12.3, 18.3; NEC 760.154; rules: fawiring.json)"
+    },
+    {
+      "id": "FA-SLC-LOOP",
+      "trade": "fire alarm",
+      "fills": "a signaling line circuit's cable (and the annunciator's bus): the drawings show the initiating devices and modules, not the loop through them",
+      "basis": "trade practice: the control panel's addressable loop runs device to device storey by storey up the riser over the panel, in address order where the shop drawings give it, else nearest neighbour, a new loop past the loop's device capacity; Class B with T-taps allowed unless the documents call for Class A (NFPA 72 12.3, 23.6; NEC 760.154; rules: fawiring.json)"
+    },
+    {
+      "id": "FA-POWER-SUPPLY",
+      "trade": "fire alarm",
+      "fills": "a NAC power supply where a storey's notification load needs one and no document places it, and its start circuit from the control panel",
+      "basis": "trade practice: a NAC power supply (booster) serves its storey's appliances where the control panel's own outputs can't carry them, as many as the load needs at 4 outputs each, in a service room nearest the riser, started by the control panel and on its own dedicated 120 V branch circuit (NFPA 72 10.6.5); the shop drawings place them (rules: fawiring.json)"
+    },
+    {
+      "id": "FA-CONTROL-PANEL",
+      "trade": "fire alarm",
+      "fills": "the fire alarm control panel where the model has fire alarm devices and no document places the panel",
+      "basis": "trade practice: every fire alarm system has a control panel (NFPA 72 10.4), set in the fire command, electrical or mechanical room of the lowest storey it serves, its top at 72 in (rules: fawiring.json)"
+    },
+    {
       "id": "E-ESTIMATED",
       "trade": "electrical",
       "fills": "a circuit's route estimated from its homerun tag where the model could not route it",
@@ -99,7 +162,7 @@
       "id": "E-UNCIRCUITED",
       "trade": "electrical",
       "fills": "a power device no document puts on a circuit",
-      "basis": "trade practice: a device the documents leave off every circuit goes on a spare circuit of the nearest panel of its level, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
+      "basis": "trade practice: a device the documents leave off every circuit is tied into its room's circuit of its kind (the nearest device of its kind in its room that the plans circuit); else it goes on a spare circuit of its room's own panel (the panel its room's circuits come from), else of the nearest panel of its level that is no other unit's own panel, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
       "reach_ft": 400.0,
       "default_size_in": 0.75
     },
@@ -107,14 +170,16 @@
       "id": "M-BRANCH-DUCT",
       "trade": "mechanical",
       "fills": "an air terminal no duct of its system reaches",
-      "basis": "trade practice: each diffuser, register or grille is taken off the nearest duct of its system by a round branch at right angles at the duct's height, then down to the terminal at its neck size",
+      "basis": "trade practice: each diffuser, register or grille is taken off the nearest duct of its system by a round branch at right angles at the duct's height (in the plenum over the ceiling it passes under: M-TERMINAL-CEILING), then down to the terminal at its neck size",
       "reach_ft": 60.0,
       "connect_reach_ft": 10.0,
       "sizes": [
         {"words": ["LINEAR", "SLOT"], "size_in": 8.0},
         {"words": ["RETURN", "EXHAUST", "TRANSFER"], "size_in": 10.0}
       ],
-      "default_size_in": 8.0
+      "default_size_in": 8.0,
+      "main_to_drawn_only": true,
+      "branch_within_run_basis": "trade practice: a branch is never larger than the duct it leaves (a tap no wider than the duct's side; the sheet metal worker reduces the neck at the terminal); a duct main is carried on past its end only to a terminal the documents draw, a terminal no document draws takes a branch off the main's end"
     },
     {
       "id": "M-FIRE-DAMPER",
@@ -123,10 +188,42 @@
       "basis": "code: a duct penetrating a fire-resistance-rated assembly takes a fire damper (IMC 607.5); the field installs one at the wall in the duct's size; alternative: an exception of IMC 607.5 (a fire partition in a sprinklered building, a listed through-penetration) that the engineer may confirm instead"
     },
     {
+      "id": "M-TERMINAL-ROOM-UNIT",
+      "trade": "mechanical",
+      "fills": "the unit serving an air terminal no duct of the model leads to a unit from and no schedule row names the room of",
+      "basis": "trade practice: a room's own air unit (a PTAC, a fan coil, a split system's indoor unit; a bath exhaust fan for its exhaust grille) serves the room's terminals of its air; alternative: a central unit the engineer's duct layout ties it to"
+    },
+    {
       "id": "M-RETURN-PLENUM",
       "trade": "mechanical",
       "fills": "a return grille no return duct of its floor reaches",
       "basis": "trade practice: a return grille the drawings leave unducted returns through the ceiling plenum to its unit (IMC 602 plenum); alternative: a ducted return the engineer may call for"
+    },
+    {
+      "id": "M-TERMINAL-CEILING",
+      "trade": "mechanical",
+      "fills": "the height of a ceiling air terminal and of the ducts with no height of their own that serve the ceilings: the terminal's face in the ceiling built over it (its room's ceiling as the reflected ceiling plans, unit RCPs, legend or sections give it, else derived), each duct with no drawn height (a default, an estimated route, a branch inferred to a terminal) in the plenum over the highest ceiling it passes under , its top under the underside of the structure over its level: the next storey's floor framing and deck as its notes give them, else the roof's framing, else the next floor's slab (numbers: clear_ft, how far over that ceiling the duct's bottom is at least; words: terminal_words name a terminal that is set in a ceiling, not_ceiling_words one that is not, a sidewall register or a floor or door grille)",
+      "basis": "trade practice: a ceiling diffuser, register or grille is set in the finished ceiling of the room it serves, its face flush with the ceiling (laid in the grid or framed in the board), never over it in the plenum or hanging under it; the ducts that serve it run in the plenum above that ceiling and drop to its neck; a duct never runs up in the joist space of the floor or roof over it (it is hung under the structure, which no duct passes through unless the documents say so); one too deep for the plenum is hung under the structure below the ceiling and marked for review (a soffit, a flatter duct or a lower ceiling); nothing hangs below a finished ceiling unless the documents call the space exposed (an area the reflected ceiling plans leave open to the structure: what is in it keeps its height); where no room's ceiling is built, the ceiling is the level's; a duct height the documents give stays (a clash below the ceiling is reported)",
+      "clear_ft": 0.25,
+      "terminal_words": ["DIFFUSER", "REGISTER", "GRILLE"],
+      "not_ceiling_words": ["SIDEWALL", "SIDE WALL", "WALL", "FLOOR", "DOOR", "UNDERCUT", "LOUVER"]
+    },
+    {
+      "id": "A-CEILING-HEIGHT",
+      "trade": "architecture",
+      "fills": "each room's ceiling height, from the first source in `order` that gives one (numbers: clear_ft, the least ceiling height a derived one is set to; default_size_in, the depth of the floor/ceiling or roof/ceiling assembly over a room when its framing is not read; deck_in, the deck or topping over the members; membrane_in, the ceiling's channel and board under them)",
+      "basis": "trade practice: the reflected ceiling plans set ceiling heights; a room takes its own RCP tag or note first, then the enlarged plan or unit RCP of its room type, then its ceiling type's legend, then a section or interior elevation that dimensions it; only where none gives one is it derived, at the underside of the assembly over the room (the floor to floor less the members, deck and ceiling membrane), never under the least ceiling height the code allows (IBC 1208.2: 7'-6\" in habitable spaces and corridors); a derived height is inferred, marked as such with its basis, and asked of the architect; alternative: the height the architect gives",
+      "order": [
+        {"key": "room_rcp", "label": "room RCP"},
+        {"key": "unit_rcp", "label": "unit RCP"},
+        {"key": "legend", "label": "ceiling type legend"},
+        {"key": "section", "label": "section"},
+        {"key": "derived", "label": "derived"}
+      ],
+      "clear_ft": 7.5,
+      "default_size_in": 24.0,
+      "deck_in": 1.5,
+      "membrane_in": 1.5
     },
     {
       "id": "A-MEZZANINE",
@@ -187,6 +284,12 @@
       "basis": "code and practice: branch circuit conductors are sized for at most 3 percent voltage drop (NEC 210.19(A) Informational Note 4), the drawings' length table first; the field pulls the next conductor size"
     },
     {
+      "id": "E-CONDUCTOR-LARGER-DOC",
+      "trade": "electrical",
+      "fills": "a branch circuit the documents give two conductor sizes (the plan's note and the panel schedule's wire column)",
+      "basis": "trade practice: where the plan and the panel schedule disagree on a circuit's conductors the field pulls the larger (never under what either document or the length table asks), the smaller kept as the design value and the difference listed for the engineer"
+    },
+    {
       "id": "M-ROOF-CURB",
       "trade": "mechanical",
       "fills": "the roof curb a ducted rooftop unit (an outdoor air unit, a packaged rooftop unit, an air handler, an energy recovery unit, a roof exhaust fan) stands on where the schedule and plans give none (numbers: default_size_in, the curb's height above the roof; sizes: by the unit's kind or schedule words)",
@@ -231,10 +334,182 @@
       "default_size_in": 0.875
     },
     {
+      "id": "M-EQUIP-MOUNT",
+      "trade": "mechanical",
+      "fills": "where a piece of mechanical equipment sits and how tall it is when its schedule, submittal and plans give no height (mountings: by the equipment's kind and its schedule's words, the first row that fits; at above_ceiling = its bottom gap_in over the room's ceiling, the body in the plenum; at floor = its bottom bottom_in over the floor, kept under the ceiling; height_in when the schedule prints none; a kind no row names stands on the floor at the usual size of its kind; a roof unit is on its curb or stand, M-ROOF-CURB / M-ROOF-STAND; a schedule's mounting height or AFF governs over every row)",
+      "basis": "trade practice: mechanical equipment is set where its kind is made to go, not stood on the floor: a ceiling exhaust fan's housing is above the ceiling with its grille in it, a damper is in its duct above the ceiling, a packaged terminal unit is through the exterior wall in its sleeve on its electrical sub-base, a unit heater hangs high clear of heads; alternative: a mounting the schedule, a submittal or a plan note gives",
+      "mountings": [
+        {"kinds": ["exhaust_fan", "fan"], "words": ["ROOF", "UPBLAST", "DOWNBLAST", "CURB"], "at": "floor", "basis": "a roof fan stands on its roof or curb"},
+        {"kinds": ["exhaust_fan", "fan"], "words": ["WALL", "SIDEWALL", "SIDE WALL", "THRU-WALL", "THROUGH-WALL"], "at": "floor", "bottom_in": 84.0, "height_in": 14.0, "basis": "a wall exhaust fan is high in its wall, its top at the ceiling at most"},
+        {"kinds": ["exhaust_fan", "fan"], "words": ["CEILING", "CABINET", "BATH"], "at": "above_ceiling", "height_in": 10.0, "basis": "a ceiling exhaust fan's housing is above the ceiling, its grille in it"},
+        {"kinds": ["exhaust_fan"], "at": "above_ceiling", "height_in": 10.0, "basis": "an exhaust fan inside the building is the ceiling cabinet kind: its housing above the ceiling, its grille in it"},
+        {"kinds": ["fire_damper", "smoke_damper", "fire_smoke_damper", "motorized_damper", "rated_damper", "damper", "volume_damper", "backdraft_damper"], "at": "above_ceiling", "gap_in": 2.0, "height_in": 12.0, "basis": "a damper is in its duct above the ceiling, reached through an access panel"},
+        {"kinds": ["vav"], "at": "above_ceiling", "gap_in": 6.0, "basis": "a terminal unit hangs in its duct above the ceiling"},
+        {"kinds": ["fan_coil_unit", "ahu"], "words": ["HORIZONTAL", "CEILING", "ABOVE CEILING", "SUSPENDED"], "at": "above_ceiling", "gap_in": 6.0, "basis": "a horizontal unit hangs above the ceiling"},
+        {"kinds": ["ptac", "through_wall_unit", "packaged_terminal"], "at": "floor", "bottom_in": 4.0, "height_in": 16.0, "basis": "a packaged terminal unit is through the exterior wall in its sleeve, set on its electrical sub-base (makers' sub-bases are about 3-1/2 to 4 in), about 16 in high"},
+        {"kinds": ["unit_heater"], "words": ["CABINET", "RECESSED", "FLOOR"], "at": "floor", "basis": "a cabinet unit heater stands at the floor or is recessed low in the wall"},
+        {"kinds": ["unit_heater"], "at": "floor", "bottom_in": 84.0, "basis": "a unit heater hangs high, its bottom about 7 ft over the floor clear of heads and its top at the ceiling at most"}
+      ]
+    },
+    {
+      "id": "M-THROUGH-WALL",
+      "trade": "mechanical",
+      "fills": "where a through-wall unit (a packaged terminal unit or another wall-sleeve unit, by its kind) goes: in the outside wall its plan symbol stands against, its wall sleeve through that wall (an opening cut in the wall, the sleeve flush with the wall's outside face and the outside grille in its end), the unit in the sleeve with its room cabinet projecting into the room; the plan symbol gives only its place along the wall (numbers: reach_in, how far in front of a wall's face its plan box may stand; unit_depth_in, the unit's depth from the outside face to the front of its cabinet when its product data gives none; sleeve_depth_in, the sleeve's depth when the wall is thinner; grille_in, the outside grille's depth; probe_in, how far past a wall's outside face the floor must end for it to be an outside wall; behind_ft, when its level has no floor or shell outline, how far behind an outside wall no wall of its level stands)",
+      "basis": "trade practice: a packaged terminal unit is installed through the outside wall in its wall sleeve (the sleeve set flush with the outside face, its outside grille in the end, the unit slid in from the room on its sub-base); plans draw the room cabinet in front of the wall, so the symbol places it along the wall, not across it; makers' standard sleeves are about 13-3/4 in deep and their units about 21 in from the outside face to the cabinet front; alternative: the depth and sleeve its product data or submittal gives",
+      "kinds": ["ptac", "pthp", "through_wall_unit", "packaged_terminal", "wall_sleeve_unit"],
+      "reach_in": 24.0,
+      "unit_depth_in": 21.0,
+      "sleeve_depth_in": 13.75,
+      "grille_in": 1.0,
+      "probe_in": 12.0,
+      "behind_ft": 20.0
+    },
+    {
+      "id": "M-EXHAUST-RISER",
+      "trade": "mechanical",
+      "fills": "the exhaust risers a typical riser detail draws: each fan's duct from where its room's view ends it in the chase, up the chase to just under the roof deck, across to the roof terminal the roof plan places over that chase and up into it; on every floor it passes, in that floor's own drawing of the chase, never through a plumbing fixture or a piece of equipment (numbers: reach_ft, how far in plan the terminal may be from the chase it serves once the roof plan is lined up with the chases; clear_ft, how far under the roof deck the ducts turn to the terminal; default_size_in, a fan duct's size where none is read; duct_gap_in, the gap between side-by-side ducts in one chase and between a duct and a fixture or equipment it is moved clear of; fixture_top_ft, how high a plumbing fixture of no known height is taken to stand; pass_kinds, the equipment a duct runs into or through, by words of its kind, which it may stand in)",
+      "basis": "trade practice: a typical riser detail is built at every chase its roof terminal stands over (the plans key one instance); where the notes require each exhaust duct to be continuous to the outside, every fan keeps its own duct to the terminal (side by side in the chase), else the chase carries one riser of the fans' combined duct area; a riser rises in the chase each floor's plan draws, and one that would stand in a tub, a shower or a unit is a clash the field moves to the nearest clear place",
+      "reach_ft": 15.0,
+      "clear_ft": 1.0,
+      "default_size_in": 4.0,
+      "duct_gap_in": 1.0,
+      "fixture_top_ft": 7.0,
+      "pass_kinds": ["exhaust fan", "relief hood", "roof curb", "damper"]
+    },
+    {
+      "id": "E-WALL-UNDER-CEILING",
+      "trade": "electrical",
+      "fills": "where a wall-mounted device goes when its height would put any part of it above its room's finished ceiling (numbers: min_below_in, the least clearance from its top to the ceiling; below, a kind's own clearance by its kinds or words; legend_words, the words after a legend's or schedule's height that make it the device's clearance under the ceiling; skip_kinds, kinds whose place above a ceiling is their own; skip_from, the height sources that put a device somewhere other than on a wall: a hoistway's device stands in its pit or at its top, under no room's ceiling)",
+      "basis": "trade practice: a wall-mounted device is installed on the wall below the finished ceiling of the room it serves, where it can be seen, reached and serviced, never in the plenum over it; its top is at least its own clearance under the ceiling (an exit sign or emergency light the legend's or schedule's \"x in below ceiling\", else 2 in); a device whose height (a default, a rule, or a document that does not fit the room) puts any part above the ceiling is set at the highest allowed place and reported, its design height kept beside; alternative: a ceiling-mounted version of the device, which the engineer may call for instead",
+      "min_below_in": 2.0,
+      "below": [],
+      "legend_words": ["BELOW FINISHED CEILING", "BELOW FIN. CEILING", "BELOW FIN CEILING", "BELOW FIN. CLG", "BELOW FIN CLG", "BELOW THE CEILING", "BELOW CEILING", "BELOW CLG", "BELOW CEIL", "BELOW CLNG"],
+      "skip_kinds": ["equipment connection", "junction box", "plumbing fixture", "plumbing stack", "damper", "disconnect"],
+      "skip_from": ["equipment", "site_work", "ceiling", "floor", "hoistway"]
+    },
+    {
+      "id": "E-SPLICES",
+      "trade": "electrical",
+      "fills": "the splice connectors in each box: no drawing shows them",
+      "basis": "trade practice: at every box the circuit's conductors are spliced where it continues (a pigtail to each device), each luminaire's leads spliced to its circuit, the grounds bundled with pigtails to the device and a metal box (NEC 250.148), each splice in a connector listed for its conductors (UL 486C)"
+    },
+    {
       "id": "E-CONN-AT-UNIT",
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
       "basis": "trade practice: an equipment connection is made at its equipment (its disconnect or junction box on the unit, at the unit's side half way up); a mark naming the unit follows the unit, never the room under it"
+    },
+    {
+      "id": "E-CONN-CEILING-EQUIP",
+      "trade": "electrical",
+      "fills": "where the connection of a piece of ceiling equipment is built (a ceiling exhaust fan's, an above-ceiling unit's), every time the model is built: at the housing of the equipment it serves, as the equipment and the ceiling over it stand then, never at a height fixed earlier (numbers: reach_ft, how far from where its plan puts the connection its equipment may be; tolerance_in, how far from its housing a connection may be and still be at it; clear_in, how far above the ceiling's underside the box's bottom is at least, over the ceiling board)",
+      "basis": "trade practice: the connection of ceiling equipment is made at the equipment's wiring compartment on its housing, above the ceiling in the plenum (NEC 314.29: the box stays accessible, through the equipment or the ceiling; NEC 300.11: wiring above a ceiling is supported there, not by the ceiling), never hung exposed under the finished ceiling nor standing off the housing it serves",
+      "reach_ft": 15.0,
+      "tolerance_in": 12.0,
+      "clear_in": 1.0
+    },
+    {
+      "id": "A-DOOR-AT-SCHEDULE-TAG",
+      "trade": "architectural",
+      "fills": "a door the door schedule lists and a plan tags where the plan draws no opening (a counter shutter over a counter top, an overhead coiling or sliding door drawn as a dashed line, a door left out of a wall drawn through): the door built at its tag, cut into the wall that holds it there (else set on the nearest line drawn there, a counter's edge or the shutter's line), at the schedule's size, its sill and head and how it opens from the schedule's words, else from its size (numbers: reach_ft, how far from its tag a door's wall or line may be; connect_reach_ft, a door built this close to a tag is that tag's; passage_min_height_in, the lowest a door people walk through is (IBC 1010.1.1: door openings 80 in clear high): a scheduled door lower than that is an opening over a counter or sill; counter_sill_in, the counter top such an opening closes onto when the schedule gives no sill; max_leaf_in, the widest one swinging leaf is (IBC 1010.1.1: 48 in), a wider door is a pair, or a coiling shutter over a counter; default_width_in, a door row with no width; operation_words, the words of a door's type or frame that say how it opens; counter_words, the words that put it over a counter)",
+      "basis": "trade practice: every opening the door schedule lists is installed whether or not the plan breaks the wall for it; the installer hangs it at its tag, at the scheduled size; a counter shutter coils above the opening and closes onto the counter top (a standing-height transaction counter, 42 in; an accessible 36 in counter is the alternative, ADA 904.4), and a door wider than one leaf is a pair",
+      "reach_ft": 4.0,
+      "connect_reach_ft": 6.0,
+      "passage_min_height_in": 80.0,
+      "counter_sill_in": 42.0,
+      "max_leaf_in": 48.0,
+      "default_width_in": 36.0,
+      "operation_words": {
+        "rolling": ["ROLLING", "COILING", "ROLL UP", "ROLLUP", "OVERHEAD", "SHUTTER", "GRILLE"],
+        "sliding": ["SLIDING", "SLIDER", "POCKET", "BYPASS", "BARN"],
+        "folding": ["FOLDING", "BIFOLD", "BI FOLD", "ACCORDION"],
+        "pair": ["PAIR", "PR", "DOUBLE", "2 LEAVES"]
+      },
+      "counter_words": ["COUNTER", "TRANSACTION", "PASS THROUGH", "SERVICE WINDOW"]
+    },
+    {
+      "id": "E-EQUIP-DISCONNECT",
+      "trade": "electrical",
+      "fills": "the connection of a piece of equipment that carries its circuit (its plan tag or its record names the circuit) where no device of that circuit stands at it: a disconnect its plans draw beside it with no circuit of its own takes the circuit; else its connection is built beside its housing, on the side toward its panel (a disconnect for a motor or air-conditioning load, a receptacle for a cord-and-plug unit, else an equipment connection), and the circuit is routed to it, then on to the equipment's terminal box (numbers: reach_ft, how far a device of its circuit of a connection's kind may stand and still be its connection, the code's within sight; at_ft, a device of any kind of its circuit this close is its connection; drawn_reach_ft, how far a drawn disconnect with no circuit may stand and be its disconnect; gap_in, how far from the housing the built connection stands; mount_in, its middle over the floor; high_bottom_ft, equipment whose bottom is this high takes its connection at its own middle height; connection_kinds, the device kinds that are a connection; disconnect_words and receptacle_words, the equipment words that take a disconnect or a receptacle; box_words, equipment that is itself a connection box; sizes_in, each connection's box, width along the housing, depth out from it, height)",
+      "basis": "NEC 440.14: air-conditioning and refrigerating equipment has a disconnecting means within sight of and readily accessible from it (on or within it allowed); NEC 430.102(B): a motor's disconnecting means is within sight of the motor (NEC Article 100, in sight from: visible and not more than 50 ft); NEC 440.13 and 440.63: a cord-and-plug connected unit's receptacle is its disconnecting means; NEC 422.31: an appliance's disconnecting means; trade practice: the safety switch stands beside the unit on the side its circuit comes from, its whip (liquidtight flexible conduit, NEC 350) on to the unit's terminal box",
+      "reach_ft": 50.0,
+      "at_ft": 10.0,
+      "drawn_reach_ft": 15.0,
+      "gap_in": 12.0,
+      "mount_in": 48.0,
+      "high_bottom_ft": 7.0,
+      "connection_kinds": [
+        "EQUIPMENT CONNECTION",
+        "DISCONNECT",
+        "SAFETY SWITCH",
+        "JUNCTION BOX",
+        "MOTOR",
+        "POWER BOX"
+      ],
+      "disconnect_words": [
+        "HEAT PUMP",
+        "CONDENSING",
+        "CONDENSER",
+        "COMPRESSOR",
+        "CHILLER",
+        "COOLING TOWER",
+        "FAN",
+        "AIR HANDL",
+        "AHU",
+        "RTU",
+        "ROOFTOP",
+        "DOAS",
+        "OUTDOOR AIR",
+        "MAKE UP AIR",
+        "ENERGY RECOVERY",
+        "ERV",
+        "HRV",
+        "UNIT HEATER",
+        "SPLIT",
+        "VRF",
+        "VRV",
+        "PUMP",
+        "BOILER",
+        "FURNACE",
+        "MOTOR",
+        "BLOWER",
+        "HVAC",
+        "AIR CONDITION",
+        "REFRIGERAT",
+        "WATER HEATER",
+        "DUCT HEATER"
+      ],
+      "receptacle_words": [
+        "PTAC",
+        "PACKAGED TERMINAL",
+        "ROOM AIR CONDITIONER",
+        "WINDOW UNIT",
+        "THROUGH WALL UNIT"
+      ],
+      "box_words": [
+        "POWER BOX",
+        "JUNCTION BOX",
+        "PULL BOX",
+        "CONNECTION BOX",
+        "PWR"
+      ],
+      "sizes_in": {
+        "disconnect": [
+          8.0,
+          5.0,
+          14.0
+        ],
+        "receptacle": [
+          2.25,
+          2.0,
+          4.0
+        ],
+        "equipment connection": [
+          4.0,
+          4.0,
+          2.125
+        ]
+      }
     }
   ]
 }

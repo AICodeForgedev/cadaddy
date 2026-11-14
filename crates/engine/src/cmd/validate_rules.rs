@@ -953,19 +953,20 @@ mod tests {
         for k in ["return_grille", "exhaust_grille", "diffuser", "supply_diffuser"] {
             assert_eq!(got(k), set(&["M-TERMINAL"]), "{k}");
         }
-        // Fire alarm devices: host, and their own rule (present, positions, heights).
-        assert_eq!(got("fire_alarm_device"), set(&["G-HOST", "E-FA"]));
-        assert_eq!(got("horn_strobe"), set(&["G-HOST", "E-FA"]));
-        assert_eq!(got("smoke_detector"), set(&["G-HOST", "E-FA"]));
+        // Fire alarm devices: host, under their room's ceiling when on a wall (Q6520), and their
+        // own rule (present, positions, heights).
+        assert_eq!(got("fire_alarm_device"), set(&["G-HOST", "G-CEILING-CLEAR", "E-FA"]));
+        assert_eq!(got("horn_strobe"), set(&["G-HOST", "G-CEILING-CLEAR", "E-FA"]));
+        assert_eq!(got("smoke_detector"), set(&["G-HOST", "G-CEILING-CLEAR", "E-FA"]));
         // Through-wall units: present, in an exterior wall.
         assert_eq!(got("ptac"), set(&["G-HOST", "M-PTAC"]));
         assert_eq!(got("through_wall_unit"), set(&["G-HOST", "M-PTAC"]));
         // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
         assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
         assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN", "E-EQUIP-ELEC"]));
-        // Occupancy sensors: present, host; and as lighting controls, their switch leg, a dimming
-        // one's drivers and the room's count (Q6145).
-        let sensor = set(&["G-HOST", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT", "E-CIRCUIT"]);
+        // Occupancy sensors: present, host, under their room's ceiling (Q6520); and as lighting
+        // controls, their switch leg, a dimming one's drivers and the room's count (Q6145).
+        let sensor = set(&["G-HOST", "G-CEILING-CLEAR", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT", "E-CIRCUIT"]);
         assert_eq!(got("occupancy_sensor"), sensor);
         assert_eq!(got("vacancy_sensor"), sensor);
         // A conduit is hosted by nothing; G-HOST is not its rule.

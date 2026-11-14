@@ -65,7 +65,7 @@ fn finished(v: &Views, job: Job, mut fin: Option<&mut Finisher>, each: &mut dyn 
         }
         true
     };
-    emit(v, job.version, job.target, job.dwg, job.bridge, &mut go)
+    emit(v, job.version, job.target, job.dwg, job.bridge, &mut go).seed
 }
 
 /// Follows the section the records are in.
@@ -145,6 +145,8 @@ struct Summary {
     max_handle: u64,
     /// CLASS records without a group 91 that have a 90 (one is inserted).
     classes_without_count: usize,
+    /// Before 2004 a CLASS record has no group 91 ([`set_class_count`]): `true` from 2004.
+    class_counts: bool,
     sections: Sections,
     table: AppidTable,
 }
@@ -158,6 +160,8 @@ impl Summary {
         self.groups += rec.len();
         if kind != "CLASS" {
             *self.kinds.entry(kind.to_ascii_uppercase()).or_default() += 1;
+        } else if !self.class_counts {
+            self.groups -= body.iter().filter(|t| t.code == 91).count();
         } else if !body.iter().any(|t| t.code == 91) && body.iter().any(|t| t.code == 90) {
             self.classes_without_count += 1;
         }
@@ -203,13 +207,16 @@ impl<'d> Plan<'d> {
     pub(crate) fn new(views: &'d Views<'d>, job: Job) -> Self {
         let d = views.saved();
         let mut fin = Scan::of(d).map(|mut scan| {
-            let seed = emit(views, job.version, job.target, job.dwg, job.bridge, &mut |chunk: Vec<Tag>| {
+            let made = emit(views, job.version, job.target, job.dwg, job.bridge, &mut |chunk: Vec<Tag>| {
                 records(&chunk).for_each(|r| scan.record(r));
                 true
             });
-            Finisher::new(scan, seed)
+            // A DXF of 2013 or later has no SAT text: solids holding it are left out (#2334). Only
+            // a DXF declares the version it is written for: the DWG bridge's DXF is for the DWG
+            // writer, which keeps SAT-text solids.
+            Finisher::new(scan, made.seed, job.version >= Version::R2013 && !job.bridge, made.reactors)
         });
-        let mut sum = Summary::default();
+        let mut sum = Summary { class_counts: job.target >= Version::R2004, ..Summary::default() };
         let mut data = DataStore::of(d, job.target >= Version::R2013);
         let raw_seed = finished(views, job, fin.as_mut(), &mut |rec: &[Tag]| {
             if rec.first().is_some_and(|z| z.code == 0 && z.str() == "EOF")
@@ -277,7 +284,7 @@ impl<'d> Plan<'d> {
             let kind = rec.first().map(Tag::str).unwrap_or_default();
             match kind.as_str() {
                 "SECTION" if sec == "HEADER" => set_seed(rec, seed),
-                "CLASS" => set_class_count(rec, kinds),
+                "CLASS" => set_class_count(rec, kinds, job.target),
                 "BLOCK" if !xrefs.is_empty() => mark_xref(rec, &xrefs),
                 _ => {}
             }
@@ -346,9 +353,16 @@ fn set_appid_count(rec: &mut [Tag], added: i64) {
     }
 }
 
-/// DXF Reference group 91 on a CLASS record: how many records of the class the file holds
-/// (`kinds`, by upper-case type), in place of its 91 or after its 90.
-fn set_class_count(rec: &mut Vec<Tag>, kinds: &HashMap<String, i64>) {
+/// DXF Reference group 91 on a CLASS record, the instance count, which came with the 2004
+/// format: how many records of the class the file holds (`kinds`, by upper-case type), in place
+/// of its 91 or after its 90 (AutoCAD rejects a 2004+ file without it). A file for a `target`
+/// before 2004 has none, not even on a class kept from a newer file: AutoCAD LT 2026 stops
+/// responding when an R2000 file's CLASS records carry a 91.
+fn set_class_count(rec: &mut Vec<Tag>, kinds: &HashMap<String, i64>, target: Version) {
+    if target < Version::R2004 {
+        rec.retain(|t| t.code != 91);
+        return;
+    }
     let name = rec.iter().skip(1).find(|t| t.code == 1).map(Tag::str).unwrap_or_default().to_ascii_uppercase();
     let count = kinds.get(&name).copied().unwrap_or(0);
     if let Some(i) = rec.iter().skip(1).position(|t| t.code == 91) {

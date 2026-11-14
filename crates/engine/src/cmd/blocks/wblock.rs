@@ -22,7 +22,7 @@ pub(super) fn with_extension(path: &str) -> String {
     if p.extension().is_none() && p.file_name().is_some() { format!("{path}.dwg") } else { path.to_string() }
 }
 
-fn stem(path: &str) -> String {
+pub(super) fn stem(path: &str) -> String {
     std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
@@ -78,7 +78,7 @@ impl Interactive for WblockM {
                     "*" => {
                         let d = s.doc()?;
                         let all: Vec<String> = d.model.iter().map(|e| e.handle.hex()).collect();
-                        self.write(s, json!({ "path": path, "handles": all }))
+                        self.write(s, json!({ "path": path, "handles": all, "whole": true }))
                     }
                     "=" => self.write(s, json!({ "path": path, "name": stem(&path) })),
                     name => self.write(s, json!({ "path": path, "name": name })),

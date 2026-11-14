@@ -207,6 +207,47 @@ fn project_rules_change_tiers_and_undo() {
     assert!(r["rules"].as_array().unwrap().len() > 10);
 }
 
+/// The 2D screen's detail levels (Q6417) are rules data too: the built-in `plan`, which the
+/// project edits key by key (its symbol rules say which tier a symbol is by its names).
+#[test]
+fn plan_detail_rules_are_data_the_project_edits() {
+    use cadaddy_engine::cmd::fidelity::plan_rules;
+    use cadaddy_render::detail::Tier;
+    let mut s = Session::new();
+    let r = s.execute("view.fidelity.rules", &json!({})).unwrap();
+    assert_eq!(r["plan"]["dot_px"], json!(1.0));
+    assert!(r["plan"]["symbols"].as_array().unwrap().len() >= 3, "built-in symbol rules");
+    let built_in = plan_rules(s.doc().unwrap());
+    assert_eq!(built_in.tier_of("SYM-RECEPTACLE", "0"), Tier::Room);
+    assert_eq!(built_in.tier_of("PANELBOARD-A", "0"), Tier::Floor);
+    assert_eq!(built_in.tier_of("NORTH ARROW", "0"), Tier::Building);
+    assert_eq!(built_in.tier_of("SYM-7", "X-DEVC"), Tier::Room, "by its layer");
+    assert_eq!(built_in.tier_of("WIDGET", "0"), Tier::Floor, "the default");
+    // The project raises the text threshold and adds a symbol rule; the rest stays built-in.
+    let r = s
+        .execute(
+            "view.fidelity.rules",
+            &json!({"plan": {"text_bar_px": 6, "symbols": [{"words": ["widget"], "tier": "detail", "why": "this project"}]}}),
+        )
+        .unwrap();
+    assert_eq!(r["source"], "project");
+    assert_eq!(r["plan"]["text_bar_px"], json!(6.0));
+    assert_eq!(r["plan"]["dot_px"], json!(1.0), "keys not given stay");
+    let own = plan_rules(s.doc().unwrap());
+    assert_eq!(own.text_bar_px, 6.0);
+    assert_eq!(own.tier_of("WIDGET", "0"), Tier::Detail);
+    // Kept in the drawing, so undo takes it back.
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(plan_rules(s.doc().unwrap()).text_bar_px, built_in.text_bar_px);
+    // Bad values are refused; hostile thresholds are made safe.
+    assert!(s.execute("view.fidelity.rules", &json!({"plan": {"symbols": [{"words": ["x"], "tier": "street"}]}})).is_err());
+    assert!(s.execute("view.fidelity.rules", &json!({"plan": 3})).is_err());
+    assert!(s.execute("view.fidelity.rules", &json!({"plan": {"dot_px": "big"}})).is_err());
+    s.execute("view.fidelity.rules", &json!({"plan": {"dot_px": 1e300, "image_px": 99999999}})).unwrap();
+    let safe = plan_rules(s.doc().unwrap());
+    assert!(safe.dot_px <= 1000.0 && safe.image_px <= 4096);
+}
+
 #[test]
 fn report_measures_each_tier() {
     let mut s = built();

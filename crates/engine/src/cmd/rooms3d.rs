@@ -31,10 +31,10 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rooms", "Rooms", run_list)
             .menu(&["Tools", "Building", "Rooms"])
-            .params("{level?: name, outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
+            .params("{level?: name, outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...], numbered_only?: bool (as rooms.list)} → as rooms.list (typed or from the menu: the Rooms palette)")
             .noundo(),
         CommandSpec::new("rooms.list", "List Rooms", run_list)
-            .params("{level?: name (only that level's rooms), outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count}: a built model's rooms at and outline where the 3D model draws them (the levels stacked), else on the sheet")
+            .params("{level?: name (only that level's rooms), outline?: bool (default true), regions?: [[x0, y0, x1, y1], ...] (read the labels only inside these sheet rectangles, each sheet in full), numbered_only?: bool (default false: only names printed with their room number, as another trade's plan numbers rooms)} → {rooms: [{name, number, area, areaSqFt, areaM2, perimeter, ceiling, ceilingFt, ceilingSource, elevation, volume, volumeCuFt, volumeM3, finishes, finishDetail, materials, level, label, at, outline}], count, nameCandidates?: {texts, outside_plan_views, numbers, kept, dropped: {reason: count}, examples} (traced, not built)}: a built model's rooms at and outline where the 3D model draws them (the levels stacked), else on the sheet")
             .noundo(),
         CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number? | label?} → the room (as rooms.list's)").noundo(),
         CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number? | label?} → {name, window}: the view shows the room").noundo(),
@@ -103,10 +103,16 @@ pub fn built(s: &mut Session) -> Result<Vec<Room3>> {
 /// [`rooms`]; before a build, with `regions` (sheet rectangles), the labels are read only inside
 /// them, sheet by sheet (a whole print set's floors, each read in full).
 pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Room3>> {
+    rooms_traced_in(s, regions, false)
+}
+
+/// [`rooms_in`]; `numbered`: traced from numbered room tags only
+/// ([`super::perceive::geometry::room_trace_numbered_in`]).
+fn rooms_traced_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool) -> Result<Vec<Room3>> {
     if let Some(built) = built_rooms(s)? {
         return Ok(built);
     }
-    let found = rooms_found_in(s, regions)?;
+    let found = if numbered { super::perceive::geometry::room_trace_numbered_in(s, regions)?.rooms.clone() } else { rooms_found_in(s, regions)? };
     let (d, ents) = objects(s)?;
     let k = units_per_inch(d);
     let ft = 12.0 * k;
@@ -118,10 +124,11 @@ pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Roo
         let inside: Vec<&String> =
             notes.iter().filter(|(_, _, at, _)| cadaddy_geom::point_in_polygon(&r.outline, *at)).map(|(_, t, _, _)| t).collect();
         let spec_room = spec.as_ref().and_then(|sp| {
-            sp.rooms.iter().find(|x| {
-                x.name.eq_ignore_ascii_case(&r.name)
-                    || (x.number.is_some() && x.number.as_deref().map(str::trim) == r.number.as_deref().map(str::trim))
-            })
+            // Its number first (a name a unit type's rooms share, or none, names no one room).
+            let number = r.number.as_deref().map(str::trim).filter(|n| !n.is_empty());
+            number
+                .and_then(|n| sp.rooms.iter().find(|x| x.number.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case(n))))
+                .or_else(|| sp.rooms.iter().find(|x| super::bspec::names_room(x, &r.name)))
         });
         let level = spec.as_ref().and_then(|sp| {
             let by_name = spec_room.and_then(|x| x.level.as_deref()).and_then(|n| sp.level(n));
@@ -269,7 +276,11 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
                     elevation: r.z,
                     ceiling: Some(r.ceiling_ft * upf).filter(|c| c.is_finite() && *c > 0.0).unwrap_or(DEFAULT_CEILING_IN * upf / 12.0),
                     ceiling_source: if r.ceiling_ft.is_finite() && r.ceiling_ft > 0.0 { "spec" } else { "default" }.into(),
-                    finish_detail: r.finish.iter().map(|f| FinishDetail { slot: "floor".into(), code: f.clone(), source: "spec".into() }).collect(),
+                    finish_detail: r
+                        .finish
+                        .iter()
+                        .map(|f| FinishDetail { slot: "floor".into(), code: f.clone(), source: r.finish_source.clone() })
+                        .collect(),
                     finishes: r.finish.into_iter().collect(),
                     materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
                     level: Some(r.level).filter(|l| !l.is_empty()),
@@ -437,9 +448,22 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
+    let numbered = bool_or(p, "numbered_only", false);
     let (mut rs, built) = match built_rooms(s)? {
         Some(rs) => (rs, true),
-        None => (rooms_in(s, regions.as_deref())?, false),
+        None => (rooms_traced_in(s, regions.as_deref(), numbered)?, false),
+    };
+    // Traced (not built): the names whose search stopped at its reach (read again, not traced).
+    // Traced (not built): the texts read as names, kept or dropped and why.
+    let (beyond, candidates) = if built {
+        (Vec::new(), None)
+    } else {
+        let t = if numbered {
+            super::perceive::geometry::room_trace_numbered_in(s, regions.as_deref())?
+        } else {
+            super::perceive::geometry::room_trace_in(s, regions.as_deref())?
+        };
+        (t.beyond_reach.clone(), Some(t.candidates.to_json()))
     };
     if let Some(l) = &level {
         rs.retain(|r| r.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(l)));
@@ -459,7 +483,15 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let list: Vec<Value> = rs.iter().map(|r| room_json(d, r, outline)).collect();
-    Ok(json!({ "rooms": list, "count": rs.len() }))
+    let mut out = json!({ "rooms": list, "count": rs.len() });
+    if !beyond.is_empty() {
+        out["beyondReach"] = super::perceive::geometry::beyond_reach_json(&beyond, units_per_inch(d));
+        out["beyondReachCount"] = json!(beyond.len());
+    }
+    if let Some(c) = candidates {
+        out["nameCandidates"] = c;
+    }
+    Ok(out)
 }
 
 /// How far the 3D model (`model.render`, the BIM view) draws each level's built objects from

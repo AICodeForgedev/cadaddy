@@ -52,12 +52,12 @@ pub fn tool_definitions(has_ui: bool) -> Value {
                 "fields": {"type": "object"}, "remove_fields": {"type": "array", "items": {"type": "string"}},
                 "handles": {"type": "array", "items": {"type": "string"}},
                 "create": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"summary\" {kind?} — per kind: count, values per key, sources per key; \"fill\" {} — put what the readers found on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), a person's values kept. \"check\" {checks?: [name], level?, limits?} — findings on what the properties say (devices with no circuit or an assumed height, doors in rated walls with no rating, rooms with no number, receptacles in wet rooms without GFCI, circuit load, wire vs breaker, conduit fill, voltage drop, MOCP, terminal cfm vs unit, duct velocity, fire dampers, unserved terminals, unpowered equipment, drainage fixture units vs pipe size, drain slope, fixtures with no waste/vent, water heater recovery, gas pipe size); \"schedule\" {kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit, file?: .csv|.xlsx} — a schedule from the properties. bim.takeoff / bim.bom also group and filter by properties: {group_by: [\"level\", \"circuit\"], filter: {kind: \"device\", type: \"duplex\"}}. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
-            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "summary", "fill", "check", "schedule"]},
+        json!({"name": "bim_props", "description": "Properties every element of the built model carries itself (outlet: type duplex, mount_height 18 in, circuit G-12, room 131…), each with its source: print (read from a sheet), legend, schedule, spec, note, rule or default (assumed — always marked), user (edited) or computed. action \"get\" {handle | handles} — an element's properties, its kind's standard keys and the missing ones; \"set\" {handle | handles | filter: {kind?, where?}, key, value, unit?, note?} or {…, props: {key: value}} — set values as the user's (kept through a rebuild from the prints); \"find\" {kind?, where: {key: value | \"exists\" | \"missing\"}} — the matching elements; \"batch\" {steps: [{kind?, where?, delta?: [dx, dy, dz?], props?: {key: value}, unit?, note?}], select?} — many corrections in one call (one undo step): each step finds elements as \"find\" does, then moves them and/or sets values on them; \"summary\" {kind?} — per kind: count, values per key, sources per key; \"fill\" {} — put what the readers found on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), a person's values kept. \"check\" {checks?: [name], level?, limits?} — findings on what the properties say (devices with no circuit or an assumed height, doors in rated walls with no rating, rooms with no number, receptacles in wet rooms without GFCI, circuit load, wire vs breaker, conduit fill, voltage drop, MOCP, terminal cfm vs unit, duct velocity, fire dampers, unserved terminals, unpowered equipment, drainage fixture units vs pipe size, drain slope, fixtures with no waste/vent, water heater recovery, gas pipe size); \"schedule\" {kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit, file?: .csv|.xlsx} — a schedule from the properties. bim.takeoff / bim.bom also group and filter by properties: {group_by: [\"level\", \"circuit\"], filter: {kind: \"device\", type: \"duplex\"}}. Kinds: wall, door, window, room, floor, ceiling, roof, device, fixture, light_fixture, equipment, duct, pipe, conduit.",
+            "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set", "find", "batch", "summary", "fill", "check", "schedule"]},
                 "handle": {"type": "string"}, "handles": {"type": "array", "items": {"type": "string"}},
                 "filter": {"type": "object"}, "kind": {"type": "string"}, "where": {"type": "object"},
                 "key": {"type": "string"}, "value": {}, "unit": {"type": "string"}, "note": {"type": "string"},
-                "props": {"type": "object"}, "select": {"type": "boolean"}, "limit": {"type": "integer"}}, "required": ["action"]}}),
+                "props": {"type": "object"}, "select": {"type": "boolean"}, "limit": {"type": "integer"}, "steps": {"type": "array", "items": {"type": "object"}}}, "required": ["action"]}}),
         json!({"name": "project_rules", "description": "Project rules: mounting heights, wiring methods, clearances, tolerances, naming and stud/joist layout per device/room type, each with a source (spec section, RFI #) and a tier (field_verified > rfi > submittal > drawing_revision > spec > project_rule > built_in). The highest tier wins. action \"list\" returns all rules (filter by domain); \"get\" resolves one rule (which tier won, what it overrode); \"set\" adds/updates a value with source, tier and reason (shows what changes); \"remove\" deletes a rule or tier; \"preview\" shows what setting would change without modifying; \"label\" gets/sets the project name; \"import\" reads a TOML/JSON file; \"export\" writes one.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "set", "remove", "preview", "label", "import", "export"]},
                 "domain": {"type": "string", "enum": ["mounting_height", "wiring_method", "stud_layout", "joist_layout", "clearance", "tolerance", "naming", "custom"]},
@@ -155,9 +155,9 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["init", "status", "check", "uncheck", "sign", "ready", "wall", "photo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
         json!({"name": "validate", "description": "Validate the BIM model against its prints, as the judge. CADaddy holds the rules and makes one evidence packet per area (a room, a corridor stretch, an equipment room): print crops, the model drawn over the same crops, a 3D view and wall elevations, objects.json, rules.json and prompt.md. You judge; CADaddy keeps the findings. The loop:\n1. start {scope: \"building\"} (or \"level\" {level}, \"room\" {room: \"101\"}, \"area\" {area}, \"selection\"; trades?, rules?, out_dir?) — starts or resumes a run; returns {run, areas, next}. Areas unchanged since judged are kept.\n2. next {run} — the next area's packet: its folder, prompt.md (inline when short), the rules and the pictures. Read prompt.md and look at every picture it names.\n3. Judge every rule of the packet for every element it applies to: pass, fail, missing (the print shows it, the model hasn't it: no handle), extra (the model has it, no print shows it: its handle) or unsure (unreadable, document not in the packet, print and notes disagree). Never guess: say unsure.\n4. report {run, area, findings: [{rule, handle?, verdict, issue, expected, found, evidence: [{image: \"prints/…png\", sheet, what}], confidence: 0-1, severity?}]} — fail, missing and extra cite at least one print picture of the packet. A bad report is refused whole with every problem listed: fix and send it again.\n5. Repeat next → judge → report until next says done; then status {run} — accuracy per trade and rule, findings, the false-alarm rate from what people rejected, and on a planted copy the planted errors caught and missed.\nplant {count, seed} opens a copy of the drawing with known errors planted, to measure a judge. People accept or reject each finding in the review queue (bim_job review_list {kind: \"validation\"}).",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "report", "status", "plant"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id: \"Q-rooms-23\", answer: \"Correct\"} — answer a question (ids come from next: Q-<stage>-<n>); the pipeline resumes (reply: effect, rerun, changed). Many at once: {answers: [{id, answer}, …]} — each stands alone (an unknown or merged id is a warning, the rest are kept) and the stages they change run again once. A level question takes an elevation (\"12'-6\\\"\" or {elevation_ft: 12.5, name: \"Mezzanine\"}). Each question's if_changed says what an answer other than the default runs again and about how long.\n- set_mode {auto: true} — run the job on unattended from here (answers given are kept); auto: false makes it stop at checkpoints again.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
+        json!({"name": "guided_job", "description": "For prints → model/takeoff/estimate, call guided_job start then loop guided_job next / guided_job answer. The software runs a fixed pipeline (import → classify → levels → rooms → devices → bim.build → takeoff → estimate) and stops with a question at each checkpoint: confirm a scale, name a room, identify an unknown symbol, spot-check a count. The job waits until the question is answered; an answer that changes what a stage read runs that stage (and the ones after it) again and says what changed. Answers become project rules for future runs. A worklist collects every question, finding and action; each resolved action is undoable. Actions:\n- start {pdfs: folder, goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\"|\"clash\", auto?: true} — create a job; auto: true takes every default and runs to the end (a stage that found nothing is still asked).\n- next {} — the next question (or done/progress).\n- answer {id: \"Q-rooms-23\", answer: \"Correct\"} — answer a question (ids come from next: Q-<stage>-<n>); the pipeline resumes (reply: effect, rerun, changed). Many at once: {answers: [{id, answer}, …]} — each stands alone (an unknown or merged id is a warning, the rest are kept) and the stages they change run again once. A level question takes an elevation (\"12'-6\\\"\" or {elevation_ft: 12.5, name: \"Mezzanine\"}). Each question's if_changed says what an answer other than the default runs again and about how long.\n- sheets_set {\"<sheet number>\": {type?, level?, title?, discipline?, scale?, plan_view?: [x0, y0, x1, y1] sheet inches, not_built?, tables?}} — the sheet-index checkpoint (the first question after classify): its evidence names sheet-index.json (every sheet's reading, flags, views with rectangles) and the PNG pictures of each page and a contact sheet; read the pictures and correct many sheets in one call (or answer the checkpoint \"Correct\"). Each correction is a rule over the readers; the levels stage on runs again.\n- set_mode {auto: true} — run the job on unattended from here (answers given are kept); auto: false makes it stop at checkpoints again.\n- status {} — job progress, findings and open worklist items.\n- explain {stage?} — what a stage does and its state.\n- rules {} — learned project rules.\n- report {} — final report.\n- worklist {status?: \"pending\"|\"resolved\"|\"info\", stage?} — the unified worklist.\n- undo {id} — undo a resolved worklist action.",
             "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["start", "next", "answer", "set_mode", "status", "explain", "rules", "report", "worklist", "undo"]}, "params": {"type": "object"}}, "required": ["action"]}}),
-        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"), \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
+        json!({"name": "mep", "description": "MEP review: list every run/fitting/item the reader made, grouped by system and level, with confidence and the source of its height and size. Edit a run's size, height or system, mark it reviewed, and rebuild the model keeping hand edits. Actions: \"list\" (default) returns items (paged, default 50), \"edit\" changes one item by its stable id (e.g. \"R1\"); one element at a time, kept through the documents being read again and every rebuild (each change a correction with the documents' value beside it): \"add\" (mep.add: a duct or pipe run, joined from an existing run's end or a unit with from: {run: \"R1\"}; an air terminal or sprinkler head; a piece of equipment with tag, kind, at, size_ft, height_ft), \"move\" (delta_ft: [dx, dy] or to, bottom_ft), \"resize\" (size_in; equipment size_ft, height_ft), \"delete\", \"set\" (type_mark, new_system, kind, properties), each naming its element by handle, run, tag, edit or element + level + at; \"edits\" lists them (applied or orphaned) and revert: \"ME-3\" takes one back; \"casework\" reads the open architectural floor plan's casework and plumbing fixtures with their schedule: each item's tag, kind, 3D family, position, height, source (sheet, schedule) and status (schedule / note / pattern / tag), paged by cursor and limit; place: true makes each item with a family that model.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string"},
             "level": {"type": "string"}, "system": {"type": "string"}, "guessed_only": {"type": "boolean"},
@@ -169,7 +169,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
             "edited_by": {"type": "string", "description": "who made this edit (default \"agent\")"},
             "rebuild": {"type": "boolean"},
             "place": {"type": "boolean", "description": "casework action: place the 3D family of each read item"},
-            "kind": {"type": "string", "description": "casework action: only this kind (e.g. \"vanity\", \"water_closet\")"},
+            "kind": {"type": "string", "description": "casework action: only this kind (e.g. \"vanity\", \"water_closet\"); add/set: the terminal's or unit's kind"},
             "sheet": {"type": "string", "description": "casework action: the sheet number to record as the source"}
         }}}),
         json!({"name": "import_check", "description": "Check the quality of a PDF-imported drawing: scale, layers, text recovery, fills, symbols, grid. Returns pass/fail, a score (0-100), per-check results with evidence for zoom-to, and hard-fail IDs (SCALE, FILLS, SYMBOLS each fail on their own). Optionally check a file by path without opening it.",
@@ -201,6 +201,7 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         json!({"name": "job_status", "description": "Check on background operations. Returns whether CADaddy is busy and what it is doing (opening files, building models, rendering). Long commands like bim.from_pdf and model.build report progress here. Use wait_until_idle to block until done.",
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "job id (omit to see all)"}}}}),
     ];
+    mep_edit_properties(&mut tools);
     if has_ui {
         tools.push(json!({"name": "screenshot", "description": "Screenshot the CADaddy window (PNG).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}}));
         tools.push(json!({"name": "ui_inspect", "description": "UI state: panels, canvas rect, view, cursor and snap, performance.", "inputSchema": {"type": "object", "properties": {}}}));
@@ -213,6 +214,45 @@ pub fn tool_definitions(has_ui: bool) -> Value {
         tools.push(json!({"name": "ui_click", "description": "Click in the drawing area at world coordinates (or screen with space:\"screen\"). Right button = Enter.", "inputSchema": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "space": {"type": "string"}, "button": {"type": "string"}}, "required": ["x", "y"]}}));
     }
     json!({ "tools": tools })
+}
+
+/// The `mep` tool's parameters for one element at a time (mep.add, mep.move, mep.resize,
+/// mep.delete, mep.set, mep.edits), apart from its literal (one `json!` that large overflows the
+/// macro's recursion).
+fn mep_edit_properties(tools: &mut [Value]) {
+    let Some(props) = tools.iter_mut().find(|t| t["name"] == "mep").and_then(|t| t["inputSchema"]["properties"].as_object_mut()) else { return };
+    let text = |d: &str| json!({"type": "string", "description": d});
+    let pair = |d: &str| json!({"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": d});
+    let more = [
+        ("handle", text("add/move/resize/delete/set: the built element (hex handle)")),
+        ("run", text("add/move/resize/delete/set: a run by its stable id")),
+        ("tag", text("equipment by its tag (add: the new unit's tag)")),
+        ("edit", text("an element an earlier add put in, by that edit's id (\"ME-2\")")),
+        ("element", text("add: run|duct|pipe|terminal|diffuser|register|grille|sprinkler|equipment; with level and at, the element nearest there")),
+        ("at", pair("drawing units: a terminal's or unit's place, or where to find an element")),
+        (
+            "points",
+            json!({"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "add run: its path, drawing units"}),
+        ),
+        ("from", json!({"type": "object", "description": "add: what the new run starts on ({run}, {tag}, {handle}, {edit}; end: start|end)"})),
+        ("to", json!({"description": "add: what the new run ends on (as from); move: [x, y] where it goes"})),
+        ("delta_ft", pair("move: by how much, feet")),
+        ("size_ft", pair("equipment plan size, feet")),
+        ("height_ft", json!({"type": "number"})),
+        ("type_mark", text("set: equipment's type mark")),
+        ("new_system", text("set: a run's or terminal's new system")),
+        ("properties", json!({"type": "object", "description": "set: name → value (null removes one of equipment's)"})),
+        ("systems", json!({"type": "array", "items": {"type": "string"}})),
+        ("made", text("add: drawn|derived|inferred (default inferred)")),
+        ("basis", text("add: why it is there")),
+        ("reason", text("why: kept with the correction")),
+        ("by", text("user or agent")),
+        ("revert", text("edits action: the edit to take back")),
+        ("status", text("edits action: applied|orphaned")),
+    ];
+    for (k, v) in more {
+        props.insert(k.to_string(), v);
+    }
 }
 
 /// A new session picks up the job kept last (Q5276): when no print set is open and the drawing
@@ -670,11 +710,12 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
                 Some("get") => "bim.props.get",
                 Some("set") => "bim.props.set",
                 Some("find") => "bim.props.find",
+                Some("batch") => "bim.props.batch",
                 Some("summary") => "bim.props.summary",
                 Some("fill") => "bim.props.fill",
                 Some("check") => "bim.props.check",
                 Some("schedule") => "bim.schedule",
-                _ => return Ok(err_text("bim_props needs an action: get, set, find, summary, fill, check or schedule")),
+                _ => return Ok(err_text("bim_props needs an action: get, set, find, batch, summary, fill, check or schedule")),
             };
             let mut params = a.clone();
             if let Some(o) = params.as_object_mut() {
@@ -823,9 +864,10 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
                 Some("worklist") => "job.worklist",
                 Some("undo") => "job.undo",
                 Some("set_mode") => "job.set_mode",
+                Some("sheets_set") => "job.sheets.set",
                 Some(other) => {
                     return Err(format!(
-                        "guided_job has no action `{}` — use start, next, answer, set_mode, status, explain, rules, report, worklist or undo",
+                        "guided_job has no action `{}` — use start, next, answer, sheets_set, set_mode, status, explain, rules, report, worklist or undo",
                         other.chars().take(30).collect::<String>()
                     ));
                 }
@@ -834,7 +876,7 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
             let params = a.get("params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             let resumed = if command == "job.start" { None } else { resume_kept(b) };
             exec(b, command, params).map(|mut out| {
-                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.set_mode" | "job.undo") {
+                if matches!(command, "job.start" | "job.next" | "job.answer" | "job.sheets.set" | "job.set_mode" | "job.undo") {
                     keep(b, &mut out);
                 }
                 if let (Some(r), Some(o)) = (resumed, out.as_object_mut()) {
@@ -921,6 +963,12 @@ fn run_tool(b: &mut dyn Backend, name: &str, a: Value) -> Result<Value, String> 
             } else {
                 let command = match a.get("action").and_then(Value::as_str) {
                     Some("edit") => "mep.edit",
+                    Some("add") => "mep.add",
+                    Some("move") => "mep.move",
+                    Some("resize") => "mep.resize",
+                    Some("delete") => "mep.delete",
+                    Some("set") => "mep.set",
+                    Some("edits") => "mep.edits",
                     _ => "mep.list",
                 };
                 let mut params = a.clone();

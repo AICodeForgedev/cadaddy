@@ -12,6 +12,13 @@ pub const MAX_BLOCK_DEPTH: usize = 16;
 /// Bounds of a single-line TEXT / ATTDEF / ATTRIB of `len` characters, following its justification
 /// the same way the renderer places it (the stroke font is about 0.88 of the height per character).
 fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
+    Bounds2::from_points(text_quad(t, len))
+}
+
+/// The box a single-line TEXT / ATTDEF / ATTRIB of `len` characters takes, along its rotation
+/// (bottom left, bottom right, top right, top left): where [`entity_bounds`] measures it, and
+/// where the screen draws it as a bar when it is too small to read.
+pub fn text_quad(t: &crate::Text, len: usize) -> [Vec2; 4] {
     use crate::{HAlign, VAlign};
     let w = t.height * 0.9 * t.width_factor.abs().max(0.01) * len.max(1) as f64;
     // Justified text (TL, ML and BL too) hangs from its alignment point (DXF group 11).
@@ -29,7 +36,7 @@ fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
         (_, VAlign::Top) => -t.height,
     };
     let local = [Vec2::new(dx, dy), Vec2::new(dx + w, dy), Vec2::new(dx + w, dy + t.height), Vec2::new(dx, dy + t.height)];
-    Bounds2::from_points(local.map(|p| origin + p.rotate(t.rotation)))
+    local.map(|p| origin + p.rotate(t.rotation))
 }
 
 /// Whether an entity inside a block definition shows: its own invisible flag and its layer count,
@@ -50,9 +57,17 @@ fn blank(s: &str) -> bool {
 
 /// Approximate box of an MTEXT, from its attachment point, width and line count.
 fn mtext_box(t: &crate::MText) -> Bounds2 {
+    Bounds2::from_points(mtext_quad(t))
+}
+
+/// The box an MTEXT takes, along its rotation (top left, top right, bottom right, bottom left),
+/// from its attachment point, width and line count.
+pub fn mtext_quad(t: &crate::MText) -> [Vec2; 4] {
     let lines = t.contents.split("\\P").count().max(1);
     let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-    let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+    let estimate = t.height * 0.8 * longest as f64;
+    // The wrap width only narrows the box: a garbage width must not stretch the drawing extents (#2465).
+    let mut w = if t.width > 0.0 { t.width.min(estimate) } else { estimate };
     let mut h = t.height * 1.66 * lines as f64;
     if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
         // Columns side by side, the text flowing down each in turn.
@@ -70,21 +85,56 @@ fn mtext_box(t: &crate::MText) -> Bounds2 {
         _ => 0.0,
     };
     let o = t.insert.xy();
-    let pts = [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
-        .map(|p| o + p.rotate(t.rotation));
-    Bounds2::from_points(pts)
+    [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
+        .map(|p| o + p.rotate(t.rotation))
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    entity_bounds_with(d, e, depth, &mut HashMap::new())
+}
+
+/// The bounds of block contents measured so far, kept across the entities of one unchanged
+/// drawing. Measuring many entities with [`entity_bounds_cached`] and one cache measures each
+/// block definition once per depth for all of them; a fresh cache per entity would measure a
+/// block again for every reference to it, R references to a block of B entities costing R x B
+/// (CWE-407). Use a cache only while the drawing it measured is unchanged.
+#[derive(Default)]
+pub struct BlockBoundsCache<'a> {
+    /// By block name and depth.
+    drawn: HashMap<(&'a str, usize), Bounds2>,
+}
+
+/// [`entity_bounds`] reusing the block bounds `cache` holds from earlier calls on drawing `d`.
+pub fn entity_bounds_cached<'a>(d: &'a Drawing, e: &Entity, depth: usize, cache: &mut BlockBoundsCache<'a>) -> Bounds2 {
+    entity_bounds_with(d, e, depth, &mut cache.drawn)
+}
+
+fn entity_bounds_with<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<(&'a str, usize), Bounds2>) -> Bounds2 {
     // A top-level annotative object measures as it draws at the current annotation scale.
     if depth == 0 {
         match d.anno_draw(e) {
             crate::AnnoDraw::Plain => {}
             crate::AnnoDraw::Hidden => return Bounds2::EMPTY,
-            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, blocks),
         }
     }
-    bounds_in(d, e, depth, &mut HashMap::new())
+    bounds_in(d, e, depth, blocks)
+}
+
+/// The union of [`entity_bounds`] of top-level objects `es`, each block's contents measured once
+/// for all of them (a run of references to the same symbol costs one pass over its definition).
+pub fn entities_bounds<'a>(d: &'a Drawing, es: impl IntoIterator<Item = &'a Entity>) -> Bounds2 {
+    let mut blocks = HashMap::new();
+    let mut out = Bounds2::EMPTY;
+    for e in es {
+        let b = match d.anno_draw(e) {
+            crate::AnnoDraw::Plain => bounds_in(d, e, 0, &mut blocks),
+            crate::AnnoDraw::Hidden => Bounds2::EMPTY,
+            crate::AnnoDraw::Scaled(f) => bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+        };
+        out = out.union(&b);
+    }
+    out
 }
 
 /// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
@@ -98,6 +148,11 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
         EntityKind::Table(t) if t.is_broken() => t.bounds(),
         EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
         EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
+        // Text that matches the layout's orientation is drawn upright (#2498).
+        EntityKind::Text(t) if e.common.matches_layout_orientation() => {
+            text_box(&crate::Text { rotation: 0.0, ..t.clone() }, t.value.chars().count())
+        }
+        EntityKind::MText(t) if e.common.matches_layout_orientation() => mtext_box(&crate::MText { rotation: 0.0, ..t.clone() }),
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
         EntityKind::MText(t) => mtext_box(t),
@@ -185,6 +240,10 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
                         inner
                     }
                 };
+                // The block draws translated by the insertion point (group 12), so its bounds
+                // move with it; the cache above keeps the block's own bounds.
+                let off = if dm.insertion_point.is_finite() { dm.insertion_point.xy() } else { Vec2::ZERO };
+                let inner = if off == Vec2::ZERO || inner.is_empty() { inner } else { Bounds2 { min: inner.min + off, max: inner.max + off } };
                 b = b.union(&inner);
             }
             b
@@ -386,6 +445,38 @@ mod tests {
         entity_bounds(&Drawing::default(), &Entity::new(crate::Handle(1), kind), 0)
     }
 
+    fn mtext(contents: &str, width: f64) -> crate::MText {
+        crate::MText {
+            background: None,
+            insert: Vec3::new(10.0, 10.0, 0.0),
+            height: 2.5,
+            width,
+            attach: 1,
+            rotation: 0.0,
+            style: "Standard".into(),
+            contents: contents.into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        }
+    }
+
+    /// A garbage wrap width only narrows an MTEXT's box, never widens it: a huge group 41 must not
+    /// stretch the drawing extents (#2465).
+    #[test]
+    fn a_huge_mtext_wrap_width_does_not_inflate_the_extents() {
+        let b = bounds(EntityKind::MText(mtext("AB", 300_000_009_519_104.0)));
+        // "AB" at height 2.5 is 2 chars * 0.8 * 2.5 = 4 wide.
+        assert!(b.max.x <= 10.0 + 4.0 + 1e-9, "box ends at x = {}", b.max.x);
+        assert!(b.min.x >= 10.0 - 1e-9);
+    }
+
+    /// A wrap width narrower than the text still bounds the box to that width.
+    #[test]
+    fn a_narrow_mtext_wrap_width_still_sets_the_box_width() {
+        let b = bounds(EntityKind::MText(mtext("A LONG LINE OF WRAPPING TEXT", 5.0)));
+        assert!((b.max.x - b.min.x - 5.0).abs() < 1e-9, "width {}", b.max.x - b.min.x);
+    }
     #[test]
     fn right_justified_text_is_left_of_alignment_point() {
         let b = bounds(EntityKind::Text(text(HAlign::Right, VAlign::Baseline)));
@@ -456,5 +547,56 @@ mod tests {
         let mut empty = ml;
         empty.text = Some(crate::MText { contents: " ".into(), ..mtext });
         assert!(bounds(EntityKind::MLeader(Box::new(empty))).max.x < 26.0);
+    }
+
+    #[test]
+    fn a_shared_block_cache_measures_as_a_fresh_one_for_each_entity() {
+        // Our block store keeps one entity per handle: each line gets its own.
+        let line = |h: u64, a: (f64, f64), b: (f64, f64), layer: &str| {
+            let mut e = Entity::new(crate::Handle(h), EntityKind::Line(crate::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) }));
+            e.common.layer = layer.into();
+            e
+        };
+        let ins = |block: &str, at: f64| {
+            Entity::new(
+                crate::Handle(2),
+                EntityKind::Insert(crate::Insert {
+                    block: block.into(),
+                    insert: Vec3::new(at, at, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: Vec::new(),
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                    clip: None,
+                }),
+            )
+        };
+        let mut d = Drawing::new_imperial();
+        d.ensure_layer("OFF");
+        if let Some(l) = d.layer_mut("OFF") {
+            l.on = false;
+        }
+        // A block with a part on a layer turned off (left out when drawn), and a block that
+        // nests it.
+        let mut b = crate::Block::new("B");
+        b.entities.push(line(0x10, (0.0, 0.0), (1.0, 1.0), "0"));
+        b.entities.push(line(0x11, (0.0, 0.0), (5.0, 5.0), "OFF"));
+        d.blocks.insert("B".into(), std::sync::Arc::new(b));
+        let mut n = crate::Block::new("N");
+        n.entities.push(ins("B", 10.0));
+        d.blocks.insert("N".into(), std::sync::Arc::new(n));
+        let ents: Vec<Entity> = (0..50).map(|i| ins(if i % 2 == 0 { "B" } else { "N" }, f64::from(i))).collect();
+        // One cache for all the references, plain and nested.
+        let mut cache = BlockBoundsCache::default();
+        for e in &ents {
+            let drawn = entity_bounds_cached(&d, e, 0, &mut cache);
+            let want = entity_bounds(&d, e, 0);
+            assert_eq!((drawn.min, drawn.max), (want.min, want.max));
+            // The part on the layer turned off is left out, nested or not.
+            assert!((drawn.width() - 1.0).abs() < 1e-9, "{drawn:?}");
+        }
     }
 }

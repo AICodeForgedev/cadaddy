@@ -118,6 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v.extend(navwheel::specs());
     v.extend(camera::specs());
     v.extend(quickview::specs());
+    v.extend(crate::sheetnav::specs());
     v
 }
 

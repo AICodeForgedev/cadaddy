@@ -33,13 +33,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {spec, stored: bool (false: drafted from the walk rules — <drawing>.walk.json, the last WALLGEN, else the defaults), parts: [{section, key, text (plain language), approved, guess?: why it was guessed}], built: bool}")
             .noundo(),
         CommandSpec::new("bspec.set", "Set Building Spec", run_set).params(
-            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layers by layer, {\"remove\": true} removes one), replace?: bool} → {spec, errors, warnings}",
+            "{spec: object (merged into the drawing's spec: objects key by key, null removes; levels, wall_types, rooms, families merge by name and layer roles by layer, {\"remove\": true} removes one; a build-up list (an assembly's or a ceiling type's layers) is replaced whole, never appended to; a new `walls` list is a wall edit where it differs: an entry whose centreline moved moves the wall built there, one removed deletes it, one added builds a wall of its type, kept in `wall_edits` and honoured by every build — the same entry put back takes the edit back), replace?: bool} → {spec, errors, warnings, wallEdits?: {made, taken_back, refused}}",
         ),
         CommandSpec::new("bspec.validate", "Validate Building Spec", run_validate)
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).long().params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it), force?: bool (lay the model out again even when nothing it reads changed since its build)} → {kept?: true (nothing the build reads changed since the model was built: kept as it is, with the steps after its build), partial?: {rebuilt_levels, elements_rebuilt, elements_kept} (only some levels' entries or roof parts changed: only those levels were laid out again), rebuild: {categories, changed_categories, changed: [{level, part, before, after}], why: [string], steps_not_repeated: [{step, by, touched, changed}]} (called from outside: what this build changed against the model it replaced and why; the drawing's spec keeps a `build_record`: the engine, switches, spec and plan the model was built with and every step after its build), walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, parapetTops: [{roof, level, facade, from_ft, to_ft, lf, height_ft, top_ft, status: read|default, basis}] (each outline edge's top of parapet, a stepped parapet's every top), crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it), force?: bool (lay the model out again even when nothing it reads changed since its build), parts?: [string] (build only these: a build part, element kind or kind as read, such as casework, furniture, ceiling, hoistway, light_fixture or receptacle; every other element of the model stays as it stands, with its corrections: a fix the build makes reaches a corrected model without laying out every device again)} → {kept?: true (nothing the build reads changed since the model was built: kept as it is, with the steps after its build), partial?: {rebuilt_levels, elements_rebuilt, elements_kept} (only some levels' entries or roof parts changed: only those levels were laid out again), parts?: {parts, elements_rebuilt, elements_kept, unmatched} (only these parts were built), handMade?: {kept, found_at_rebuild} (copies a person made of generated elements, kept as they stand: added items in override.list), rebuild: {categories, changed_categories, changed: [{level, part, before, after}], why: [string], steps_not_repeated: [{step, by, touched, changed}]} (called from outside: what this build changed against the model it replaced and why; the drawing's spec keeps a `build_record`: the engine, switches, spec and plan the model was built with and every step after its build), walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, parapetTops: [{roof, level, facade, from_ft, to_ft, lf, height_ft, top_ft, status: read|default, basis}] (each outline edge's top of parapet, a stepped parapet's every top), crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, structuralGrid: {level?, lines, labels?, plan?} (the building's structural grid, each line a model element, read from the lowest storey's plan that shows one), conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).long().params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (save the model even when the run failed)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the plan sheets the job built from), pages_note, spec_guesses, check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {wall, door, window, ...} (elements built), built: {level: {part: n}}, levels, job: {job_id, status, done, findings} (the guided job that ran: job.status / job.report say more), ok, failed: [why the run failed: the job didn't finish, a hard import-check fail, a storey that came out empty], warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -48,8 +48,74 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The drawing's stored spec, if it has one.
-fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
-    d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).map(BuildingSpec::from_json).transpose()
+pub(crate) fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
+    let text = &d.building_spec;
+    if text.as_deref().is_none_or(|t| t.trim().is_empty()) {
+        return Ok(None);
+    }
+    let kept = READ_SPEC.with(|c| c.try_borrow().ok().and_then(|r| r.as_ref().filter(|r| text.is(&r.text)).map(|r| Arc::clone(&r.spec))));
+    if let Some(spec) = kept {
+        return spec.as_ref().clone().map(Some);
+    }
+    SPEC_PARSES.with(|n| n.set(n.get().saturating_add(1)));
+    let spec = Arc::new(BuildingSpec::from_json(text.as_deref().unwrap_or_default()));
+    if SPEC_SCOPES.with(std::cell::Cell::get) > 0 {
+        READ_SPEC.with(|c| {
+            if let Ok(mut c) = c.try_borrow_mut() {
+                *c = Some(ReadSpec { text: text.downgrade(), spec: Arc::clone(&spec) });
+            }
+        });
+    }
+    spec.as_ref().clone().map(Some)
+}
+
+/// A drawing's stored spec as read, by the copy of the text it was read from.
+struct ReadSpec {
+    text: std::sync::Weak<Option<String>>,
+    spec: Arc<std::result::Result<BuildingSpec, String>>,
+}
+
+thread_local! {
+    /// The spec last read on this thread while a command runs ([`read_spec_scope`]): every
+    /// pass of a takeoff (and of many other commands) asks for the spec, and each was a whole
+    /// parse of text that runs to megabytes (Q6568). A changed spec is a new copy of the text,
+    /// so it never matches (`Shared::is`); it is let go when the outermost command ends, so a
+    /// large spec is never held twice between commands.
+    static READ_SPEC: std::cell::RefCell<Option<ReadSpec>> = const { std::cell::RefCell::new(None) };
+    static SPEC_SCOPES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static SPEC_PARSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// While the value lives (the outermost command running), [`stored`] reads each spec text on
+/// this thread once.
+pub(crate) struct ReadSpecScope(());
+
+pub(crate) fn read_spec_scope() -> ReadSpecScope {
+    SPEC_SCOPES.with(|n| n.set(n.get().saturating_add(1)));
+    ReadSpecScope(())
+}
+
+impl Drop for ReadSpecScope {
+    fn drop(&mut self) {
+        let left = SPEC_SCOPES.with(|n| {
+            n.set(n.get().saturating_sub(1));
+            n.get()
+        });
+        if left == 0 {
+            READ_SPEC.with(|c| {
+                if let Ok(mut c) = c.try_borrow_mut() {
+                    *c = None;
+                }
+            });
+        }
+    }
+}
+
+/// How many times this thread has parsed a drawing's stored spec in [`stored`] (a test counter:
+/// a command asking again for the spec of an unchanged drawing parses nothing).
+#[cfg(test)]
+pub(crate) fn spec_parses() -> u64 {
+    SPEC_PARSES.with(std::cell::Cell::get)
 }
 
 /// What to do about a stored spec that can't be read (a newer version, or the wrong shape).
@@ -66,13 +132,32 @@ pub(crate) fn current(s: &Session, cmd: &str) -> Result<(BuildingSpec, bool)> {
 /// The current spec with `patch` merged in (or `patch` alone with `replace`).
 /// With `replace` the stored spec is never read, so an unreadable one can still be replaced.
 fn merged(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Result<BuildingSpec> {
-    let Some(patch) = patch.filter(|v| !v.is_null()) else { return Ok(current(s, cmd)?.0) };
+    Ok(merged_with_edits(s, cmd, patch, replace)?.0)
+}
+
+/// [`merged`], and the wall edits a change to the wall list made (Q6613): merged into the spec,
+/// an entry of `walls` moved, removed or added moves, deletes or adds the wall built there
+/// ([`BuildingSpec::record_wall_list_changes`]), unless the patch gives `wall_edits` itself.
+/// A replaced spec is the spec as given.
+fn merged_with_edits(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Result<(BuildingSpec, cadaddy_walk3d::walledits::ListChange)> {
+    let Some(patch) = patch.filter(|v| !v.is_null()) else { return Ok((current(s, cmd)?.0, Default::default())) };
     if !patch.is_object() {
         return Err(bad(cmd, "`spec` must be an object"));
     }
-    let mut v = if replace { json!({}) } else { serde_json::to_value(current(s, cmd)?.0).map_err(|e| bad(cmd, e.to_string()))? };
+    let old = if replace { None } else { Some(current(s, cmd)?.0) };
+    let mut v = match &old {
+        None => json!({}),
+        Some(o) => serde_json::to_value(o).map_err(|e| bad(cmd, e.to_string()))?,
+    };
     cadaddy_walk3d::merge(&mut v, patch);
     let mut sp = BuildingSpec::from_json(&v.to_string()).map_err(|e| bad(cmd, e))?;
+    let mut change = cadaddy_walk3d::walledits::ListChange::default();
+    if let Some(old) = &old
+        && patch.get("walls").is_some()
+        && patch.get("wall_edits").is_none()
+    {
+        change = sp.record_wall_list_changes(&old.walls);
+    }
     // Replacing the spec replaces the spec, not the data other commands keep beside it in the
     // same text (saved views, colour schemes…): those stay unless the new spec gives them. A
     // stored spec that can't be read keeps nothing.
@@ -81,7 +166,7 @@ fn merged(s: &Session, cmd: &str, patch: Option<&Value>, replace: bool) -> Resul
             sp.kept.entry(k).or_insert(val);
         }
     }
-    Ok(sp)
+    Ok((sp, change))
 }
 
 fn issue_json(i: &Issue) -> Value {
@@ -208,11 +293,20 @@ pub(crate) fn room_label(r: &cadaddy_walk3d::SpecRoom) -> String {
     }
 }
 
-/// Whether a tag text names the room (its name or number, case and spacing aside).
+/// Whether a tag text names the room (its name, number or the plan label it corrects, case and
+/// spacing aside).
 pub(crate) fn names_room(r: &cadaddy_walk3d::SpecRoom, text: &str) -> bool {
     let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     let t = norm(text);
-    (!r.name.trim().is_empty() && norm(&r.name) == t) || r.number.as_deref().is_some_and(|n| !n.trim().is_empty() && norm(n) == t)
+    let is = |v: Option<&str>| v.is_some_and(|v| !v.trim().is_empty() && norm(v) == t);
+    is(Some(&r.name)) || is(r.number.as_deref()) || is(r.label.as_deref())
+}
+
+/// Whether a room number tag on the plan is the room's: its number, or the plan label (a wrong
+/// number) its entry corrects.
+fn numbers_room(r: &cadaddy_walk3d::SpecRoom, text: &str) -> bool {
+    let t = text.trim();
+    [r.number.as_deref(), r.label.as_deref()].into_iter().flatten().any(|n| !n.trim().is_empty() && n.trim().eq_ignore_ascii_case(t))
 }
 
 /// The texts that tag rooms: those on room tag layers, else every text.
@@ -494,10 +588,25 @@ fn run_get(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(patch) = p.get("spec").filter(|v| !v.is_null()) else { return Err(bad("bspec.set", "`spec` is required")) };
-    let sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
+    let (mut sp, walls) = merged_with_edits(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
+    // Gear placed, moved or put on another floor: the feeders that land on it are routed again
+    // (Q6523); model.build builds them.
+    let feeders = super::feederfollow::follow(&mut sp, super::feederfollow::Mode::Moved);
     let issues = validate(s.doc()?, &sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
+    if feeders.changed() {
+        r["feeders"] = feeders.json();
+    }
+    if !walls.is_empty() {
+        r["wallEdits"] = json!({"made": walls.made, "taken_back": walls.dropped, "refused": walls.refused});
+        if walls.refused > 0 {
+            s.echo(format!(
+                "{} wall list changes not kept: the spec holds the most wall edits it keeps (wall.edits revert takes some back)",
+                walls.refused
+            ));
+        }
+    }
     r["spec"] = serde_json::to_value(&sp).unwrap_or(Value::Null);
     if let Some(o) = r.as_object_mut() {
         o.remove("ok");
@@ -521,6 +630,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         super::conduitroute::set_enabled(s.doc_mut()?, on);
     }
     let budget = count_param("model.build", p, "budget_s", 1, MAX_BUILD_BUDGET_S)?;
+    let parts = parts_param(p)?;
     if bool_or(p, "clear", false) {
         let n = wallgen::remove_made(s.doc_mut()?);
         s.state_mut()?.wallgen = None;
@@ -558,17 +668,20 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let echo = super::bool_param("model.build", p, "echo")?.unwrap_or(true);
     let g = WallGen { rules: sp.to_rules(), auto: bool_or(p, "auto", true), slab_ft, layers: None, spec: Some(sp) };
-    if let Some(rec) = old_rec.as_ref().filter(|_| top && !force && why.is_empty()) {
+    if let Some(rec) = old_rec.as_ref().filter(|_| top && !force && why.is_empty() && parts.is_none()) {
         return kept_model(s, g, rec, echo);
     }
     if force {
         why.push("force: true".into());
     }
+    if let Some(parts) = &parts {
+        why.push(format!("parts: {} (every other element kept as it stands)", parts.iter().cloned().collect::<Vec<_>>().join(", ")));
+    }
     let partial = match (&old_rec, &inputs, &g.spec) {
-        (Some(rec), Some(i), Some(sp)) if !force => i.partial(rec, sp),
+        (Some(rec), Some(i), Some(sp)) if !force && parts.is_none() => i.partial(rec, sp),
         _ => None,
     };
-    let old_doc = s.state().map(|st| Arc::clone(&st.doc)).ok().filter(|_| partial.is_some());
+    let old_doc = s.state().map(|st| Arc::clone(&st.doc)).ok().filter(|_| partial.is_some() || parts.is_some());
     let mut r = build_spec_with_budget(s, &g, budget_s)?;
     if let (Some(levels), Some(old)) = (&partial, &old_doc) {
         let (rebuilt, kept) = super::buildrec::keep_unaffected(s.doc_mut()?, old, levels);
@@ -577,6 +690,21 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             "Only the levels the spec change touches were laid out again ({}); every other level kept its {kept} elements as they were, with the steps after the last build.",
             levels.iter().cloned().collect::<Vec<_>>().join(", ")
         ))]).collect::<Vec<_>>());
+    }
+    if let (Some(parts), Some(old)) = (&parts, &old_doc) {
+        let (rebuilt, kept, unmatched) = super::buildrec::keep_parts(s.doc_mut()?, old, parts);
+        r["parts"] = json!({ "parts": parts, "elements_rebuilt": rebuilt, "elements_kept": kept, "unmatched": unmatched });
+        let mut note = format!(
+            "Only {} were built ({rebuilt} elements); every other element of the model ({kept}) was kept as it stood, with its corrections.",
+            parts.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
+        if !unmatched.is_empty() {
+            note.push_str(&format!(
+                " No element of the model or the build is of: {} (a build part, an element kind or a kind as read).",
+                unmatched.join(", ")
+            ));
+        }
+        r["notes"] = json!(r["notes"].as_array().cloned().unwrap_or_default().into_iter().chain([json!(note)]).collect::<Vec<_>>());
     }
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
     // The counts are of what the model holds when the build is done (steps after the walls
@@ -599,9 +727,21 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         r["rebuild"] = super::buildrec::report(old_rec.as_ref(), why, &before_counts, &after);
     }
     if let Some(sp) = &g.spec {
-        let mut rec = super::buildrec::BuildRecord::new(s.doc()?, sp, switches);
+        // The heights and routes the build's own steps corrected in the drawing's spec (a grille
+        // set in its room's ceiling, a pipe out of gear's space) are part of what it was built
+        // with: with no spec of the call's own, the record is of the spec as the build left it,
+        // so building the unchanged model again keeps it.
+        let left = if p.get("spec").is_none_or(Value::is_null) {
+            current(s, "model.build").ok().filter(|(_, stored)| *stored).map(|(mut st, _)| {
+                st.stack = sp.stack;
+                st
+            })
+        } else {
+            None
+        };
+        let mut rec = super::buildrec::BuildRecord::new(s.doc()?, left.as_ref().unwrap_or(sp), switches);
         // A partial rebuild: the other levels still hold what the steps after the last build did.
-        if let (Some(old), Some(_)) = (&old_rec, &partial) {
+        if let Some(old) = old_rec.as_ref().filter(|_| partial.is_some() || parts.is_some()) {
             rec.steps = old.steps.clone();
             rec.steps_dropped = old.steps_dropped;
         }
@@ -620,6 +760,28 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = s.execute("vscurrent", &json!({ "style": "realistic" }));
     super::guided::progress_line(&format!("  model.build: 3D view set in {:.1} s", viewing.elapsed().as_secs_f64()));
     Ok(r)
+}
+
+/// Most parts `model.build {parts}` names.
+const MAX_PARTS: usize = 64;
+
+/// `model.build`'s `parts`: the names (lower case), none when not given.
+fn parts_param(p: &Value) -> Result<Option<std::collections::BTreeSet<String>>> {
+    let Some(v) = p.get("parts").filter(|v| !v.is_null()) else { return Ok(None) };
+    let list = v.as_array().ok_or_else(|| bad("model.build", "`parts` must be a list of part names (casework, ceiling, light_fixture…)"))?;
+    if list.is_empty() || list.len() > MAX_PARTS {
+        return Err(bad("model.build", format!("`parts` must name 1 to {MAX_PARTS} parts")));
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for x in list {
+        let name = x
+            .as_str()
+            .map(str::trim)
+            .filter(|n| !n.is_empty() && n.len() <= 64)
+            .ok_or_else(|| bad("model.build", "each of `parts` is a part name (casework, ceiling, light_fixture…)"))?;
+        out.insert(name.to_ascii_lowercase());
+    }
+    Ok(Some(out))
 }
 
 /// `model.build` on a model nothing the build reads changed for since it was built: kept as it
@@ -714,6 +876,34 @@ fn run_bim_from_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     s.echo(format!("bim.from_pdf: running the job on {stem}..."));
     s.new_drawing_with_viewports(false);
     let status = s.execute("job.start", &json!({"pdfs": path, "goal": "bim", "auto": true, "checkpoint": false, "resume": false}))?;
+    // A set with no plan view: the job declined at classify, before importing anything (Q6329).
+    // Said as the failure, with why; nothing to check or save.
+    let stopped = status.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("");
+    if status.get("done").and_then(Value::as_bool) != Some(true) && stopped.contains(super::guided::NO_PLAN_VIEWS) {
+        let why = format!("{stem}: {stopped}");
+        s.echo(format!("bim.from_pdf: {why}"));
+        return Ok(json!({
+            "cdy_paths": [],
+            "pages": [],
+            "pages_note": "built from 0 sheet(s): the set has no plan views",
+            "links": status.get("links"),
+            "spec_guesses": [],
+            "check_results": [],
+            "built_counts": {},
+            "levels": [],
+            "built": {},
+            "job": {"job_id": status.get("job_id"), "status": status.get("status"), "done": status.get("done"), "findings": status.get("findings")},
+            "ok": false,
+            "declined": stopped,
+            "failed": [why.clone()],
+            "warnings": [why],
+            "next_steps": [
+                "bim.from_pdf {path: \"...\"} — the folder or PDF of the set's floor plans",
+                "job.status {} — the sheets the job read and what it took each for",
+                "job.sheets.set {\"<number>\": {\"type\": \"plan\"}} — a sheet that is a plan after all; the job goes on from it",
+            ],
+        }));
+    }
     let mut warnings: Vec<String> = Vec::new();
     // What makes the run a failure (the CLI exits non-zero on any).
     let mut failed: Vec<String> = Vec::new();
@@ -919,11 +1109,20 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         }
     }
     texts.sort_by_key(|(_, t, _, _)| super::perceive::geometry::room_number(t));
-    let spec_number = |t: &str| sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(t.trim())));
+    // A view callout's or sheet reference's label (`A12`) on plans numbering their rooms in digits
+    // numbers no room (Q6365), whatever layer it is on.
+    let callouts = super::perceive::geometry::CalloutLabels::new(
+        sp.sheets.iter().map(|x| x.number.as_str()),
+        texts
+            .iter()
+            .filter(|(_, t, at, _)| super::perceive::geometry::room_number(t) && level_at(&sp.levels, at.x, at.y).is_some())
+            .map(|x| x.1.as_str()),
+    );
+    let spec_number = |t: &str| sp.rooms.iter().any(|r| numbers_room(r, t));
     // The plans' room numbers, for a room left without one after the trace.
     let number_tags: Vec<(String, Vec2)> = texts
         .iter()
-        .filter(|(_, t, _, _)| super::perceive::geometry::room_number(t))
+        .filter(|(_, t, _, _)| super::perceive::geometry::room_number(t) && !callouts.is_callout(t))
         .filter(|(_, t, _, h)| tagged || spec_number(t) || plan_room_tag(t, *h, tag_h.as_ref()))
         .map(|(_, t, at, _)| (t.trim().to_string(), *at))
         .take(MAX_ROOMS * 10)
@@ -979,6 +1178,9 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
             break;
         }
         let plan_tag = plan_room_tag(&text, text_h, tag_h.as_ref());
+        if super::perceive::geometry::room_number(&text) && callouts.is_callout(&text) {
+            continue;
+        }
         if super::perceive::geometry::room_number(&text) {
             let here = level_at(&sp.levels, at.x, at.y).map(|l| l.name.clone());
             // One number per level: a room of it numbered already (by its own label on the plan,
@@ -1019,10 +1221,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                         o.room = sp
                             .rooms
                             .iter()
-                            .position(|r| {
-                                r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))
-                                    && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&level))
-                            })
+                            .position(|r| numbers_room(r, &text) && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&level)))
                             .filter(|i| claimed.insert(*i));
                     }
                 }
@@ -1187,9 +1386,14 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     }
     // A number in a room numbered already: the closed outline drawn round it (its own walls, its
     // door) inside that room is a room of its own, carved out of it (Q6160).
-    let carved = carve_rooms(&mut out, &carve, &mut floors, sp, plan, &mut outline_cache, &number_tags);
-    if carved > 0 {
-        notes.push(format!("{carved} room(s) tagged with their own number inside another room's trace were traced on their own walls."));
+    let (carved, split) = carve_rooms(&mut out, &carve, &mut floors, sp, plan, &mut outline_cache, &number_tags);
+    if carved > split {
+        notes.push(format!("{} room(s) tagged with their own number inside another room's trace were traced on their own walls.", carved - split));
+    }
+    if split > 0 {
+        notes.push(format!(
+            "{split} room(s) tagged with their own number inside another room's trace, open to it on one side, were parted from it where their wall's line stops short of the next wall (a room separation line, up to {SPLIT_REACH_FT}' across)."
+        ));
     }
     // The floor no label traced: a pocket a room's own door or a narrow passage cut off (its bath,
     // its entry) joins the one room it opens onto (Q6160).
@@ -1241,20 +1445,27 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
 /// that is smaller than a room (`min_area`: the box a tag is drawn in), the smallest room-sized
 /// loop round that box (traced from just outside each of its sides). None when nothing closes.
 pub(crate) fn outline_round_label(plan: &Session, at: Vec2, cache: &mut Option<super::hatch::Outlines>, min_area: f64) -> Option<Vec<Vec2>> {
-    outline_round_label_within(plan, at, cache, min_area, None)
+    outline_round_label_within(plan, at, cache, min_area, None, &mut false)
 }
 
 /// [`outline_round_label`] looking no farther than `reach` each way from each point it traces
-/// from ([`super::hatch::loops_at_lazy_within`]).
+/// from ([`super::hatch::loops_at_lazy_within`]). `capped` is set when a search stopped there.
 pub(crate) fn outline_round_label_within(
     plan: &Session,
     at: Vec2,
     cache: &mut Option<super::hatch::Outlines>,
     min_area: f64,
     reach: Option<f64>,
+    capped: &mut bool,
 ) -> Option<Vec<Vec2>> {
-    let trace = |p: Vec2, cache: &mut Option<super::hatch::Outlines>| {
-        let loops = super::hatch::loops_at_lazy_within(plan, p, cache, reach).ok()?;
+    let mut trace = |p: Vec2, cache: &mut Option<super::hatch::Outlines>| {
+        let loops = match super::hatch::loops_at_lazy_within(plan, p, cache, reach) {
+            Ok(loops) => loops,
+            Err(e) => {
+                *capped |= super::hatch::beyond_reach(&e);
+                return None;
+            }
+        };
         let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
         let poly = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
         (poly.len() >= 3).then_some(poly)
@@ -1285,13 +1496,19 @@ pub(crate) fn outline_round_label_within(
 
 /// The most a carved room may take of the room it is carved from.
 const CARVE_MAX_SHARE: f64 = 0.5;
+/// Widest open side (feet) a room parted from the room it opens onto may have: its wall's line run
+/// on across to the next wall. Only where the room holds another room's number (two rooms in one
+/// trace): wider than [`SEPARATION_REACH_FT`], since no room would be built otherwise.
+const SPLIT_REACH_FT: f64 = 16.0;
 /// How much of a carved outline must lie inside the room it is carved from.
 const CARVE_INSIDE: f64 = 0.9;
 
 /// Each number in `carve` (text, where) that no room on its level has yet: the closed outline the
 /// plan draws round it, when that is room-sized, at most [`CARVE_MAX_SHARE`] of the floor-traced
 /// room holding it, [`CARVE_INSIDE`] inside it and holding no other number tag, becomes a room of
-/// that number, its floor taken out of the room's. How many.
+/// that number, its floor taken out of the room's; with no such outline (a room open to it on one
+/// side), the room parted along a wall's line ([`wallgen::Floors::split_open`]). How many, and how
+/// many of them were parted.
 fn carve_rooms(
     out: &mut Vec<Traced>,
     carve: &[(String, Vec2)],
@@ -1300,7 +1517,8 @@ fn carve_rooms(
     plan: &Session,
     cache: &mut Option<super::hatch::Outlines>,
     number_tags: &[(String, Vec2)],
-) -> usize {
+) -> (usize, usize) {
+    let mut split = 0usize;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let min_area = MIN_ROOM_SF * upf * upf;
     let mut n = 0usize;
@@ -1322,15 +1540,32 @@ fn carve_rooms(
             continue;
         };
         let Some(fr) = out.get(host).and_then(|o| o.floor_room) else { continue };
-        let Some(poly) = outline_round_label(plan, *at, cache, min_area) else { continue };
-        let area = cadaddy_geom::shoelace(&poly).abs();
         let Some(h) = out.get(host) else { continue };
-        let others = number_tags.iter().any(|(m, p)| !m.eq_ignore_ascii_case(num) && cadaddy_geom::point_in_polygon(&poly, *p));
-        if poly.len() < 3 || area < min_area || area > CARVE_MAX_SHARE * h.cached_area || share_inside(&poly, &h.outline) < CARVE_INSIDE || others {
-            continue;
-        }
+        let drawn = outline_round_label(plan, *at, cache, min_area).filter(|poly| {
+            let area = cadaddy_geom::shoelace(poly).abs();
+            let others = number_tags.iter().any(|(m, p)| !m.eq_ignore_ascii_case(num) && cadaddy_geom::point_in_polygon(poly, *p));
+            poly.len() >= 3
+                && area >= min_area
+                && area <= CARVE_MAX_SHARE * h.cached_area
+                && share_inside(poly, &h.outline) >= CARVE_INSIDE
+                && !others
+        });
+        // The room's other labels: its own tag and the other numbers in it.
+        let others: Vec<Vec2> = number_tags
+            .iter()
+            .filter(|(m, p)| !m.eq_ignore_ascii_case(num) && cadaddy_geom::point_in_polygon(&h.outline, *p))
+            .map(|(_, p)| *p)
+            .chain(std::iter::once(h.at))
+            .collect();
         let Some(Some(f)) = floors.get_mut(&level.to_ascii_uppercase()) else { continue };
-        let Some(new) = f.carve(fr, &poly) else { continue };
+        // No closed outline drawn round it (an alcove or an open-plan room open on one side): the
+        // room parted along the line of a wall that stops short of the next one across (Q6487).
+        let parted = drawn.is_none();
+        let new = match drawn {
+            Some(poly) => f.carve(fr, &poly),
+            None => f.split_open(fr, *at, &others, SPLIT_REACH_FT * upf),
+        };
+        let Some(new) = new else { continue };
         let (Some(old_rects), Some(new_rects)) = (f.rects(fr).map(rects_outline), f.rects(new).map(rects_outline)) else { continue };
         if old_rects.len() < 3 || new_rects.len() < 3 {
             continue;
@@ -1356,8 +1591,9 @@ fn carve_rooms(
             floor_room: Some(new),
         });
         n += 1;
+        split += usize::from(parted);
     }
-    n
+    (n, split)
 }
 
 /// How far outside its outline a room's number tag may sit, feet (a tag set in the doorway).
@@ -2053,7 +2289,7 @@ fn floor_face(poly: &[Vec2], z: f64) -> Option<Mesh> {
     let vertices = ring.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
     let id = |i: usize| u32::try_from(i).unwrap_or(0);
     let faces = tris.iter().map(|t| MeshFace { v: vec![id(t[0]), id(t[1]), id(t[2])], hidden: 0 }).collect();
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 /// A room element's tag value (`name:`, `number:`, `area_sf:`, `ceiling_ft:`, `finish:`).
@@ -2061,6 +2297,41 @@ pub(crate) fn room_tag<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     x.iter().skip(at + 4).take_while(|t| t.code != 1001).find_map(|t| t.value.strip_prefix(key)).map(str::trim)
+}
+
+/// A room element's `number` or `name` (Q6593: one room identity): the value its properties hold
+/// (a person's `bim.props.set`, a later reader's) outranks the label the build traced, so every
+/// layout, list and element reads the room as corrected. None: neither gives one.
+pub(crate) fn room_value(e: &Entity, key: &str) -> Option<String> {
+    let store = cadaddy_doc::props::read(&e.common.xdata);
+    let own = store.get(key).filter(|p| p.has_value()).map(|p| p.text().trim().chars().take(240).collect::<String>()).filter(|v| !v.is_empty());
+    own.or_else(|| room_tag(e, &format!("{key}:")).filter(|v| !v.is_empty()).map(str::to_string))
+}
+
+/// The label a room element gives the elements in it (their `room`): its number, else its name;
+/// both as [`room_value`] reads them.
+pub(crate) fn room_element_label(e: &Entity) -> Option<String> {
+    room_value(e, "number").or_else(|| room_value(e, "name"))
+}
+
+/// A room's name and number as one label (`OFFICE 202`; the name alone when it holds the number):
+/// what the trade pieces in it carry as their room.
+pub(crate) fn room_full_label(name: &str, number: &str) -> String {
+    match (name.trim(), number.trim()) {
+        ("", "") => String::new(),
+        (n, "") => n.to_string(),
+        ("", k) => k.to_string(),
+        (n, k) if n.contains(k) => n.to_string(),
+        (n, k) => format!("{n} {k}"),
+    }
+}
+
+/// A room element's two labels: [`room_element_label`]'s and [`room_full_label`]'s. None: it
+/// has neither a name nor a number.
+pub(crate) fn room_element_labels(e: &Entity) -> Option<(String, String)> {
+    let short = room_element_label(e)?;
+    let full = room_full_label(&room_value(e, "name").unwrap_or_default(), &room_value(e, "number").unwrap_or_default());
+    Some((short, full))
 }
 
 /// The rooms built as model elements (part `room`), with their tags.
@@ -2073,6 +2344,9 @@ pub(crate) struct RoomElement {
     pub area_sf: f64,
     pub ceiling_ft: f64,
     pub finish: Option<String>,
+    /// Where its floor finish came from: its property's source (`user`, `schedule`…), else
+    /// `spec` (the build's tag).
+    pub finish_source: String,
     pub source: Handle,
     pub outline: Vec<Vec2>,
     pub z: f64,
@@ -2094,14 +2368,22 @@ pub(crate) fn room_elements(d: &Drawing) -> Vec<RoomElement> {
             .and_then(|at| x.get(at + 3))
             .and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok())
             .map_or(Handle(0), Handle);
+        // Its floor finish as its properties say (a person's, a schedule's: the value the room
+        // finish schedule shows), else as the build tagged it.
+        let store = cadaddy_doc::props::read(x);
+        let (finish, finish_source) = match store.get("floor_finish").filter(|p| p.has_value()) {
+            Some(p) => (Some(p.text().trim().chars().take(200).collect::<String>()).filter(|f| !f.is_empty()), p.source.kind.as_str().to_string()),
+            None => (room_tag(e, "finish:").filter(|n| !n.is_empty()).map(str::to_string), "spec".to_string()),
+        };
         out.push(RoomElement {
             handle: e.handle,
             level: made_level(e).unwrap_or_default(),
-            name: room_tag(e, "name:").filter(|n| !n.is_empty()).unwrap_or("Room").to_string(),
-            number: room_tag(e, "number:").filter(|n| !n.is_empty()).map(str::to_string),
+            name: room_value(e, "name").unwrap_or_else(|| "Room".to_string()),
+            number: room_value(e, "number"),
             area_sf: num("area_sf:").unwrap_or(0.0),
             ceiling_ft: num("ceiling_ft:").unwrap_or(0.0),
-            finish: room_tag(e, "finish:").filter(|n| !n.is_empty()).map(str::to_string),
+            finish,
+            finish_source,
             source,
             outline: m.vertices.iter().map(|v| v.xy()).collect(),
             z: m.vertices.first().map_or(0.0, |v| v.z),
@@ -2123,17 +2405,46 @@ fn room_key(level: &str, name: &str, number: Option<&str>) -> (String, String) {
     (level.trim().to_ascii_uppercase(), id.to_ascii_uppercase())
 }
 
-/// The user edits on the model's room elements, by [`room_key`] (at most `MAX_ROOMS` × 10).
+/// An unnumbered room's key by its place too: its name and its outline's middle on its level's
+/// plan (whole feet), so that two rooms of one name with no number keep their own edits (Q6593:
+/// each its own number).
+fn room_place_key(level: &str, name: &str, plan_outline: &[Vec2], upf: f64) -> (String, String) {
+    let c = cadaddy_geom::Bounds2::from_points(plan_outline.iter().copied()).center() * (1.0 / upf.max(1e-9));
+    let ft = |v: f64| if v.is_finite() { format!("{}", v.round() as i64) } else { "?".into() };
+    (level.trim().to_ascii_uppercase(), format!("{}@{},{}", name.trim().to_ascii_uppercase(), ft(c.x), ft(c.y)))
+}
+
+/// The user edits on the model's room elements (at most `MAX_ROOMS` × 10): by [`room_key`], and an
+/// unnumbered room's also by [`room_place_key`]; a name two unnumbered rooms of a level share
+/// keys neither by name alone.
 fn room_user_edits(d: &Drawing) -> std::collections::BTreeMap<(String, String), cadaddy_doc::props::Props> {
+    let upf = super::elemprops::units_per_foot(d);
     let mut out = std::collections::BTreeMap::new();
+    let mut by_name: std::collections::BTreeMap<(String, String), usize> = std::collections::BTreeMap::new();
     for e in d.model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("room")).take(MAX_ROOMS * 10) {
+        let level = made_level(e).unwrap_or_default();
+        let name = room_tag(e, "name:").unwrap_or("");
+        let number = room_tag(e, "number:").filter(|n| !n.trim().is_empty());
+        if number.is_none() {
+            *by_name.entry(room_key(&level, name, None)).or_default() += 1;
+        }
         let edits = cadaddy_doc::props::read(&e.common.xdata).user_edits();
         if edits.is_empty() {
             continue;
         }
-        let level = made_level(e).unwrap_or_default();
-        let name = room_tag(e, "name:").unwrap_or("");
-        out.insert(room_key(&level, name, room_tag(e, "number:")), edits);
+        if number.is_none()
+            && let EntityKind::Mesh(m) = &e.kind
+        {
+            let off = stacked_by(e);
+            let plan: Vec<Vec2> = m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect();
+            out.insert(room_place_key(&level, name, &plan, upf), edits.clone());
+        }
+        out.insert(room_key(&level, name, number), edits);
+    }
+    for (k, n) in by_name {
+        if n > 1 {
+            out.remove(&k);
+        }
     }
     out
 }
@@ -2199,7 +2510,8 @@ fn add_room_elements(
         if let Some(f) = &finish {
             xdata.push(tg(1000, format!("finish:{}", clip(f))));
         }
-        if let Some(kept) = edits.get(&room_key(&level.name, &name, number.as_deref())) {
+        let by_place = || number.is_none().then(|| edits.get(&room_place_key(&level.name, &name, &t.outline, upf))).flatten();
+        if let Some(kept) = by_place().or_else(|| edits.get(&room_key(&level.name, &name, number.as_deref()))) {
             xdata = cadaddy_doc::props::write(&xdata, kept);
         }
         let common = Common { layer: ROOM_LAYER.into(), visible: false, xdata: xdata.into(), ..Common::default() };
@@ -2208,6 +2520,97 @@ fn add_room_elements(
         }
     }
     by_level
+}
+
+/// The unit instances' numbers no room element has, and the instance's level: the numbers a
+/// room that lost its number may carry.
+fn unclaimed_unit_numbers(sp: &BuildingSpec, rooms: &[RoomElement]) -> Vec<(String, String)> {
+    let have: std::collections::BTreeSet<String> = rooms.iter().filter_map(|r| r.number.as_deref()).map(|n| n.trim().to_ascii_uppercase()).collect();
+    sp.unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(50_000)
+        .filter_map(|u| {
+            let t = |k: &str| u.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let n = t("number");
+            (!n.is_empty() && !have.contains(&n.to_ascii_uppercase())).then(|| (t("level"), n))
+        })
+        .collect()
+}
+
+/// A short stable id from a text (FNV-1a, 32 bits in hex).
+fn short_id(text: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{:08x}", h as u32)
+}
+
+/// At most this many rooms with no number are asked about in one build.
+const MAX_UNNUMBERED_ASKS: usize = 200;
+
+/// One room identity (Q6593): a room built with its name and no number where rooms of that name
+/// are numbered (a unit type's rooms, its number lost on the plan) is a review item: which number
+/// is it? Its question goes in the drawing's spec (an `room_unnumbered` RFI, the unit instances'
+/// numbers no room has proposed); one asked before and since numbered (by a person's
+/// `bim.props.set`, a later reader) is dropped while open. The build's notes for them.
+pub(crate) fn ask_unnumbered_rooms(d: &mut Drawing) -> Vec<String> {
+    use cadaddy_walk3d::{Rfi, RfiKind, RfiStatus};
+    let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok()) else { return Vec::new() };
+    let rooms = room_elements(d);
+    let numbered: std::collections::BTreeSet<String> =
+        rooms.iter().filter(|r| r.number.is_some()).map(|r| r.name.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()).collect();
+    let free = unclaimed_unit_numbers(&stored, &rooms);
+    let mut asks: Vec<Rfi> = Vec::new();
+    for r in rooms.iter().filter(|r| r.number.is_none() && r.outline.len() >= 3) {
+        let name = r.name.trim();
+        if name.is_empty() || !numbered.contains(&name.to_ascii_uppercase()) {
+            continue;
+        }
+        // Where on its level's plan (the build stacked the levels).
+        let off = d.model.get(r.handle).map_or(Vec2::ZERO, |e| stacked_by(e));
+        let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().map(|p| *p - off));
+        let c = b.center();
+        let here: Vec<&str> =
+            free.iter().filter(|(l, _)| l.is_empty() || l.eq_ignore_ascii_case(&r.level)).map(|(_, n)| n.as_str()).take(5).collect();
+        let id = format!("RFI-RN{}", short_id(&format!("{}|{}|{:.0}|{:.0}", r.level.to_ascii_uppercase(), name.to_ascii_uppercase(), c.x, c.y)));
+        asks.push(Rfi {
+            id,
+            kind: Some(RfiKind::RoomUnnumbered),
+            severity: RfiKind::RoomUnnumbered.severity(),
+            level: r.level.clone(),
+            at: [c.x, c.y],
+            extent: Some([[b.min.x, b.min.y], [b.max.x, b.max.y]]),
+            about: format!("room {name}"),
+            issue: format!("A room named {name} has no number on the plan, where the other {name} rooms are numbered: which number is it?"),
+            assumed: "Built with its name only: per-room layouts (unit types, accessories, circuits) skip it until it is numbered (bim.props.set {number} on the room).".into(),
+            proposed: (!here.is_empty()).then(|| format!("The unit numbers on its level no room has: {}", here.join(", "))),
+            topic: "rooms: unnumbered".into(),
+            ..Rfi::default()
+        });
+        if asks.len() >= MAX_UNNUMBERED_ASKS {
+            break;
+        }
+    }
+    let before = stored.rfis.len();
+    let kept_ids: std::collections::BTreeSet<String> = asks.iter().map(|a| a.id.clone()).collect();
+    // Open questions that no longer hold (the room was numbered) go; answered ones stay on record.
+    stored.rfis.retain(|x| x.kind != Some(RfiKind::RoomUnnumbered) || x.status != RfiStatus::Open || kept_ids.contains(&x.id));
+    let mut changed = stored.rfis.len() != before;
+    let mut notes = Vec::new();
+    for a in asks {
+        notes.push(format!("{} on {}: {} ({})", a.about, a.level, a.issue, a.id));
+        if !stored.rfis.iter().any(|x| x.id == a.id) && stored.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            stored.rfis.push(a);
+            changed = true;
+        }
+    }
+    if changed {
+        d.building_spec = Some(stored.to_json()).into();
+    }
+    notes
 }
 
 /// One room element of `level` added after the build (a room another trade's plan names that
@@ -2314,11 +2717,28 @@ fn build_step(s: &mut Session, step: &str, started: web_time::Instant) {
 
 /// [`build_spec`] with an explicit time budget (seconds).
 pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64) -> Result<Value> {
-    let Some(sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    let Some(mut sp) = g.spec.clone() else { return wallgen::build(s, g) };
+    // The edits made to single MEP elements (Q6502), on the lists as the documents give them now.
+    let mep_edits = super::mepedit::apply(&mut sp);
+    // Feeders follow their gear (Q6523): a route that no longer ends at its gear (the gear moved,
+    // went to another floor, or was set again) is routed again before it is built; the drawing's
+    // spec takes the same routes.
+    let feeders = super::feederfollow::follow(&mut sp, super::feederfollow::Mode::Moved);
+    {
+        let d = s.doc_mut()?;
+        if let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+            && super::feederfollow::follow(&mut stored, super::feederfollow::Mode::Moved).changed()
+        {
+            d.building_spec = Some(stored.to_json()).into();
+        }
+    }
     let deadline = web_time::Instant::now() + std::time::Duration::from_secs(budget_s);
     let build_start = web_time::Instant::now();
     // What a person set on a room element (bim.props.set) goes on the rebuilt room.
     let room_edits = room_user_edits(s.doc()?);
+    // The model being replaced: a copy a person made of its elements before copies were
+    // recorded is found against the rebuilt one (Q6620).
+    let old_made: Vec<Arc<Entity>> = s.doc()?.model.iter().filter(|e| super::revise3d::built_object(e)).map(Arc::clone).collect();
     let removed = wallgen::remove_made(s.doc_mut()?);
     build_step(s, "old model removed", build_start);
     let mut notes: Vec<String> = Vec::new();
@@ -2340,7 +2760,18 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         ));
     }
     s.event("build.progress", json!({"step": "walls", "detail": "building walls per level"}));
-    let mut r = wallgen::build_with_progress(s, g, &deadline)?;
+    // The ceilings the spec gives the traced rooms: a wall built to the ceiling stops at them.
+    let ceilings: Vec<wallgen::RoomCeiling> = rooms
+        .iter()
+        .filter_map(|t| {
+            let room = t.room.and_then(|i| sp.rooms.get(i))?;
+            let ceiling_ft = room.ceiling_ft.filter(|c| c.is_finite() && *c > 0.0)?;
+            let name = room.number.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(&room.name);
+            let source = room.ceiling_source.clone().unwrap_or_else(|| format!("room {name}'s ceiling"));
+            Some(wallgen::RoomCeiling { level: t.level.clone(), outline: t.outline.clone(), area: t.cached_area, ceiling_ft, source })
+        })
+        .collect();
+    let mut r = wallgen::build_with_progress(s, g, &deadline, &ceilings)?;
     build_step(s, "walls built", build_start);
     let wall_ms = build_start.elapsed().as_millis();
     s.event("build.progress", json!({"step": "walls_done", "ms": wall_ms, "walls": r["walls"]}));
@@ -2449,6 +2880,16 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         let name = room.map_or(String::new(), room_label);
         let mut xdata = wallgen::tag(Part::Ceiling, &level.name, t.tag);
         xdata.push(RawTag { code: 1000, value: format!("room:{}", name.chars().take(240).collect::<String>()) });
+        // The ceiling type given the room (`rcp.type`), with who gave it.
+        if let Some(r) = room {
+            xdata.extend(super::ceilings::room_type_tags(r));
+            xdata.extend(super::ceilings::room_tags(r));
+        }
+        // Its properties (Q6595): the height it is built at and where that was read, its type's
+        // assembly and finish, its area.
+        xdata.extend(super::ceilings::room_height_tags(room, level));
+        xdata.extend(super::ceilings::type_detail_tags(&sp, room.and_then(|r| r.ceiling_type.as_deref()), false));
+        xdata.extend(super::ceilings::area_tag(&t.outline, upf));
         let common = Common { layer: wallgen::layer_of(Part::Ceiling).into(), xdata: xdata.into(), ..Common::default() };
         if let Ok(h) = d.add(&Space::Model, common, EntityKind::Mesh(m)) {
             ceilings += 1;
@@ -2460,6 +2901,8 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Each room as a model element of its level (a space: its floor outline, name, number,
     // area, ceiling and floor finish), what bim.tree, the takeoff and the room commands list.
     let room_elements = add_room_elements(d, &sp, &rooms, upf, &room_edits);
+    // A room of a numbered name built with no number: asked which (Q6593).
+    notes.extend(ask_unnumbered_rooms(d));
     mark("room ceilings and elements");
     // The ground: the building's extents and the margin, a slab under the site elevation.
     let mut ground = 0;
@@ -2510,6 +2953,27 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The outside: roofs, parapets, crickets, rooftop equipment, facade glass and materials.
     let outside = super::exterior::build(d, &sp);
     mark("exterior");
+    // The elevator hoistways (Q6608): each shaft at its documented clear size (nothing inside it
+    // a wall), its pit below the lowest landing and its overrun above the roof, what the roof
+    // plan stands over it on the overrun's roof.
+    let hoistways = super::hoistway::build(d, &sp);
+    mark("elevator hoistways");
+    // Casework and furniture (Q6422): read from the plans (the casework reader, the furniture
+    // drawn), each in its room; a room the plans leave unfurnished takes its type's furniture.
+    let room_refs: Vec<super::furniture::RoomRef> = rooms
+        .iter()
+        .map(|t| {
+            let spec = t.room.and_then(|i| sp.rooms.get(i));
+            let name = spec.map(|r| r.name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| t.name.clone()).unwrap_or_default();
+            let label =
+                spec.map(room_label).unwrap_or_else(|| [t.number.as_deref(), t.name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" "));
+            super::furniture::RoomRef { level: t.level.clone(), outline: t.outline.clone(), label, type_key: super::furniture::room_type(&name) }
+        })
+        .collect();
+    let (casework, furniture) = super::furniture::build(d, &sp, &room_refs);
+    r["casework"] = casework;
+    r["furniture"] = furniture;
+    mark("casework and furniture");
     // The reflected ceiling plans' ceilings (replacing the level's and rooms'), grids, soffits,
     // lights and diffusers.
     let rcp = super::ceilings::build(d, &sp);
@@ -2517,7 +2981,6 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Foreign pipe and duct out of electrical gear's dedicated space (NEC 110.26(E)(1)), the gear
     // where it is built (a panel on its wall's face): offset past its side, the drawn route kept
     // on the run; the drawing's spec takes the same correction.
-    let mut sp = sp;
     let gear_space = super::gearspace::clear_built(d, &mut sp);
     if gear_space.found > 0
         && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
@@ -2526,12 +2989,55 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         d.building_spec = Some(stored.to_json()).into();
     }
     mark("gear's dedicated space");
+    // Each ceiling diffuser, register and grille in the ceiling built over it (its room's, not
+    // its level's guess), and the ducts with no height of their own over the ceilings they pass
+    // under (Q6341); the drawing's spec takes the same heights.
+    let in_ceiling = super::ceilingseat::seat(d, &mut sp);
+    if in_ceiling.moved() > 0
+        && let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+        && super::ceilingseat::seat(d, &mut stored).moved() > 0
+    {
+        d.building_spec = Some(stored.to_json()).into();
+    }
+    mark("air terminals in the ceilings");
     // Duct, pipe and conduit runs of the shown systems.
     let mep = super::mep::build_with(d, &sp, true);
     mark("MEP runs");
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
+    // No wall device left in the plenum (Q6520): one whose height puts it above its room's
+    // ceiling is set at its clearance under it, its design height kept beside.
+    let under_ceiling = super::underceiling::keep_under(d, &sp, None);
+    // A control in a room the documents mark accessible (a switch, a thermostat) within its reach
+    // (Q6555): a printed accessible maximum, else the code's; the design height kept beside.
+    let areas: Vec<super::reach::RoomArea> = rooms
+        .iter()
+        .map(|t| {
+            let spec = t.room.and_then(|i| sp.rooms.get(i));
+            let number = spec.and_then(|r| r.number.clone()).or_else(|| t.number.clone()).unwrap_or_default();
+            let name = spec.map(|r| r.name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| t.name.clone()).unwrap_or_default();
+            let label = if number.trim().is_empty() { name.clone() } else { number.clone() };
+            super::reach::RoomArea { level: t.level.clone(), outline: t.outline.clone(), label, words: format!("{name} {number}") }
+        })
+        .collect();
+    let in_reach = super::reach::keep_within(d, &sp, None, &areas);
+    if !in_reach.record_moves.is_empty() {
+        super::reach::follow_records(&mut sp, &in_reach);
+        if let Some(mut stored) = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok())
+            && super::reach::follow_records(&mut stored, &in_reach) > 0
+        {
+            d.building_spec = Some(stored.to_json()).into();
+        }
+    }
     mark("device elements");
+    // The fire alarm system's control panel and NAC power supplies the documents don't place
+    // (Q6503), built now its devices stand, before its circuits are routed.
+    let fa_equipment = super::conduitroute::fa::place_equipment(d, &mut sp);
+    mark("fire alarm equipment");
+    // Each piece of equipment that carries its circuit gets its connection where no device of
+    // that circuit stands at it (Q6624): its drawn disconnect, else one beside it by rule.
+    let equipment_connections = super::equipdisc::place(d, &sp);
+    mark("equipment connections");
     // The circuits routed through the model now its devices stand (Q6152): around the ducts,
     // pipes and structure, by the corridors, into each box and the panel's entry window; the
     // drawn conduit as it is. The estimated routes give way to them for the pieces.
@@ -2576,6 +3082,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Columns at the grid intersections.
     let grid_columns = super::grids::build(d, &sp);
     mark("grid columns");
+    // The building's structural grid (Q6407): its lines model elements, as the plan draws them.
+    let structural_grid = super::grids::build_grid(d, &sp);
+    mark("structural grid");
     // Materials: the room's for its ceiling, else the building's for the part.
     let made: Vec<(Handle, String)> = d.model.iter().filter_map(|e| wallgen::made_as(e).map(|p| (e.handle, p))).collect();
     for (h, part) in made {
@@ -2634,7 +3143,14 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     if let (Some(o), Some(x)) = (r.as_object_mut(), trade_pieces.as_object()) {
         o.extend(x.clone());
     }
+    if let (Some(n), Some(x)) = (r["notes"].as_array_mut(), hoistways["notes"].as_array()) {
+        n.extend(x.iter().cloned());
+    }
+    if hoistways["hoistways"].as_u64().unwrap_or(0) > 0 {
+        r["hoistways"] = hoistways;
+    }
     r["gridColumns"] = json!(grid_columns);
+    r["structuralGrid"] = structural_grid.to_json();
     r["breakers"] = json!({
         "breakers": breakers.breakers, "spares": breakers.spares, "spaces": breakers.spaces, "panels": breakers.panels.len(),
         "devicesLinked": breakers.devices_linked, "mismatches": breakers.mismatches_total,
@@ -2646,18 +3162,52 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    if equipment_connections["loads"].as_u64().unwrap_or(0) > 0 || equipment_connections["removed"].as_u64().unwrap_or(0) > 0 {
+        r["equipmentConnections"] = equipment_connections;
+    }
+    if fa_equipment["devices"].as_u64().unwrap_or(0) > 0 {
+        r["fireAlarmEquipment"] = fa_equipment;
+    }
     r["gearSpace"] = gear_space.json();
+    r["inCeiling"] = in_ceiling.json();
     r["deviceBuild"] = devices.to_json();
+    r["deviceBuild"]["under_ceiling"] = under_ceiling.to_json();
+    r["deviceBuild"]["accessible_reach"] = in_reach.to_json();
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     // Every built element says what it is by the documents (Q6216): drawn, derived or inferred,
     // with its basis.
     r["provenance"] = super::provenance::stamp(d).to_json();
     mark("provenance");
+    if !mep_edits.is_empty() {
+        r["mepEdits"] = super::mepedit::report(&mep_edits);
+    }
+    if feeders.changed() {
+        r["feeders"] = feeders.json();
+        if let (Some(line), Some(n)) = (feeders.line(), r["notes"].as_array_mut()) {
+            n.push(Value::from(line));
+        }
+    }
     // One building: the levels' 3D moved off their plans onto the lowest level's.
     if sp.stack {
         r["stacked"] = json!(stack_levels(d, &sp));
         mark("levels stacked");
+    }
+    // Copies a person made of the old model's devices before copies were recorded (Q6620): more
+    // elements of one device id than the build makes, at least a foot from the rebuilt one, are
+    // put back where they stood and recorded as hand-made. (The copies recorded when made were
+    // never taken away.)
+    let foot = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let found = super::overrides::keep_copies(d, &old_made, foot);
+    let hand_made = d.model.iter().filter(|e| super::overrides::hand_made(e)).count();
+    if hand_made > 0 {
+        r["handMade"] = json!({ "kept": hand_made, "found_at_rebuild": found });
+        if let Some(n) = r["notes"].as_array_mut() {
+            n.push(Value::from(format!(
+                "{hand_made} element(s) copied by hand from generated ones kept as they stand (added items, override.list){}.",
+                if found > 0 { format!("; {found} of them made before copies were recorded, found by their device id") } else { String::new() }
+            )));
+        }
     }
     Ok(r)
 }
@@ -2869,7 +3419,15 @@ fn flat(poly: &[Vec2], z: f64) -> Option<Mesh> {
     }
     let vertices = poly.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
     let faces = tris.iter().map(|t| MeshFace { v: [t[0], t[2], t[1]].iter().map(|&i| u32::try_from(i).unwrap_or(0)).collect(), hidden: 0 }).collect();
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
+}
+
+/// A generated mesh with the seams inside its flat surfaces hidden (the triangles an outline is
+/// ear-clipped into, the quads of a straight run of sides): only outline and crease edges draw,
+/// as a polyface's invisible edges ([`Mesh::hide_flat_seams`]).
+pub(crate) fn seamless(mut m: Mesh) -> Mesh {
+    m.hide_flat_seams();
+    m
 }
 
 /// A prism over a polygon from `z0` up to `z1`: sides and both caps, faces outward.
@@ -2893,7 +3451,7 @@ pub(crate) fn prism(poly: &[Vec2], z0: f64, z1: f64) -> Option<Mesh> {
         let j = (i + 1) % n;
         faces.push(MeshFace { v: vec![i, j, j + n, i + n], hidden: 0 });
     }
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 #[cfg(test)]

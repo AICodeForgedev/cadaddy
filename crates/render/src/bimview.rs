@@ -27,11 +27,46 @@ pub struct BimShade {
     /// The ink the see-through surfaces' faint edges are mixed from (opaque surfaces' edges are
     /// their own colour darkened, [`EDGE_SHADE`]).
     pub ink: Rgb,
+    /// Opaque surfaces' edges in the surface's own lit colour, not darkened: no edge lines on
+    /// the systems of a coordination view, and a run thinner than a pixel still drawn in its
+    /// colour.
+    pub own_edges: bool,
+    /// The thinnest an opaque surface's edge is drawn, pixels (with `own_edges`: the thinnest
+    /// run on screen).
+    pub min_px: f64,
+    /// How much a see-through surface's edge tints what is behind it (0 … 1).
+    pub ghost_edge: f64,
 }
 
 impl Default for BimShade {
     fn default() -> Self {
-        BimShade { sun: Vec3::new(-0.45, -0.6, 0.66), sun_strength: 0.5, ao: 1.0, ao_reach: None, edges: true, ink: Rgb(38, 38, 42) }
+        BimShade {
+            sun: Vec3::new(-0.45, -0.6, 0.66),
+            sun_strength: 0.5,
+            ao: 1.0,
+            ao_reach: None,
+            edges: true,
+            ink: Rgb(38, 38, 42),
+            own_edges: false,
+            min_px: 1.0,
+            ghost_edge: GHOST_EDGE,
+        }
+    }
+}
+
+impl BimShade {
+    /// The coordination look (the Systems view, Q6617): systems in flat strong colours softly
+    /// lit, no dark edges, every run at least `min_px` wide on screen; the ghosted shell's edges
+    /// clear enough to read the floor plates and the outline on white.
+    pub fn systems(min_px: f64) -> BimShade {
+        BimShade {
+            sun_strength: 0.35,
+            ao: 0.5,
+            own_edges: true,
+            min_px: if min_px.is_finite() { min_px.clamp(1.0, 8.0) } else { 2.0 },
+            ghost_edge: 0.55,
+            ..BimShade::default()
+        }
     }
 }
 
@@ -97,6 +132,26 @@ fn cover(s: &[(f64, f64, f64); 3], w: usize, h: usize, mut f: impl FnMut(usize, 
             f(y * w + x, (a * z0 + b * z1 + c * z2) as f32);
         }
     }
+}
+
+/// Each pixel of the segment `a`–`b` drawn `px` pixels wide (a square pen): `(index, depth)`.
+fn walk_wide(a: (f64, f64, f64), b: (f64, f64, f64), px: f64, w: usize, h: usize, mut f: impl FnMut(usize, f32)) {
+    let n = if px.is_finite() { px.round().clamp(1.0, 8.0) as i64 } else { 1 };
+    if n <= 1 {
+        return walk(a, b, w, h, f);
+    }
+    let lo = -(n - 1) / 2;
+    walk(a, b, w, h, |k, z| {
+        let (x, y) = ((k % w.max(1)) as i64, (k / w.max(1)) as i64);
+        for dy in lo..lo + n {
+            for dx in lo..lo + n {
+                let (px, py) = (x + dx, y + dy);
+                if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                    f(py as usize * w + px as usize, z);
+                }
+            }
+        }
+    });
 }
 
 /// Each pixel of the segment `a`–`b` (pixel x, y, depth): `(index, depth)`.
@@ -184,9 +239,10 @@ pub fn rasterize_bim(scene: &Scene, v: &ShadeView, bg: Rgb, o: &BimShade) -> Ras
     // The opaque surfaces' edges, those behind a surface left out: the surface's own colour
     // darkened (a thin pipe's facets read as its colour, not as black).
     if o.edges {
+        let (k_ink, px_pen) = if o.own_edges { (light(Vec3::Z, o, sun).min(1.0) * 0.92, o.min_px) } else { (EDGE_SHADE, 1.0) };
         for l in scene.lines.iter().filter(|l| l.edge && !l.faint) {
-            let lc = [f64::from(l.color.0) * EDGE_SHADE, f64::from(l.color.1) * EDGE_SHADE, f64::from(l.color.2) * EDGE_SHADE];
-            walk(v.screen(l.a), v.screen(l.b), w, h, |k, z| {
+            let lc = [f64::from(l.color.0) * k_ink, f64::from(l.color.1) * k_ink, f64::from(l.color.2) * k_ink];
+            walk_wide(v.screen(l.a), v.screen(l.b), px_pen, w, h, |k, z| {
                 if depth.get(k).is_some_and(|d| z + bias >= *d)
                     && let Some(c) = color.get_mut(k)
                 {
@@ -227,8 +283,9 @@ pub fn rasterize_bim(scene: &Scene, v: &ShadeView, bg: Rgb, o: &BimShade) -> Ras
                 if depth.get(k).is_some_and(|d| z + bias >= *d)
                     && let Some(c) = color.get_mut(k)
                 {
+                    let a = o.ghost_edge.clamp(0.0, 1.0);
                     for (ch, f) in c.iter_mut().zip(fc) {
-                        *ch = *ch * (1.0 - GHOST_EDGE) + f * GHOST_EDGE;
+                        *ch = *ch * (1.0 - a) + f * a;
                     }
                 }
             });
@@ -300,6 +357,31 @@ mod tests {
         let r = rasterize_bim(&g, &top_view(60), Rgb(255, 255, 255), &BimShade::default());
         let edge = (0..r.width).map(|x| at(&r, x, 30)).map(|c| c[0]).min().unwrap_or(255);
         assert!(edge > 100, "{edge}");
+    }
+
+    #[test]
+    fn the_systems_look_draws_a_thin_run_two_pixels_wide_in_its_own_colour() {
+        // A run 0.02 wide across a 12-unit view of 60 px: a fifth of a pixel.
+        let mut s = Scene::default();
+        let c = Rgb(230, 40, 30);
+        let p = [Vec3::new(0.0, 5.0, 0.0), Vec3::new(10.0, 5.0, 0.0), Vec3::new(10.0, 5.02, 0.0), Vec3::new(0.0, 5.02, 0.0)];
+        s.tris.push(Tri::plain([p[0], p[1], p[2]], c));
+        s.tris.push(Tri::plain([p[0], p[2], p[3]], c));
+        for k in 0..4 {
+            s.lines.push(Line3 { a: p[k], b: p[(k + 1) % 4], color: c, edge: true, faint: false });
+        }
+        let reddish = |r: &Raster, y: u32| {
+            let q = at(r, 30, y);
+            q[0] > 120 && q[1] < 90 && q[2] < 90
+        };
+        let wide = |r: &Raster| (0..r.height).filter(|y| reddish(r, *y)).count();
+        let sys = rasterize_bim(&s, &top_view(60), Rgb(255, 255, 255), &BimShade::systems(2.0));
+        assert!(wide(&sys) >= 2, "two pixels of its own colour: {}", wide(&sys));
+        // No dark outline: nothing in the column is near black.
+        assert!((0..sys.height).all(|y| at(&sys, 30, y).iter().any(|ch| *ch > 60)));
+        // The default look: a one-pixel line in its colour darkened.
+        let dflt = rasterize_bim(&s, &top_view(60), Rgb(255, 255, 255), &BimShade::default());
+        assert!(wide(&dflt) < 2, "{}", wide(&dflt));
     }
 
     #[test]

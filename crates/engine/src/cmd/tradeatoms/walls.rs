@@ -2,8 +2,8 @@
 //! — studs at their spacing with king, jack and cripple studs at the openings, plates or tracks
 //! cut to stock, headers and sills, fire blocking, backing behind what hangs on the wall,
 //! masonry courses, a batt in each stud bay, sheathing and board sheets per face and layer with
-//! the openings taken out, furring rows, corner bead, tape, joint compound, screws, and paint
-//! per coat on the faces that face a room.
+//! the openings taken out, furring rows, corner bead, tape, joint compound, screws, paint per
+//! coat on the faces that face a room, and the exterior finish layers ([`cladding`]).
 //!
 //! A built wall's mesh is the boxes `wallgen` made of it (its pieces between the openings, the
 //! headers over them, the sills under windows), so its centreline, thickness, height and
@@ -11,6 +11,8 @@
 
 use super::*;
 use cadaddy_walk3d::{Assembly, AssemblyLayer, LayerSide};
+
+mod cladding;
 
 /// Most walls laid out (hostile models).
 const MAX_WALLS: usize = 200_000;
@@ -359,6 +361,9 @@ struct EndJoin {
     corner: bool,
     /// This end stops against another wall's face (a T).
     tee: bool,
+    /// The wall meeting this end turns there (an outside or inside corner, not a straight
+    /// continuation of this wall's line).
+    bent: bool,
 }
 
 /// Each wall's two ends: what meets them (walls of one level).
@@ -389,6 +394,8 @@ fn joins(walls: &[Wall]) -> Vec<[EndJoin; 2]> {
                 let [oa, ob] = ow.ends();
                 if oa.dist(p) < reach || ob.dist(p) < reach {
                     j.corner = true;
+                    // More than 15 degrees off this wall's line.
+                    j.bent |= (w.u.x * ow.u.y - w.u.y * ow.u.x).abs() > 0.26;
                 } else {
                     let s = (p - ow.o).dot(ow.u);
                     let off = (p - ow.o).dot(ow.n).abs();
@@ -429,8 +436,28 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             }
         }
     }
+    // The building's lowest floor: a wall standing on it has its screed at the foundation plate.
+    let ground_z = walls.iter().map(|w| w.zf).fold(f64::INFINITY, f64::min);
+    // The straight runs of the walls with finish layers (their control joints follow the run).
+    let clad: Vec<bool> = walls
+        .iter()
+        .map(|w| {
+            sp.wall_types
+                .iter()
+                .find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type))
+                .and_then(|t| t.assembly.as_ref())
+                .is_some_and(|a| {
+                    a.layers
+                        .iter()
+                        .any(|l| l.side != LayerSide::Core && !cladding::LAID_ELSEWHERE.contains(&l.category.trim().to_ascii_lowercase().as_str()))
+                })
+        })
+        .collect();
+    let runs = cladding::runs(&walls, &clad);
     let mut untyped = 0usize;
     let mut no_layers: BTreeSet<String> = BTreeSet::new();
+    let mut framed_twice: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut turned, mut both) = (0usize, 0usize);
     for (i, w) in walls.iter().enumerate() {
         let Some(wt) = sp.wall_types.iter().find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type)) else {
             untyped += 1;
@@ -440,16 +467,66 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             no_layers.insert(wt.name.clone());
             continue;
         };
+        if asm.duplicate_framing().is_some() {
+            *framed_twice.entry(wt.name.clone()).or_default() += 1;
+        }
         let jn = end_joins.get(i).copied().unwrap_or_default();
         // A corner's bead and tape go with the first of its two walls.
         let corner_mine = |end: usize| -> bool {
             let p = w.ends().get(end).copied().unwrap_or(w.o);
             !walls.iter().take(i).any(|o| o.level.eq_ignore_ascii_case(&w.level) && o.ends().iter().any(|q| q.dist(p) < (w.t + o.t)))
         };
-        lay_wall(w, wt, asm, r, ctx, k, batch, want, jn, [corner_mine(0), corner_mine(1)]);
+        let ground = w.zf <= ground_z + ctx.upf;
+        let run = runs.get(i).copied().unwrap_or_default();
+        match lay_wall(w, wt, asm, r, ctx, k, batch, want, jn, [corner_mine(0), corner_mine(1)], ground, run) {
+            Facing::Turned => turned += 1,
+            Facing::RoomsBothSides => both += 1,
+            Facing::AsDrawn => {}
+        }
+    }
+    // What the stud layout set its studs beside or framed round (Q6623), and what it couldn't.
+    let tallied = |pre: &str| -> String {
+        batch.tally.iter().filter_map(|(k, n)| k.strip_prefix(pre).map(|w| format!("{n} {w}"))).collect::<Vec<_>>().join(", ")
+    };
+    let (moved, framed, stuck) = (tallied("moved:"), tallied("framed:"), tallied("stuck:"));
+    if !moved.is_empty() {
+        batch.notes.push(format!(
+            "studs set at the side of what stands in their walls, not through it (by what: {moved}): {}",
+            r.source_text("framing.box_beside_stud")
+        ));
+    }
+    if !framed.is_empty() {
+        batch.notes.push(format!("things wider than a stud bay framed with a stud each side and cripples over and under them: {framed}"));
+    }
+    if !stuck.is_empty() {
+        batch.missing.insert(
+            "things in a stud".into(),
+            format!("{stuck}: in an opening's jamb stud, or with no spot for a stud beside them; move them into the bay beside the stud"),
+        );
+    }
+    if turned > 0 {
+        batch
+            .notes
+            .push(format!("{turned} exterior walls laid out turned: drawn with side 1 (the exterior layers) towards a room and side 2 towards none"));
+    }
+    if both > 0 {
+        batch.missing.insert(
+            "exterior walls with rooms on both faces".into(),
+            format!("{both} walls of an exterior wall type have a room on each face, so which face is outside is not known: laid out as drawn (side 1 outside)"),
+        );
     }
     if untyped > 0 {
         batch.missing.insert("walls with no wall type".into(), format!("{untyped} walls: no type mark or legend type, so no layers to lay out"));
+    }
+    if !framed_twice.is_empty() {
+        let n: usize = framed_twice.values().sum();
+        batch.missing.insert(
+            "wall types framed twice".into(),
+            format!(
+                "{n} walls of {}: two framing layers of the same depth on the same side, each laid out (likely a duplicate build-up; check the partition legend)",
+                framed_twice.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        );
     }
     if !no_layers.is_empty() {
         let n = walls.iter().filter(|w| no_layers.iter().any(|t| t.eq_ignore_ascii_case(&w.wall_type))).count();
@@ -478,7 +555,22 @@ fn lay_wall(
     want: &dyn Fn(&str) -> bool,
     jn: [EndJoin; 2],
     corner_mine: [bool; 2],
-) {
+    ground: bool,
+    run: cladding::Run,
+) -> Facing {
+    // An exterior wall's side 1 is its outside: one drawn the other way round (side 1 towards a
+    // room, side 2 towards none) is laid out turned, its exterior layers away from the rooms.
+    let faces_room = |sign: f64| {
+        [0.25, 0.5, 0.75].iter().any(|f| ctx.room_at(&w.level, w.at(w.s0 + (w.s1 - w.s0) * f, sign * (w.t / 2.0 + 1.5 * ctx.upf))).is_some())
+    };
+    let facing = match (asm.external, faces_room(1.0), faces_room(-1.0)) {
+        (true, true, false) => Facing::Turned,
+        (true, true, true) => Facing::RoomsBothSides,
+        _ => Facing::AsDrawn,
+    };
+    let turned = facing == Facing::Turned;
+    let flipped = Wall { n: -w.n, ..w.clone() };
+    let w = if turned { &flipped } else { w };
     let src = type_source(wt, asm);
     let placed = place_layers(asm, w.t, k);
     let upf = ctx.upf;
@@ -500,7 +592,7 @@ fn lay_wall(
         if !want("framing") && !want("insulation") {
             break;
         }
-        let (s, f, ph) = frame(w, wt, asm, pl, r, k, upf, batch, &base, &src, want("framing"));
+        let (s, f, ph) = frame(w, wt, asm, pl, r, ctx, k, upf, batch, &base, &src, want("framing"));
         if studs.is_empty() {
             studs = s;
             flange = f;
@@ -552,6 +644,10 @@ fn lay_wall(
                 }
             }
         }
+    }
+    // ── Exterior finish layers ──
+    if want("cladding") || want("masonry") {
+        cladding::Face { w, r, k, upf, base: &base, src: &src, want, jn, corner_mine, ground, run, rooms: face_room.clone() }.lay(&placed, batch);
     }
     // ── Corner bead and inside-corner tape ──
     if want("drywall") {
@@ -624,6 +720,95 @@ fn lay_wall(
     if want("framing") && flange > 0.0 {
         backing(w, r, ctx, k, upf, batch, &base, &studs, flange);
     }
+    facing
+}
+
+/// Which way an exterior wall's layers were laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Facing {
+    AsDrawn,
+    /// Drawn the other way round: side 1 towards a room, side 2 towards none.
+    Turned,
+    /// A room on each face: which is outside is not known.
+    RoomsBothSides,
+}
+
+/// A framing layer's stud spacing, inches, and where it comes from: a person's rule for the wall
+/// type, else the layer's, its text's or its type's notes' (the legend), else the rules'.
+fn stud_spacing(wt: &cadaddy_walk3d::WallType, asm: &Assembly, layer: &AssemblyLayer, r: &Rules, src: &Source) -> (f64, Source) {
+    let documented =
+        layer.spacing_in.filter(|v| *v > 0.0).or_else(|| text_spacing(&layer.material)).or_else(|| asm.notes.iter().find_map(|n| text_spacing(n)));
+    let (spacing_in, sp_src) = match (r.stud_by_type.get(&wt.name.to_ascii_uppercase()), documented) {
+        // A person's rule for the wall type wins over what the legend says.
+        (Some((v, why)), _) => (*v, Source::from_doc(SourceKind::Rule, why)),
+        (None, Some(v)) => (v, src.clone()),
+        (None, None) => (r.num("framing.stud_spacing_in", 16.0), r.source("framing.stud_spacing_in")),
+    };
+    let spacing_in = if spacing_in.is_finite() { spacing_in } else { 16.0 };
+    (spacing_in.clamp(4.0, 48.0), sp_src)
+}
+
+/// A steel stud's gauge (its text's, else the rules'); none for wood.
+fn stud_gauge(material: &str, wood: bool, r: &Rules, src: &Source) -> (String, Source) {
+    match text_gauge(material) {
+        Some(g) => (g, src.clone()),
+        None if wood => (String::new(), src.clone()),
+        None => (r.text("framing.steel_gauge"), r.source("framing.steel_gauge")),
+    }
+}
+
+/// A wood stud as its text names it (`2x6`).
+fn wood_name(material: &str) -> Option<String> {
+    let up = material.to_ascii_uppercase();
+    up.find("2X").and_then(|i| {
+        let n: String = up.get(i + 2..).unwrap_or_default().chars().take_while(char::is_ascii_digit).take(3).collect();
+        (!n.is_empty()).then(|| format!("2x{n}"))
+    })
+}
+
+/// A wall type's studs as its framing is laid (Q6594): what they are (`2x6`, `3 5/8" 20 ga`,
+/// `5 1/2" metal stud`) and their spacing (inches), each with where it comes from; a steel stud's
+/// gauge on its own when the type names none (the rules' gauge is a default, the depth is not).
+pub(crate) struct Studs {
+    pub size: String,
+    pub size_src: Source,
+    pub gauge: Option<(String, Source)>,
+    pub spacing_in: f64,
+    pub spacing_src: Source,
+}
+
+/// The studs of a wall type's framing layer; none when its build-up has no framing (masonry,
+/// concrete) or none was read.
+pub(crate) fn studs_of(wt: &cadaddy_walk3d::WallType, r: &Rules) -> Option<Studs> {
+    let asm = wt.assembly.as_ref()?;
+    let layer =
+        asm.layers.iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS).find(|l| l.category.trim().eq_ignore_ascii_case("framing") && !l.in_cavity)?;
+    let src = type_source(wt, asm);
+    let wood = is_wood(r, &layer.material);
+    let depth_in = layer_depth(layer).max(1.5);
+    // The legend reader's stand-in depth where the legend gives none is a default, not the legend's.
+    let depth_src = if layer.material.contains("(depth not given)") {
+        Source::from_doc(SourceKind::Default, &format!("{}: the legend gives no stud depth (a stand-in depth)", wt.name))
+    } else {
+        src.clone()
+    };
+    let (spacing_in, spacing_src) = stud_spacing(wt, asm, layer, r, &src);
+    let (size, size_src, gauge) = if wood {
+        match wood_name(&layer.material) {
+            Some(n) => (n, src, None),
+            None => (lumber(depth_in), depth_src, None),
+        }
+    } else {
+        let size = inches_text(depth_in);
+        match text_gauge(&layer.material) {
+            Some(g) => (format!("{size} {g}"), depth_src, None),
+            None => {
+                let (g, g_src) = stud_gauge(&layer.material, false, r, &src);
+                (format!("{size} metal stud"), depth_src, (!g.is_empty()).then_some((g, g_src)))
+            }
+        }
+    };
+    Some(Studs { size, size_src, gauge, spacing_in, spacing_src })
 }
 
 /// The studs, plates or tracks, headers, sills and blocking of a framing layer; the studs'
@@ -636,6 +821,7 @@ fn frame(
     asm: &Assembly,
     pl: &Placed,
     r: &Rules,
+    ctx: &Ctx,
     k: f64,
     upf: f64,
     batch: &mut Batch,
@@ -646,30 +832,10 @@ fn frame(
     let material = pl.layer.material.clone();
     let wood = is_wood(r, &material);
     let depth_in = layer_depth(pl.layer).max(1.5);
-    // Spacing: the layer's, its text's, the project's for the wall type, else the rules'.
-    let documented =
-        pl.layer.spacing_in.filter(|v| *v > 0.0).or_else(|| text_spacing(&material)).or_else(|| asm.notes.iter().find_map(|n| text_spacing(n)));
-    let (spacing_in, sp_src) = match (r.stud_by_type.get(&wt.name.to_ascii_uppercase()), documented) {
-        // A person's rule for the wall type wins over what the legend says.
-        (Some((v, why)), _) => (*v, Source::from_doc(SourceKind::Rule, why)),
-        (None, Some(v)) => (v, src.clone()),
-        (None, None) => (r.num("framing.stud_spacing_in", 16.0), r.source("framing.stud_spacing_in")),
-    };
-    let spacing_in = spacing_in.clamp(4.0, 48.0);
-    let (gauge, g_src) = match text_gauge(&material) {
-        Some(g) => (g, src.clone()),
-        None if wood => (String::new(), src.clone()),
-        None => (r.text("framing.steel_gauge"), r.source("framing.steel_gauge")),
-    };
+    let (spacing_in, sp_src) = stud_spacing(wt, asm, pl.layer, r, src);
+    let (gauge, g_src) = stud_gauge(&material, wood, r, src);
     let size = inches_text(depth_in);
-    // A wood stud as its text names it (`2x6`), else by its depth.
-    let named = {
-        let up = material.to_ascii_uppercase();
-        up.find("2X").and_then(|i| {
-            let n: String = up.get(i + 2..).unwrap_or_default().chars().take_while(char::is_ascii_digit).collect();
-            (!n.is_empty()).then(|| format!("2x{n}"))
-        })
-    };
+    let named = wood_name(&material);
     let (ty, item) = if wood {
         let l = named.clone().unwrap_or_else(|| lumber(depth_in));
         (format!("wood {l}"), format!("{l} wood stud"))
@@ -688,7 +854,7 @@ fn frame(
     let (z0, z1) = (w.zf + bottom_h, w.zt - top_h - short);
     let stud_len_ft = ((z1 - z0) / upf).max(0.0);
     let mut out: Vec<(f64, usize)> = Vec::new();
-    let mk_stud = |batch: &mut Batch, s: f64, za: f64, zb: f64, role: &str| -> usize {
+    let mk_stud_with = |batch: &mut Batch, s: f64, za: f64, zb: f64, role: &str, extra: Vec<(&'static str, String, Source)>| -> usize {
         if !emit {
             return usize::MAX;
         }
@@ -700,35 +866,21 @@ fn frame(
         if !gauge.is_empty() {
             p = p.with("gauge", gauge.clone(), g_src.clone());
         }
+        p.extra.extend(extra);
         p.blocks.push(w.block(s - f / 2.0, s + f / 2.0, pl.off, pl.depth, za, zb));
         batch.push(p)
     };
+    let mk_stud = |batch: &mut Batch, s: f64, za: f64, zb: f64, role: &str| -> usize { mk_stud_with(batch, s, za, zb, role, Vec::new()) };
     let sp = spacing_in * k;
     let in_hole = |s: f64| w.holes.iter().find(|h| s > h.s0 - f * 0.5 && s < h.s1 + f * 0.5);
     // Kings and jacks either side of each opening.
     let jambs = r.num("framing.jamb_studs", 1.0).round().clamp(0.0, 4.0) as usize;
     let jacks = if wood { r.num("framing.jack_studs", 1.0).round().clamp(0.0, 4.0) as usize } else { 0 };
     let mut fixed: Vec<f64> = Vec::new();
-    for h in &w.holes {
-        let headed = h.z1 < w.zt - 1e-6;
-        for side in [-1.0f64, 1.0] {
-            let edge = if side < 0.0 { h.s0 } else { h.s1 };
-            for j in 0..jacks.min(usize::from(headed) * jacks) {
-                let s = edge - side * (f * (j as f64 + 0.5));
-                let i = mk_stud(batch, s, z0, h.z1, "jack");
-                out.push((s, i));
-                fixed.push(s);
-            }
-            for j in 0..jambs {
-                let s = edge + side * (f * ((j + if headed { jacks } else { 0 }) as f64 + 0.5));
-                if s < w.s0 || s > w.s1 {
-                    continue;
-                }
-                let i = mk_stud(batch, s, z0, z1, "king");
-                out.push((s, i));
-                fixed.push(s);
-            }
-        }
+    for js in jamb_studs(w, f, jambs, jacks) {
+        let i = mk_stud(batch, js.s, z0, js.top.unwrap_or(z1), js.role);
+        out.push((js.s, i));
+        fixed.push(js.s);
     }
     // The layout from the wall's start, the last stud at its end.
     let mut s = w.s0 + f / 2.0;
@@ -743,24 +895,115 @@ fn frame(
         layout.push(w.s1 - f / 2.0);
     }
     let min_cripple = r.num("framing.min_cripple_in", 4.0) * k;
+    // What the other trades set in this wall (boxes, devices, equipment): no stud stands in one
+    // (Q6623). A stud the layout puts through one stands at its side instead (the box fastened to
+    // it, in the bay); a thing wider than a bay gets a stud each side and cripples over and under.
+    let things = if r.get("framing.box_beside_stud").and_then(Value::as_bool) == Some(false) {
+        Vec::new()
+    } else {
+        in_wall_things(w, ctx, pl, z0, z1, r.num("framing.in_wall_min_in", 0.25).max(0.0) * k)
+    };
+    let beside_src = r.source("framing.box_beside_stud");
+    // A jamb stud of an opening stays where the opening needs it: a thing in it is for review.
+    for x in &fixed {
+        if let Some(t) = things.iter().find(|t| t.a < x + f / 2.0 - STUD_EPS * k && t.b > x - f / 2.0 + STUD_EPS * k) {
+            *batch.tally.entry(format!("stuck:{}", t.what)).or_default() += 1;
+        }
+    }
+    // Where studs stand already: the openings' kings and jacks, then each one laid.
+    let mut taken: Vec<f64> = fixed.clone();
+    let lo = w.s0 + f / 2.0;
+    let hi = w.s1 - f / 2.0;
+    let mut cripples: Vec<(f64, f64, f64, Vec<(&'static str, String, Source)>)> = Vec::new();
     for s in layout {
         if fixed.iter().any(|x| (x - s).abs() < f) {
             continue;
         }
-        match in_hole(s) {
-            None => {
-                let i = mk_stud(batch, s, z0, z1, "common");
-                out.push((s, i));
-            }
+        // The stud's pieces: a common stud, or the cripples under and over an opening.
+        let (pieces, hole): (Vec<(f64, f64)>, bool) = match in_hole(s) {
+            None => (vec![(z0, z1)], false),
             Some(h) => {
+                let mut v = Vec::new();
                 if h.z0 - z0 > min_cripple {
-                    mk_stud(batch, s, z0, h.z0 - plate_t.max(f * 0.0), "cripple");
+                    v.push((z0, h.z0 - plate_t.max(f * 0.0)));
                 }
                 let top = h.z1 + if wood { header_depth(r, (h.s1 - h.s0) / upf) * k } else { 0.0 };
                 if z1 - top > min_cripple {
-                    mk_stud(batch, s, top, z1, "cripple");
+                    v.push((top, z1));
+                }
+                (v, true)
+            }
+        };
+        let role = if hole { "cripple" } else { "common" };
+        // A moved stud keeps out of the openings (their kings stand there), a cripple under its own.
+        let ok = |c: f64| c >= lo - 1e-6 && c <= hi + 1e-6 && (hole || in_hole(c).is_none());
+        for (za, zb) in pieces {
+            let mut put = |batch: &mut Batch, taken: &mut Vec<f64>, c: f64, role: &str, extra: Vec<(&'static str, String, Source)>| -> bool {
+                if taken.iter().any(|x| (x - c).abs() < f) {
+                    return false;
+                }
+                let i = mk_stud_with(batch, c, za, zb, role, extra);
+                if !hole {
+                    taken.push(c);
+                    out.push((c, i));
+                }
+                true
+            };
+            match clear_of(s, za, zb, f, spacing_in * k, &things, &ok) {
+                Clear::Here => {
+                    put(batch, &mut taken, s, role, Vec::new());
+                }
+                Clear::Moved { to, what } => {
+                    let extra = vec![
+                        ("moved_for", what.clone(), beside_src.clone()),
+                        ("layout_at_in", num_text(((s - w.s0) / k * 100.0).round() / 100.0), Source::computed()),
+                        ("moved_in", num_text(((to - s) / k * 100.0).round() / 100.0), Source::computed()),
+                    ];
+                    // A stud already at the thing's side holds it: none is added.
+                    if put(batch, &mut taken, to, role, extra) {
+                        *batch.tally.entry(format!("moved:{what}")).or_default() += 1;
+                    }
+                }
+                Clear::Around { left, right, za: ta, zb: tb, what } => {
+                    let frames = || vec![("frames", what.clone(), beside_src.clone())];
+                    let mut added = false;
+                    for c in [left, right].into_iter().flatten() {
+                        added |= put(batch, &mut taken, c, if hole { "cripple" } else { "jamb" }, frames());
+                    }
+                    if added {
+                        *batch.tally.entry(format!("framed:{what}")).or_default() += 1;
+                    }
+                    // The layout's stud over and under it, as cripples.
+                    if ta - za > min_cripple {
+                        cripples.push((s, za, ta, frames()));
+                    }
+                    if zb - tb > min_cripple {
+                        cripples.push((s, tb, zb, frames()));
+                    }
+                }
+                Clear::Stuck { what } => {
+                    *batch.tally.entry(format!("stuck:{what}")).or_default() += 1;
+                    put(batch, &mut taken, s, role, Vec::new());
                 }
             }
+        }
+    }
+    // The cripples over and under a wide thing clear the things above and below it too.
+    let in_wall = |c: f64| c >= lo - 1e-6 && c <= hi + 1e-6;
+    for (s, za, zb, extra) in cripples {
+        match clear_of(s, za, zb, f, spacing_in * k, &things, &in_wall) {
+            Clear::Here => {
+                mk_stud_with(batch, s, za, zb, "cripple", extra);
+            }
+            Clear::Moved { to, what } => {
+                let mut extra = extra;
+                extra.push(("moved_for", what.clone(), beside_src.clone()));
+                extra.push(("moved_in", num_text(((to - s) / k * 100.0).round() / 100.0), Source::computed()));
+                mk_stud_with(batch, to, za, zb, "cripple", extra);
+                *batch.tally.entry(format!("moved:{what}")).or_default() += 1;
+            }
+            // Another wide thing over or under it: the jambs round that one hold it.
+            Clear::Around { .. } | Clear::Stuck { .. } => {}
         }
     }
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -889,6 +1132,223 @@ fn frame(
     let _ = stud_idx;
     let _ = stud_len_ft;
     (out, f, (bottom_h, top_h))
+}
+
+/// A jamb stud of an opening: where along the wall, its top (a jack: the opening's head; a king:
+/// none, full height), its role and the way off its opening (-1: towards smaller s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct JambStud {
+    s: f64,
+    top: Option<f64>,
+    role: &'static str,
+    away: f64,
+}
+
+/// The jamb studs of `w`'s openings, `f` wide: `jacks` under each header (beside the opening),
+/// `jambs` kings beyond them; a king off the wall's end is none.
+fn jamb_studs(w: &Wall, f: f64, jambs: usize, jacks: usize) -> Vec<JambStud> {
+    let mut out = Vec::new();
+    for h in w.holes.iter().take(MAX_PER_WALL) {
+        let headed = h.z1 < w.zt - 1e-6;
+        for side in [-1.0f64, 1.0] {
+            let edge = if side < 0.0 { h.s0 } else { h.s1 };
+            for j in 0..jacks.min(usize::from(headed) * jacks) {
+                out.push(JambStud { s: edge - side * (f * (j as f64 + 0.5)), top: Some(h.z1), role: "jack", away: side });
+            }
+            for j in 0..jambs {
+                let s = edge + side * (f * ((j + if headed { jacks } else { 0 }) as f64 + 0.5));
+                if s < w.s0 || s > w.s1 {
+                    continue;
+                }
+                out.push(JambStud { s, top: None, role: "king", away: side });
+            }
+        }
+    }
+    out
+}
+
+/// Where an opening's jamb studs (its king studs, and the jacks under a wood header) stand in a
+/// wall as the stud layout puts them (Q6623): along the wall's axis (`o` + `u`·s) from `s0` to
+/// `s1`, from `z0` to `z1`; `away` the way off the opening (-1: towards smaller s).
+#[derive(Clone, Debug)]
+pub(crate) struct Jamb {
+    pub o: Vec2,
+    pub u: Vec2,
+    pub s0: f64,
+    pub s1: f64,
+    pub z0: f64,
+    pub z1: f64,
+    pub away: f64,
+}
+
+/// The jambs of the openings in `walls` (built wall elements), by wall: none for a wall with no
+/// framing layer, or when the project turns the rule off. The source: the rules' (why no box stands
+/// in a stud, and the jamb studs).
+pub(crate) fn jambs_of(d: &Drawing, sp: &BuildingSpec, walls: &BTreeSet<Handle>) -> (HashMap<Handle, Vec<Jamb>>, String) {
+    let r = Rules::of(d, sp);
+    let src = format!("{}; {}", r.source_text("framing.box_beside_stud"), r.source_text("framing.jamb_studs"));
+    let mut out: HashMap<Handle, Vec<Jamb>> = HashMap::new();
+    if walls.is_empty() || r.get("framing.box_beside_stud").and_then(Value::as_bool) == Some(false) {
+        return (out, src);
+    }
+    let k = upf_of(sp) / 12.0;
+    let jambs = r.num("framing.jamb_studs", 1.0).round().clamp(0.0, 4.0) as usize;
+    for h in walls.iter().take(MAX_WALLS) {
+        let Some(w) = d.entity(*h).and_then(|e| read_wall(e)) else { continue };
+        let Some(asm) =
+            sp.wall_types.iter().find(|t| !w.wall_type.is_empty() && t.name.eq_ignore_ascii_case(&w.wall_type)).and_then(|t| t.assembly.as_ref())
+        else {
+            continue;
+        };
+        let Some(layer) = asm.layers.iter().take(cadaddy_walk3d::MAX_ASSEMBLY_LAYERS).find(|l| l.category == "framing") else { continue };
+        let wood = is_wood(&r, &layer.material);
+        let f = if wood { r.num("framing.wood_thickness_in", 1.5) } else { r.num("framing.steel_flange_in", 1.25) } * k;
+        let jacks = if wood { r.num("framing.jack_studs", 1.0).round().clamp(0.0, 4.0) as usize } else { 0 };
+        let list: Vec<Jamb> = jamb_studs(&w, f, jambs, jacks)
+            .into_iter()
+            .map(|js| Jamb { o: w.o, u: w.u, s0: js.s - f / 2.0, s1: js.s + f / 2.0, z0: w.zf, z1: js.top.unwrap_or(w.zt), away: js.away })
+            .filter(|j| j.s1 - j.s0 > 1e-9 && j.s0.is_finite() && j.s1.is_finite())
+            .collect();
+        if !list.is_empty() {
+            out.insert(*h, list);
+        }
+    }
+    (out, src)
+}
+
+/// How far a box centred at `c` (its half width along the wall `hw`, half height `hh`) moves along
+/// its wall's axis so that it stands in none of `jambs`: off each jamb it stands in, away from the
+/// opening (a few steps: a move may land in the next jamb). None when it stands in none.
+pub(crate) fn off_jambs(c: Vec3, hw: f64, hh: f64, jambs: &[Jamb]) -> Option<Vec2> {
+    let eps = 1e-6 + hw.abs() * 1e-9;
+    let mut at = c;
+    let mut total: Option<Vec2> = None;
+    for _ in 0..8 {
+        let hit = jambs.iter().find_map(|j| {
+            let s = (Vec2::new(at.x, at.y) - j.o).dot(j.u);
+            if at.z - hh >= j.z1 || at.z + hh <= j.z0 || s + hw <= j.s0 + eps || s - hw >= j.s1 - eps {
+                return None;
+            }
+            let d = if j.away < 0.0 { j.s0 - (s + hw) } else { j.s1 - (s - hw) };
+            d.is_finite().then(|| j.u * d)
+        });
+        let Some(d) = hit else { return total };
+        at = at + Vec3::new(d.x, d.y, 0.0);
+        total = Some(total.map_or(d, |t| t + d));
+    }
+    total
+}
+
+/// Overlap ignored between a stud and a thing in the wall, inches (a box set against a stud's face
+/// touches it).
+const STUD_EPS: f64 = 0.05;
+/// Most things one wall's layout looks at, and most a stud's spot is cleared past.
+const MAX_THINGS: usize = 2_000;
+const MAX_CLEAR_STEPS: usize = 64;
+
+/// A thing another trade set in a wall's stud cavity: its extent along the wall (`a`..`b`), its
+/// heights and what it is.
+#[derive(Clone, Debug)]
+pub(super) struct Thing {
+    pub a: f64,
+    pub b: f64,
+    pub za: f64,
+    pub zb: f64,
+    pub what: String,
+}
+
+/// The things in the stud cavity of `w`'s framing layer `pl` between `z0` and `z1`: those whose
+/// body reaches at least `min_into` into the layer.
+fn in_wall_things(w: &Wall, ctx: &Ctx, pl: &Placed, z0: f64, z1: f64, min_into: f64) -> Vec<Thing> {
+    let (n0, n1) = (pl.off - pl.depth / 2.0, pl.off + pl.depth / 2.0);
+    let [p, q] = w.ends();
+    let pad = w.t.abs() + 1.0;
+    let lo = Vec2::new(p.x.min(q.x) - pad, p.y.min(q.y) - pad);
+    let hi = Vec2::new(p.x.max(q.x) + pad, p.y.max(q.y) + pad);
+    let mut out = Vec::new();
+    for it in ctx.in_wall.near(&w.level, lo, hi) {
+        if out.len() >= MAX_THINGS {
+            break;
+        }
+        if it.hi.z <= z0 || it.lo.z >= z1 {
+            continue;
+        }
+        let (mut a, mut b, mut na, mut nb) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+        for v in &it.pts {
+            let d = Vec2::new(v.x, v.y) - w.o;
+            let (s, n) = (d.dot(w.u), d.dot(w.n));
+            a = a.min(s);
+            b = b.max(s);
+            na = na.min(n);
+            nb = nb.max(n);
+        }
+        if !(a.is_finite() && b.is_finite()) || nb.min(n1) - na.max(n0) < min_into.max(1e-9) || b <= w.s0 || a >= w.s1 {
+            continue;
+        }
+        out.push(Thing { a: a.max(w.s0), b: b.min(w.s1), za: it.lo.z, zb: it.hi.z, what: it.what.clone() });
+    }
+    out
+}
+
+/// Where a stud the layout puts at `s` (from `za` to `zb`) stands clear of the things in the wall.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Clear {
+    /// Nothing in its way.
+    Here,
+    /// At the side of the thing it would stand in (the nearer side `ok` allows).
+    Moved { to: f64, what: String },
+    /// A thing wider than a stud bay: a stud each side (those `ok` allows), the layout's stud over
+    /// and under it (`za`..`zb`: the thing's heights).
+    Around { left: Option<f64>, right: Option<f64>, za: f64, zb: f64, what: String },
+    /// Neither side is a place for a stud: left where it is, for review.
+    Stuck { what: String },
+}
+
+/// [`Clear`] for a stud `f` wide the layout puts at `s` from `za` to `zb`, with studs `spacing`
+/// apart; `ok` says where a stud may stand. Things closer together than a stud's width are one.
+pub(super) fn clear_of(s: f64, za: f64, zb: f64, f: f64, spacing: f64, things: &[Thing], ok: &dyn Fn(f64) -> bool) -> Clear {
+    let eps = (f * STUD_EPS / 1.25).max(1e-9);
+    let in_height = |t: &Thing| t.za < zb && t.zb > za;
+    let Some(first) = things.iter().find(|t| in_height(t) && t.a < s + f / 2.0 - eps && t.b > s - f / 2.0 + eps) else {
+        return Clear::Here;
+    };
+    let (mut a, mut b, mut ta, mut tb) = (first.a, first.b, first.za, first.zb);
+    let mut what = first.what.clone();
+    for _ in 0..MAX_CLEAR_STEPS {
+        let mut grew = false;
+        for t in things.iter().filter(|t| in_height(t)) {
+            if t.a < b + f - eps && t.b > a - f + eps && (t.a < a || t.b > b) {
+                a = a.min(t.a);
+                b = b.max(t.b);
+                ta = ta.min(t.za);
+                tb = tb.max(t.zb);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    // Named as the widest of them; a device and its box are one thing, named as the box the stud
+    // holds.
+    let members = || things.iter().filter(|t| in_height(t) && t.a < b && t.b > a);
+    if let Some(t) = members().max_by(|x, y| (x.b - x.a).total_cmp(&(y.b - y.a))) {
+        what = t.what.clone();
+    }
+    if what == "device" && members().any(|t| t.what == "box") {
+        what = "box".into();
+    }
+    let (left, right) = (a - f / 2.0, b + f / 2.0);
+    if b - a + f > spacing {
+        let side = |c: f64| ok(c).then_some(c);
+        return Clear::Around { left: side(left), right: side(right), za: ta, zb: tb, what };
+    }
+    let mut sides = [left, right];
+    sides.sort_by(|x, y| (x - s).abs().total_cmp(&(y - s).abs()));
+    match sides.into_iter().find(|c| ok(*c)) {
+        Some(to) => Clear::Moved { to, what },
+        None => Clear::Stuck { what },
+    }
 }
 
 /// A wood header's name by the opening's width (feet), from the rules' table.
@@ -1386,10 +1846,10 @@ mod tests {
             from: cadaddy_walk3d::WallFrom::Pairs,
             assembly: Some(asm.clone()),
         };
-        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new() };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::default() };
         let mut batch = Batch::default();
         let all = |_: &str| true;
-        lay_wall(w, &wt, &asm, r, &ctx, 1.0, &mut batch, &all, [EndJoin::default(); 2], [true, true]);
+        lay_wall(w, &wt, &asm, r, &ctx, 1.0, &mut batch, &all, [EndJoin::default(); 2], [true, true], true, cladding::Run::default());
         batch.pieces
     }
 
@@ -1463,6 +1923,196 @@ mod tests {
         assert!(p.iter().filter(|x| x.trade != "firestopping").all(|x| x.extra.iter().any(|(k, v, _)| *k == "wall_type" && v == "P9")));
     }
 
+    /// A box-shaped thing in the wall of [`wall`]: along it from `s0` to `s1`, across it from
+    /// `n0` to `n1` (side 1 positive), from `z0` to `z1` (inches).
+    fn thing(what: &str, s: (f64, f64), n: (f64, f64), z: (f64, f64)) -> (String, InWall) {
+        let mut pts = Vec::new();
+        for x in [s.0, s.1] {
+            for y in [n.0, n.1] {
+                for h in [z.0, z.1] {
+                    pts.push(Vec3::new(x, y, h));
+                }
+            }
+        }
+        ("L1".into(), InWall { what: what.into(), pts, lo: Vec3::new(s.0, n.0, z.0), hi: Vec3::new(s.1, n.1, z.1) })
+    }
+
+    fn lay_with(w: &Wall, asm: Assembly, r: &Rules, things: Vec<(String, InWall)>) -> (Vec<Piece>, Batch) {
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: Some(asm.clone()),
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::new(things, 12.0) };
+        let mut batch = Batch::default();
+        let only = |t: &str| t == "framing";
+        lay_wall(w, &wt, &asm, r, &ctx, 1.0, &mut batch, &only, [EndJoin::default(); 2], [true, true], true, cladding::Run::default());
+        (batch.pieces.clone(), batch)
+    }
+
+    fn steel_partition() -> Assembly {
+        Assembly {
+            tag: "P9".into(),
+            source: "sample legend, mark P9".into(),
+            layers: vec![
+                layer("5/8\" gypsum board", 0.625, LayerSide::Side1, "board", false, None),
+                layer("3 5/8\" 20 ga metal studs", 3.625, LayerSide::Core, "framing", false, Some(16.0)),
+                layer("5/8\" gypsum board", 0.625, LayerSide::Side2, "board", false, None),
+            ],
+            ..Assembly::default()
+        }
+    }
+
+    /// The studs' extents along the wall and up it, with the piece.
+    fn studs(p: &[Piece]) -> Vec<(f64, f64, f64, f64, &Piece)> {
+        p.iter().filter(|x| x.kind == "stud").filter_map(|x| x.blocks.first().map(|b| (b.a.x.min(b.b.x), b.a.x.max(b.b.x), b.z0, b.z1, x))).collect()
+    }
+
+    fn prop<'a>(p: &'a Piece, key: &str) -> Option<&'a str> {
+        p.extra.iter().find(|(k, _, _)| *k == key).map(|(_, v, _)| v.as_str())
+    }
+
+    #[test]
+    fn no_stud_stands_in_a_box_or_in_what_is_set_in_the_wall() {
+        // Q6623: a 10' steel stud partition at 16" o.c.; a receptacle box (2" x 3", 2 1/2" deep
+        // from side 2's face) centred 16" from the wall's start at 18" AFF: the layout's second
+        // stud (16 5/8") stands in it. A 20" recessed panel from 40" to 60", 4' to 6'-6" AFF.
+        let w = wall(10.0, Vec::new());
+        let face = -w.t / 2.0;
+        let bx = thing("box", (15.0, 17.0), (face, face + 2.5), (16.5, 19.5));
+        let panel = thing("panel", (40.0, 60.0), (face, face + 3.75), (48.0, 78.0));
+        // A box under the panel, in the layout's 4'-0 5/8" stud (the cripple under the panel).
+        let under = thing("box", (47.5, 49.5), (face, face + 2.5), (16.5, 19.5));
+        let (bare, _) = lay_with(&w, steel_partition(), &Rules::default(), Vec::new());
+        let hits = |p: &[Piece], s: (f64, f64), z: (f64, f64)| {
+            studs(p).into_iter().filter(|(a, b, z0, z1, _)| *a < s.1 - 0.01 && *b > s.0 + 0.01 && *z0 < z.1 && *z1 > z.0).count()
+        };
+        // Before: the layout alone stands a stud in the box and one in the panel.
+        assert_eq!(hits(&bare, (15.0, 17.0), (16.5, 19.5)), 1);
+        assert_eq!(hits(&bare, (40.0, 60.0), (48.0, 78.0)), 1);
+        let (p, batch) = lay_with(&w, steel_partition(), &Rules::default(), vec![bx, panel, under]);
+        assert_eq!(hits(&p, (47.5, 49.5), (16.5, 19.5)), 0);
+        assert_eq!(hits(&p, (15.0, 17.0), (16.5, 19.5)), 0, "{:?}", studs(&p).iter().map(|s| (s.0, s.1, s.2, s.3)).collect::<Vec<_>>());
+        assert_eq!(hits(&p, (40.0, 60.0), (48.0, 78.0)), 0);
+        // The box's stud moved to its nearer side, 1" over: against the box's face, carrying
+        // where the layout had it and why.
+        let moved: Vec<_> = studs(&p).into_iter().filter(|s| prop(s.4, "moved_for").is_some() && prop(s.4, "role") != Some("cripple")).collect();
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        let (a, _, _, _, m) = moved[0];
+        assert!((a - 17.0).abs() < 1e-9, "{a}");
+        assert_eq!(prop(m, "moved_for"), Some("box"));
+        assert_eq!(prop(m, "layout_at_in"), Some("16.63"));
+        assert_eq!(prop(m, "moved_in"), Some("1"));
+        assert_eq!(prop(m, "role"), Some("common"));
+        let why = m.extra.iter().find(|(k, _, _)| *k == "moved_for").map(|(_, _, s)| s.doc.clone().unwrap_or_default()).unwrap_or_default();
+        assert!(why.contains("side of a stud"), "{why}");
+        // The panel: a jamb stud each side, the layout's stud over and under it as cripples.
+        let jambs: Vec<f64> = studs(&p).into_iter().filter(|s| prop(s.4, "role") == Some("jamb")).map(|s| s.0).collect();
+        assert_eq!(jambs, vec![40.0 - 1.25, 60.0], "{jambs:?}");
+        // The cripple under the panel stands at the side of the box under it.
+        let under_cripple: Vec<f64> = studs(&p).into_iter().filter(|s| prop(s.4, "role") == Some("cripple") && s.3 <= 48.0).map(|s| s.0).collect();
+        assert_eq!(under_cripple, vec![49.5], "{under_cripple:?}");
+        let cripples: Vec<(f64, f64)> = studs(&p)
+            .into_iter()
+            .filter(|s| prop(s.4, "frames") == Some("panel") && prop(s.4, "role") == Some("cripple"))
+            .map(|s| (s.2, s.3))
+            .collect();
+        assert_eq!(cripples.len(), 2, "{cripples:?}");
+        // Nothing else changed: every other stud where the layout put it, none twice.
+        assert_eq!(count(&p, "stud"), count(&bare, "stud") + 3, "two jambs and a cripple more");
+        let mut at: Vec<f64> = studs(&p).into_iter().filter(|s| prop(s.4, "role") != Some("cripple")).map(|s| s.0).collect();
+        at.sort_by(f64::total_cmp);
+        assert!(at.windows(2).all(|x| x[1] - x[0] >= 1.25 - 1e-9), "{at:?}");
+        assert!(batch.tally.get("moved:box") == Some(&2) && batch.tally.get("framed:panel") == Some(&1), "{:?}", batch.tally);
+    }
+
+    #[test]
+    fn a_box_under_a_window_moves_its_cripple_and_a_plate_on_the_face_moves_nothing() {
+        // A 4' window from 6' to 10' (sill 3', head 7'); a box at 18" AFF under it, in the
+        // layout's 6'-8 5/8" cripple; a cover plate only 1/8" into the wall at 2' (in the 2'-0 5/8"
+        // stud's way, but clear of the cavity's studs).
+        let win = Hole { s0: 72.0, s1: 120.0, z0: 36.0, z1: 84.0 };
+        let w = wall(12.0, vec![win]);
+        let face = -w.t / 2.0;
+        let under = thing("box", (79.5, 81.5), (face, face + 2.5), (16.5, 19.5));
+        let plate = thing("receptacle", (31.0, 34.0), (face - 0.25, face + 0.75), (40.0, 44.0));
+        let (bare, _) = lay_with(&w, steel_partition(), &Rules::default(), Vec::new());
+        let (p, _) = lay_with(&w, steel_partition(), &Rules::default(), vec![under, plate]);
+        let cripples = |p: &[Piece]| -> Vec<f64> {
+            let mut v: Vec<f64> = studs(p).into_iter().filter(|s| prop(s.4, "role") == Some("cripple") && s.3 <= 36.0).map(|s| s.0).collect();
+            v.sort_by(f64::total_cmp);
+            v
+        };
+        assert_eq!(cripples(&bare), vec![80.0, 96.0, 112.0]);
+        assert_eq!(cripples(&p), vec![81.5, 96.0, 112.0], "moved to the box's nearer side");
+        // The face plate reaches 1/8" into the framing: nothing moved for it.
+        assert!(studs(&p).iter().filter(|s| prop(s.4, "moved_for").is_some()).all(|s| prop(s.4, "moved_for") == Some("box")));
+        assert_eq!(count(&p, "stud"), count(&bare, "stud"));
+        // The project turns the rule off: the layout as before.
+        let mut off = Rules::default();
+        if let Some(fr) = off.v.get_mut("framing") {
+            fr["box_beside_stud"] = json!(false);
+        }
+        let under = thing("box", (79.5, 81.5), (face, face + 2.5), (16.5, 19.5));
+        let (p_off, _) = lay_with(&w, steel_partition(), &off, vec![under]);
+        assert_eq!(cripples(&p_off), cripples(&bare));
+    }
+
+    #[test]
+    fn a_box_in_a_jamb_moves_off_it_away_from_the_opening() {
+        // A wall along x; a door from 60" to 96": jambs 3" wide each side (king + jack).
+        let j = |s0: f64, s1: f64, away: f64| Jamb { o: Vec2::new(0.0, 0.0), u: Vec2::new(1.0, 0.0), s0, s1, z0: 0.0, z1: 120.0, away };
+        let jambs = [j(57.0, 60.0, -1.0), j(96.0, 99.0, 1.0)];
+        // A 2" box centred 1" left of the left jamb's middle: its right edge to the jamb's start.
+        let d = off_jambs(Vec3::new(57.5, 3.0, 48.0), 1.0, 1.5, &jambs).unwrap();
+        assert!((d.x + 1.5).abs() < 1e-9 && d.y.abs() < 1e-9, "{d:?}");
+        // One in the right jamb moves right, off it.
+        let d = off_jambs(Vec3::new(97.0, 3.0, 48.0), 1.0, 1.5, &jambs).unwrap();
+        assert!((d.x - 3.0).abs() < 1e-9, "{d:?}");
+        // Clear of it (touching its face, or above it), nothing.
+        assert!(off_jambs(Vec3::new(56.0, 3.0, 48.0), 1.0, 1.5, &jambs).is_none());
+        assert!(off_jambs(Vec3::new(57.5, 3.0, 130.0), 1.0, 1.5, &jambs).is_none());
+        // A pier between two openings all jamb: no spot off them, so the move found still
+        // stands in one (the caller leaves the box for review).
+        let pier = [j(40.0, 43.0, 1.0), j(43.0, 46.0, -1.0)];
+        let d = off_jambs(Vec3::new(44.0, 0.0, 48.0), 1.0, 1.5, &pier).unwrap();
+        assert!(off_jambs(Vec3::new(44.0 + d.x, 0.0, 48.0), 1.0, 1.5, &pier).is_some(), "{d:?}");
+        // Hostile numbers never panic.
+        let _ = off_jambs(Vec3::new(f64::NAN, 0.0, f64::INFINITY), f64::NAN, -1.0, &jambs);
+    }
+
+    #[test]
+    fn a_stud_clears_things_by_the_nearer_side_and_is_stuck_only_with_no_room() {
+        let t = |a: f64, b: f64| Thing { a, b, za: 10.0, zb: 20.0, what: "box".into() };
+        let any = |_: f64| true;
+        // Clear of it in height or along the wall.
+        assert_eq!(clear_of(16.0, 0.0, 9.0, 1.25, 16.0, &[t(15.0, 17.0)], &any), Clear::Here);
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[t(17.0, 19.0)], &any), Clear::Here, "touching its face is clear");
+        // The nearer side; two boxes closer than a stud's width are one.
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[t(15.5, 17.5)], &any), Clear::Moved { to: 14.875, what: "box".into() });
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[t(15.5, 17.5), t(18.0, 20.0)], &any), Clear::Moved { to: 14.875, what: "box".into() });
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[t(15.5, 17.5), t(12.0, 15.0)], &any), Clear::Moved { to: 18.125, what: "box".into() });
+        // A device round its box: one thing, named as the box.
+        let dev = Thing { a: 15.0, b: 18.0, za: 10.0, zb: 20.0, what: "device".into() };
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[dev, t(15.5, 17.5)], &any), Clear::Moved { to: 14.375, what: "box".into() });
+        // The other side when the nearer one is no place for a stud; stuck when neither is.
+        let not_left = |c: f64| c > 15.0;
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[t(15.5, 17.5)], &not_left), Clear::Moved { to: 18.125, what: "box".into() });
+        let none = |_: f64| false;
+        assert_eq!(clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[t(15.5, 17.5)], &none), Clear::Stuck { what: "box".into() });
+        // Wider than a bay: a stud each side.
+        let wide = Thing { a: 10.0, b: 40.0, za: 30.0, zb: 60.0, what: "equipment".into() };
+        assert_eq!(
+            clear_of(16.0, 0.0, 100.0, 1.25, 16.0, &[wide], &any),
+            Clear::Around { left: Some(9.375), right: Some(40.625), za: 30.0, zb: 60.0, what: "equipment".into() }
+        );
+        // Hostile numbers never panic.
+        let nan = Thing { a: f64::NAN, b: f64::INFINITY, za: f64::NEG_INFINITY, zb: f64::NAN, what: String::new() };
+        let _ = clear_of(f64::NAN, 0.0, 1e300, 0.0, 0.0, &[nan.clone(), nan], &any);
+    }
+
     #[test]
     fn a_wood_wall_takes_its_texts_spacing_double_top_plate_and_sheathing() {
         let asm = Assembly {
@@ -1513,6 +2163,285 @@ mod tests {
         let s = p.iter().find(|x| x.kind == "stud").unwrap();
         assert!(s.extra.iter().any(|(k, v, src)| *k == "spacing_in" && v == "24" && src.kind == SourceKind::Rule));
         assert!(s.extra.iter().any(|(k, v, src)| *k == "gauge" && v == "20 ga" && src.kind == SourceKind::Default));
+    }
+
+    /// The exterior wall of the finding: stucco, rigid insulation and wood sheathing outside 2x6
+    /// studs, gypsum board inside; the assembly lists no lath and no barrier.
+    fn stucco_wall() -> Assembly {
+        Assembly {
+            tag: "X7".into(),
+            source: "sample legend, mark X7".into(),
+            layers: vec![
+                layer("7/8\" portland cement stucco", 0.875, LayerSide::Side1, "finish", false, None),
+                layer("3/4\" rigid insulation", 0.75, LayerSide::Side1, "insulation", false, None),
+                layer("1/2\" wood structural panel sheathing", 0.5, LayerSide::Side1, "sheathing", false, None),
+                layer("2x6 wood studs @ 16\" o.c.", 5.5, LayerSide::Core, "framing", false, None),
+                layer("5/8\" gypsum board", 0.625, LayerSide::Side2, "board", false, None),
+            ],
+            ..Assembly::default()
+        }
+    }
+
+    fn sum(p: &[Piece], kind: &str, f: fn(&Piece) -> f64) -> f64 {
+        p.iter().filter(|x| x.kind == kind).map(f).sum()
+    }
+
+    fn has(p: &Piece, key: &str, value: &str) -> bool {
+        p.extra.iter().any(|(k, v, _)| *k == key && v == value)
+    }
+
+    #[test]
+    fn a_stucco_walls_finish_is_laid_out_with_its_lath_barrier_and_accessories() {
+        // 20' x 10' with a 4' window (sill 3', head 7') from 8' to 12'.
+        let window = Hole { s0: 96.0, s1: 144.0, z0: 36.0, z1: 84.0 };
+        let p = lay(&wall(20.0, vec![window]), stucco_wall(), &Rules::default());
+        let net = 200.0 - 16.0;
+        // The plaster in panels no bigger than 144 sf: two 10' x 10' panels, one control joint.
+        let plaster: Vec<&Piece> = p.iter().filter(|x| x.kind == "plaster").collect();
+        assert_eq!(plaster.len(), 2);
+        assert!(plaster.iter().all(|x| x.trade == "cladding" && x.size == "7/8\"" && x.ty == "3 coats" && x.inferred.is_none()));
+        assert!(plaster.iter().all(|x| x.source.doc.as_deref() == Some("sample legend, mark X7")));
+        assert!((sum(&p, "plaster", |x| x.area_sf) - net).abs() < 1e-6);
+        assert!((sum(&p, "plaster", |x| x.volume_cf) - net * 0.875 / 12.0).abs() < 1e-6);
+        // (The joint at 10' crosses the window: 6' of it.)
+        assert_eq!(count(&p, "control_joint"), 1);
+        assert!((sum(&p, "control_joint", |x| x.length_ft) - 6.0).abs() < 1e-6);
+        // The lath under it: 27" x 96" sheets lapped 1/2" and 1", the window cut out.
+        let lath: Vec<&Piece> = p.iter().filter(|x| x.kind == "lath").collect();
+        // Rows of 26.5" up a 120" wall: 5; pieces of 95" along 240": 3 a row.
+        assert_eq!(lath.len(), 15);
+        assert!((sum(&p, "lath", |x| x.area_sf) - net).abs() < 1e-6);
+        assert!(lath.iter().all(|x| x.inferred.as_deref().is_some_and(|b| b.contains("C1063"))));
+        // Two layers of barrier over wood-based sheathing (IBC 2510.6): an 8' 10" course (a 9'
+        // roll less its 2" lap) and the 1' 2" rest, per layer.
+        let wrb: Vec<&Piece> = p.iter().filter(|x| x.kind == "weather_barrier").collect();
+        assert_eq!(wrb.len(), 4);
+        assert!(wrb.iter().all(|x| x.ty == "2 layers" && x.inferred.as_deref().is_some_and(|b| b.contains("2510.6"))));
+        assert!((sum(&p, "weather_barrier", |x| x.area_sf) - 2.0 * net).abs() < 1e-6);
+        assert_eq!(wrb.iter().filter(|x| has(x, "ply", "2")).count(), 2);
+        // The weep screed along its base (on the lowest floor), casing bead round the window and
+        // at the wall's two free ends.
+        let screed: Vec<&Piece> = p.iter().filter(|x| x.kind == "screed").collect();
+        assert_eq!(screed.len(), 1);
+        assert!((screed[0].length_ft - 20.0).abs() < 1e-6 && has(screed[0], "at", "the foundation plate line"));
+        assert!(screed[0].inferred.as_deref().is_some_and(|b| b.contains("2512.1.2")));
+        assert_eq!(count(&p, "casing_bead"), 3);
+        let round_window = p.iter().find(|x| x.kind == "casing_bead" && has(x, "at", "opening")).unwrap();
+        assert!((round_window.length_ft - 16.0).abs() < 1e-6, "{}", round_window.length_ft);
+        // Every piece is the wall's and has a body; the board and framing are still laid out.
+        assert!(p.iter().filter(|x| x.trade == "cladding").all(|x| x.host == Some(Handle(0x42)) && !x.blocks.is_empty()));
+        assert!(count(&p, "sheathing") > 0 && count(&p, "board") > 0 && count(&p, "sheet") > 0 && count(&p, "stud") > 0);
+    }
+
+    #[test]
+    fn listed_lath_and_barrier_are_laid_out_as_themselves_not_twice() {
+        let mut asm = stucco_wall();
+        asm.layers.insert(1, layer("self-furred metal lath", 0.0, LayerSide::Side1, "finish", false, None));
+        asm.layers.insert(2, layer("two layers grade D building paper", 0.0, LayerSide::Side1, "barrier", false, None));
+        let p = lay(&wall(20.0, Vec::new()), asm, &Rules::default());
+        let lath: Vec<&Piece> = p.iter().filter(|x| x.kind == "lath").collect();
+        assert_eq!(lath.len(), 15);
+        assert!(lath.iter().all(|x| x.inferred.is_none() && x.item.starts_with("self-furred metal lath")));
+        let wrb: Vec<&Piece> = p.iter().filter(|x| x.kind == "weather_barrier").collect();
+        assert_eq!(wrb.len(), 4);
+        assert!(wrb.iter().all(|x| x.inferred.is_none() && x.ty == "2 layers"));
+        assert!((sum(&p, "weather_barrier", |x| x.area_sf) - 400.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn siding_veneer_panels_and_unnamed_finishes_are_laid_out() {
+        let door = Hole { s0: 60.0, s1: 96.0, z0: 0.0, z1: 84.0 };
+        let one = |material: &str, category: &str| Assembly {
+            source: "sample legend".into(),
+            layers: vec![
+                layer(material, 0.625, LayerSide::Side1, category, false, None),
+                layer("3 5/8\" metal studs", 3.625, LayerSide::Core, "framing", false, Some(16.0)),
+            ],
+            ..Assembly::default()
+        };
+        let r = Rules::default();
+        // Lap siding: 7" courses (18 up a 10' wall, the last 1"), 12' boards, the door cut out,
+        // over one layer of barrier (not over wood sheathing here).
+        let p = lay(&wall(20.0, vec![door]), one("fiber cement lap siding", "cladding"), &r);
+        assert_eq!(count(&p, "siding"), 18);
+        assert!((sum(&p, "siding", |x| x.area_sf) - (200.0 - 21.0)).abs() < 1e-6);
+        // The 12 courses beside the door: a 5' and a 12' run (2 boards); the rest one 20' run.
+        assert_eq!(sum(&p, "siding", |x| x.qty), 12.0 * 2.0 + 6.0 * 2.0);
+        assert!(p.iter().filter(|x| x.kind == "weather_barrier").all(|x| x.ty == "1 layer"));
+        assert_eq!(count(&p, "lath"), 0);
+        // Brick veneer: the masonry trade's, 6.75 a square foot in 8" bands, ties per 2.67 sf.
+        let p = lay(&wall(20.0, Vec::new()), one("3 5/8\" brick veneer", "cladding"), &r);
+        assert_eq!(count(&p, "brick"), 15);
+        assert!(p.iter().filter(|x| x.kind == "brick").all(|x| x.trade == "masonry"));
+        assert_eq!(sum(&p, "brick", |x| x.qty), 15.0 * (240.0 * 8.0 / 144.0 * 6.75f64).ceil());
+        assert_eq!(sum(&p, "tie", |x| x.qty), (200.0f64 / 2.67).ceil());
+        // Metal panels: 4' x 10' sheets.
+        let p = lay(&wall(20.0, Vec::new()), one("insulated metal panel", "finish"), &r);
+        assert_eq!(count(&p, "panel"), 5);
+        // A finish layer no system names: by area, in 4' x 8' pieces, and said so.
+        let p = lay(&wall(20.0, Vec::new()), one("textured coating", "finish"), &r);
+        assert_eq!(count(&p, "cladding"), 10);
+        assert!((sum(&p, "cladding", |x| x.area_sf) - 200.0).abs() < 1e-6);
+        // Upstairs the screed is at the floor line.
+        let mut w = wall(20.0, Vec::new());
+        w.zf = 120.0;
+        w.zt = 240.0;
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: Some(stucco_wall()),
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::default() };
+        let mut batch = Batch::default();
+        let only = |t: &str| t == "cladding";
+        lay_wall(&w, &wt, &stucco_wall(), &r, &ctx, 1.0, &mut batch, &only, [EndJoin::default(); 2], [true, true], false, cladding::Run::default());
+        assert!(batch.pieces.iter().all(|x| x.trade == "cladding"));
+        assert!(batch.pieces.iter().any(|x| x.kind == "screed" && has(x, "at", "the floor line")));
+    }
+
+    #[test]
+    fn an_exterior_wall_drawn_the_other_way_round_is_laid_out_turned() {
+        let room = |y0: f64, y1: f64| RoomEl {
+            level: "L1".into(),
+            name: "OFFICE".into(),
+            number: "R1".into(),
+            finish: String::new(),
+            outline: vec![Vec2::new(0.0, y0), Vec2::new(240.0, y0), Vec2::new(240.0, y1), Vec2::new(0.0, y1)],
+            z: 0.0,
+            handle: Handle(0x50),
+        };
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: None,
+        };
+        let plaster_y = |rooms: Vec<RoomEl>, external: bool| -> (f64, bool) {
+            let asm = Assembly { external, ..stucco_wall() };
+            let ctx = Ctx { upf: 12.0, rooms, devices: Vec::new(), in_wall: InWallIndex::default() };
+            let mut batch = Batch::default();
+            let all = |_: &str| true;
+            let turned = Facing::Turned
+                == lay_wall(
+                    &wall(20.0, Vec::new()),
+                    &wt,
+                    &asm,
+                    &Rules::default(),
+                    &ctx,
+                    1.0,
+                    &mut batch,
+                    &all,
+                    [EndJoin::default(); 2],
+                    [true, true],
+                    true,
+                    cladding::Run::default(),
+                );
+            let p = batch.pieces.iter().find(|x| x.kind == "plaster").map(|x| x.blocks[0].a.y).unwrap_or(f64::NAN);
+            (p, turned)
+        };
+        // The room on side 2 (below the line): the stucco on side 1, outside.
+        let (y, turned) = plaster_y(vec![room(-120.0, -6.0)], true);
+        assert!(y > 0.0 && !turned, "{y}");
+        // The room on side 1: the wall was drawn the other way round; the stucco goes outside.
+        let (y, turned) = plaster_y(vec![room(6.0, 120.0)], true);
+        assert!(y < 0.0 && turned, "{y}");
+        // Rooms on both faces: laid as drawn.
+        let (y, turned) = plaster_y(vec![room(6.0, 120.0), room(-120.0, -6.0)], true);
+        assert!(y > 0.0 && !turned, "{y}");
+        // Not an exterior wall type: laid as the legend gives it.
+        let (y, turned) = plaster_y(vec![room(6.0, 120.0)], false);
+        assert!(y > 0.0 && !turned, "{y}");
+    }
+
+    #[test]
+    fn a_join_tells_a_corner_from_a_straight_run() {
+        let w = |a: [f64; 2], b: [f64; 2]| {
+            let (a, b) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+            let u = (b - a) * (1.0 / a.dist(b));
+            Wall { o: a, u, n: u.perp(), s0: 0.0, s1: a.dist(b), ..wall(1.0, Vec::new()) }
+        };
+        let walls = [w([0.0, 0.0], [240.0, 0.0]), w([240.0, 0.0], [480.0, 0.0]), w([480.0, 0.0], [480.0, 240.0])];
+        let j = joins(&walls);
+        assert!(j[0][1].corner && !j[0][1].bent, "a straight run on: no corner aid");
+        assert!(j[1][1].corner && j[1][1].bent && j[2][0].bent, "a turn: a corner");
+        // A stucco wall gets a corner aid at its bent end only.
+        let mut batch = Batch::default();
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: None,
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::default() };
+        let all = |_: &str| true;
+        lay_wall(&walls[1], &wt, &stucco_wall(), &Rules::default(), &ctx, 1.0, &mut batch, &all, j[1], [true, true], true, cladding::Run::default());
+        assert_eq!(count(&batch.pieces, "corner_aid"), 1);
+        assert_eq!(count(&batch.pieces, "casing_bead"), 0, "no free end");
+    }
+
+    #[test]
+    fn a_facade_of_several_walls_takes_its_control_joints_along_the_run() {
+        let w = |a: [f64; 2], b: [f64; 2]| {
+            let (a, b) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+            let u = (b - a) * (1.0 / a.dist(b));
+            Wall { o: a, u, n: u.perp(), s0: 0.0, s1: a.dist(b), ..wall(1.0, Vec::new()) }
+        };
+        // Three 8' walls on one line (the middle one drawn the other way) and a return.
+        let walls = [w([0.0, 0.0], [96.0, 0.0]), w([192.0, 0.0], [96.0, 0.0]), w([192.0, 0.0], [288.0, 0.0]), w([288.0, 0.0], [288.0, 240.0])];
+        let runs = cladding::runs(&walls, &[true, true, true, true]);
+        assert!(runs[..3].iter().all(|r| (r.len - 288.0).abs() < 1e-6), "{runs:?}");
+        assert!(runs[1].reversed && !runs[0].reversed && runs[3] == cladding::Run::default(), "{runs:?}");
+        // The 24' run in panels no wider than 14.4' (144 sf at 10'): two 12' panels, one joint
+        // in the middle wall, 4' from its end.
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: None,
+        };
+        let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::default() };
+        let all = |_: &str| true;
+        let mut joints = Vec::new();
+        let mut panels = Vec::new();
+        for (i, wl) in walls.iter().take(3).enumerate() {
+            let mut batch = Batch::default();
+            lay_wall(wl, &wt, &stucco_wall(), &Rules::default(), &ctx, 1.0, &mut batch, &all, [EndJoin::default(); 2], [true, true], true, runs[i]);
+            joints.push(batch.pieces.iter().filter(|x| x.kind == "control_joint").map(|x| x.blocks[0].a.x).collect::<Vec<f64>>());
+            panels.push(count(&batch.pieces, "plaster"));
+        }
+        assert_eq!(panels, vec![1, 2, 1]);
+        assert!(joints[0].is_empty() && joints[2].is_empty() && joints[1].len() == 1, "{joints:?}");
+        assert!((joints[1][0] - 144.0).abs() < 1.0, "{joints:?}");
+        // Laid alone, each 8' wall is one panel with no joint.
+        let mut batch = Batch::default();
+        lay_wall(
+            &walls[1],
+            &wt,
+            &stucco_wall(),
+            &Rules::default(),
+            &ctx,
+            1.0,
+            &mut batch,
+            &all,
+            [EndJoin::default(); 2],
+            [true, true],
+            true,
+            cladding::Run::default(),
+        );
+        assert_eq!(count(&batch.pieces, "control_joint"), 0);
+    }
+
+    #[test]
+    fn layer_counts_are_read() {
+        assert_eq!(cladding::layers_named("two layers grade D paper"), Some(2.0));
+        assert_eq!(cladding::layers_named("(2) layers of building paper"), Some(2.0));
+        assert_eq!(cladding::layers_named("2-ply WRB"), Some(2.0));
+        assert_eq!(cladding::layers_named("housewrap"), None);
     }
 
     #[test]

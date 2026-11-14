@@ -502,6 +502,18 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The plan wall mark a WALLGEN wall stands on, when its type has a head of wall: same level and
 /// type, the wall's middle within half its thickness (and 6") of the mark, running along it.
+/// The built walls whose plan mark takes its type's head of wall (Q6527), each with whether
+/// the head has a bottom track: their head's track is the head detail's, never a plain run.
+pub(crate) fn head_of_wall_walls(d: &Drawing, sp: &BuildingSpec) -> BTreeMap<Handle, bool> {
+    collect_walls(d, sp)
+        .iter()
+        .filter_map(|wd| {
+            head_mark(sp, wd)?;
+            Some((wd.handle, wd.assembly.as_ref()?.head.as_ref()?.bottom_track))
+        })
+        .collect()
+}
+
 fn head_mark(sp: &BuildingSpec, wd: &WallData) -> Option<usize> {
     let asm = wd.assembly.as_ref()?;
     asm.head.as_ref()?;
@@ -772,8 +784,8 @@ fn finish_faces_for_wall(handle: Handle, mesh: &Mesh, asm: &Assembly, k: f64, ro
 
 /// The building spec from the drawing, if any.
 fn spec_if_any(s: &Session) -> Option<BuildingSpec> {
-    let d = s.doc().ok()?;
-    d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).and_then(|t| BuildingSpec::from_json(t).ok())
+    // Read as every other part of the command reads it (once while the command runs).
+    super::bspec::stored(s.doc().ok()?).ok().flatten()
 }
 
 /// Read the xdata tag strings for CADADDY_WALLGEN on an entity.

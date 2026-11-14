@@ -1045,6 +1045,9 @@ pub struct VportTile {
     /// Width / height of the tile on screen when it was saved (0: unknown).
     #[serde(default)]
     pub aspect: f64,
+    /// The tile's view twist (radians, counterclockwise; DXF VPORT group 51 in degrees).
+    #[serde(default)]
+    pub twist: f64,
 }
 
 /// A model space viewport configuration (VPORTS): `*Active` is the one shown, other names are

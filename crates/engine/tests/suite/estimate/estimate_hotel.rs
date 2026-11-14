@@ -150,7 +150,9 @@ fn a_synthetic_hotel_is_estimated_end_to_end() {
         let k = line["key"].as_str().unwrap();
         let ex = s.execute("estimate.explain", &json!({ "line": k })).unwrap();
         assert_eq!(ex["value"], line["cost"], "{k}");
-        assert!(ex["elements"].as_array().is_some_and(|e| !e.is_empty()), "{k} explains to no element: {ex}");
+        // Its model objects, or (nothing built yet) the spec ids it was counted by.
+        let named = |k: &str| ex[k].as_array().is_some_and(|e| !e.is_empty());
+        assert!(named("elements") || named("sources"), "{k} explains to no element: {ex}");
     }
     let feeder = s.execute("estimate.explain", &json!({ "line": "electrical|wire|THHN copper|#3/0" })).unwrap();
     // 624 ft × 0.02 h × 1.25 = 15.6 h × $90 = $1,404; 686.4 ft × $4.50 = $3,088.80.

@@ -538,6 +538,7 @@ fn invisible_dimblock_entity_is_ignored_in_dimension_extents() {
             &Space::Model,
             Common::default(),
             EntityKind::Dimension(Box::new(Dimension {
+                insertion_point: Default::default(),
                 kind: DimKind::Linear { rotation: 0.0 },
                 defpt: Vec3::new(1.0, 1.0, 0.0),
                 text_mid: Vec3::new(0.5, 1.0, 0.0),
@@ -629,4 +630,42 @@ fn objects_whose_size_puts_them_beyond_the_limit_are_dropped() {
     assert_eq!(d.model.iter().map(|e| e.handle).collect::<Vec<_>>(), keep);
     assert_eq!(d.block("Mixed").map(|b| b.entities.len()), Some(1));
     assert_eq!(d.drop_beyond_limit(1e12), 0, "nothing more on a second pass");
+}
+
+/// DXF group 12: a dimension moved by an older AutoCAD keeps its `*D` block where it was and
+/// the move in the insertion point, and the block draws translated by it. Extents follow the
+/// drawing, not the stale block contents (#2634).
+#[test]
+fn dimension_insertion_point_moves_its_block_in_extents() {
+    let moved = |ins: Vec3| {
+        let mut d = Drawing::new_metric();
+        let mut blk = Block::new("*D1");
+        blk.entities.push(on_layer("0", line((850.0, 920.0), (860.0, 920.0)), 2));
+        d.blocks.insert("*D1".into(), std::sync::Arc::new(blk));
+        let dm = Dimension {
+            kind: DimKind::Aligned,
+            defpt: Vec3::new(5.0, 1.0, 0.0),
+            text_mid: Vec3::ZERO,
+            p13: Vec3::ZERO,
+            p14: Vec3::new(10.0, 0.0, 0.0),
+            p15: Vec3::ZERO,
+            p16: Vec3::ZERO,
+            text: String::new(),
+            style: "Standard".into(),
+            measurement: 0.0,
+            text_rotation: 0.0,
+            user_text_pos: false,
+            block: Some("*D1".into()),
+            insertion_point: ins,
+            overrides: Default::default(),
+            assoc: Vec::new(),
+            marks: Default::default(),
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Dimension(Box::new(dm))).unwrap();
+        d
+    };
+    // Without the offset the block's far-away contents reach the extents.
+    assert!(moved(Vec3::ZERO).extents(&Space::Model).max.x > 800.0);
+    // With it, the block draws at the definition points and the extents stay at the drawing.
+    assert!(moved(Vec3::new(-850.0, -920.0, 0.0)).extents(&Space::Model).max.x < 20.0);
 }

@@ -1,0 +1,40 @@
+{
+  "_doc": "Q6504: the framing members bim.clash tests the MEP against, and the hole rules each hit is judged by (an allowed bored hole or a real conflict). Flags for coordination only, never a structural approval: the member maker's literature (an I-joist or rim board hole chart, a truss drawing, a stud maker's punchout and hole tables) or the engineer's details override, as project rules do. The I-joist web and truss chord rules are the conduit router's (conduitroute.json `framing`), one source for both.",
+  "members": ["stud", "joist", "truss", "rim", "header", "beam"],
+  "members_source": "the framing trade's pieces a raceway, pipe or duct crosses (studs, joists and I-joists, trusses, rim boards, headers and beams); plates, tracks, blocking, backing and furring are the wall's and floor's own edges and are not tested",
+  "no_holes": ["header", "beam", "column", "member"],
+  "no_holes_source": "company default: headers, beams and columns are never field bored or notched without the structural engineer's detail (IRC R502.8.2 / IBC 2308.4.2.4: engineered and built-up members only as their design allows)",
+  "runs": ["duct", "pipe", "conduit", "tray", "cable", "fitting", "wire"],
+  "runs_source": "the MEP pieces that pass through a member (a run and its fittings); equipment, terminals and boxes stand in the bay beside it",
+  "parallel_deg": 30,
+  "parallel_source": "geometry: a run within 30 degrees of a member's length runs along inside it, not across it",
+  "truss_words": ["TRUSS", "OPEN WEB", "OPEN-WEB"],
+  "sawn_words": ["2X", "SAWN", "LUMBER", "DIMENSION", "RAFTER"],
+  "steel_words": ["STEEL", "METAL", " GA", "CFS", "COLD-FORMED", "COLD FORMED"],
+  "words_source": "the member's type and item as the trade layout wrote them (`I-joist`, `floor truss`, `wood 2x6`, `steel 20 ga`); a joist that names no sawn lumber is the layout's engineered I-joist (tradeatoms.json joist_depth_source)",
+  "sawn_joist": {
+    "max_frac": 0.3333,
+    "edge_in": 2.0,
+    "hole_over_in": 0.375,
+    "source": "IRC R502.8.1 / IBC 2308.4.2.4: holes bored in sawn lumber joists no larger than 1/3 of the depth and no closer than 2 in to the top or bottom; the hole is the outside size plus 3/8 in (the conduit router's hole allowance)"
+  },
+  "rim": {
+    "max_frac": 0.3333,
+    "edge_in": 1.0,
+    "hole_over_in": 0.375,
+    "source": "company default from the rim board makers' published hole rules (a round hole up to 1/3 of the board's depth, kept off its edges); the rim board submittal's own chart overrides (project rule)"
+  },
+  "wood_stud": {
+    "bearing_frac": 0.4,
+    "non_bearing_frac": 0.6,
+    "edge_in": 0.625,
+    "hole_over_in": 0.375,
+    "unknown_bearing": "bearing",
+    "source": "IRC R602.6: holes bored in a wood stud no larger than 40% of its width in a bearing wall (60% in a non-bearing partition), the hole's edge no closer than 5/8 in to the stud's face; a wall whose type says neither is taken as bearing (the stricter limit) and the reason says so"
+  },
+  "steel_stud": {
+    "punchout_in": 1.5,
+    "clearance_in": 0.125,
+    "source": "company default: a cold-formed steel stud is passed through its factory punchouts (1 1/2 in wide, in the middle of the web, ASTM C645 / SSMA standard punchouts); anything larger needs a field-cut hole by the stud maker's limits or a reinforced opening"
+  }
+}

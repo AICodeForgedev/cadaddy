@@ -124,6 +124,11 @@ pub struct CanvasState {
     mesh_key: Option<u64>,
     mesh_slot: crate::gpu::MeshSlot,
     mesh_origin: Vec2,
+    /// Its area tiles, when it is tiled (what a frame draws of it, for the draw statistics).
+    mesh_tiles: Option<std::sync::Arc<crate::gpu::Tiles>>,
+    /// The most drawing units per pixel `list` is drawn at while it serves (the coarsest view's
+    /// zoom band when it was built): how its vertex data is cut into tiles.
+    coarse_px: f64,
     /// The dragged objects of a MOVE/COPY/ROTATE/SCALE preview, uploaded once per drag (see
     /// [`draw_drag_gpu`]).
     drag_key: Option<u64>,
@@ -199,6 +204,19 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
+    /// The open sheet's pictures, drawn instead of its linework zoomed out ([`sheetimage`]).
+    pub sheet_images: sheetimage::SheetImages,
+    /// Draw everything in full on screen: no detail levels, no sheet pictures, and every object
+    /// as it is on the GPU canvas, also those under a pixel (normally drawn as dots and boxes:
+    /// [`crate::gpu::build_screen_mesh`]); the screen as it was before them (for measuring them).
+    pub full_detail: bool,
+    /// The detail level `list` was built at (`None`: in full), see [`cadaddy_render::detail`].
+    pub list_detail: Option<cadaddy_render::detail::Detail>,
+    /// The drawing's detail rules (`plan` in its fidelity rules data), for which drawing and
+    /// building spec.
+    plan_rules: Option<((u64, usize, usize), std::sync::Arc<cadaddy_render::detail::PlanRules>)>,
+    /// Where frames and regenerations spend their time (the `--debug` overlay, `ui.draw2d`).
+    pub stats: drawstats::DrawStats,
 }
 
 impl CanvasState {
@@ -216,13 +234,24 @@ impl CanvasState {
     }
 
     /// Put a finished background build in place, with its GPU vertex data when it has some.
-    fn install(&mut self, key: ListKey, window: Option<Bounds2>, built: rebuild::Built) {
+    fn install(&mut self, key: ListKey, window: Option<Bounds2>, detail: Option<cadaddy_render::detail::Detail>, built: rebuild::Built) {
         self.list_gen = self.list_gen.wrapping_add(1);
+        self.list_detail = detail;
+        self.stats.built(&built.list, built.objects, built.build_ms, true, built.profile);
+        // The parts the build kept and made are the canvas's from now on.
+        if let Some(cache) = built.cache {
+            self.chunk_cache = cache;
+            self.stats.chunks(self.chunk_cache.rebuilt, self.chunk_cache.kept);
+        }
         if let Some(m) = built.mesh {
+            self.stats.meshed_counts(m.counts, m.simplified, m.ms - m.upload_ms, m.upload_ms);
+            self.stats.tiled(m.data.tiles.as_deref());
+            self.mesh_tiles = m.data.tiles.clone();
+            self.coarse_px = m.coarse_px;
             if let Ok(mut slot) = self.mesh_slot.lock() {
                 *slot = Some(m.data);
             }
-            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay));
+            self.mesh_key = Some(list_mesh_key(&key, self.list_gen, m.origin, m.bg, m.lwdisplay, m.pixel, m.coarse_px));
             self.mesh_origin = m.origin;
             self.mesh_ms = m.ms;
             self.infinite = m.infinite;
@@ -322,12 +351,20 @@ fn prim_color32(prim: &cadaddy_render::DPrim, bg: Rgb) -> Color32 {
 /// yet, is built at once.
 fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::Context) {
     let px = 1.0 / xf.scale;
+    // The screen's detail levels (model space's plan view only).
+    let rules = detail_rules(app);
+    let picture = sheet_picture_want(app, rules.as_ref());
+    // What the screen shows of the drawing: with a print set's sheet open, that sheet's objects
+    // alone (`cadaddy_engine::sheetnav`).
+    let Ok(shown) = app.session.view_doc() else { return };
     let Ok(st) = app.session.state() else { return };
     // Rebuild when the drawing changes, the zoom moves by more than 2x (tessellation band) or a
     // view leaves the area the list was built for.
     let band = |px: f64| px.max(1e-300).log2().floor() as i32;
-    // Hatch level of detail follows the finest view showing the list.
+    // Hatch level of detail follows the finest view showing the list; its GPU tiles, the
+    // coarsest (the most units a pixel at the top of its zoom band).
     let lod_band = views.iter().map(|v| band(v.1)).fold(band(px), i32::min);
+    let coarse_px = 2f64.powi(views.iter().map(|v| band(v.1)).fold(band(px), i32::max).saturating_add(1));
     // The active MSPACE viewport's contents are drawn apart (see `VpContent`), so panning and
     // zooming inside it leave this list alone. Without a stencil buffer a clipped viewport's
     // contents stay in the list, which then follows its view: realtime navigation changes it
@@ -346,20 +383,22 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         {
             (h, vp.view_center.x.to_bits(), vp.view_center.y.to_bits(), vp.view_height.to_bits()).hash(&mut s);
         }
+        // Detail levels on or off, and by which rules.
+        rules.as_ref().map(|r| std::sync::Arc::as_ptr(r) as usize).hash(&mut s);
         s.finish()
     };
     let (lwdisplay, transparency_display) = (app.session.settings.lwdisplay, app.session.settings.transparency_display);
-    let key: ListKey = (st.uid, st.revision, band(px), lod_band, lwdisplay, transparency_display, std::sync::Arc::as_ptr(&st.doc) as usize, vp_view);
+    let key: ListKey = (st.uid, st.revision, band(px), lod_band, lwdisplay, transparency_display, std::sync::Arc::as_ptr(&shown) as usize, vp_view);
     // A background build that finished: use it unless the drawing has changed since it started
     // (or the list was dropped to force a rebuild).
     if let Some(job) = &app.canvas.job {
         match job.poll() {
             rebuild::Poll::Pending => {}
             rebuild::Poll::Done(built) => {
-                let (job_key, window) = (job.key, job.window);
+                let (job_key, window, detail) = (job.key, job.window, job.detail.clone());
                 app.canvas.job = None;
                 if app.canvas.list.is_some() && same_content(&job_key, &key) {
-                    app.canvas.install(job_key, window, *built);
+                    app.canvas.install(job_key, window, detail, *built);
                 }
             }
             rebuild::Poll::Lost => {
@@ -379,6 +418,13 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     if view_only && app.canvas.job.as_ref().is_some_and(|j| j.serves(&key, &visible)) {
         return;
     }
+    // Zoomed out on a sheet whose picture is drawn instead of the list: the list (kept for
+    // highlights) needs no new build for the view.
+    let screen_px = px / f64::from(ctx.pixels_per_point()).max(1e-6);
+    if view_only && picture.as_ref().is_some_and(|w| w.covers(screen_px) && app.canvas.sheet_images.ready(w)) {
+        app.canvas.job = None;
+        return;
+    }
     // A build for another view, or for a drawing that has since changed, is no longer wanted:
     // dropping it cancels it.
     app.canvas.job = None;
@@ -389,6 +435,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         // level of detail must hold at the finest one.
         min_dash: 2f64.powi(lod_band) * 2.0,
         text: true,
+        linetypes: true,
         fill: true,
         lineweights: lwdisplay,
         view_height: st.paper_view().height,
@@ -405,6 +452,10 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         // Drywall layer boundary lines.
         layer_lines: app.session.drywall_layer_lines.clone(),
         skip_hatches: false,
+        // The band's finest zoom, as the level of detail above: the list serves every zoom in
+        // the band, so what it draws as less must stay under a pixel at the finest one.
+        detail: rules.and_then(|r| cadaddy_render::detail::Detail::new(2f64.powi(lod_band), r)),
+        profile: app.canvas.stats.profile_for_build(),
     };
     if view_only {
         let t = Tokens::get();
@@ -414,10 +465,15 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
             model_bg: view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())),
             paper_bg: Rgb(t.paper.r(), t.paper.g(), t.paper.b()),
             lwdisplay,
+            pixel: screen_pixel(&key, app.canvas.full_detail),
             device: app.canvas.gpu_device.clone(),
+            coarse_px,
         });
         let window = opts.view;
-        let req = rebuild::Request { doc: st.doc.clone(), space: st.space.clone(), opts: opts.clone(), mesh };
+        // The worker builds from a copy of the canvas's parts: those the new view doesn't reach
+        // are kept as they are (`cadaddy_render::build_cached_into`).
+        let cache = Some(app.canvas.chunk_cache.clone());
+        let req = rebuild::Request { doc: shown.clone(), space: st.space.clone(), opts: opts.clone(), mesh, cache };
         if let Some(job) = rebuild::spawn(req, key, window, ctx) {
             app.canvas.job = Some(job);
             return;
@@ -427,11 +483,64 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     // The list it replaces goes back to the cache: an edit that changed objects in place is
     // written into it instead of joining every part again.
     let prev = app.canvas.list.take();
-    app.canvas.list = Some(cadaddy_render::build_cached_into(&st.doc, &space, &opts, &mut app.canvas.chunk_cache, prev));
+    app.canvas.list = Some(cadaddy_render::build_cached_into(&shown, &space, &opts, &mut app.canvas.chunk_cache, prev));
+    app.canvas.coarse_px = coarse_px;
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
+    app.canvas.list_detail = opts.detail;
     app.canvas.build_ms = crate::now_ms() - t0;
+    if let Some(list) = &app.canvas.list {
+        let objects = st.doc.space(&space).map_or(0, |s| s.len());
+        app.canvas.stats.built(list, objects, app.canvas.build_ms, false, None);
+        app.canvas.stats.chunks(app.canvas.chunk_cache.rebuilt, app.canvas.chunk_cache.kept);
+    }
+}
+
+/// The drawing's detail rules when the screen draws at detail levels: model space's plan view,
+/// not turned off ([`CanvasState::full_detail`]). Kept per drawing and building spec.
+fn detail_rules(app: &mut CadApp) -> Option<std::sync::Arc<cadaddy_render::detail::PlanRules>> {
+    if app.canvas.full_detail {
+        return None;
+    }
+    let st = app.session.state().ok()?;
+    if st.space != cadaddy_doc::Space::Model || st.mspace.is_some() || st.projection().is_some() || st.list_projection().is_some() {
+        return None;
+    }
+    let spec = st.doc.building_spec.as_deref().map_or((0, 0), |s| (s.as_ptr() as usize, s.len()));
+    let key = (st.uid, spec.0, spec.1);
+    if let Some((k, r)) = &app.canvas.plan_rules
+        && *k == key
+    {
+        return Some(r.clone());
+    }
+    let r = std::sync::Arc::new(cadaddy_engine::cmd::fidelity::plan_rules(&st.doc));
+    app.canvas.plan_rules = Some((key, r.clone()));
+    Some(r)
+}
+
+/// The open sheet's picture the screen would draw zoomed out ([`sheetimage`]): with a print
+/// set's sheet open in model space's plan view and detail levels on.
+fn sheet_picture_want(app: &CadApp, rules: Option<&std::sync::Arc<cadaddy_render::detail::PlanRules>>) -> Option<sheetimage::Want> {
+    let rules = rules?;
+    let st = app.session.state().ok()?;
+    if st.block_edit.is_some() || st.active_viewport().is_some() {
+        return None;
+    }
+    let (i, sheet) = app.session.active_sheet()?;
+    let t = Tokens::get();
+    let bg = view_background(app).unwrap_or(Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b()));
+    sheetimage::Want::new(st.uid, st.revision, i, sheet.rect, bg, rules.image_px)
+}
+
+/// Draw the open sheet's picture instead of its linework when zoomed out enough (asking for it
+/// when it isn't ready). True when it was drawn.
+fn draw_sheet_picture(app: &mut CadApp, p: &egui::Painter, xf: &Xf, ctx: &egui::Context) -> bool {
+    let rules = detail_rules(app);
+    let want = sheet_picture_want(app, rules.as_ref());
+    let px = 1.0 / (xf.scale * f64::from(ctx.pixels_per_point())).max(1e-300);
+    let session = &app.session;
+    app.canvas.sheet_images.draw(want.as_ref(), || session.view_doc().ok(), rules.unwrap_or_default(), px, p, xf, ctx)
 }
 
 /// The active MSPACE viewport when its contents are drawn apart from the layout's list (see
@@ -450,7 +559,7 @@ fn stencil_clip(app: &CadApp) -> bool {
 
 /// How long the view inside the active viewport stays still before a zoomed [`VpContent`] is
 /// rebuilt at the exact view (dash lengths and curve detail follow the viewport's scale).
-const VP_SETTLE_MS: f64 = 150.0;
+pub(crate) const VP_SETTLE_MS: f64 = 150.0;
 
 /// Model space seen through the active MSPACE viewport, drawn apart from the layout's list. It is
 /// built for an area around the viewport at one view and drawn clipped to the viewport, moved
@@ -559,6 +668,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             tolerance: 2f64.powi(band) * 0.5,
             min_dash: 2f64.powi(band) * 2.0,
             text: true,
+            linetypes: true,
             fill: true,
             lineweights: lwdisplay,
             view_height: st.paper_view().height,
@@ -572,6 +682,8 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             color_overrides: app.session.drywall_color_overrides.iter().map(|(&h, &c)| (h, c)).collect(),
             layer_lines: app.session.drywall_layer_lines.clone(),
             skip_hatches: false,
+            detail: None,
+            profile: None,
         };
         c.list = cadaddy_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);
@@ -592,7 +704,8 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
 /// Draw the active viewport's contents (see [`VpContent`]) as [`ensure_vp_content`] set out;
 /// `p` clips them to the viewport's rectangle, and a clipped viewport's outline is masked with
 /// the stencil buffer first.
-fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
+#[allow(clippy::too_many_arguments)]
+fn draw_vp_content(c: &mut VpContent, gpu: bool, full_detail: bool, p: &egui::Painter, f: &VpFrame, xf_paper: &Xf, bg: Rgb, lwdisplay: bool) {
     let xf = &f.xf;
     if !gpu {
         draw_list(p, xf, &c.list, bg, lwdisplay);
@@ -604,14 +717,17 @@ fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame,
         stencil = crate::gpu::Stencil::Inside;
     }
     let origin = crate::gpu::choose_origin(&c.list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
+    // The list is drawn up to 2x larger than it was built for before it is rebuilt (see
+    // `ensure_vp_content`): its finest pixel is half its band's.
+    let pixel = c.key.filter(|_| !full_detail).map(|k| 2f64.powi(k.4.saturating_sub(1)));
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+        (c.builds, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, pixel.map(f64::to_bits)).hash(&mut h);
         h.finish()
     };
     if c.mesh_key != Some(key) {
-        let mesh = crate::gpu::build_mesh(&c.list, origin, bg, lwdisplay);
+        let mesh = crate::gpu::build_screen_mesh(&c.list, origin, bg, lwdisplay, pixel);
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -631,7 +747,10 @@ fn draw_vp_content(c: &mut VpContent, gpu: bool, p: &egui::Painter, f: &VpFrame,
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
             stencil,
-        },
+            cull: None,
+            moving: false,
+        }
+        .track_motion(p.ctx()),
     ));
 }
 
@@ -686,6 +805,8 @@ fn draw_vp_mask(c: &mut VpContent, p: &egui::Painter, outline: &[Vec2], xf_paper
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
             stencil: crate::gpu::Stencil::Mask,
+            cull: None,
+            moving: false,
         },
     ));
 }
@@ -860,8 +981,8 @@ fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]>
     Some([xf.to_screen(a), xf.to_screen(b)])
 }
 
-/// Draw a display list.
-pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) {
+/// Draw a display list; returns the shapes made for it (what is in view).
+pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay: bool) -> usize {
     let vis = xf.world_bounds();
     let mut shapes: Vec<Shape> = Vec::with_capacity(list.prims.len());
     let px = 1.0 / xf.scale;
@@ -940,7 +1061,9 @@ pub(crate) fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb,
             }
         }
     }
+    let n = shapes.len();
     p.extend(shapes);
+    n
 }
 
 /// Textures of the images drawn by the CPU canvas, by their pixels (each entry keeps its pixels
@@ -1014,6 +1137,8 @@ fn draw_highlight_gpu(
             xform: crate::gpu::IDENTITY_XFORM,
             dash: if look.dashed { 10.0 } else { 0.0 },
             stencil,
+            cull: None,
+            moving: false,
         },
     ));
 }
@@ -1080,16 +1205,33 @@ fn draw_drag_gpu(
             xform: [m.a as f32, m.b as f32, m.c as f32, m.d as f32, t.x as f32, t.y as f32],
             dash: 0.0,
             stencil: crate::gpu::Stencil::Off,
+            cull: None,
+            moving: false,
         },
     ));
 }
 
-/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`.
-fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool) -> u64 {
+/// Identifies the GPU vertex data of list `key` / `list_gen` converted at `origin` against `bg`
+/// for screen pixels of `pixel` drawing units, tiled for `coarse_px` drawing units a pixel.
+#[allow(clippy::too_many_arguments)]
+fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay: bool, pixel: Option<f64>, coarse_px: f64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+    (key, list_gen, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay, pixel.map(f64::to_bits), coarse_px.to_bits()).hash(&mut h);
     h.finish()
+}
+
+/// The part of the list a frame at `xf` shows, grown by the half width of the widest line and a
+/// pixel (points: 12 / 2 + 1, and one more): a tiled mesh draws the tiles reaching into it.
+fn cull_area(xf: &Xf) -> Bounds2 {
+    xf.world_bounds().expand(8.0 / xf.scale.max(1e-300))
+}
+
+/// Drawing units in a screen pixel at the finest zoom list `key` is drawn at (its hatch level of
+/// detail band: the finest view showing it), which the GPU vertex data simplifies for (see
+/// [`crate::gpu::build_screen_mesh`]); `None` with `full_detail`.
+fn screen_pixel(key: &ListKey, full_detail: bool) -> Option<f64> {
+    (!full_detail).then(|| 2f64.powi(key.2.min(key.3)))
 }
 
 /// Draw the display list through the GPU paint callback (uploading it when it changed), plus
@@ -1097,10 +1239,15 @@ fn list_mesh_key(key: &ListKey, list_gen: u64, origin: Vec2, bg: Rgb, lwdisplay:
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
     let Some(list) = &c.list else { return };
     let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
-    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay);
+    let pixel = screen_pixel(&c.key, c.full_detail);
+    let key = list_mesh_key(&c.key, c.list_gen, origin, bg, lwdisplay, pixel, c.coarse_px);
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
-        let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+        let tiling = crate::gpu::Tiling::choose(list, c.coarse_px);
+        let mesh = crate::gpu::build_screen_mesh_tiled(list, origin, bg, lwdisplay, pixel, tiling.as_ref());
+        c.stats.meshed(&mesh, crate::now_ms() - t0, 0.0);
+        c.stats.tiled(mesh.tiles.as_deref());
+        c.mesh_tiles = mesh.tiles.clone();
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -1110,6 +1257,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
         c.mesh_ms = crate::now_ms() - t0;
     }
     let center = xf.rect.center();
+    let cull = cull_area(xf);
     p.add(egui_wgpu::Callback::new_paint_callback(
         xf.rect,
         crate::gpu::CanvasCallback {
@@ -1122,7 +1270,10 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 0.0,
             stencil: crate::gpu::Stencil::Off,
-        },
+            cull: Some(cull),
+            moving: false,
+        }
+        .track_motion(p.ctx()),
     ));
     let mut shapes = Vec::new();
     for prim in c.infinite.iter().filter_map(|i| list.prims.get(*i)) {
@@ -1134,6 +1285,10 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
         }
     }
     p.extend(shapes);
+    c.stats.drew(list, c.list_gen, &xf.world_bounds(), None);
+    if let Some(tiles) = &c.mesh_tiles {
+        c.stats.drew_tiles(tiles.drawn(&tiles.visible(&cull)));
+    }
 }
 
 /// How a highlight is drawn: lines `width` points wide, and either solid with fills filled or
@@ -1506,6 +1661,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.zoom_pending = false;
         let _ = app.session.zoom_extents();
     }
+    // A print set opens on its first sheet, its sheet list beside it: there is no view of the
+    // whole set (`cadaddy_engine::sheetnav`). The list takes room from the canvas, so the sheet
+    // is fitted again next frame.
+    crate::sheetload::open_first_sheet(app);
+    crate::sheetload::park_when_idle(app);
     let Ok(st) = app.session.state() else { return };
     let view = st.view();
     let scale = f64::from(rect.height()) / view.height.max(1e-12);
@@ -1802,12 +1962,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if idle_dbl {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
+        // In the 3D BIM view: the next view down at the element (its level, then its room).
+        if inside {
+            crate::shaded::enter_at_selection(app);
+        }
     }
     // Hyperlinks: the tooltip over a linked object; Ctrl+click (⌘-click) follows its link.
     let link_pick = if inside && pressed_primary && mods.command {
-        raw_world
-            .zip(app.session.state().ok())
-            .and_then(|(w, st)| cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale))
+        raw_world.zip(app.session.state().ok().zip(app.session.view_doc().ok())).and_then(|(w, (st, shown))| {
+            cadaddy_engine::select::pick(&shown, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+        })
     } else {
         app.canvas.hover
     };
@@ -1949,10 +2113,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let selecting = app.session.previews_selection();
     if inside && selecting && app.session.pending_window.is_none() {
         if hover_pos != app.canvas.hover_at
-            && let (Some(w), Ok(st)) = (raw_world, app.session.state())
+            && let (Some(w), Ok(st), Ok(shown)) = (raw_world, app.session.state(), app.session.view_doc())
         {
             let filter = app.session.settings.previewfilter;
-            app.canvas.hover = cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
+            // With a print set's sheet open, only its objects (`sheetnav`).
+            app.canvas.hover = cadaddy_engine::select::pick(&shown, &st.edit_space(), w, app.session.settings.pickbox.max(1.0) * 1.5 / scale)
                 .filter(|h| st.doc.entity(*h).is_none_or(|e| !cadaddy_engine::select::preview_filtered(&st.doc, e, filter)));
             app.canvas.hover_at = hover_pos;
         }
@@ -1980,6 +2145,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     } else {
         ensure_list(app, &xf_paper, &views, ui.ctx());
     }
+    // The snaps offer only what the list draws in full.
+    let drawn_at = app.canvas.list.as_ref().and(app.canvas.list_detail.clone());
+    app.session.set_screen_detail(drawn_at);
     let sheet = app.canvas.list.as_ref().and_then(|l| l.sheet);
     let surround = Color32::from_rgb(0x50, 0x57, 0x63);
     let (bg, paper_rect) = match sheet {
@@ -2021,18 +2189,26 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(f) = ensure_vp_content(app, &xf_paper, ui.ctx()) {
         let gpu = app.canvas.gpu.is_some();
         let clipped = painter.with_clip_rect(f.on_screen.intersect(rect));
-        draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
+        draw_vp_content(&mut app.canvas.vp, gpu, app.canvas.full_detail, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
         masked = gpu && f.outline.is_some();
     }
     if sheet.is_none() && crate::shaded::paint(app, ui, &painter, &xf, bg) {
         // The Model tab in a 3D visual style: the shaded view stands for the display list, with
         // the section box's face handles over it.
         crate::shaded::section_box_handles(app, ui, &painter, &xf);
+    } else if sheet.is_none() && active_vp.is_none() && draw_sheet_picture(app, &painter, &xf_paper, ui.ctx()) {
+        // Zoomed out on a print set's sheet: its picture stands for the linework, and the snaps
+        // follow what it draws.
+        let drawn_at = app.canvas.sheet_images.shown_detail.clone();
+        app.session.set_screen_detail(drawn_at);
     } else if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
-        draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
+        let sent = draw_list(&painter, &xf_paper, list, bg, app.session.settings.lwdisplay);
+        app.canvas.stats.drew(list, app.canvas.list_gen, &xf_paper.world_bounds(), Some(sent));
     }
+    // A drawing opened holding a built model offers its 3D BIM view on the plan.
+    crate::shaded::offer_bim3d(app, ui, &xf);
     if let Some(vp) = &active_vp {
         // The active viewport: a heavy border, highlights in model units clipped to it.
         let r = Rect::from_two_pos(
@@ -2411,7 +2587,7 @@ fn tooltip(p: &egui::Painter, at: Pos2, text: &str) {
 fn hatch_at(app: &CadApp, w: Vec2, scale: f64) -> Option<Handle> {
     let st = app.session.state().ok()?;
     let aperture = app.session.settings.pickbox.max(1.0) * 1.5 / scale.max(1e-12);
-    let h = cadaddy_engine::select::pick(&st.doc, &st.edit_space(), w, aperture)?;
+    let h = cadaddy_engine::select::pick(&*app.session.view_doc().ok()?, &st.edit_space(), w, aperture)?;
     matches!(st.doc.entity(h)?.kind, cadaddy_doc::EntityKind::Hatch(_)).then_some(h)
 }
 
@@ -2447,13 +2623,13 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
     let s = &app.session.settings;
     let osmode = over.unwrap_or(s.osmode) | if s.osnaphatch { snap::mode::HATCH } else { 0 };
-    let Ok(st) = app.session.state() else { return };
+    let (Ok(st), Ok(shown)) = (app.session.state(), app.session.view_doc()) else { return };
     let hit = match cycle {
         Some(i) => {
-            let cands = cadaddy_engine::pointmod::snap_candidates(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred);
+            let cands = cadaddy_engine::pointmod::snap_candidates(&shown, &st.edit_space(), raw, ap, osmode, base, deferred);
             cands.get(i % cands.len().max(1)).copied()
         }
-        None => snap::osnap(&st.doc, &st.edit_space(), raw, ap, osmode, base, deferred),
+        None => snap::osnap(&shown, &st.edit_space(), raw, ap, osmode, base, deferred),
     };
     let p = match (hit, app.canvas.snap) {
         (Some(h), _) => {
@@ -3468,7 +3644,10 @@ mod lasso;
 mod refedit;
 
 /// Background rebuilds of the display list for a new view.
+pub mod drawstats;
 mod rebuild;
+/// The open sheet's picture, drawn zoomed out (Q6417).
+pub mod sheetimage;
 
 #[cfg(test)]
 mod hatch_pick_tests {

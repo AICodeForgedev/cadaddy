@@ -267,6 +267,11 @@ fn edit_and_remove_work_on_one_part_of_every_section() {
     edit_unchanged(&mut h, "2 walls: ", &at(&s, "/walls"));
     let mut want = s.clone();
     want.as_object_mut().map(|o| o.remove("walls"));
+    // The wall list's walls removed are kept as wall edits, so a build doesn't bring them back.
+    want["wall_edits"] = json!([
+        {"id": "WE-1", "op": "delete", "level": "L1", "from": [[0.0, 0.0], [10.0, 0.0]], "wall_type": "WT1", "by": "user", "via": "wall list"},
+        {"id": "WE-2", "op": "delete", "level": "L1", "from": [[0.0, 0.0], [0.0, 10.0]], "wall_type": "WT1", "by": "user", "via": "wall list"}
+    ]);
     remove(&mut h, "2 walls: ", &want);
     edit_unchanged(&mut h, "Materials: ", &at(&s, "/materials"));
     want["materials"] = json!({});
@@ -277,13 +282,15 @@ fn edit_and_remove_work_on_one_part_of_every_section() {
     edit_unchanged(&mut h, "Openings in walls: ", &at(&s, "/openings"));
     assert!(button(&h, "Openings in walls: ", "Remove").is_none(), "the openings are never removed");
 
-    // A room with only a number can't be picked out by name: no Edit or Remove for it.
+    // A room known by its number alone is picked out by that number (Q6426): its own Edit and
+    // Remove, which touch only it.
     set(&mut h, json!({"rooms": [{"name": "Office"}, {"name": "", "number": "102"}]}));
     assert!(button(&h, "Office: ", "Edit").is_some());
-    let numbered = row(&h, "102: ");
-    let next = row(&h, "Openings in walls: ");
-    assert!(h.get_all_by_label("Edit").all(|e| e.rect().top() < numbered || e.rect().top() > next), "no Edit under the numbered room");
-    assert!(h.get_all_by_label("Remove").all(|e| e.rect().top() < numbered), "no Remove under the numbered room");
+    let s = spec(&mut h);
+    let rooms = s["rooms"].as_array().cloned().unwrap_or_default();
+    let numbered = rooms.iter().position(|r| r["number"] == "102").unwrap_or_else(|| panic!("no room 102 in {s}"));
+    edit_unchanged(&mut h, "102: ", &at(&s, &format!("/rooms/{numbered}")));
+    remove(&mut h, "102: ", &without(&s, "/rooms", &[numbered]));
 }
 
 /// Type `text` over the open editor's JSON and apply it.
@@ -329,4 +336,39 @@ fn one_ceiling_or_soffit_type_removed_or_edited_leaves_the_others() {
         assert_eq!(spec(&mut h)[list], json!([edited, types[1], types[2]]), "{list}");
         assert_eq!(status(&h), None, "a real change isn't reported as none");
     }
+}
+
+/// A spec of thousands of parts lays out only the rows on screen (Q6542): the palette holds a few
+/// dozen Edit buttons, not one per part; scrolled to the end it shows the last part, whose Edit
+/// opens that part's own JSON.
+#[test]
+fn a_large_spec_lays_out_only_the_parts_on_screen() {
+    const ROOMS: usize = 3000;
+    let mut h = harness();
+    let rooms: Vec<Value> = (1..=ROOMS).map(|i| json!({"name": format!("Room {i:04}"), "number": format!("{i:04}")})).collect();
+    set(&mut h, json!({ "rooms": rooms }));
+    let s = spec(&mut h);
+    assert_eq!(s["rooms"].as_array().map(Vec::len), Some(ROOMS));
+    let edits = h.get_all_by_label("Edit").count();
+    assert!(edits > 0 && edits < 100, "{edits} Edit buttons laid out for {ROOMS} rooms");
+    // Scroll to the end over the palette's rows.
+    let first = h.get_by_label_contains("Room 0001: ").rect().center();
+    for _ in 0..30 {
+        h.event(egui::Event::PointerMoved(first));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -20_000.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(2);
+    }
+    h.run_steps(12);
+    assert!(h.query_by_label_contains("Room 0001: ").is_none(), "the first room scrolled out of view");
+    let last = format!("Room {ROOMS:04}: ");
+    let edits = h.get_all_by_label("Edit").count();
+    assert!(edits > 0 && edits < 100, "{edits} Edit buttons laid out at the end");
+    let numbered =
+        s["rooms"].as_array().and_then(|r| r.iter().position(|r| r["number"] == format!("{ROOMS:04}"))).unwrap_or_else(|| panic!("no last room"));
+    edit_unchanged(&mut h, &last, &at(&s, &format!("/rooms/{numbered}")));
 }

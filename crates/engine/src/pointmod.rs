@@ -126,16 +126,31 @@ pub fn snap_name(m: u32) -> &'static str {
 /// The candidate snaps near `cursor` for Tab cycling: the snap [`crate::snap::osnap`] picks
 /// first, then the closest snap of each other mode in `osmode`, nearest first, without repeats.
 pub fn snap_candidates(d: &Drawing, space: &Space, cursor: Vec2, aperture: f64, osmode: u32, base: Option<Vec2>, deferred: bool) -> Vec<SnapHit> {
+    snap_candidates_drawn(d, space, cursor, aperture, osmode, base, deferred, None)
+}
+
+/// [`snap_candidates`] for the screen as it is drawn at `detail` (see [`crate::snap::osnap_drawn`]).
+#[allow(clippy::too_many_arguments)]
+pub fn snap_candidates_drawn(
+    d: &Drawing,
+    space: &Space,
+    cursor: Vec2,
+    aperture: f64,
+    osmode: u32,
+    base: Option<Vec2>,
+    deferred: bool,
+    detail: Option<&cadaddy_render::detail::Detail>,
+) -> Vec<SnapHit> {
     if osmode & !mode::HATCH == 0 || osmode & mode::OFF != 0 {
         return Vec::new();
     }
-    let osnap = |m: u32| crate::snap::osnap(d, space, cursor, aperture, m, base, deferred);
+    let osnap = |m: u32| crate::snap::osnap_drawn(d, space, cursor, aperture, m, base, deferred, detail);
     let extra = osmode & mode::HATCH;
     let mut per_mode: Vec<SnapHit> = mode::ALL.iter().filter(|(b, _)| osmode & b != 0).filter_map(|(b, _)| osnap(*b | extra)).collect();
     per_mode.sort_by(|a, b| a.point.dist(cursor).total_cmp(&b.point.dist(cursor)));
     let mut out: Vec<SnapHit> = osnap(osmode).into_iter().collect();
     // Then every other snap point under the aperture (two endpoints there, both).
-    let rest = crate::snap::osnap_all(d, space, cursor, aperture, osmode & !mode::HATCH | extra);
+    let rest = crate::snap::osnap_all_drawn(d, space, cursor, aperture, osmode & !mode::HATCH | extra, detail);
     for h in per_mode.into_iter().chain(rest) {
         if !out.iter().any(|o| o.mode == h.mode && o.point.near(h.point, aperture * 1e-6)) {
             out.push(h);
@@ -380,13 +395,17 @@ impl Session {
                     let hatch = if self.settings.osnaphatch { mode::HATCH } else { 0 };
                     let base = prompt.as_ref().and_then(|q| q.base);
                     let deferred = prompt.as_ref().is_some_and(|q| q.deferred);
-                    let hit = crate::snap::osnap(self.doc()?, &space, p, aperture, mode | hatch, base, deferred).or_else(|| {
+                    // With a print set's sheet open, only its objects (`sheetnav`).
+                    let shown = self.view_doc()?;
+                    // And only what the screen draws in full (its detail level).
+                    let detail = self.screen_detail();
+                    let hit = crate::snap::osnap_drawn(&shown, &space, p, aperture, mode | hatch, base, deferred, detail.as_ref()).or_else(|| {
                         // Center, Midpoint, Quadrant…: the object picked, wherever its snap point is.
                         let object_modes = mode::CEN | mode::MID | mode::QUA | mode::END | mode::NOD;
                         if mode & object_modes == 0 {
                             None
                         } else {
-                            self.doc().ok().and_then(|d| crate::snap::osnap_object(d, &space, p, aperture, mode & object_modes))
+                            crate::snap::osnap_object_drawn(&shown, &space, p, aperture, mode & object_modes, detail.as_ref())
                         }
                     });
                     match hit {

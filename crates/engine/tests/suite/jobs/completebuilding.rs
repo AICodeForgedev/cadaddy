@@ -168,7 +168,9 @@ fn the_bim_view_shows_filled_in_work_apart_from_drawn() {
     assert_eq!(v["apart"], json!(true), "{v}");
     assert!(v["made"]["inferred"].as_u64().unwrap_or(0) > 0, "{v}");
     let d = s.doc().expect("doc").clone();
-    let shown = bimlook::display(&d).expect("the BIM view");
+    // Every built element in the look (no one view draws them all, Q6419).
+    let look = bimlook::Look::of(&d);
+    let shown = bimlook::compose(&d, &look, bimlook::ghosting(&d, &look), true, &|_, _| true);
     let rgb = |e: &Entity| match e.common.color {
         Color::True(c) => Some([c.0, c.1, c.2]),
         _ => None,
@@ -188,6 +190,8 @@ fn the_bim_view_shows_filled_in_work_apart_from_drawn() {
     assert_eq!(drawn_apart, 0, "nothing else looks inferred");
     // Off again: the trades' colours.
     s.execute("bim.look", &json!({"apart": false})).expect("off");
-    let shown = bimlook::display(s.doc().expect("doc")).expect("view");
+    let d = s.doc().expect("doc");
+    let look = bimlook::Look::of(d);
+    let shown = bimlook::compose(d, &look, bimlook::ghosting(d, &look), true, &|_, _| true);
     assert!(shown.model.iter().all(|e| rgb(e) != Some(INFERRED_RGB)));
 }

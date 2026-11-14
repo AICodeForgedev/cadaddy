@@ -36,7 +36,11 @@ fn harness(gpu: bool) -> Harness<'static, CadApp> {
     let mut app = CadApp::new(s, Services::default());
     let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), egui_wgpu::RendererOptions::default());
     app.set_wgpu(&rs, None);
-    if !gpu {
+    if gpu {
+        // The whole lighting, whatever kind of GPU the test runs on (an integrated one starts
+        // without ambient occlusion and soft shadows).
+        app.run("ui.gpu", json!({"quality": "full"})).unwrap();
+    } else {
         app.run("ui.gpu", json!({"cpu": true})).unwrap();
     }
     app.session.execute("vscurrent", &json!({"style": "realistic"})).unwrap();

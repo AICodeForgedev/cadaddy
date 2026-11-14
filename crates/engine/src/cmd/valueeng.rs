@@ -61,8 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Draw", "BIM", "Value Engineering"])
             .params(
                 "{specs?: [path] (spec PDFs or text files, or folders of them: their wiring-methods tables; default the ones the job read), construction_type?: \"V-A\" (else the code sheet's), code_texts?: [string] (the code-analysis sheet's texts in reading order: construction type, sprinklers, occupancies, stories, rated assemblies, electrical code), cost_db?: path (.csv or .json: item, size, unit, material_unit, labor_unit — labor in DOLLARS; `# price_date:`, `# escalation:`, `# manpower_rate:` lines), manpower_rate?: $/h (default the cost DB's), crew_size?: n, hours_per_day?: h, price_book?: path (.csv: the cost DB rows the job needs, a private book beside the drawing), sketches?: folder (an SVG sketch per RFI), model?: bool (default true: each proposed alternative as a hidden model scenario), force?: bool (replace existing files)} → {facts, construction_type, applications, groups: [{kind, area, as_designed, allowed_now, needs_rfi, not_proposed, not_allowed}], scenarios: [{id, name, tier, why?, application, code, conditions, excluded, intent, checks, quantity, as_designed, alternative, saves, unpriced, rfi?, model}], pricing, price_book?}: the wiring-method alternatives, tiered, priced with their manpower and modelled",
-            )
-            .noundo(),
+            ),
         CommandSpec::new("ve.scenario", "Value Engineering Scenario", scenario::run_scenario)
             .menu(&["Draw", "BIM", "Value Engineering Scenario"])
             .params("{id?: scenario id (none: the list), show?: bool} → {scenarios: [{id, name, tier, shown, pieces, replaces, decision, rfi}]} or {id, shown, pieces, replaces}: a scenario shown in the model (its pieces on, the design's pieces it replaces hidden) or hidden again; `conduit.takeoff {scenario}` counts it"),
@@ -189,6 +188,10 @@ pub(crate) struct Alternative {
     pub conditions: Vec<String>,
     pub excluded_areas: BTreeMap<String, String>,
     pub intents: Vec<String>,
+    /// The areas its cable is never used in (Validate's G-VE-AREA table, [`rules`] fills it):
+    /// excluded wherever it goes; an alternative for those areas only is not allowed.
+    #[serde(skip)]
+    pub never: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -199,7 +202,15 @@ pub(crate) struct Cite {
 }
 
 pub(crate) fn rules() -> Rules {
-    serde_json::from_str(RULES).unwrap_or_default()
+    let mut r: Rules = serde_json::from_str(RULES).unwrap_or_default();
+    // Where each cable is never used is Validate's table (G-VE-AREA), not a second copy here.
+    for alt in &mut r.alternatives {
+        alt.never = super::validate_value::never_areas(&alt.cable);
+        for (a, why) in &alt.never {
+            alt.excluded_areas.insert(a.clone(), format!("{why} (G-VE-AREA)"));
+        }
+    }
+    r
 }
 
 // ---- The specification's wiring-methods table ---------------------------------------------------
@@ -448,7 +459,7 @@ fn r1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// The manpower basis: the caller's rate, the cost DB's, else the estimate's labor rate.
+/// The manpower basis: the caller's rate, the cost DB's, else the estimate's crew rate.
 fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
     let (rate, rate_source) = match (inp.manpower_rate, inp.cost_db.as_ref().and_then(|d| d.manpower_rate)) {
         (Some(r), _) => (Some(r), "given".to_string()),
@@ -459,15 +470,24 @@ fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
                 .map(|d| if d.manpower_rate_source.is_empty() { format!("cost DB {}", d.path) } else { d.manpower_rate_source.clone() })
                 .unwrap_or_default(),
         ),
-        _ => match s.execute("estimate.settings", &json!({})).ok().and_then(|v| v["labor_rate"].as_f64()).filter(|v| v.is_finite() && *v > 0.0) {
-            Some(r) => (Some(r), "the estimate's labor rate (no cost DB manpower rate)".to_string()),
-            None => (None, "none: man-hours not computed".to_string()),
+        _ => match crate::cmd::estimate::crew_rate(s) {
+            Some(r) => (Some(r), "the estimate's crew rate (estimate.settings; no cost DB manpower rate)".to_string()),
+            None if inp.cost_db.is_none() => {
+                (None, "none set (estimate.settings crew_rate): labor dollars are not priced; man-hours need no rate".to_string())
+            }
+            None => (None, "none: the cost DB gives labor in dollars and no manpower rate, so man-hours are not computed".to_string()),
         },
+    };
+    let hours_from = match (&inp.cost_db, rate) {
+        (None, _) => "the estimate's labor hours per unit (the drawing's prices, the price book, the starter book), summed".to_string(),
+        (Some(_), Some(r)) => format!("the cost DB's labor dollars ÷ ${r}/h"),
+        (Some(_), None) => "not computed: the cost DB's labor is in dollars and no manpower rate is given".to_string(),
     };
     let given_crew = inp.crew_size.is_some() || inp.hours_per_day.is_some();
     price::Manpower {
         rate,
         rate_source,
+        hours_from,
         crew_size: inp.crew_size.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rules.crew.size.max(1.0)),
         hours_per_day: inp.hours_per_day.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(if rules.crew.hours_per_day > 0.0 {
             rules.crew.hours_per_day
@@ -627,7 +647,18 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             }));
         }
         let lists_alt = app.is_some_and(|ap| ap.methods.contains(&alt.alternative));
+        // Areas its cable is never used in (G-VE-AREA): an alternative for those only is not allowed.
+        let never_all = !alt.areas.is_empty() && alt.areas.iter().all(|a| alt.never.contains_key(a));
         let (tier, why) = match (app, code_ok) {
+            _ if never_all => (
+                "not_allowed",
+                format!(
+                    "{} cable is never used in {}: {} (Validate's area rule G-VE-AREA)",
+                    alt.cable,
+                    alt.areas.iter().map(|a| rules.areas.get(a).map_or(a.as_str(), |x| x.name.as_str())).collect::<Vec<_>>().join(", "),
+                    alt.areas.iter().filter_map(|a| alt.never.get(a)).cloned().collect::<Vec<_>>().join("; ")
+                ),
+            ),
             (None, _) => ("no_application", "the specification's wiring-methods table has no application this alternative answers to".to_string()),
             (Some(_), false) => (
                 "not_allowed",
@@ -713,8 +744,10 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             v["why"] = json!(why);
         }
         for a in &alt.areas {
+            // An area its cable is never used in lists it not allowed, whatever its other areas say.
+            let tier_here = if alt.never.contains_key(a) { "not_allowed" } else { tier };
             if let Some(g) = groups.get_mut(&(alt.circuit.clone(), a.clone()))
-                && let Some(list) = g[tier].as_array_mut()
+                && let Some(list) = g[tier_here].as_array_mut()
                 && !list.contains(&json!(alt.id))
             {
                 list.push(json!(alt.id));

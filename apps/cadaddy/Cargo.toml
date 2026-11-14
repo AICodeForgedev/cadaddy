@@ -19,6 +19,12 @@ egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+# glibc's malloc keeps what each thread frees in that thread's own arena (up to 8 per core), so a
+# many-core job's resident size followed the thread count, not what it held; macOS's keeps freed
+# small blocks in the process's footprint (main.rs, ALLOC).
+[target.'cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))'.dependencies]
+mimalloc = { workspace = true }
+
 [build-dependencies]
 winresource = "0.1"
 
@@ -31,6 +37,9 @@ zbus = { version = "=5.19.0", default-features = false, features = ["async-io", 
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
+# The window runs on the app's own event loop, so a panic in its drawing can't end the app
+# (graphics.rs `Guarded`). Already in Cargo.lock through eframe; the same version.
+winit = { version = "0.30", default-features = false }
 sys-locale = "0.3"
 # Checking downloaded updates (updater.rs); already built for DWG reading.
 sha2 = "0.11"

@@ -35,6 +35,7 @@ use crate::{Result, Session};
 
 pub mod checks;
 pub mod codes;
+pub(crate) mod conn;
 
 use codes::Section;
 
@@ -51,10 +52,10 @@ const MAX_VERTS: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(SCHEDULE, "Schedule from Element Properties", run_schedule)
-            .params("{kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit (device schedule; default room), level?, limits?: {drop_ft? (10), makeup_pct? (10)}, file?: .csv|.xlsx} → {schedule, columns, rows: [{column: value}], count, notes, csv, path?}: a schedule made from the elements' properties; panels: circuits, breakers, wire, connected load per phase")
+            .params("{kind: device|door|window|room_finish|light_fixture|equipment|plumbing_fixture|air_distribution|panel|wire|duct|pipe, by?: room|circuit (device schedule; default room), level?, limits?: {drop_ft? (10), makeup_pct? (10)}, file?: .csv|.xlsx} → {schedule, columns, rows: [{column: value}], count, notes, csv, path?}: a schedule made from the elements' properties; panels: circuits, breakers, wire, connected load per phase; review?: [{panel, circuits, devices, elements, why}] (circuit labels naming a panel no panel schedule, one-line or riser has: never listed as panels)")
             .noundo(),
         CommandSpec::new(checks::CHECK, "Check Element Properties", checks::run)
-            .params("{checks?: [name] (default all: no_circuit, no_fed_from, default_height, rated_door, door_schedule, room_number, gfci_wet, circuit_load, wire_breaker, conduit_fill, voltage_drop, equipment_mocp, terminal_cfm, duct_velocity, fire_damper, terminal_unserved, equipment_power, drain_dfu, pipe_slope, fixture_waste_vent, water_heater, gas_size), level?, limits?: {cfm_tolerance_pct? (10), duct_velocity_fpm? (2000), voltage_drop_pct? (3), load_pct? (80), hw_demand_factor? (0.25), gas_btu_per_cf? (1000)}} → {findings: [{check, severity: error|warning|info, message, handle?, kind?, level?, values?}], counts: {check: n}, checked: {check: n}, totals: {dfu, gas}, limits}")
+            .params("{checks?: [name] (default all: no_circuit, no_fed_from, default_height, rated_door, door_schedule, room_number, gfci_wet, circuit_load, wire_breaker, conduit_fill, voltage_drop, equipment_mocp, terminal_cfm, duct_velocity, fire_damper, terminal_unserved, corridor_no_terminals, equipment_power, drain_dfu, pipe_slope, fixture_waste_vent, water_heater, gas_size), level?, limits?: {cfm_tolerance_pct? (10), duct_velocity_fpm? (2000), voltage_drop_pct? (3), load_pct? (80), hw_demand_factor? (0.25), gas_btu_per_cf? (1000)}} → {findings: [{check, severity: error|warning|info, message, handle?, kind?, level?, values?}], counts: {check: n}, checked: {check: n}, totals: {dfu, gas}, limits}")
             .noundo(),
     ]
 }
@@ -98,6 +99,22 @@ impl El<'_> {
 
     pub fn level(&self) -> String {
         self.text("level").unwrap_or_default()
+    }
+
+    /// A trade piece's own kind (`stud`, `batt`, Q6527): what a filter or a line names it by;
+    /// none for other elements.
+    pub fn piece_kind(&self) -> Option<String> {
+        (self.kind == "atom").then(|| self.text(super::mepatoms::ATOM_KEY)).flatten().map(|k| k.to_ascii_lowercase())
+    }
+
+    /// The kind a takeoff line counts it as: a trade piece's own, else its element kind.
+    pub fn line_kind(&self) -> String {
+        self.piece_kind().unwrap_or_else(|| self.kind.clone())
+    }
+
+    /// The trade it belongs to: a trade piece's own (`framing`), else its kind's.
+    pub fn trade(&self) -> String {
+        (self.kind == "atom").then(|| self.text("trade")).flatten().unwrap_or_else(|| trade_of(&self.kind).to_string())
     }
 
     /// What the element is, in words: its type, type mark, model, name and build part.
@@ -167,9 +184,15 @@ fn bounds3(d: &Drawing, e: &Entity) -> ([f64; 3], [f64; 3]) {
 
 impl<'a> Model<'a> {
     pub fn new(d: &'a Drawing) -> Model<'a> {
+        Model::of(d, |_| true)
+    }
+
+    /// The model's elements of the kinds `keep` takes only (a check that looks at a few kinds
+    /// needn't read the properties of every trade piece).
+    pub fn of(d: &'a Drawing, keep: impl Fn(&str) -> bool) -> Model<'a> {
         let upf = super::elemprops::units_per_foot(d);
         let mut els = Vec::new();
-        for (e, kind) in super::elemprops::elements(d) {
+        for (e, kind) in super::elemprops::elements(d).filter(|(_, k)| keep(k)) {
             let props = super::elemprops::effective(e, &kind, upf);
             let (lo, hi) = bounds3(d, e);
             els.push(El { e, kind, props, lo, hi });
@@ -274,9 +297,10 @@ fn has_any(w: &str, words: &[&str]) -> bool {
     words.iter().any(|x| w.contains(x))
 }
 
-/// An air terminal: a diffuser, grille, register (an airflow or the build's terminal part).
+/// An air terminal: a diffuser, grille, register (an airflow or the build's terminal part). A
+/// sprinkler head (the build makes it a terminal too) is fire protection, not air (Q6505).
 pub(crate) fn is_terminal(el: &El) -> bool {
-    if !matches!(el.kind.as_str(), "fixture" | "device" | "duct") {
+    if !matches!(el.kind.as_str(), "fixture" | "device" | "duct") || is_sprinkler(el) {
         return false;
     }
     let w = el.words();
@@ -439,11 +463,11 @@ impl PropFilter {
     }
 
     pub fn matches(&self, el: &El) -> bool {
-        if !self.kinds.is_empty() && !self.kinds.contains(&el.kind) {
+        if !self.kinds.is_empty() && !self.kinds.contains(&el.kind) && !el.piece_kind().is_some_and(|k| self.kinds.contains(&k)) {
             return false;
         }
         if let Some(t) = &self.trade
-            && !trade_of(&el.kind).contains(t.as_str())
+            && !el.trade().to_ascii_lowercase().contains(t.as_str())
         {
             return false;
         }
@@ -536,6 +560,7 @@ pub(crate) fn grouped(s: &Session, cmd: &str, p: &Value) -> Result<Value> {
     struct Acc {
         group: Vec<String>,
         kind: String,
+        trade: String,
         count: usize,
         length_ft: f64,
         area_sf: f64,
@@ -553,12 +578,15 @@ pub(crate) fn grouped(s: &Session, cmd: &str, p: &Value) -> Result<Value> {
                 carried.insert(k.to_ascii_lowercase());
             }
         }
+        // A trade piece is counted as its own kind, in its own trade (Q6527).
+        let kind = el.line_kind();
         let values: Vec<String> =
-            keys.iter().map(|k| if k == "kind" { el.kind.clone() } else { el.text(k).unwrap_or_else(|| "(none)".into()) }).collect();
-        let id = (el.kind.clone(), values.iter().map(|v| v.to_ascii_lowercase()).collect::<Vec<_>>());
+            keys.iter().map(|k| if k == "kind" { kind.clone() } else { el.text(k).unwrap_or_else(|| "(none)".into()) }).collect();
+        let id = (kind.clone(), values.iter().map(|v| v.to_ascii_lowercase()).collect::<Vec<_>>());
         let a = lines.entry(id).or_insert_with(|| Acc {
             group: values.clone(),
-            kind: el.kind.clone(),
+            kind: kind.clone(),
+            trade: el.trade(),
             count: 0,
             length_ft: 0.0,
             area_sf: 0.0,
@@ -632,7 +660,7 @@ pub(crate) fn grouped(s: &Session, cmd: &str, p: &Value) -> Result<Value> {
         let item = a.group.iter().filter(|v| *v != "(none)").cloned().collect::<Vec<_>>().join(" / ");
         let key = format!("{}|{}", a.kind, a.group.join("|"));
         let mut l = json!({
-            "key": key, "kind": a.kind, "trade": trade_of(&a.kind), "group": group, "item": if item.is_empty() { a.kind.clone() } else { item },
+            "key": key, "kind": a.kind, "trade": a.trade, "group": group, "item": if item.is_empty() { a.kind.clone() } else { item },
             "count": a.count, "qty": qty, "unit": unit, "element_count": a.count, "elements": a.elements, "levels": a.levels,
         });
         for (k, v) in keys.iter().zip(&a.group) {
@@ -895,23 +923,34 @@ fn sched_plumbing(m: &Model, level: Option<&str>) -> Sched {
     s
 }
 
-/// The air terminals each unit serves, with their airflow.
-pub(crate) fn air_systems<'m>(m: &'m Model, level: Option<&str>) -> (BTreeMap<usize, Vec<&'m El<'m>>>, Vec<&'m El<'m>>) {
-    let mut by_unit: BTreeMap<usize, Vec<&El>> = BTreeMap::new();
-    let mut unserved = Vec::new();
-    for el in m.els.iter().filter(|e| is_terminal(e) && on_level(e, level)) {
-        match m.link(el, &["served_by", "fed_from", "unit"]) {
-            Some(u) => by_unit.entry(u).or_default().push(el),
-            None => unserved.push(el),
+/// The air terminals: those each unit serves by their own links (`served_by`, `fed_from`,
+/// `unit`), with their airflow; those served through their built duct network (`connects`) and
+/// the unit it ends at (Q6505); and those served by none.
+pub(crate) struct AirSystems<'m> {
+    pub by_unit: BTreeMap<usize, Vec<&'m El<'m>>>,
+    pub via_net: Vec<(&'m El<'m>, usize)>,
+    pub unserved: Vec<&'m El<'m>>,
+}
+
+pub(crate) fn air_systems<'m>(m: &'m Model, level: Option<&str>, nets: &conn::Nets) -> AirSystems<'m> {
+    let mut a = AirSystems { by_unit: BTreeMap::new(), via_net: Vec::new(), unserved: Vec::new() };
+    for (i, el) in m.els.iter().enumerate().filter(|(_, e)| is_terminal(e) && on_level(e, level)) {
+        match m.link(el, &["served_by_handle", "served_by", "fed_from", "unit"]) {
+            Some(u) => a.by_unit.entry(u).or_default().push(el),
+            None => match nets.unit_of(i) {
+                Some(u) => a.via_net.push((el, u)),
+                None => a.unserved.push(el),
+            },
         }
     }
-    (by_unit, unserved)
+    a
 }
 
 fn sched_air(m: &Model, level: Option<&str>) -> Sched {
     let mut s =
         Sched::new(&["unit", "unit_cfm", "terminals", "terminal_cfm", "difference_pct", "terminal", "type_mark", "size", "cfm", "room", "level"]);
-    let (by_unit, unserved) = air_systems(m, level);
+    let nets = conn::Nets::new(m);
+    let AirSystems { by_unit, via_net, unserved } = air_systems(m, level, &nets);
     for (u, terms) in &by_unit {
         let Some(unit) = m.get(*u) else { continue };
         let ucfm = unit.num(&["cfm", "airflow", "capacity"]);
@@ -933,6 +972,22 @@ fn sched_air(m: &Model, level: Option<&str>) -> Sched {
                 t.level(),
             ]);
         }
+    }
+    for (t, u) in &via_net {
+        let name = m.get(*u).map(|unit| unit.tag().unwrap_or_else(|| unit.handle().hex())).unwrap_or_default();
+        s.push(vec![
+            name,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            t.handle().hex(),
+            t.text("type_mark").unwrap_or_default(),
+            t.text("size").unwrap_or_default(),
+            t.num(&["cfm", "airflow"]).map(n2).unwrap_or_default(),
+            t.text("room").unwrap_or_default(),
+            t.level(),
+        ]);
     }
     for t in &unserved {
         s.push(vec![
@@ -1018,18 +1073,48 @@ pub(crate) fn circuits<'m>(m: &'m Model, level: Option<&str>) -> BTreeMap<String
     out
 }
 
-fn sched_panel(m: &Model, level: Option<&str>) -> (Sched, Value) {
+/// The panel schedule: each panel's circuits (`known`: the documents' panels,
+/// [`super::breakers::documented_panels`]; empty when the model has no spec that names any).
+/// Where the documents name panels, only theirs are panels (Q6319): an element that reads like
+/// one (a heat pump tagged `HP-1`, a wireway by a panel) is not, and a circuit whose label names
+/// another panel is no panel's: it is listed for review (the third value), never as a panel.
+fn sched_panel(m: &Model, level: Option<&str>, known: &BTreeSet<String>) -> (Sched, Value, Value) {
     let mut s = Sched::new(&["panel", "circuit", "description", "breaker", "poles", "wire", "devices", "load_va", "phase"]);
     let cs = circuits(m, level);
-    // Panels: the ones the circuits name, and the panel elements.
+    // Panels: the panel elements (the documents' where they name any), and the ones the circuits
+    // name that the documents have.
     let mut panels: BTreeMap<String, Vec<&Circuit>> = BTreeMap::new();
     for el in m.els.iter().filter(|e| is_panel(e)) {
-        if let Some(t) = el.tag() {
-            panels.entry(t.to_ascii_uppercase()).or_default();
+        if let Some(t) = el.tag().map(|t| t.to_ascii_uppercase()).filter(|t| known.is_empty() || known.contains(t)) {
+            panels.entry(t).or_default();
         }
     }
+    let mut review: BTreeMap<String, Vec<&Circuit>> = BTreeMap::new();
     for c in cs.values() {
+        if super::breakers::names_no_panel(known, &c.id.panel) {
+            review.entry(c.id.panel.clone()).or_default().push(c);
+            continue;
+        }
         panels.entry(if c.id.panel.is_empty() { "(no panel)".into() } else { c.id.panel.clone() }).or_default().push(c);
+    }
+    let reviewed: Vec<Value> = review
+        .iter()
+        .map(|(panel, list)| {
+            let devices: usize = list.iter().map(|c| c.devices.len()).sum();
+            let labels: Vec<String> = list.iter().take(20).map(|c| c.id.key.clone()).collect();
+            let handles: Vec<String> = list.iter().flat_map(|c| c.devices.iter().chain(&c.conduit)).take(20).map(|e| e.handle().hex()).collect();
+            json!({
+                "panel": panel, "circuits": labels, "devices": devices, "elements": handles,
+                "why": format!("panel {panel} is in no panel schedule, one-line or riser: not a panel ({})", super::breakers::rules().panel_rule),
+            })
+        })
+        .collect();
+    if !review.is_empty() {
+        s.notes.push(format!(
+            "{} circuit label(s) name panels the documents don't have ({}): not panels, listed under review",
+            review.values().map(Vec::len).sum::<usize>(),
+            review.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
     }
     let mut summary = Vec::new();
     let mut assumed = 0usize;
@@ -1088,7 +1173,7 @@ fn sched_panel(m: &Model, level: Option<&str>) -> (Sched, Value) {
         s.notes.push(format!("{unknown} device(s) carry no load and are counted at 0 VA: set load_va on them"));
     }
     s.notes.push("phases: circuits 1-2 on A, 3-4 on B, 5-6 on C (single-phase panels A/B), as panelboards number them".into());
-    (s, json!(summary))
+    (s, json!(summary), json!(reviewed))
 }
 
 /// A circuit's route length, feet: its conduit, else a chain from the panel through its devices
@@ -1165,6 +1250,7 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.doc()?;
     let m = Model::new(d);
     let mut extra = Value::Null;
+    let mut review = Value::Null;
     let sched = match kind.as_str() {
         "device" | "devices" => {
             let by = str_param(p, "by").unwrap_or("room").to_ascii_lowercase();
@@ -1225,8 +1311,14 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
         "plumbing_fixture" | "plumbing" | "fixture" => sched_plumbing(&m, lv),
         "air_distribution" | "air" => sched_air(&m, lv),
         "panel" | "panels" => {
-            let (sc, sum) = sched_panel(&m, lv);
+            // The documents' panels: a circuit label naming another is for review (Q6319).
+            let known = match super::bspec::current(s, SCHEDULE) {
+                Ok((sp, true)) => super::breakers::documented_panels(&sp),
+                _ => BTreeSet::new(),
+            };
+            let (sc, sum, rev) = sched_panel(&m, lv, &known);
             extra = sum;
+            review = rev;
             sc
         }
         "wire" | "wire_conduit" | "conduit" => sched_wire(&m, lv, &limits),
@@ -1270,6 +1362,9 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
         json!({"schedule": kind, "columns": sched.columns, "rows": rows, "count": sched.rows.len(), "notes": sched.notes, "csv": csv_text(&table)});
     if !extra.is_null() {
         out["panels"] = extra;
+    }
+    if review.as_array().is_some_and(|r| !r.is_empty()) {
+        out["review"] = review;
     }
     if m.els.is_empty() {
         out["next_step"] = json!("the model has no elements yet: build it with model.build or bim.build");

@@ -11,6 +11,10 @@ use std::sync::{Arc, OnceLock};
 use crate::{Entity, EntityKind, Handle};
 
 const CHUNK_MAX: usize = 1024;
+/// Chunk ids rise along the draw order in steps of this many, so that a chunk taken out of the
+/// store whole, or split into a few (a print set's sheet out of memory), can come back where it
+/// was ([`EntityStore::insert_chunk_at`]) with the ids still in order.
+pub const CHUNK_STEP: u32 = 16;
 /// Shards of a store's handle index: at least this many (a power of two)…
 const SHARDS: usize = 64;
 /// …and more as the store grows, about this many handles a shard: an edit copies the shard of
@@ -81,6 +85,10 @@ impl ChunkRef {
     }
     pub fn same(&self, other: &ChunkRef) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// Where the chunk is in its store's draw order: ids rise along it (in [`CHUNK_STEP`]s).
+    pub fn order(&self) -> u32 {
+        self.0.id
     }
     /// A number naming this chunk while it is held (two held chunks never share one): for
     /// looking a chunk up among many.
@@ -265,7 +273,7 @@ impl EntityStore {
     }
     fn new_chunk(&mut self) -> Arc<Chunk> {
         let id = self.next_chunk;
-        self.next_chunk = self.next_chunk.wrapping_add(1);
+        self.next_chunk = self.next_chunk.wrapping_add(CHUNK_STEP);
         Arc::new(Chunk { id, items: Vec::with_capacity(64), kinds: OnceLock::new() })
     }
     /// Append on top of the draw order. Replaces an entity with the same handle in place.
@@ -364,6 +372,28 @@ impl EntityStore {
             }
         }
         self.shards = split.into_iter().map(Arc::new).collect();
+    }
+    /// Fit the handle index to the store again after most of it left (a print set's sheets put
+    /// out of memory, [`EntityStore::take_chunks`]): the index keeps the shards it was split into
+    /// as the store grew, each as large as when it was fullest (a map never gives back its room
+    /// as handles leave it), so a store that once held a million objects kept an index for a
+    /// million, and every copy of it (an undo step) one of its own. Rebuilt for what the store
+    /// holds when it holds less than a quarter of what its shards were split for, or when a
+    /// shard has room for four times its handles; nothing otherwise.
+    pub fn fit_index(&mut self) {
+        let want = (self.len / SHARD_TARGET).saturating_add(1).next_power_of_two().clamp(SHARDS, SHARDS_MAX);
+        let roomy = |m: &HashMap<Handle, u32>| m.capacity() > m.len().saturating_mul(4).saturating_add(64);
+        if self.shards.len() <= want.saturating_mul(4) && !self.shards.iter().any(|m| roomy(m)) {
+            return;
+        }
+        let per = self.len / want + 1;
+        let mut fit: Vec<HashMap<Handle, u32>> = (0..want).map(|_| HashMap::with_capacity(per)).collect();
+        for (h, c) in self.shards.iter().flat_map(|s| s.iter()) {
+            if let Some(m) = fit.get_mut(shard_of(*h, want)) {
+                m.insert(*h, *c);
+            }
+        }
+        self.shards = fit.into_iter().map(Arc::new).collect();
     }
     /// Insert at the bottom of the draw order.
     pub fn push_front(&mut self, e: Entity) {
@@ -552,6 +582,62 @@ impl EntityStore {
         }
         self.split_index();
     }
+    /// [`EntityStore::push_chunk`] of one chunk's worth of new objects (at most the chunk size,
+    /// none already here): the chunk made, to tell later whether it is still the same. `None`
+    /// when the objects didn't make exactly one new chunk.
+    pub fn push_one_chunk(&mut self, items: Vec<Entity>) -> Option<ChunkRef> {
+        let fits = !items.is_empty() && items.len() <= CHUNK_MAX && !items.iter().any(|e| self.contains(e.handle));
+        let before = self.chunks.len();
+        self.push_chunk(items);
+        if !fits || self.chunks.len() != before.saturating_add(1) {
+            return None;
+        }
+        self.chunks.last().cloned().map(ChunkRef)
+    }
+    /// Put `items` (new objects, at most a chunk's worth) into the draw order as a chunk of their
+    /// own at the place `order` names (a [`ChunkRef::order`] the store doesn't use): where a chunk
+    /// with that id was, or would be. The chunk made; the objects back, and nothing done, when that
+    /// place is taken or they don't fit or are already here (put them on top instead).
+    pub fn insert_chunk_at(&mut self, order: u32, items: Vec<Entity>) -> Result<ChunkRef, Vec<Entity>> {
+        if items.is_empty() || items.len() > CHUNK_MAX || items.iter().any(|e| self.contains(e.handle)) {
+            return Err(items);
+        }
+        let at = self.chunks.partition_point(|c| c.id < order);
+        if self.chunks.iter().any(|c| c.id == order) {
+            return Err(items);
+        }
+        let chunk = Chunk { id: order, items: items.into_iter().map(Arc::new).collect(), kinds: OnceLock::new() };
+        for e in &chunk.items {
+            self.set_index(e.handle, Some(order));
+        }
+        self.len += chunk.items.len();
+        let chunk = Arc::new(chunk);
+        self.chunks.insert(at, chunk.clone());
+        // New chunks go on top of it.
+        if order >= self.next_chunk {
+            self.next_chunk = order.saturating_add(CHUNK_STEP);
+        }
+        self.split_index();
+        Ok(ChunkRef(chunk))
+    }
+    /// Take the chunks `take` picks out of the store whole (out of the draw order and the handle
+    /// index), in draw order.
+    pub fn take_chunks(&mut self, take: impl Fn(&ChunkRef) -> bool) -> Vec<ChunkRef> {
+        let mut out = Vec::new();
+        let mut keep = Vec::with_capacity(self.chunks.len());
+        for c in std::mem::take(&mut self.chunks) {
+            let r = ChunkRef(c);
+            if take(&r) { out.push(r) } else { keep.push(r.0) }
+        }
+        self.chunks = keep;
+        for r in &out {
+            for e in r.items() {
+                self.set_index(e.handle, None);
+            }
+            self.len = self.len.saturating_sub(r.items().len());
+        }
+        out
+    }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
     /// a clone of a store makes this exact: any edit to the original copies the touched chunk.
     pub fn same_as(&self, other: &EntityStore) -> bool {
@@ -572,6 +658,44 @@ impl EntityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_handle_index_fits_the_store_again_after_most_of_it_left() {
+        let mut s = EntityStore::new();
+        for k in 0..300u64 {
+            s.push_chunk((k * 1000 + 1..=(k + 1) * 1000).map(ent).collect());
+        }
+        let grown = s.shards.len();
+        assert!(grown > SHARDS, "{grown} shards for {} objects", s.len());
+        let room = |s: &EntityStore| s.shards.iter().map(|m| m.capacity()).sum::<usize>();
+        let full = room(&s);
+        // All but the first two chunks leave (a print set's other sheets out of memory).
+        let first: Vec<usize> = s.chunk_refs().iter().take(2).map(ChunkRef::key).collect();
+        let taken = s.take_chunks(|c| !first.contains(&c.key()));
+        assert_eq!(s.len(), 2000);
+        assert!(room(&s) >= full / 2, "taking chunks leaves the index as large as it was");
+        let kept = s.clone();
+        s.fit_index();
+        assert_eq!(s.shards.len(), SHARDS);
+        assert!(room(&s) * 8 < full, "the index fits the store: room for {} handles, {} before", room(&s), full);
+        // The same handles, found where they are; the copy taken before is as it was.
+        for h in (1..=2000).map(Handle) {
+            assert!(s.contains(h) && kept.contains(h));
+            assert_eq!(s.get(h).map(|e| e.handle), Some(h));
+        }
+        assert!((2001..=300_000).map(Handle).all(|h| !s.contains(h)));
+        // Nothing to do on a store that fits: the very same shards.
+        let before: Vec<*const HashMap<Handle, u32>> = s.shards.iter().map(Arc::as_ptr).collect();
+        s.fit_index();
+        assert_eq!(s.shards.iter().map(Arc::as_ptr).collect::<Vec<_>>(), before);
+        // And it grows again as the chunks come back.
+        for c in taken {
+            s.push_chunk(c.items().iter().map(|e| (**e).clone()).collect());
+        }
+        assert_eq!(s.len(), 300_000);
+        assert!(s.shards.len() > SHARDS);
+        assert!((1..=300_000).map(Handle).all(|h| s.contains(h)));
+    }
 
     #[test]
     fn a_copy_is_unchanged_until_one_of_its_chunks_changes() {

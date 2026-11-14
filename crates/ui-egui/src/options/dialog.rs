@@ -238,8 +238,24 @@ fn display(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         }
         crate::rtl::trail(ui, crate::tl!("Command line history"));
         ui.end_row();
+
+        // DYNRESMODE's target: the frame rate a lower resolution while moving aims to hold.
+        crate::rtl::lead(ui, crate::tl!("Frame rate to hold while moving"));
+        let mut fps = app.session.settings.dynres_fps;
+        let r = ui.add_enabled(app.session.settings.dynres, egui::DragValue::new(&mut fps).range(10..=120).suffix(" fps"));
+        if r.changed() {
+            changes.insert("DYNRESFPS".into(), json!(fps));
+        }
+        crate::rtl::trail(ui, crate::tl!("Frame rate to hold while moving"));
+        ui.end_row();
     });
     ui.add_space(6.0);
+    let mut dynres = app.session.settings.dynres;
+    if ui.checkbox(&mut dynres, crate::tl!("Lower the resolution while panning and zooming when the graphics are slow")).changed() {
+        changes.insert("DYNRESMODE".into(), json!(i32::from(dynres)));
+    }
+    hint(ui, crate::tl!("The drawing sharpens as soon as the view stops. Plots, exports and screenshots are always full resolution."));
+    hint(ui, crate::tl!("The 3D Model view and Walk do the same while orbiting and walking; their lighting and detail stay as they are."));
     let mut system_cursor = app.ui.system_cursor;
     if ui.checkbox(&mut system_cursor, crate::tl!("Keep the system cursor visible over the drawing area")).changed() {
         changes.insert("systemCursor".into(), json!(system_cursor));

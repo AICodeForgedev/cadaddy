@@ -23,11 +23,15 @@ use super::wallgen::{self, WallGen};
 use super::*;
 use crate::{Result, Session};
 
+mod saved;
+pub(crate) use saved::after_open;
+pub use saved::before_save;
+
 /// Most plan objects compared.
 const MAX_ITEMS: usize = 200_000;
 
 /// A revision report's lists, paged alike.
-const LISTS: [&str; 6] = ["added", "removed", "moved", "kept", "conflicts", "changed"];
+const LISTS: [&str; 7] = ["added", "removed", "moved", "kept", "conflicts", "changed", "selected"];
 /// Items per list in one page of a revision report, by default and at most.
 const PAGE: usize = 100;
 const PAGE_MAX: usize = 500;
@@ -37,7 +41,7 @@ const MAX_ROOM_PAGES: usize = 100;
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("model.revise", "Revise Model from Plans", run).long()
         .menu(&["Draw", "Modeling", "Revise Model from Plans"])
-        .params("{against?: path (an earlier or later version of the plan to compare with, rooms included; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units: how far an object may move and still count as moved rather than removed and added; default 5 % of the larger side of the box around both plans' objects), last?: bool (return the last revision that found changes, e.g. the one an associative model made when the plan was edited, instead of comparing again), offset?, limit? (default 100, at most 500: each list is paged alike)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, auto, kept: [handles], conflicts: [{handle?, part, source, change}], changed: [handles of rebuilt objects of changed plan objects], deleted: rebuilt objects taken away again because they were deleted by hand since the last build, totals: {added, removed, moved, kept, conflicts, changed}, offset, limit, next?: offset of the next page, last?: the last revision's totals when this one found nothing}")]
+        .params("{against?: path (an earlier or later version of the plan to compare with, rooms included; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units: how far an object may move and still count as moved rather than removed and added; default 5 % of the larger side of the box around both plans' objects), last?: bool (return the last revision that found changes, e.g. the one an associative model made when the plan was edited, instead of comparing again), offset?, limit? (default 100, at most 500: each list is paged alike)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, auto, kept: [handles], conflicts: [{handle?, part, source, change}], changed: [handles of rebuilt objects of changed plan objects], selected: [handles this revise selected to show them: the changed ones when run by hand; none when the model rebuilt itself (auto), which leaves the selection as it was], deleted: rebuilt objects taken away again because they were deleted by hand since the last build, totals: {added, removed, moved, kept, conflicts, changed, selected}, offset, limit, next?: offset of the next page, last?: the last revision's totals when this one found nothing}")]
 }
 
 fn read_file(cmd: &str, path: &str) -> Result<Vec<u8>> {
@@ -64,7 +68,7 @@ pub struct PlanItem {
 }
 
 /// A generated object's (part, level, source) tag.
-type TagKey = (String, String, String);
+pub(crate) type TagKey = (String, String, String);
 
 /// What a build left: the plan it was built from and each generated object's fingerprint and tag.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -79,6 +83,20 @@ pub struct ModelRecord {
     /// The drawing as the build left it (shared, not copied): a plan unchanged since then needs
     /// no rebuild, even when the build was one step of a longer command.
     pub built: Option<BuiltDrawing>,
+    /// How its plan's rooms were read: as a job's rooms stage read them (a build in a job's later
+    /// stages), or traced as asked (`None`). A revision reads the plan's rooms now the same way.
+    pub(crate) rooms_settled: Option<super::perceive::geometry::SettledRooms>,
+    /// The plan's rooms weren't read for this record (a model opened from a drawing saved before
+    /// its associative state was): a revision takes the rooms as they are then for the ones built.
+    pub rooms_unread: bool,
+}
+
+impl ModelRecord {
+    /// The plan objects it was built from, and its rooms (none: not read, [`Self::rooms_unread`]).
+    pub(crate) fn plan_and_rooms(&self) -> (Vec<PlanItem>, Option<Vec<PlanItem>>) {
+        let (plan, rooms): (Vec<PlanItem>, Vec<PlanItem>) = self.plan.iter().cloned().partition(|i| i.kind != "room");
+        (plan, (!self.rooms_unread).then_some(rooms))
+    }
 }
 
 /// Most build records a drawing keeps (the states undo can return to name the one they came from).
@@ -95,8 +113,9 @@ const MAX_STATES: usize = 4096;
 /// Undo and redo bring back drawing states as they are, so a state keeps the build it came from.
 #[derive(Clone, Debug, Default)]
 pub struct ModelRecords {
-    /// The records, oldest first, each with its id (ids start at 1).
-    records: Vec<(u64, ModelRecord)>,
+    /// The records, oldest first, each with its id (ids start at 1). Shared: a copy of the
+    /// session (a long command's, a dialog's read: Q6574) copied every record of a large build.
+    records: Vec<(u64, std::sync::Arc<ModelRecord>)>,
     next: u64,
     /// Drawing states and the record they come from (0: from no build: the model was undone).
     states: Vec<(std::sync::Weak<Drawing>, u64)>,
@@ -118,7 +137,7 @@ impl ModelRecords {
     /// (a drawing changed outside any command).
     pub fn for_state(&self, d: &std::sync::Arc<Drawing>) -> Option<&ModelRecord> {
         match self.state_id(d) {
-            Some(id) => self.index_of(id).and_then(|i| self.records.get(i)).map(|(_, r)| r),
+            Some(id) => self.index_of(id).and_then(|i| self.records.get(i)).map(|(_, r)| &**r),
             None => self.last(),
         }
     }
@@ -130,7 +149,7 @@ impl ModelRecords {
             return self.for_state(now);
         }
         if let Some(i) = self.fresh.and_then(|id| self.index_of(id)) {
-            return self.records.get(i).map(|(_, r)| r);
+            return self.records.get(i).map(|(_, r)| &**r);
         }
         self.for_state(before)
     }
@@ -139,11 +158,11 @@ impl ModelRecords {
             Some(id) => self.index_of(id)?,
             None => self.records.len().checked_sub(1)?,
         };
-        self.records.get_mut(i).map(|(_, r)| r)
+        self.records.get_mut(i).map(|(_, r)| std::sync::Arc::make_mut(r))
     }
     /// The last build's record.
     pub fn last(&self) -> Option<&ModelRecord> {
-        self.records.last().map(|(_, r)| r)
+        self.records.last().map(|(_, r)| &**r)
     }
     fn follow(&mut self, d: &std::sync::Arc<Drawing>, id: u64) {
         if let Some(e) = self.states.iter_mut().find(|(w, _)| std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(d))) {
@@ -162,7 +181,7 @@ impl ModelRecords {
     fn push(&mut self, rec: ModelRecord, d: &std::sync::Arc<Drawing>, fresh: bool) {
         self.next = self.next.saturating_add(1);
         let id = self.next;
-        self.records.push((id, rec));
+        self.records.push((id, std::sync::Arc::new(rec)));
         self.follow(d, id);
         // A rebuild while a command's build is still unsettled is part of that command's work.
         self.fresh = (fresh || self.fresh.is_some()).then_some(id);
@@ -204,13 +223,16 @@ impl std::fmt::Debug for BuiltDrawing {
     }
 }
 
-fn fnv(s: &str) -> u64 {
-    s.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
-}
-
-/// A generated object's fingerprint: its geometry, layer and colour.
+/// A generated object's fingerprint: its geometry, layer and colour. The text is hashed as it is
+/// written, never held whole: the same value as hashing it in one string (fingerprints saved with
+/// a drawing are compared with these when it is opened again), with no string per object (an
+/// opened model's every generated object is fingerprinted, Q6569).
 fn fingerprint(e: &Entity) -> u64 {
-    fnv(&format!("{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color))
+    use std::fmt::Write as _;
+    let mut h = super::buildrec::Fnv::new();
+    // Writing to a hasher can't fail.
+    let _ = write!(h, "{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color);
+    h.value()
 }
 
 /// Plan signatures round coordinates to this many drawing units.
@@ -324,7 +346,20 @@ pub(crate) fn record(s: &mut Session, g: &WallGen) {
 
 /// The generated objects of `d`: each one's fingerprint and tag.
 fn made_of(d: &Drawing) -> HashMap<Handle, (u64, Option<TagKey>)> {
-    d.model.iter().filter(|e| wallgen::made_as(e).is_some()).map(|e| (e.handle, (fingerprint(e), twin_key(e)))).collect()
+    // Chunk by chunk on all cores: every build records it, and every opening of a built model (a
+    // large one holds hundreds of thousands of generated objects; one core took seconds, Q6569).
+    let one = |items: &[std::sync::Arc<Entity>]| -> Vec<(Handle, (u64, Option<TagKey>))> {
+        items.iter().filter(|e| built_object(e)).map(|e| (e.handle, (fingerprint(e), twin_key(e)))).collect()
+    };
+    let chunks: Vec<&[std::sync::Arc<Entity>]> = d.model.chunk_slices().map(|(_, items)| items).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let parts: Vec<_> = {
+        use rayon::prelude::*;
+        chunks.par_iter().map(|c| one(c)).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let parts: Vec<_> = chunks.iter().map(|c| one(c)).collect();
+    parts.into_iter().flatten().collect()
 }
 
 /// [`record`], with the plan's rooms when they were just read (`None`: read them); `fresh`: the
@@ -336,10 +371,11 @@ fn record_with(s: &mut Session, g: &WallGen, rooms: Option<Vec<PlanItem>>, fresh
     let mut plan = plan_items(d, g);
     let made = made_of(d);
     plan.extend(rooms.unwrap_or_else(|| room_items(s)));
+    let rooms_settled = super::perceive::geometry::settled_rooms(s);
     if let Ok(st) = s.state_mut() {
         let doc = std::sync::Arc::clone(&st.doc);
         let built = Some(BuiltDrawing(std::sync::Arc::clone(&doc)));
-        st.model_records.push(ModelRecord { plan, made, built, ..ModelRecord::default() }, &doc, fresh);
+        st.model_records.push(ModelRecord { plan, made, built, rooms_settled, ..ModelRecord::default() }, &doc, fresh);
     }
 }
 
@@ -347,7 +383,8 @@ fn record_with(s: &mut Session, g: &WallGen, rooms: Option<Vec<PlanItem>>, fresh
 /// build `before` came from; and at the end of the outermost command, a build the command made
 /// takes the model as the command left it (its later steps replaced conduits and equipment the
 /// build had made: taken for deleted by hand, the next rebuild dropped 71 of 99 conduits).
-pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Drawing>>) {
+/// `switched`: the command started in another drawing (nothing to compare with it).
+pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Drawing>>, switched: bool) {
     let outermost = s.journal.at_top();
     let Ok(st) = s.state_mut() else { return };
     let now = std::sync::Arc::clone(&st.doc);
@@ -358,7 +395,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
         return;
     }
     let Some(id) = st.model_records.fresh.take() else {
-        if let Some(before) = before {
+        if let Some(before) = before.filter(|_| !switched) {
             absorb_generated(st, before, &now);
         }
         return;
@@ -374,7 +411,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     if let Some(i) = st.model_records.index_of(id)
         && let Some((_, rec)) = st.model_records.records.get_mut(i)
     {
-        rec.made = made;
+        std::sync::Arc::make_mut(rec).made = made;
     }
     st.model_records.follow(&now, id);
 }
@@ -385,7 +422,7 @@ pub(crate) fn carry(st: &mut crate::DocState, from: &std::sync::Arc<Drawing>, to
     st.model_records.followed(from, to);
     for (_, r) in &mut st.model_records.records {
         if r.built.as_ref().is_some_and(|b| std::sync::Arc::ptr_eq(&b.0, from)) {
-            r.built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
+            std::sync::Arc::make_mut(r).built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
         }
     }
 }
@@ -403,7 +440,7 @@ fn absorb_generated(st: &mut crate::DocState, before: &std::sync::Arc<Drawing>, 
         return;
     }
     let (added, modified, erased) = before.model.changes(&now.model);
-    let generated = |d: &Drawing, h: &Handle| d.model.get(*h).is_some_and(|e| wallgen::made_as(e).is_some());
+    let generated = |d: &Drawing, h: &Handle| d.model.get(*h).is_some_and(|e| built_object(e));
     if !added.iter().any(|h| generated(now, h) && !generated(before, h)) {
         return;
     }
@@ -412,7 +449,7 @@ fn absorb_generated(st: &mut crate::DocState, before: &std::sync::Arc<Drawing>, 
         .chain(&modified)
         .chain(&erased)
         .filter(|h| generated(before, h) || generated(now, h))
-        .map(|h| (*h, now.model.get(*h).filter(|e| wallgen::made_as(e).is_some()).map(|e| (fingerprint(e), twin_key(e)))))
+        .map(|h| (*h, now.model.get(*h).filter(|e| built_object(e)).map(|e| (fingerprint(e), twin_key(e)))))
         .collect();
     let Some(rec) = st.model_records.for_state_mut(now) else { return };
     for (h, v) in touched {
@@ -435,7 +472,7 @@ pub(crate) fn resync(s: &mut Session, touched: &[Handle]) {
     }
     let Ok(d) = s.doc() else { return };
     let now: Vec<(Handle, Option<(u64, Option<TagKey>)>)> =
-        touched.iter().map(|h| (*h, d.model.get(*h).filter(|e| wallgen::made_as(e).is_some()).map(|e| (fingerprint(e), twin_key(e))))).collect();
+        touched.iter().map(|h| (*h, d.model.get(*h).filter(|e| built_object(e)).map(|e| (fingerprint(e), twin_key(e))))).collect();
     let Ok(st) = s.state_mut() else { return };
     let doc = std::sync::Arc::clone(&st.doc);
     let Some(rec) = st.model_records.for_state_mut(&doc) else { return };
@@ -516,10 +553,20 @@ fn source_of(e: &Entity) -> Option<Handle> {
     x.get(at + 3).filter(|t| t.code == 1000).and_then(|t| Handle::parse_hex(&t.value))
 }
 
+/// Whether a build made `e` (it carries the build's tag and is no copy a person made of such an
+/// object: [`super::overrides::hand_made`], Q6620).
+pub(crate) fn built_object(e: &Entity) -> bool {
+    wallgen::made_as(e).is_some() && !super::overrides::hand_made(e)
+}
+
 /// A generated object's (part, level, source) tag. One plan object makes many MEP objects (a
 /// run's segments, each fitting, terminals read from nothing), so theirs adds the object's own
-/// id (`mepid:`) to the source: `<source>#<id>`. (Overrides keep elements by it.)
+/// id (`mepid:`) to the source: `<source>#<id>`. (Overrides keep elements by it.) A copy a person
+/// made of one has none: it is no build's, and a rebuild keeps it as it stands.
 pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
+    if super::overrides::hand_made(e) {
+        return None;
+    }
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP))?;
     let v = |k: usize| x.get(at + k).filter(|t| t.code == 1000).map(|t| t.value.clone());
@@ -537,7 +584,9 @@ pub(crate) fn tag_key(e: &Entity) -> Option<TagKey> {
 /// own id when it has one besides (`devid:`, else the name its build gave it). Many objects are
 /// made from no plan object (devices and equipment from the spec's tags): with the bare tag they
 /// all shared one key, and one deleted by hand took all of them away at the next rebuild.
-fn twin_key(e: &Entity) -> Option<TagKey> {
+pub(crate) fn twin_key(e: &Entity) -> Option<TagKey> {
+    #[cfg(test)]
+    tests::TWIN_KEYS.with(|n| n.set(n.get() + 1));
     let (part, level, mut source) = tag_key(e)?;
     if !source.contains('#') {
         let id = super::bimlook::made_tag(e, "devid").or_else(|| super::bimlook::made_name(e)).filter(|i| !i.is_empty());
@@ -592,7 +641,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     let mut handles_of: HashMap<TagKey, std::collections::VecDeque<Handle>> = HashMap::new();
     if let Some(rec) = &before {
         let d = s.doc()?;
-        for e in d.model.iter().filter(|e| wallgen::made_as(e).is_some()) {
+        for e in d.model.iter().filter(|e| built_object(e)) {
             match rec.made.get(&e.handle) {
                 Some((f, _)) if *f != fingerprint(e) || rec.hand_edited.contains(&e.handle) => edited.push((**e).clone()),
                 Some((_, Some(key))) if !key_source(&key.2).is_some_and(|h| changed.contains(&h)) => {
@@ -604,7 +653,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
         deleted = rec.made.iter().filter(|(h, _)| d.entity(**h).is_none()).filter_map(|(_, (_, k))| k.clone()).collect();
         // Deleted before the build the record is of, and still.
         if !rec.hand_deleted.is_empty() {
-            let present: HashSet<TagKey> = d.model.iter().filter(|e| wallgen::made_as(e).is_some()).filter_map(|e| twin_key(e)).collect();
+            let present: HashSet<TagKey> = d.model.iter().filter(|e| built_object(e)).filter_map(|e| twin_key(e)).collect();
             let mut seen: HashSet<TagKey> = deleted.iter().cloned().collect();
             for k in &rec.hand_deleted {
                 if !present.contains(k) && seen.insert(k.clone()) {
@@ -632,7 +681,16 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
         _ => as_built,
     };
     let mut kept = Kept { kept: Vec::new(), conflicts: Vec::new(), deleted: 0 };
+    // The rebuilt objects by twin key, worked out once: every edit and deletion looks its twins
+    // up here, and the map follows what is taken away and put back. (A scan of the model per edit,
+    // and the deletions are carried into every later rebuild: 4,000 deleted and 4,000 edited of
+    // 56,000 objects took 55 s a rebuild.)
+    let mut twins = if edited.is_empty() && deleted.is_empty() { HashMap::new() } else { twins_by_key(s.doc()?) };
     for e in edited {
+        // Found at the rebuild to be a copy made by hand (Q6620): kept as it stands already.
+        if s.doc()?.entity(e.handle).is_some_and(|now| super::overrides::hand_made(now)) {
+            continue;
+        }
         let src = source_of(&e);
         let part = wallgen::made_as(&e).unwrap_or_default();
         if src.is_some_and(|h| changed.contains(&h)) {
@@ -642,12 +700,14 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
         // The rebuilt counterparts give way to the edited object.
         let key = twin_key(&e);
         let d = s.doc_mut()?;
-        let twins: Vec<Handle> = d.model.iter().filter(|x| key.is_some() && twin_key(x) == key).map(|x| x.handle).collect();
-        for h in twins {
+        for h in key.as_ref().and_then(|k| twins.remove(k)).unwrap_or_default() {
             d.remove_entity(h);
         }
         let h = if d.entity(e.handle).is_none() { e.handle } else { d.new_handle() };
         d.model.push(Entity { handle: h, ..e });
+        if let Some(k) = key {
+            twins.entry(k).or_default().push(h);
+        }
         kept.kept.push(h);
     }
     // Deleted by hand: stays deleted unless its plan object changed (then it conflicts).
@@ -659,8 +719,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
             continue;
         }
         let d = s.doc_mut()?;
-        let twins: Vec<Handle> = d.model.iter().filter(|x| twin_key(x).as_ref() == Some(&key)).map(|x| x.handle).collect();
-        for h in twins {
+        for h in twins.remove(&key).unwrap_or_default() {
             if d.remove_entity(h).is_some() {
                 kept.deleted += 1;
             }
@@ -675,12 +734,24 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     if let Ok(st) = s.state_mut()
         && let Some((_, rec)) = st.model_records.records.last_mut()
     {
+        let rec = std::sync::Arc::make_mut(rec);
         rec.hand_deleted = hand_deleted;
         rec.hand_edited = hand_edited;
     }
     // Built from these rules: the model's own from now on.
     s.state_mut()?.wallgen = Some(g.clone());
     Ok((built, kept))
+}
+
+/// The objects of `d` with a twin key (the generated ones), by it, in drawing order.
+fn twins_by_key(d: &Drawing) -> HashMap<TagKey, Vec<Handle>> {
+    let mut out: HashMap<TagKey, Vec<Handle>> = HashMap::new();
+    for e in d.model.iter() {
+        if let Some(k) = twin_key(e) {
+            out.entry(k).or_default().push(e.handle);
+        }
+    }
+    out
 }
 
 /// Give rebuilt objects back the handles their counterparts had before the build (`handles_of`,
@@ -720,14 +791,31 @@ pub(crate) struct Revise {
     pub auto: bool,
 }
 
-/// Compare `old` (its plan objects) and `old_rooms` with the plan now and, when they differ and
+/// Compare `old` (its plan objects) and `old_rooms` (none: not read, the rooms now are taken for
+/// them) with the plan now and, when they differ and
 /// `how.rebuild`, build again keeping the hand edits; select the rebuilt objects of changed plan
-/// objects and echo a summary with the conflicts. The whole report (every list), also kept as
+/// objects (`selected`; not when `how.auto`: an automatic rebuild leaves the user's selection
+/// as it was) and echo a summary with the conflicts. The whole report (every list), also kept as
 /// the drawing's last revision when it found changes.
-pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Vec<PlanItem>, how: &Revise) -> Result<Value> {
+pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Option<Vec<PlanItem>>, how: &Revise) -> Result<Value> {
+    // Against the record of a build: the plan's rooms now read as that build's were (a job's
+    // build, as its rooms stage read them), and so recorded again if it rebuilds.
+    let was = super::perceive::geometry::settled_rooms(s);
+    if how.by_handle {
+        let settled = s.state().ok().and_then(|st| st.model_records.for_state(&st.doc)).and_then(|r| r.rooms_settled.clone());
+        super::perceive::geometry::settle_rooms(s, settled);
+    }
+    let r = revise_rooms_settled(s, g, old, old_rooms, how);
+    super::perceive::geometry::settle_rooms(s, was);
+    r
+}
+
+/// [`revise`], the plan's rooms read as the drawing's room traces are settled now.
+fn revise_rooms_settled(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms: Option<Vec<PlanItem>>, how: &Revise) -> Result<Value> {
     let g = &rules_now(s, g);
     let now = plan_items(s.doc()?, g);
     let rooms_now = room_items(s);
+    let old_rooms = old_rooms.unwrap_or_else(|| rooms_now.clone());
     // The default reach: from the plan objects only (not the model, which moves with them).
     let reach = how.tolerance.unwrap_or_else(|| {
         let b = Bounds2::from_points(old.iter().chain(&now).chain(&old_rooms).chain(&rooms_now).map(|i| i.at));
@@ -750,19 +838,35 @@ pub(crate) fn revise(s: &mut Session, g: &WallGen, old: Vec<PlanItem>, old_rooms
         "kept": [],
         "conflicts": [],
         "changed": [],
+        "selected": [],
         "deleted": 0,
     });
     let (n_added, n_removed, n_moved) = (added.len() + r_added.len(), removed.len() + r_removed.len(), moved.len() + r_moved.len());
     if rebuild {
+        // The user's selection (the pickfirst set) as it was before the build.
+        let picked = s.selection();
         let (built, kept) = rebuild_keeping_edits(s, g, &changed_sources, Some(rooms_now))?;
-        // The rebuilt objects of changed plan objects, selected to show them.
         let changed: Vec<Handle> =
             s.doc()?.model.iter().filter(|e| source_of(e).is_some_and(|h| changed_sources.contains(&h))).map(|e| e.handle).collect();
-        s.set_selection(changed.clone());
+        // Only a revise the user ran selects the rebuilt objects of changed plan objects to show
+        // them (and says so in its reply). An automatic rebuild (`how.auto`: model.update, the
+        // rebuild before a command, the idle one) never touches the selection: the next typed
+        // command would take the model objects as its implied selection (Q6601). It keeps what
+        // the user had selected, less what the build took away.
+        let selected = if how.auto {
+            let d = s.doc()?;
+            let still: Vec<Handle> = picked.into_iter().filter(|h| d.entity(*h).is_some()).collect();
+            s.set_selection(still);
+            Vec::new()
+        } else {
+            s.set_selection(changed.clone());
+            changed.clone()
+        };
         if let Some(o) = out.as_object_mut() {
             o.insert("kept".into(), json!(kept.kept.iter().map(|h| h.hex()).collect::<Vec<_>>()));
             o.insert("conflicts".into(), json!(kept.conflicts));
             o.insert("changed".into(), json!(changed.iter().map(|h| h.hex()).collect::<Vec<_>>()));
+            o.insert("selected".into(), json!(selected.iter().map(|h| h.hex()).collect::<Vec<_>>()));
             o.insert("deleted".into(), json!(kept.deleted));
             o.insert("model".into(), built);
         }
@@ -832,11 +936,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let hooks = super::file::io().ok_or_else(|| bad(cmd, "file formats are not available in this build"))?;
             let bytes = read_file(cmd, path)?;
             let other = (hooks.read)(&bytes, path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-            (plan_items(&other, &g), rooms_of(other), false)
+            (plan_items(&other, &g), Some(rooms_of(other)), false)
         }
         None => match s.state().map(|st| st.model_records.for_state(&st.doc))? {
             Some(r) => {
-                let (old, rooms) = r.plan.iter().cloned().partition(|i| i.kind != "room");
+                let (old, rooms) = r.plan_and_rooms();
                 (old, rooms, true)
             }
             None => return Err(bad(cmd, "no record of the plan the model was built from: build it once, or pass `against`")),
@@ -853,4 +957,135 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out["last"] = json!({ "totals": short["totals"], "auto": last["auto"], "rebuilt": last["rebuilt"] });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadaddy_doc::Line;
+    use cadaddy_geom::Vec3;
+
+    thread_local! {
+        /// Twin keys worked out on this thread (each test runs on its own).
+        pub(super) static TWIN_KEYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// `n` free-standing 6" walls 10' long, 3' apart, each two lines on a wall layer; built (not
+    /// associative). The plan lines of each wall, west to east.
+    fn walls(n: usize) -> (Session, Vec<[Handle; 2]>) {
+        let mut d = Drawing::new_imperial();
+        let line = |d: &mut Drawing, x: f64| {
+            let h = Handle(d.handseed.max(0x100));
+            d.handseed = h.0 + 1;
+            let p = |y: f64| Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
+            let mut e = Entity::new(h, EntityKind::Line(Line { a: p(0.0), b: p(10.0) }));
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+            h
+        };
+        let plan: Vec<[Handle; 2]> = (0..n)
+            .map(|i| {
+                let x = i as f64 * 3.0;
+                [line(&mut d, x), line(&mut d, x + 0.5)]
+            })
+            .collect();
+        let mut s = Session::empty();
+        s.open_drawing(d, "Plan", None);
+        let rules = json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        });
+        s.execute("wallgen", &json!({"rules": rules, "auto": false})).unwrap();
+        (s, plan)
+    }
+
+    /// The generated walls, west to east (by the plan line they come from).
+    fn built_walls(s: &Session) -> Vec<Handle> {
+        let mut w: Vec<(Option<Handle>, Handle)> =
+            s.doc().unwrap().model.iter().filter(|e| wallgen::made_as(e).as_deref() == Some("wall")).map(|e| (source_of(e), e.handle)).collect();
+        w.sort_unstable();
+        w.into_iter().map(|(_, h)| h).collect()
+    }
+
+    /// Move the last wall's plan lines 1' north: the plan changed, so model.revise rebuilds.
+    /// Returns the twin keys the revise worked out.
+    fn revise_after_a_plan_edit(s: &mut Session, plan: &[[Handle; 2]]) -> usize {
+        let last = plan.last().unwrap();
+        s.execute("move", &json!({"handles": [last[0].hex(), last[1].hex()], "from": [0, 0], "to": [0, 12]})).unwrap();
+        TWIN_KEYS.with(|n| n.set(0));
+        let r = s.execute("model.revise", &json!({})).unwrap();
+        assert_eq!(r["rebuilt"], true, "{r}");
+        TWIN_KEYS.with(std::cell::Cell::get)
+    }
+
+    /// Q6463: each object edited or deleted by hand scanned the whole model for its rebuilt twins,
+    /// and the deletions are carried into every later rebuild: on a big model every rebuild
+    /// worked out the twin key of every object once per edit. Now one map per rebuild.
+    #[test]
+    fn a_rebuild_looks_hand_edits_up_once_not_a_model_scan_each() {
+        let (mut s, plan) = walls(60);
+        let all = built_walls(&s);
+        assert_eq!(all.len(), 60, "one wall per pair of plan lines");
+        // 20 walls deleted by hand, 20 recoloured; the last wall's plan lines will move.
+        let (deleted, edited) = (&all[..20], &all[20..40]);
+        for h in deleted {
+            s.doc_mut().unwrap().remove_entity(*h);
+        }
+        for h in edited {
+            s.doc_mut().unwrap().modify_entity(*h, |e| e.common.color = cadaddy_doc::color::Color::Index(1)).unwrap();
+        }
+        let objects = s.doc().unwrap().model.len();
+        for pass in 0..3 {
+            let keys = revise_after_a_plan_edit(&mut s, &plan);
+            // A few passes over the model (record, carried deletions, the twins map, handles
+            // kept), not one per edit: 40 edits made it 40 passes and more.
+            assert!(keys <= 8 * objects, "rebuild {pass}: {keys} twin keys for {objects} objects");
+            // And the edits are kept: the deleted walls stay deleted, the recoloured stay red.
+            let now = built_walls(&s);
+            assert_eq!(now.len(), 40, "rebuild {pass}: the deleted walls aren't rebuilt");
+            let red =
+                now.iter().filter(|h| s.doc().unwrap().entity(**h).is_some_and(|e| e.common.color == cadaddy_doc::color::Color::Index(1))).count();
+            assert_eq!(red, 20, "rebuild {pass}: the recoloured walls stay recoloured");
+        }
+    }
+
+    /// Q6569: a fingerprint is hashed as its text is written, with no string per object, and is
+    /// still the FNV-1a of that text in one string: the value drawings saved before carry, which an
+    /// opened model's objects are compared with.
+    #[test]
+    fn a_fingerprint_is_the_hash_of_its_text_as_before() {
+        let mut e = Entity::new(Handle(0x2a), EntityKind::Line(Line { a: Vec3 { x: 1.5, y: -2.0, z: 0.0 }, b: Vec3 { x: 120.25, y: 3.0, z: 9.0 } }));
+        e.common.layer = "A-WALL".into();
+        e.common.color = cadaddy_doc::color::Color::Index(3);
+        let text = format!("{:?}|{}|{:?}", e.kind, e.common.layer, e.common.color);
+        let in_one_string = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+        assert_eq!(fingerprint(&e), in_one_string);
+        // Not a constant: another colour is another fingerprint.
+        e.common.color = cadaddy_doc::color::Color::Index(1);
+        assert_ne!(fingerprint(&e), in_one_string);
+    }
+
+    /// The timings for Q6463 (not run by default): `N` walls, `K` deleted and `K` recoloured by
+    /// hand, then two rebuilds.
+    #[test]
+    #[ignore]
+    fn time_rebuilds_after_many_hand_edits() {
+        let var = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let (n, k) = (var("REVISE_N", 5000), var("REVISE_K", 1000));
+        let (mut s, plan) = walls(n);
+        let all = built_walls(&s);
+        for h in all.iter().take(k) {
+            s.doc_mut().unwrap().remove_entity(*h);
+        }
+        for h in all.iter().skip(k).take(k) {
+            s.doc_mut().unwrap().modify_entity(*h, |e| e.common.color = cadaddy_doc::color::Color::Index(1)).unwrap();
+        }
+        let objects = s.doc().unwrap().model.len();
+        for pass in 0..2 {
+            let t = std::time::Instant::now();
+            let keys = revise_after_a_plan_edit(&mut s, &plan);
+            eprintln!("N={n} K={k} objects={objects} rebuild {pass}: {:.2} s, {keys} twin keys", t.elapsed().as_secs_f64());
+        }
+    }
 }

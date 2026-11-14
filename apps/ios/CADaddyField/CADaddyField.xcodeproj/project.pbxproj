@@ -12,10 +12,52 @@
 		AF0000000000000000000103 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AF0000000000000000000204 /* Exceptions for "CADaddyFieldTests" folder in "CADaddyFieldTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Fixtures/SyntheticSet/building-architectural.glb",
+				"Fixtures/SyntheticSet/building-architectural.json",
+				"Fixtures/SyntheticSet/building-mep-full.glb",
+				"Fixtures/SyntheticSet/building-mep-full.json",
+				"Fixtures/SyntheticSet/building-mep-mains.glb",
+				"Fixtures/SyntheticSet/building-mep-mains.json",
+				"Fixtures/SyntheticSet/building.json",
+				"Fixtures/SyntheticSet/levels/L1.glb",
+				"Fixtures/SyntheticSet/levels/L1.json",
+				"Fixtures/SyntheticSet/levels/L2.glb",
+				"Fixtures/SyntheticSet/levels/L2.json",
+				"Fixtures/SyntheticSet/manifest.json",
+				"Fixtures/SyntheticSet/rooms/L1-101-GUEST.glb",
+				"Fixtures/SyntheticSet/rooms/L1-101-GUEST.json",
+				"Fixtures/SyntheticSet/rooms/L1-102-GUEST.glb",
+				"Fixtures/SyntheticSet/rooms/L1-102-GUEST.json",
+				"Fixtures/SyntheticSet/rooms/L1-103-CORRIDOR.glb",
+				"Fixtures/SyntheticSet/rooms/L1-103-CORRIDOR.json",
+				"Fixtures/SyntheticSet/rooms/L1-104-ELEC.glb",
+				"Fixtures/SyntheticSet/rooms/L1-104-ELEC.json",
+				"Fixtures/SyntheticSet/rooms/L2-201-GUEST.glb",
+				"Fixtures/SyntheticSet/rooms/L2-201-GUEST.json",
+				"Fixtures/SyntheticSet/rooms/L2-202-GUEST.glb",
+				"Fixtures/SyntheticSet/rooms/L2-202-GUEST.json",
+				"Fixtures/SyntheticSet/rooms/L2-203-CORRIDOR.glb",
+				"Fixtures/SyntheticSet/rooms/L2-203-CORRIDOR.json",
+				"Fixtures/SyntheticSet/rooms/L2-204-ELEC.glb",
+				"Fixtures/SyntheticSet/rooms/L2-204-ELEC.json",
+				"Fixtures/SyntheticSetV2/building.json",
+				"Fixtures/SyntheticSetV2/manifest.json",
+				"Fixtures/SyntheticSetV2/rooms/L1-101-GUEST.glb",
+				"Fixtures/SyntheticSetV2/rooms/L1-101-GUEST.json",
+				"Fixtures/regenerate.sh",
+			);
+			target = AF0000000000000000000402 /* CADaddyFieldTests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AF0000000000000000000201 /* CADaddyField */ = {isa = PBXFileSystemSynchronizedRootGroup; path = CADaddyField; sourceTree = "<group>"; };
 		AF0000000000000000000202 /* FieldCore */ = {isa = PBXFileSystemSynchronizedRootGroup; path = FieldCore; sourceTree = "<group>"; };
-		AF0000000000000000000203 /* CADaddyFieldTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = CADaddyFieldTests; sourceTree = "<group>"; };
+		AF0000000000000000000203 /* CADaddyFieldTests */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (AF0000000000000000000204 /* Exceptions for "CADaddyFieldTests" folder in "CADaddyFieldTests" target */, ); path = CADaddyFieldTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */

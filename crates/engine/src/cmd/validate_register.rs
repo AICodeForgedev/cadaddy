@@ -770,10 +770,20 @@ const ROOM_WALL_FT: f64 = 1.0;
 /// Shifts whose walls round the room are looked at, per turn (the best by the room's own).
 const CONTEXT_TRIED: usize = 2;
 /// Two layings are one picture when this share of the view's lines, laid one way and taken
-/// back the other, falls on its own lines (a view of two mirrored rooms is its own mirror).
+/// back the other, falls on its own lines (a view of two mirrored rooms is its own mirror), and
+/// this share of its symbols on a symbol of their own kind (Q6459: a plain room's walls are
+/// their own turn, the devices drawn on one of them are not).
 const SAME_PICTURE: f64 = 0.9;
 /// The view's line samples looked at for that, at most.
 const MAX_VIEW_SAMPLES: usize = 2_000;
+/// A symbol laid one way and taken back the other lands on one of its kind within this, feet.
+const SAME_MARK_FT: f64 = 1.0;
+/// The view's symbols looked at, at most.
+const MAX_VIEW_MARKS: usize = 1_000;
+
+/// A symbol a print shows: what it is (one key: its kind and its tag) and its point (drawing
+/// units).
+pub(crate) type Mark = (String, [f64; 2]);
 
 /// A view's straight lines (a typical room's enlarged plan, drawn anywhere on its sheet) in feet
 /// round the view's middle, read once for [`view_turn`] on every room of its type.
@@ -788,13 +798,15 @@ pub(crate) struct ViewLines {
     acrosses: Vec<(f64, f64)>,
     /// Samples along its lines, for telling one picture from another.
     samples: Vec<Sample>,
+    /// Its symbols (key, feet off its middle), for that too.
+    marks: Vec<(String, [f64; 2])>,
     count: usize,
 }
 
 impl ViewLines {
-    /// The view `view` (sheet units, `unit` a foot) from `print`, its lines; none when it has
-    /// none of 1 ft or more.
-    pub(crate) fn new(print: &[Seg], unit: f64, view: [f64; 4]) -> Option<ViewLines> {
+    /// The view `view` (sheet units, `unit` a foot) from `print`, its lines, and the symbols of
+    /// `marks` inside it; none when it has no lines of 1 ft or more.
+    pub(crate) fn new(print: &[Seg], marks: &[Mark], unit: f64, view: [f64; 4]) -> Option<ViewLines> {
         if !(unit.is_finite() && unit > 0.0) {
             return None;
         }
@@ -817,7 +829,15 @@ impl ViewLines {
         let all = sample(&lines);
         let samples: Vec<Sample> = all.iter().step_by((all.len() / MAX_VIEW_SAMPLES).max(1)).copied().collect();
         let count = lines.len();
-        Some(ViewLines { grid: Grid::new(lines, ON_LINE_FT), axis, half, ups, acrosses, samples, count })
+        let (lo, hi) = ([view[0].min(view[2]), view[1].min(view[3])], [view[0].max(view[2]), view[1].max(view[3])]);
+        let marks: Vec<(String, [f64; 2])> = marks
+            .iter()
+            .filter(|(_, p)| p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1])
+            .map(|(k, p)| (k.clone(), local(*p)))
+            .filter(|(_, p)| p.iter().all(|v| v.is_finite()))
+            .take(MAX_VIEW_MARKS)
+            .collect();
+        Some(ViewLines { grid: Grid::new(lines, ON_LINE_FT), axis, half, ups, acrosses, samples, marks, count })
     }
 }
 
@@ -842,7 +862,7 @@ pub(crate) struct Laid {
 impl Laid {
     /// A point of the view (feet off its middle, as drawn) on the plan (feet off the room's
     /// middle), and back.
-    fn to_plan(self, v: [f64; 2]) -> [f64; 2] {
+    pub(crate) fn to_plan(self, v: [f64; 2]) -> [f64; 2] {
         let q = rotate(mirror(v, self.mirrored), self.rotation_deg.to_radians());
         [q[0] + self.offset_ft[0], q[1] + self.offset_ft[1]]
     }
@@ -886,7 +906,10 @@ fn decisive(view: &ViewLines, a: &Laid, b: &Laid, own: &[Sample], round: &[Sampl
 }
 
 /// Whether laying `view` by `a` and by `b` draws one picture: its lines laid by `b` and taken
-/// back by `a` fall on its own lines (a symmetric view: two mirrored rooms side by side).
+/// back by `a` fall on its own lines, and its symbols on symbols of their own kind (a symmetric
+/// view: two mirrored rooms side by side). The lines are only those of 1 ft or more, so a room
+/// whose walls are their own turn is one picture by its lines alone; what is drawn on them (its
+/// devices) tells the two layings apart.
 fn same_picture(view: &ViewLines, a: &Laid, b: &Laid) -> bool {
     let (mut on, mut all) = (0.0, 0.0);
     for sm in &view.samples {
@@ -898,7 +921,18 @@ fn same_picture(view: &ViewLines, a: &Laid, b: &Laid) -> bool {
             on += sm.w;
         }
     }
-    all > 0.0 && on / all >= SAME_PICTURE
+    if !(all > 0.0 && on / all >= SAME_PICTURE) {
+        return false;
+    }
+    let mapped = view
+        .marks
+        .iter()
+        .filter(|(key, at)| {
+            let p = a.to_view(b.to_plan(*at));
+            view.marks.iter().any(|(k, q)| k == key && (q[0] - p[0]).hypot(q[1] - p[1]) <= SAME_MARK_FT)
+        })
+        .count();
+    view.marks.is_empty() || mapped as f64 >= SAME_PICTURE * view.marks.len() as f64
 }
 
 /// How a view lies on a room, measured: the best of the eight turns, the next best of another
@@ -1385,6 +1419,17 @@ mod tests {
         (plan.iter().map(|(a, b)| (to(*a), to(*b))).collect(), [vc[0] - hx * 12.0, vc[1] - hy * 12.0, vc[0] + hx * 12.0, vc[1] + hy * 12.0])
     }
 
+    /// Symbols (key, plan feet round `mid`) drawn as [`drawn`] draws the view's lines.
+    fn drawn_marks(marks: &[(&str, [f64; 2])], mid: [f64; 2], k: u8, vc: [f64; 2]) -> Vec<Mark> {
+        marks
+            .iter()
+            .map(|(key, p)| {
+                let v = unturn([p[0] - mid[0], p[1] - mid[1]], k);
+                ((*key).to_string(), [vc[0] + v[0] * 12.0, vc[1] + v[1] * 12.0])
+            })
+            .collect()
+    }
+
     #[test]
     fn each_of_the_eight_turns_of_a_view_is_measured_on_the_rooms_walls() {
         let room = [0.0, 0.0, 20.0, 13.0];
@@ -1393,7 +1438,7 @@ mod tests {
         drawing.extend(furniture(0.0, false));
         for k in 0..8u8 {
             let (print, rect) = drawn(&drawing, [10.0, 6.5], k, [5000.0, 3000.0], [11.5, 8.0]);
-            let v = ViewLines::new(&print, 12.0, rect).unwrap();
+            let v = ViewLines::new(&print, &[], 12.0, rect).unwrap();
             let t = view_turn(&v, &walls, room).unwrap();
             assert_eq!(t.best.k, k, "turn {k}: {t:?}");
             assert!(t.certain, "turn {k}: {t:?}");
@@ -1416,19 +1461,19 @@ mod tests {
         let mut drawing = walls.clone();
         drawing.extend(furniture(0.0, false));
         let (print, rect) = drawn(&drawing, [10.0, 6.5], 2, [5000.0, 3000.0], [11.5, 8.0]);
-        let t = view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &walls, room).unwrap();
+        let t = view_turn(&ViewLines::new(&print, &[], 12.0, rect).unwrap(), &walls, room).unwrap();
         assert!(!t.certain, "{t:?}");
         assert!(t.why.as_deref().is_some_and(|w| w.contains("fits about as well")), "{t:?}");
         // A view of another room (its walls nowhere on this one's): not certain either.
         let other: Vec<Seg> = vec![([0.0, 0.0], [7.0, 0.0]), ([7.0, 0.0], [7.0, 30.0]), ([7.0, 30.0], [0.0, 30.0]), ([0.0, 30.0], [0.0, 0.0])];
         let (print, rect) = drawn(&other, [3.5, 15.0], 0, [5000.0, 3000.0], [5.0, 17.0]);
-        let t = view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &guest_room(0.0, false), room).unwrap();
+        let t = view_turn(&ViewLines::new(&print, &[], 12.0, rect).unwrap(), &guest_room(0.0, false), room).unwrap();
         assert!(!t.certain, "{t:?}");
         // Nothing to measure: no walls, no lines.
-        assert!(view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &[], room).is_err());
-        assert!(ViewLines::new(&[], 12.0, rect).is_none());
-        assert!(ViewLines::new(&print, f64::NAN, rect).is_none());
-        assert!(view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &walls, [f64::NAN, 0.0, 1.0, 1.0]).is_err());
+        assert!(view_turn(&ViewLines::new(&print, &[], 12.0, rect).unwrap(), &[], room).is_err());
+        assert!(ViewLines::new(&[], &[], 12.0, rect).is_none());
+        assert!(ViewLines::new(&print, &[], f64::NAN, rect).is_none());
+        assert!(view_turn(&ViewLines::new(&print, &[], 12.0, rect).unwrap(), &walls, [f64::NAN, 0.0, 1.0, 1.0]).is_err());
     }
 
     #[test]
@@ -1443,7 +1488,7 @@ mod tests {
         drawing.extend(furniture(0.0, false));
         drawing.extend(furniture(20.0, true));
         let (print, rect) = drawn(&drawing, [20.0, 6.5], 2, [5000.0, 3000.0], [21.5, 8.0]);
-        let t = view_turn(&ViewLines::new(&print, 12.0, rect).unwrap(), &walls, room).unwrap();
+        let t = view_turn(&ViewLines::new(&print, &[], 12.0, rect).unwrap(), &walls, room).unwrap();
         assert!(t.certain, "{t:?}");
         assert_eq!(t.best.k, 2, "{t:?}");
         // The view's middle (the shared wall) lies 10 ft east of the room's middle; on the view,
@@ -1451,5 +1496,49 @@ mod tests {
         assert!((t.best.offset_ft[0] - 10.0).abs() < 0.3 && t.best.offset_ft[1].abs() < 0.3, "{t:?}");
         let v = t.best.room_in_view();
         assert!((v[0] - 10.0).abs() < 0.3 && v[1].abs() < 0.3, "{t:?}");
+        // Its symbols drawn mirrored in the other room too: still one picture, still certain.
+        let marks = [("receptacle|R", [2.0, 0.3]), ("receptacle|R", [5.0, 0.3]), ("receptacle|R", [38.0, 0.3]), ("receptacle|R", [35.0, 0.3])];
+        let marks = drawn_marks(&marks, [20.0, 6.5], 2, [5000.0, 3000.0]);
+        let t = view_turn(&ViewLines::new(&print, &marks, 12.0, rect).unwrap(), &walls, room).unwrap();
+        assert!(t.certain && t.best.k == 2, "{t:?}");
+    }
+
+    /// Q6459: a plain box room and its view drawn turned 180° with a 3 ft door leaf and four
+    /// receptacles on one wall. The view's lines are their own turn (the leaf is a small share of
+    /// them), so by its lines alone the turn read certain at 0° and laid every receptacle across
+    /// the room; its symbols are not their own turn, so 0° and 180° are two pictures that fit the
+    /// walls alike: not certain.
+    #[test]
+    fn a_view_whose_symbols_are_not_their_own_turn_is_no_certain_turn_on_symmetric_walls() {
+        let room = [0.0, 0.0, 20.0, 13.0];
+        let walls: Vec<Seg> = guest_room(0.0, false).into_iter().take(4).collect();
+        let mut drawing = walls.clone();
+        drawing.push(([17.0, 13.0], [17.0, 10.0]));
+        let recs = [("receptacle|R", [2.0, 0.3]), ("receptacle|R", [5.0, 0.3]), ("receptacle|R", [8.5, 0.3]), ("receptacle|R", [13.0, 0.3])];
+        let (print, rect) = drawn(&drawing, [10.0, 6.5], 2, [5000.0, 3000.0], [11.5, 8.0]);
+        let mut marks = drawn_marks(&recs, [10.0, 6.5], 2, [5000.0, 3000.0]);
+        // Symbols outside the view and unreadable ones are not its.
+        marks.push(("receptacle|R".into(), [9000.0, 3000.0]));
+        marks.push(("receptacle|R".into(), [f64::NAN, 3000.0]));
+        // The cause: by the lines alone it is one picture, and certain the wrong way.
+        let lines_only = view_turn(&ViewLines::new(&print, &[], 12.0, rect).unwrap(), &walls, room).unwrap();
+        assert!(lines_only.certain && lines_only.best.k == 0, "{lines_only:?}");
+        let v = ViewLines::new(&print, &marks, 12.0, rect).unwrap();
+        assert_eq!(v.marks.len(), 4);
+        let t = view_turn(&v, &walls, room).unwrap();
+        assert!(!t.certain, "{t:?}");
+        assert!(t.why.as_deref().is_some_and(|w| w.contains("fits about as well")), "{t:?}");
+        assert!([t.best.k, t.runner_up.map_or(9, |r| r.k)].contains(&2), "{t:?}");
+        assert_eq!(turn_json(&t)["certain"], json!(false));
+        // Symbols that are their own turn (one in the middle of each long wall) say nothing: one
+        // picture, as before.
+        let even = drawn_marks(&[("receptacle|R", [10.0, 0.3]), ("receptacle|R", [10.0, 12.7])], [10.0, 6.5], 2, [5000.0, 3000.0]);
+        let (print, rect) = drawn(&walls, [10.0, 6.5], 2, [5000.0, 3000.0], [11.5, 8.0]);
+        let t = view_turn(&ViewLines::new(&print, &even, 12.0, rect).unwrap(), &walls, room).unwrap();
+        assert!(t.certain, "{t:?}");
+        // Another kind where its twin should be is not the same picture.
+        let odd = drawn_marks(&[("receptacle|R", [10.0, 0.3]), ("switch|S", [10.0, 12.7])], [10.0, 6.5], 2, [5000.0, 3000.0]);
+        let t = view_turn(&ViewLines::new(&print, &odd, 12.0, rect).unwrap(), &walls, room).unwrap();
+        assert!(!t.certain, "{t:?}");
     }
 }

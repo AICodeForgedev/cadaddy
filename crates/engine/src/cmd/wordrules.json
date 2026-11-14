@@ -1,6 +1,207 @@
 {
  "about": "Building knowledge as rule data (Q6210): the words the readers tell a room, a sheet, a unit, equipment and devices by. Shapes and job additions: crates/mepfix/src/wordrules.rs.",
  "lists": {
+  "submittals.section_category": {
+   "source": "MasterFormat: the kind of product a submittal's CSI section holds (Q6588: a submittal goes only on the elements of its own category, its type marks being unique only within a category); the first pair whose section number starts the submittal's decides, so the longer numbers come first",
+   "pairs": [
+    [
+     "26 51",
+     "luminaire"
+    ],
+    [
+     "26 52",
+     "luminaire"
+    ],
+    [
+     "26 55",
+     "luminaire"
+    ],
+    [
+     "26 56",
+     "luminaire"
+    ],
+    [
+     "26 24",
+     "gear"
+    ],
+    [
+     "26 22",
+     "gear"
+    ],
+    [
+     "26 28",
+     "gear"
+    ],
+    [
+     "26 36",
+     "gear"
+    ],
+    [
+     "26 27",
+     "device"
+    ],
+    [
+     "22 40",
+     "plumbing"
+    ],
+    [
+     "22 41",
+     "plumbing"
+    ],
+    [
+     "22 42",
+     "plumbing"
+    ],
+    [
+     "22 47",
+     "plumbing"
+    ],
+    [
+     "22 30",
+     "equipment"
+    ],
+    [
+     "22 33",
+     "equipment"
+    ],
+    [
+     "22 34",
+     "equipment"
+    ],
+    [
+     "23",
+     "equipment"
+    ]
+   ]
+  },
+  "submittals.product_category": {
+   "source": "trade practice: the kind of product a cut sheet is, by the words its pages use of it (Q6588), where its submittal names no CSI section; the first row that matches decides (a whole word or phrase of its pages); a luminaire is told by `fixtures.lighting_words` after these",
+   "rules": [
+    {
+     "value": "gear",
+     "any": [
+      "PANELBOARD",
+      "PANELBOARDS",
+      "SWITCHBOARD",
+      "SWITCHBOARDS",
+      "SWITCHGEAR",
+      "LOAD CENTER",
+      "LOAD CENTERS",
+      "SAFETY SWITCH",
+      "SAFETY SWITCHES",
+      "MAIN LUGS",
+      "DRY TYPE TRANSFORMER",
+      "TRANSFER SWITCH"
+     ],
+     "none": [
+      "LUMEN",
+      "LUMENS",
+      "LUMINAIRE",
+      "CCT",
+      "PHOTOMETRIC",
+      "PHOTOMETRY"
+     ]
+    }
+   ]
+  },
+  "submittals.element_category": {
+   "source": "trade practice: the kind of equipment an equipment element is, by the words of its kind, part, title, type and description (Q6588): electrical gear takes a gear submittal's product, other equipment an equipment submittal's; the first row that matches decides, no row matching is `equipment`",
+   "rules": [
+    {
+     "value": "gear",
+     "any": [
+      "PANEL",
+      "PANELBOARD",
+      "SWITCHBOARD",
+      "SWITCHGEAR",
+      "SWBD",
+      "SWGR",
+      "LOAD CENTER",
+      "DISCONNECT",
+      "SAFETY SWITCH",
+      "TRANSFORMER",
+      "XFMR",
+      "MCC",
+      "MOTOR CONTROL CENTER",
+      "TRANSFER SWITCH",
+      "METER CENTER",
+      "DISTRIBUTION BOARD"
+     ],
+     "none": [
+      "FIRE ALARM",
+      "FACP",
+      "ANNUNCIATOR",
+      "CONTROL PANEL",
+      "HEAT PUMP"
+     ]
+    }
+   ]
+  },
+  "submittals.category_aliases": {
+   "source": "Q6588: the categories a type's reading gives it (a submittal, a schedule, a spec section) said as the submittal categories (luminaire, gear, equipment, plumbing, device); a category not here says nothing of which elements its product goes on",
+   "pairs": [
+    [
+     "luminaire",
+     "luminaire"
+    ],
+    [
+     "light_fixture",
+     "luminaire"
+    ],
+    [
+     "lighting",
+     "luminaire"
+    ],
+    [
+     "gear",
+     "gear"
+    ],
+    [
+     "switchboard",
+     "gear"
+    ],
+    [
+     "panelboard",
+     "gear"
+    ],
+    [
+     "panel",
+     "gear"
+    ],
+    [
+     "equipment",
+     "equipment"
+    ],
+    [
+     "hvac",
+     "equipment"
+    ],
+    [
+     "mechanical",
+     "equipment"
+    ],
+    [
+     "plumbing",
+     "plumbing"
+    ],
+    [
+     "plumbing_fixture",
+     "plumbing"
+    ],
+    [
+     "device",
+     "device"
+    ],
+    [
+     "receptacle",
+     "device"
+    ],
+    [
+     "wiring_device",
+     "device"
+    ]
+   ]
+  },
   "asbuilt.kind_words": {
    "source": "(trade practice: the words a field markup names an element by, and its kind; moved from asbuilt.rs `NAMES`)",
    "pairs": [
@@ -873,6 +1074,30 @@
     "CIRCUITING"
    ]
   },
+  "devices.line_key_words": {
+   "source": "drafting convention (Q6596): a legend row whose description has one of these whole words keys a line type (a utility, grading or boundary line: SANITARY SEWER, STORM DRAIN, UNDERGROUND ELECTRIC LINE), not a device, unless it names a device and doesn't end with the line; its marks on the plan are that line's labels",
+   "words": [
+    "LINE",
+    "LINES",
+    "SEWER",
+    "STORM",
+    "CONTOUR",
+    "EASEMENT",
+    "SETBACK",
+    "FENCE",
+    "SWALE",
+    "DITCH"
+   ]
+  },
+  "devices.line_key_device_phrases": {
+   "source": "trade practice (Q6596): a legend row with one of these phrases is a device's though it has a line word (a LINE VOLTAGE dimmer, an IN-LINE fan)",
+   "words": [
+    "LINE VOLTAGE",
+    "IN LINE",
+    "IN-LINE",
+    "INLINE"
+   ]
+  },
   "devices.legend_row_words": {
    "source": "trade practice: the words a legend row describing a device of a kind (value) has; a kind not listed takes any row (moved from propfill.rs `row_fits`)",
    "groups": [
@@ -1226,6 +1451,30 @@
     ]
    ]
   },
+  "equipment.air_unit_kinds": {
+   "source": "trade practice: the kinds of equipment that move air through ducts to air terminals (a unit's kind contains one: `fan_coil_unit`, `outdoor_air_unit`, `exhaust_fan`); a damper, a curb or a hood on the duct moves none (fix-air-terminals-unconnected)",
+   "words": [
+    "ahu",
+    "air_handl",
+    "rtu",
+    "rooftop",
+    "ptac",
+    "pthp",
+    "fan",
+    "split",
+    "outdoor_air",
+    "doas",
+    "make_up_air",
+    "energy_recovery",
+    "erv",
+    "hrv",
+    "unit_ventilator",
+    "furnace",
+    "vav",
+    "mixing_box",
+    "heat_pump"
+   ]
+  },
   "equipment.control_marks": {
    "source": "drafting practice: the marks of the controls and sensors a unit's tag labels when printed beside them (a thermostat, a humidistat, a sensor, a switch: `FCU-1 T` is the thermostat of FCU-1, not the unit) (fix-symbol-misread)",
    "words": [
@@ -1261,6 +1510,50 @@
     "SWITCHGEAR",
     "PANELBOARD",
     "SWITCHBOARD"
+   ]
+  },
+  "equipment.in_wall_mounting_words": {
+   "source": "drafting convention: the words a schedule's MOUNTING says a panel is set into its wall by (`RECESSED`, `FLUSH`); anything else hangs on the wall's face (Q6513)",
+   "words": [
+    "RECESS",
+    "FLUSH"
+   ]
+  },
+  "equipment.gear_location_phrases": {
+   "source": "drafting convention: the words a riser or one-line label, or a plan note, puts between a panel's name and the room it is in (`PANEL 'A' LOCATED IN ELEC 1120`, a label's next line `MOUNTED IN STORAGE 1104`); the longest first (Q6513)",
+   "words": [
+    "TO BE LOCATED IN",
+    "SHALL BE LOCATED IN",
+    "TO BE MOUNTED IN",
+    "SHALL BE MOUNTED IN",
+    "LOCATED IN",
+    "LOCATED AT",
+    "MOUNTED IN",
+    "MOUNTED AT",
+    "LOCATION:",
+    "LOC:",
+    "IN ROOM"
+   ]
+  },
+  "schedules.panel_location_labels": {
+   "source": "drafting convention: the header labels a panel schedule names the panel's room by (`LOCATION:`, `MOUNTED IN:`), in the order they are trusted (Q6513)",
+   "words": [
+    "LOCATION",
+    "PANEL LOCATION",
+    "LOCATED",
+    "LOCATED IN",
+    "MOUNTED IN",
+    "LOC",
+    "ROOM"
+   ]
+  },
+  "equipment.switchboard_words": {
+   "source": "drafting convention: the words that name a switchboard or switchgear on a plan's label or a schedule's header (`SWBD MDP`); the word and the tag after it label the gear (Q6437)",
+   "words": [
+    "SWITCHBOARD",
+    "SWITCHGEAR",
+    "SWBD",
+    "SWGR"
    ]
   },
   "equipment.kind_by_tag_prefix": {
@@ -1446,7 +1739,128 @@
     [
      "UNIT HEATER",
      "unit_heater"
+    ],
+    [
+     "RELIEF HOOD",
+     "relief_hood"
+    ],
+    [
+     "ROOF HOOD",
+     "relief_hood"
     ]
+   ]
+  },
+  "equipment.kind_by_row_words": {
+   "source": "drafting convention: a plumbing fixture schedule also lists the plumbing system's equipment, each row's name saying what it is (GAS WATER HEATER, EXPANSION TANK, BOOSTER PUMP); a row whose name has these words is that kind of equipment, not a fixture, the first pair whose words the name has (equip_reader.rs `scheduled`, Q6316)",
+   "pairs": [
+    [
+     "WATER HEATER",
+     "water_heater"
+    ],
+    [
+     "EXPANSION TANK",
+     "expansion_tank"
+    ],
+    [
+     "BOOSTER PUMP",
+     "pump"
+    ],
+    [
+     "CIRCULATING PUMP",
+     "pump"
+    ],
+    [
+     "CIRCULATION PUMP",
+     "pump"
+    ],
+    [
+     "RECIRCULATION PUMP",
+     "pump"
+    ],
+    [
+     "SUMP PUMP",
+     "pump"
+    ],
+    [
+     "SEWAGE EJECTOR",
+     "pump"
+    ],
+    [
+     "WATER SOFTENER",
+     "water_treatment"
+    ],
+    [
+     "STORAGE TANK",
+     "storage_tank"
+    ]
+   ]
+  },
+  "equipment.serves_generic_words": {
+   "source": "plain English: words of a room's name or a schedule's SERVES column that say nothing about which room (ROOM, AREA), not counted when a schedule row is matched to the room a unit serves (schedequip.rs `type_built`, Q6316)",
+   "words": [
+    "ROOM",
+    "AREA",
+    "SPACE",
+    "TYP",
+    "TYPICAL",
+    "THE",
+    "AND",
+    "FOR",
+    "ALL"
+   ]
+  },
+  "equipment.view_title_drafting_words": {
+   "source": "drafting convention: the words of a view's title that name the drawing, not the room it shows (MECH ENLARGED ... PLAN), not counted when a schedule row is matched to the room a unit serves (schedequip.rs `type_built`, Q6316)",
+   "words": [
+    "PLAN",
+    "PLANS",
+    "ENLARGED",
+    "VIEW",
+    "PART",
+    "PARTIAL",
+    "FLOOR",
+    "LEVEL",
+    "MECH",
+    "MECHANICAL",
+    "PLUMBING",
+    "ELECTRICAL",
+    "DETAIL",
+    "SCALE",
+    "UNIT",
+    "TYPE"
+   ]
+  },
+  "equipment.every_tag_kinds": {
+   "source": "drafting convention: a kind of equipment a schedule lists once for many units, its tag a type mark printed by every one (a relief hood over each exhaust chase), so it is built at every place a plan prints its tag, not once (schedequip.rs, Q6496)",
+   "words": [
+    "relief_hood"
+   ]
+  },
+  "mechanical.exhaust_riser_titles": {
+   "source": "drafting convention: a detail whose title has these words draws a typical exhaust riser (TYPICAL EXHAUST RISER, 12 FANS): the fans' ducts stacked in a chase up to the roof terminal it tags (exhaustrisers.rs, Q6496)",
+   "rules": [
+    {
+     "value": "exhaust_riser",
+     "any": [
+      "EXHAUST"
+     ],
+     "all": [
+      "RISER"
+     ]
+    }
+   ]
+  },
+  "mechanical.continuous_exhaust_duct_notes": {
+   "source": "code and specification language: a note with these words requires each exhaust fan's duct to be continuous from the fan to the outside (EACH EXHAUST DUCT TO RUN CONTINUOUS TO THE OUTSIDE), so a riser carries one duct per fan, never a shared one (exhaustrisers.rs, Q6496)",
+   "rules": [
+    {
+     "value": "continuous",
+     "all": [
+      "EXHAUST",
+      "DUCT",
+      "CONTINUOUS"
+     ]
+    }
    ]
   },
   "equipment.load_words": {
@@ -1511,7 +1925,7 @@
    ]
   },
   "equipment.names": {
-   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`)",
+   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`; COMPRESSOR, CONDENSER: the refrigeration units a note points at, plural too, Q6365)",
    "words": [
     "PNLBD",
     "PNL",
@@ -1552,7 +1966,9 @@
     "PTAC",
     "EWC",
     "WH",
-    "EF"
+    "EF",
+    "COMPRESSOR",
+    "CONDENSER"
    ]
   },
   "equipment.off_floor_mounting_words": {
@@ -2031,6 +2447,85 @@
     "EXIT LIGHT"
    ]
   },
+  "fp.head_kinds": {
+   "source": "Words of a sprinkler head legend or schedule row and the head kind they name, first match wins (NFPA 13 head orientations: sidewall, upright, pendent; concealed and recessed heads hang pendent; Q6497).",
+   "pairs": [
+    [
+     "SIDEWALL",
+     "sprinkler_sidewall"
+    ],
+    [
+     "SIDE WALL",
+     "sprinkler_sidewall"
+    ],
+    [
+     "UPRIGHT",
+     "sprinkler_upright"
+    ],
+    [
+     "PENDENT",
+     "sprinkler_pendent"
+    ],
+    [
+     "PENDANT",
+     "sprinkler_pendent"
+    ],
+    [
+     "CONCEALED",
+     "sprinkler_pendent"
+    ],
+    [
+     "RECESSED",
+     "sprinkler_pendent"
+    ]
+   ]
+  },
+  "fp.head_table_titles": {
+   "source": "Titles of the head table a sprinkler shop drawing counts its heads in (drafting convention; Q6497).",
+   "words": [
+    "HEAD SCHEDULE",
+    "SPRINKLER SCHEDULE",
+    "HEAD TABLE",
+    "HEAD COUNT",
+    "HEAD SUMMARY",
+    "HEAD LIST"
+   ]
+  },
+  "fp.page_words": {
+   "source": "Words a page's own text names fire protection by: a page that prints none is no sprinkler plan (trade vocabulary; Q6497).",
+   "words": [
+    "SPRINKLER",
+    "FIRE PROTECTION",
+    "FIRE SUPPRESSION"
+   ]
+  },
+  "fp.quantity_headers": {
+   "source": "Column headings of a table's count column (drafting convention; Q6497).",
+   "words": [
+    "QTY",
+    "QUANTITY",
+    "COUNT",
+    "NO. REQ",
+    "TOTAL"
+   ]
+  },
+  "fp.shop_drawing_path_words": {
+   "source": "Words in a submittal file's or folder's name that make it a fire protection submittal whose pages are read for sprinkler shop drawings (trade vocabulary and the CSI MasterFormat 21 13 13 wet-pipe sprinkler section number; Q6497).",
+   "words": [
+    "SPRINKLER",
+    "FIRE PROTECTION",
+    "FIRE SUPPRESSION",
+    "211313",
+    "21 13 13",
+    "21-13-13"
+   ]
+  },
+  "fp.submittal_folder_words": {
+   "source": "Words in the name of a folder beside the prints that make it the project's submittals (looked in for sprinkler shop drawings when the job is given none; Q6497).",
+   "words": [
+    "SUBMITTAL"
+   ]
+  },
   "framing.layout_heading_words": {
    "source": "(drafting convention: the words of a joist or floor framing layout's heading that names the floor it is for, `2ND FLOOR FRAMING`, `LEVEL 3 JOIST LAYOUT`; Q6400)",
    "words": [
@@ -2226,6 +2721,22 @@
     "COFFEE"
    ]
   },
+  "notes.appliance_kinds": {
+   "source": "trade practice: which appliance a mounting-height note's words or a panel schedule's load description name (value: the appliance; a cooktop, oven or stove is on the range's circuit; a range hood or its exhaust is its own); the first row that matches decides, whole words only. A typical room's appliance note goes to the receptacle whose circuit's schedule line names that appliance, never to one whose line names another (Q6344, guided.rs `typical_heights`)",
+   "rules": [
+    {"value": "microwave", "any": ["MICROWAVE", "MICRO WAVE", "MW"]},
+    {"value": "range_hood", "any": ["RANGE EXHAUST", "RANGE HOOD", "EXHAUST HOOD", "HOOD"]},
+    {"value": "range", "any": ["RANGE", "COOKTOP", "COOK TOP", "OVEN", "STOVE"], "none": ["EXHAUST", "HOOD", "FAN"]},
+    {"value": "refrigerator", "any": ["REFRIGERATOR", "FRIDGE", "REFRIG"]},
+    {"value": "dishwasher", "any": ["DISHWASHER", "DISH WASHER", "DW"]},
+    {"value": "disposal", "any": ["DISPOSAL", "DISPOSER", "GARBAGE DISPOSAL"]},
+    {"value": "washer", "any": ["WASHER", "CLOTHES WASHER", "WASHING MACHINE"], "none": ["DISHWASHER", "DISH"]},
+    {"value": "dryer", "any": ["DRYER", "CLOTHES DRYER"], "none": ["HAND DRYER", "HAIR DRYER"]},
+    {"value": "water_heater", "any": ["WATER HEATER"]},
+    {"value": "ice_maker", "any": ["ICE MAKER", "ICEMAKER", "ICE MACHINE"]},
+    {"value": "coffee", "any": ["COFFEE", "COFFEE MAKER", "COFFEE BREWER"]}
+   ]
+  },
   "notes.defer_to_architecture": {
    "source": "drafting convention: an electrical sheet's numbered note that sends its devices' locations or mounting heights to the architecture's drawings (`SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND HEIGHTS`, `MOUNT AT THE HEIGHT SHOWN ON THE ARCHITECTURAL ELEVATIONS`): value is what it sends there (both, heights, locations); the first row that matches decides, a row matching when the note contains one of `any` and all of `all` (Q6244, archauthority.rs)",
    "rules": [
@@ -2280,6 +2791,12 @@
     }
    ]
   },
+  "fire_alarm.counted_kinds": {"source": "trade practice and NFPA 72 (Q6495): the devices (devices.legend_kind values) whose shop drawing legend quantity is checked against the design plans' count (devices the design plans mark by a kind the legend rule reads; detectors are often marked by letters only, so they are not counted)", "words": ["pull_station"]},
+  "fire_alarm.mount_words": {"source": "trade practice and NFPA 72 (Q6495): how a legend row's description or mounting column says an appliance is mounted (NFPA 72 18.5.5: wall-mounted visible appliances 80-96 in AFF; ceiling-mounted at the ceiling)", "rules": [{"value": "ceiling", "any": ["CEILING", "CENTER OF TILE"]}, {"value": "wall", "any": ["WALL"]}]},
+  "fire_alarm.notification_tags": {"source": "trade practice and NFPA 72 (Q6495): the notification appliance a shop drawing legend row's description names (value: the mark it is built as); the first row that matches decides", "rules": [{"value": "HORN/STROBE", "all": ["HORN", "STROBE"]}, {"value": "SPEAKER/STROBE", "all": ["SPEAKER", "STROBE"]}, {"value": "CHIME/STROBE", "all": ["CHIME", "STROBE"]}, {"value": "STROBE", "any": ["STROBE", "VISIBLE APPLIANCE", "VISUAL APPLIANCE"]}, {"value": "HORN", "any": ["HORN"]}, {"value": "SPEAKER", "any": ["SPEAKER"]}, {"value": "CHIME", "any": ["CHIME"]}, {"value": "BELL", "any": ["BELL"], "none": ["DOORBELL"]}]},
+  "fire_alarm.outdoor_words": {"source": "trade practice and NFPA 72 (Q6495): a legend row for a weatherproof (outdoor or wet-location) appliance", "words": ["OUTDOOR", "WEATHERPROOF", "WEATHER PROOF", "WET LOCATION"]},
+  "fire_alarm.shop_document_words": {"source": "trade practice and NFPA 72 (Q6495): the words that make a submittal a fire alarm document whose plans' labelled notification appliances are read (an address beside a candela)", "words": ["FIRE ALARM"]},
+  "fire_alarm.weatherproof_marks": {"source": "trade practice and NFPA 72 (Q6495): the mark a shop drawing prints by a weatherproof device's symbol (its legend's abbreviations)", "words": ["WP", "W/P"]},
   "notes.reference_only": {"source": "drafting convention: a sheet's note that says its layout or its device spots are for reference only or diagrammatic (`LOW VOLTAGE LAYOUT IS FOR REFERENCE ONLY`, `DEVICE LOCATIONS ARE DIAGRAMMATIC`): its spots are not measured against (Q6262, validate_present.rs); a row matches when the note contains one of `any`, all of `all` and none of `none` (a background drawn for reference, raceways drawn diagrammatically are no such note)", "rules": [{"value": "locations", "any": ["REFERENCE ONLY", "FOR REFERENCE PURPOSES"], "all": [], "none": ["BACKGROUND", "XREF", "UNDERLAY"]}, {"value": "locations", "any": ["DIAGRAMMATIC", "SCHEMATIC"], "all": ["LOCATION"], "none": ["CONDUIT", "RACEWAY", "WIRING", "PIPING", "DUCT"]}]},
   "openings.window_mark_prefixes": {"source": "drafting convention: a window's tag on a floor plan is its type letter and a number (`W5`, `W-2`, `W3A`); a mark so by a gap in an outside wall is a window there when the set has no window schedule to read the marks from (Q6293, wallgen.rs `is_window_mark`)", "words": ["W", "WIN", "WDW"]},   "openings.storefront_mark_prefixes": { "source": "drafting convention: a storefront's tag on a floor plan is its type letters and a number (`SF1`, `SF-2`); it is a window mark whose window is a storefront assembly (Q6311, wallgen.rs `storefront_mark`)", "words": ["SF"]}, "openings.storefront_words": {"source": "door and window schedules and legends: a type or frame of these words is a storefront or curtain-wall assembly, from the floor up when the schedule gives no sill (Q6311, wallgen.rs `storefront_mark`)", "words": ["STOREFRONT", "STORE FRONT", "CURTAIN WALL", "CURTAINWALL"]}, "pipes.drain_systems": {
    "source": "The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to. (trade practice; moved from ugplan.rs `DRAINS`)",
@@ -2462,6 +2979,47 @@
     "SQM"
    ]
   },
+  "rooms.area_label_words": {
+   "source": "drafting convention: words of a plan's label for an area that is not a room: a roof or canopy area (LOW ROOF, CANOPY ABOVE, ROOF BELOW), an awning, an overhang, a skylight, a soffit, or what is above or below the plan (OPEN TO BELOW) (perceive/geometry.rs `note_like`). Such a label names no room.",
+   "words": [
+    "ROOF",
+    "ROOFS",
+    "ROOFING",
+    "CANOPY",
+    "CANOPIES",
+    "AWNING",
+    "AWNINGS",
+    "OVERHANG",
+    "OVERHANGS",
+    "PARAPET",
+    "PARAPETS",
+    "SKYLIGHT",
+    "SKYLIGHTS",
+    "COCHERE",
+    "SOFFIT",
+    "ABOVE",
+    "BELOW",
+    "ABV",
+    "BLW"
+   ]
+  },
+  "rooms.load_note_words": {
+   "source": "structural drafting convention: the units and words of a design-load, wind or rating note (ROOF LIVE LOAD 20 PSF, WIND 115 MPH, 3000 PSI): a note's string, never a room's name (perceive/geometry.rs `note_like`).",
+   "words": [
+    "PSF",
+    "PSI",
+    "PLF",
+    "KSF",
+    "KSI",
+    "PCF",
+    "MPH",
+    "KIP",
+    "KIPS",
+    "LBS",
+    "LOAD",
+    "LOADS"
+   ]
+  },
   "rooms.corridor_words": {
    "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
    "words": [
@@ -2483,6 +3041,13 @@
     "GEN",
     "MDP",
     "CDP"
+   ]
+  },
+  "rooms.equipment_number_prefixes": {
+   "source": "(drafting convention: the letters of an equipment or fixture mark printed under its name, `COOLER` over `EQ15`; such a mark numbers no room, whatever its shape. With equipment.marks.)",
+   "words": [
+    "EQ",
+    "EQUIP"
    ]
   },
   "rooms.equipment_room_names": {
@@ -2607,7 +3172,41 @@
     "LIBRARY",
     "CLASSROOM",
     "BOH",
-    "MEP"
+    "MEP",
+    "RR",
+    "WC",
+    "GARAGE",
+    "SALES",
+    "PREP",
+    "CAFE",
+    "CAFETERIA",
+    "GYM",
+    "WAITING",
+    "EXAM",
+    "NURSE",
+    "LABORATORY",
+    "STUDY",
+    "FOYER",
+    "DEN",
+    "FAMILY",
+    "DRESSING",
+    "TELECOM",
+    "COMM",
+    "RECEIVING",
+    "SHIPPING",
+    "WAREHOUSE",
+    "CHAPEL",
+    "CLINIC",
+    "PHARMACY",
+    "NURSERY",
+    "CLASS",
+    "SCULLERY",
+    "ATRIUM",
+    "GALLERY",
+    "AUDITORIUM",
+    "LOADING",
+    "SPA",
+    "SAUNA"
    ]
   },
   "rooms.not_room_words": {
@@ -2615,6 +3214,7 @@
    "words": [
     "1 HOUR FIRE RATED PARTITION",
     "PARTITION",
+    "BARRIER",
     "SCALE",
     "SHEET",
     "DRAWN",
@@ -2855,6 +3455,19 @@
     "FIXTURE SCHEDULE"
    ]
   },
+  "schedules.air_device_titles": {
+   "source": "drafting convention: the words of an air device schedule's title (`GRILLE, REGISTER, AND DIFFUSER SCHEDULE`, `AIR DEVICE SCHEDULE`): each diffuser, register and grille type by its mark (fix-air-terminals-unconnected)",
+   "words": [
+    "AIR DEVICE",
+    "AIR DISTRIBUTION",
+    "AIR TERMINAL",
+    "AIR OUTLET",
+    "AIR INLET",
+    "DIFFUSER",
+    "GRILLE",
+    "REGISTER"
+   ]
+  },
   "schedules.luminaire_titles": {
    "source": "drafting convention: the titles of a luminaire schedule (moved from guided.rs); read on any trade's sheet (fix-lum-fixture-schedule-not-read)",
    "words": [
@@ -2874,12 +3487,45 @@
    ]
   },
   "schedules.not_luminaire_title_words": {
-   "source": "drafting convention: a schedule title naming another trade's or another table's fixtures is no luminaire schedule (fix-lum-fixture-schedule-not-read)",
+   "source": "drafting convention: a schedule title naming another trade's or another table's fixtures is no luminaire schedule, nor is the table of a schedule's notes (LIGHTING FIXTURE SCHEDULE NOTES) (fix-lum-fixture-schedule-not-read, fix-fixture-schedule-type-column-unread)",
    "words": [
     "PLUMBING",
     "CASEWORK",
     "PANEL",
-    "CONTROL"
+    "CONTROL",
+    "NOTES"
+   ]
+  },
+  "schedules.photometric_table_words": {
+   "source": "format vocabulary of lighting calculation programs: a luminaire table whose title or a heading has one of these is the calculation's list of the luminaires it calculated with (its labels are the calculation's names), never the designer's fixture schedule, so it adds no types when the set has a schedule (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "LLF",
+    "LIGHT LOSS FACTOR",
+    "LOSS FACTOR",
+    "ARRANGEMENT",
+    "FILENAME",
+    "IES FILE",
+    "PHOTOMETRIC",
+    "CALCULATION",
+    "LUM LUMENS",
+    "LUM WATTS"
+   ]
+  },
+  "schedules.photometric_sheet_words": {
+   "source": "format vocabulary of lighting calculation programs: a sheet printing one of these (spaces aside) shows a calculation's results (a statistics table's ratios, its summary), so its luminaire table titled without fixtures is the calculation's (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "AVG/MIN",
+    "MAX/MIN",
+    "AVG:MIN",
+    "MAX:MIN",
+    "CALCULATION SUMMARY"
+   ]
+  },
+  "schedules.designed_schedule_title_words": {
+   "source": "drafting convention: a luminaire schedule title naming fixtures (LIGHT FIXTURE SCHEDULE) is the designer's, even on a sheet of calculation results (fix-fixture-schedule-wrong-table)",
+   "words": [
+    "FIXTURE",
+    "FIXTURES"
    ]
   },
   "schedules.title_reference_words": {
@@ -3261,6 +3907,20 @@
     "SPECIFICATION"
    ]
   },
+  "sheets.legend_notes_heading_words": {
+   "source": "A heading word of a legend, a notes list, an abbreviation list or a specification printed on a sheet (`ELECTRICAL SYMBOL LEGEND`, `GENERAL NOTES`): a sheet of these with no plan view is a legend/notes sheet whatever its title or number says (Q6361). (drafting convention: general, no job's title)",
+   "words": [
+    "LEGEND",
+    "LEGENDS",
+    "SYMBOL",
+    "SYMBOLS",
+    "ABBREVIATION",
+    "ABBREVIATIONS",
+    "NOTES",
+    "SPECIFICATION",
+    "SPECIFICATIONS"
+   ]
+  },
   "sheets.floor_plan_title_words": {
    "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
    "words": [
@@ -3268,6 +3928,29 @@
     "FLOOR PLANS",
     "MEZZANINE PLAN",
     "MEZZ PLAN"
+   ]
+  },
+  "sheets.not_floor_plan_title_words": {
+   "source": "An architectural plan title that names another kind of plan than the level's floor plan: a level shown only by these is not built from them (Q6517). (drafting convention: general, no job's title)",
+   "words": [
+    "FINISH",
+    "FINISHES",
+    "FURNITURE",
+    "FURNISHING",
+    "FURNISHINGS",
+    "SIGNAGE",
+    "LIFE SAFETY",
+    "CODE",
+    "EGRESS",
+    "DEMOLITION",
+    "DEMO",
+    "KEY PLAN",
+    "EQUIPMENT PLAN",
+    "REFLECTED CEILING",
+    "CEILING PLAN",
+    "RCP",
+    "ROOF PLAN",
+    "FLOOR PATTERN"
    ]
   },
   "sheets.import_discipline_prefix": {
@@ -3389,6 +4072,7 @@
     "AMPS",
     "B",
     "BKR",
+    "BRKR",
     "C",
     "CKT",
     "CO",
@@ -3474,6 +4158,60 @@
     "C",
     "S",
     "T"
+   ]
+  },
+  "sheets.not_storey_plan_disciplines": {
+   "source": "(drafting convention, Q6582: the sheet-number disciplines whose plans are never a storey's floor plan the building is built from: general (cover, code, project information) and structural (foundation and framing plans, drawn over the floor plans); a plan of theirs with no scale is left out with a finding, never asked for its scale)",
+   "words": [
+    "G",
+    "S"
+   ]
+  },
+  "sheets.structural_plan_title_words": {
+   "source": "(drafting convention, Q6582: the words of a structural plan's title (a foundation, framing or truss plan): drawn over a storey's floor plan for its structure, never the plan the storey is built from)",
+   "words": [
+    "FRAMING",
+    "TRUSS",
+    "TRUSSES",
+    "JOIST",
+    "JOISTS",
+    "FOUNDATION",
+    "FOOTING",
+    "FOOTINGS",
+    "REBAR"
+   ]
+  },
+  "sheets.address_words": {
+   "source": "(postal convention, Q6582: the street-type words of a street address (123 MAIN ST, SUITE 200): a title-block line that is an address is the firm's or the project's, never a sheet title)",
+   "words": [
+    "STREET",
+    "ST",
+    "AVENUE",
+    "AVE",
+    "ROAD",
+    "RD",
+    "BOULEVARD",
+    "BLVD",
+    "DRIVE",
+    "DR",
+    "LANE",
+    "LN",
+    "PARKWAY",
+    "PKWY",
+    "HIGHWAY",
+    "HWY",
+    "FREEWAY",
+    "FWY",
+    "COURT",
+    "CT",
+    "PLACE",
+    "PL",
+    "CIRCLE",
+    "CIR",
+    "TRAIL",
+    "WAY",
+    "SUITE",
+    "STE"
    ]
   },
   "sheets.not_plan_view_words": {
@@ -4296,6 +5034,23 @@
     "VTAC"
    ]
   },
+  "units.room_list_joiners": {
+   "source": "plain English: a word that joins the room numbers a view title lists (`ROOMS 201, 301 AND 401`; fix-room-enlarged-view-copied-up)",
+   "words": [
+    "AND"
+   ]
+  },
+  "units.room_number_lead_words": {
+   "source": "drafting convention: a word a view title puts before a room's number (`STORAGE ROOM 201`, `RM 201`, `NO. 201`); a number after `#` is one too (fix-room-enlarged-view-copied-up)",
+   "words": [
+    "ROOM",
+    "ROOMS",
+    "RM",
+    "RMS",
+    "NO",
+    "NOS"
+   ]
+  },
   "units.type_word_aliases": {
    "source": "trade practice: a room type's word and the word it is written as (QUEEN as Q, ACCESSIBLE as ADA) (moved from guided.rs `type_words`)",
    "pairs": [
@@ -4329,6 +5084,13 @@
     "2BR",
     "3BR",
     "EFFICIENCY"
+   ]
+  },
+  "units.typical_title_words": {
+   "source": "drafting convention: a view title with one of these words is a typical one, for every room of the type it names; without it a title naming room numbers is those rooms' only (fix-room-enlarged-view-copied-up)",
+   "words": [
+    "TYPICAL",
+    "TYP"
    ]
   },
   "units.typical_view_words": {

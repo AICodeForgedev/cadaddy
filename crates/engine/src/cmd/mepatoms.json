@@ -225,8 +225,27 @@
       "putty_item": "Putty pad, listed, for an outlet box",
       "putty_source": "IBC 714.4.2 exception 1.4: boxes on opposite sides of a fire-resistance-rated wall closer than 24 in, where neither can move that far on its wall, are both protected by listed putty pads",
       "max_move_in": 32.0,
+      "max_vertical_in": null,
+      "vertical_source": "IBC 714.4.2 exception 1.1 states a horizontal separation only: two boxes hosted in one rated wall on its opposite faces count at any heights in it (one stud cavity runs the wall's height); a box counts only where that wall stands at its height, never a device above or below the wall whose plan point lies on it (a roof device over a top-floor wall). The rule's alternative, a vertical reach in inches (0: their heights overlap), is kept for a job whose documents limit it",
       "keep_kinds": ["switch"],
-      "keep_source": "a switch's spot is where its door's latch side, the bed or the counter it serves puts it: the field keeps it and moves the box on the other face, else pads both (trade practice; the designed device location wins over a move)"
+      "keep_source": "a switch's spot is where its door's latch side, the bed or the counter it serves puts it: the field keeps it and moves the box on the other face, else pads both (trade practice; the designed device location wins over a move)",
+      "remedy": "separate",
+      "remedy_source": "the usual remedy where no project rule, specification or note names one (trade practice): the boxes separated by distance, one moved to the next stud bays; the alternative, listed putty pads on both boxes at the drawn positions (IBC 714.4.2 exception 1.4), is the project's choice (project rule clearance/rated_wall_boxes: putty pads)",
+      "rule_domain": "clearance",
+      "rule_key": "rated_wall_boxes",
+      "putty_words": ["PUTTY PAD", "PUTTY-PAD", "BOX INSERT", "BOX PAD", "INTUMESCENT PAD", "MOLDABLE PUTTY", "MOLDABLE PAD", "FIRESTOP PAD", "FIRE STOP PAD"],
+      "separate_words": ["SEPARATE", "SEPARATION", "APART", "DISTANCE", "OFFSET", "STAGGER", "MOVE"],
+      "box_words": ["BOX", "OUTLET", "DEVICE"],
+      "pair_words": ["OPPOSITE", "BACK TO BACK", "BACK-TO-BACK", "BOTH SIDES", "EACH SIDE"],
+      "not_words": ["NOT PERMITTED", "NOT ALLOWED", "NOT ACCEPTABLE", "NOT BE USED", "PROHIBITED", "DO NOT USE", "SHALL NOT USE"],
+      "putty_choice_source": "IBC 714.4.2 exception 1.4: listed putty pads on both boxes of a back-to-back pair in a fire-resistance-rated wall keep the devices where the documents put them (the remedy the project names)",
+      "back_words": ["BACK TO BACK", "BACK-TO-BACK", "BACK OF EACH OTHER", "SAME STUD SPACE", "SAME STUD CAVITY", "SAME STUD BAY"],
+      "forbid_words": ["NOT PERMITTED", "NOT ALLOWED", "NOT ACCEPTABLE", "PROHIBITED", "DO NOT", "SHALL NOT", "NOT BE INSTALLED", "NOT BE MOUNTED", "NOT BE LOCATED", "NOT BE PLACED", "NEVER", "AVOID", "NO BACK"],
+      "allow_words": ["PERMITTED", "ALLOWED", "ACCEPTABLE"],
+      "fire_words": ["FIRE-RATED", "FIRE RATED", "FIRE-RESISTANCE", "FIRE RESISTANCE", "FIRE-RESISTIVE", "FIRE RESISTIVE", "HOUR RATED", "HR RATED", "RATED WALL", "RATED PARTITION"],
+      "any_wall_words": ["ANY WALL", "ALL WALLS", "ANY PARTITION", "ALL PARTITIONS", "NON-RATED", "NONRATED", "UNRATED", "DEMISING", "EVERY WALL"],
+      "forbid_rule_key": "back_to_back_boxes",
+      "forbid_source": "the documents forbid back-to-back devices: every pair of boxes on opposite faces of one wall closer than the rule's distance is separated, one box moved to the next stud bays (the usual move), else farther along its wall or the box that would keep its spot (trade practice); listed putty pads are the remedy only where the documents allow back-to-back boxes and the wall is fire-rated (IBC 714.4.2 exception 1.4)"
     },
     "stud_bay_in": 16.0,
     "stud_bay_source": "the next stud bays: a box moved for the field goes no farther than two 16 in o.c. bays (past that the putty pads keep both where they are), never into a bay another box on that face stands in, nor across an opening or into a wall that meets its own, nor behind fixed furniture (trade practice)"
@@ -268,6 +287,7 @@
   },
   "colors_source": "NEC 200.6 (neutral white or gray), 250.119 (ground green); phase colours: the trade's usual code (company default; NEC 210.5(C) asks the code be posted)",
   "phase_source": "panel circuit numbering: circuits 1-2 on phase A, 3-4 on B, 5-6 on C (standard panelboard bussing)",
+  "phase_single_source": "panel circuit numbering on a single-phase panel (its schedule's volts/phase: 1PH, or a 120/240 V system): circuits 1-2 on phase A, 3-4 on B, then A and B again; it has no phase C (standard panelboard bussing, NEC 408.3(E))",
   "offset_max_ft": 1.0,
   "joint_tol_in": 1.0,
   "one_raceway_source": "NEC 300.3(B): all conductors of one circuit in the same raceway; trade practice: a circuit's runs that leave a box or run one way together share one conduit to where they part, and a junction box joins them there (NEC 314.16, 4\" square); so a stretch the routing laid twice for one circuit is one raceway with one set of the circuit's conductors",
@@ -277,6 +297,8 @@
   "panel_reach_ft": 5.0,
   "routed_touch_in": 6.0,
   "routed_touch_source": "a routed branch run (conduit.route) ends on the box or panel it serves: its end lands in the box whose entry, or on the panel whose can, is within 6 in of it, whatever circuit the box is on (a homerun group's taps meet in its lead's box), the panel before a box; never back in the box its other end left (company default: the route's own landing, NEC 300.12: a raceway continuous between cabinets, boxes and fittings)",
+  "knockout_spacing_in": 1.5,
+  "knockout_source": "trade practice: the raceways entering one box each come in by its own knockout, side by side along its top, 1-1/2 in apart centre to centre (a 3/4 in raceway's outside and the conduit clearance between them), the one on the side it comes from; never two down one line",
   "feeder_makeup_ft": 3.0,
   "feeder_makeup_source": "3 ft of each feeder conductor at each gear it lands on: from where its raceway enters, through the gutter's bending space to the lug (company default; NEC 312.6)",
   "feeder_conductors": {
@@ -294,5 +316,31 @@
       { "words": ["PENDANT", "SURFACE", "CEILING", "WALL", "SCONCE", "STEM", "CHAIN", "CANOPY", "AFF"], "box": true, "source": "a surface, wall or pendant luminaire hangs on an outlet box (NEC 314.27(A))" }
     ],
     "default_source": "the trade's usual 4 in octagon at a luminaire where neither its schedule nor its submittal says how it mounts (company default)"
+  },
+  "splices": {
+    "item": "Wire connector, twist-on",
+    "large_item": "Wire connector, insulated multi-tap",
+    "connectors": [
+      { "size": "small", "max": { "18": 4, "16": 4, "14": 3, "12": 2 } },
+      { "size": "medium", "max": { "18": 5, "16": 5, "14": 4, "12": 3, "10": 2 } },
+      { "size": "large", "max": { "18": 6, "16": 6, "14": 5, "12": 4, "10": 3, "8": 1 } },
+      { "size": "extra large", "max": { "18": 8, "16": 7, "14": 6, "12": 5, "10": 4, "8": 2 } }
+    ],
+    "connectors_source": "company default from the twist-on makers' published combination charts (UL 486C: a connector is used only with the conductor combinations it is listed for): a splice takes the smallest connector whose listed range holds its conductors (a mix fills each size's share of the range); past the largest twist-on the field joins the bundle in two with a jumper, and conductors larger than any twist-on takes go in an insulated multi-tap connector",
+    "lead_size": "18",
+    "lead_source": "trade practice: a luminaire's or a fan's leads (#18 fixture wire unless its submittal says otherwise, NEC 402.6 and 410.117) are spliced to the circuit in its box; a 4 in octagon or square box on a luminaire is its outlet box",
+    "terminal_families": ["receptacle", "device", "floor"],
+    "switch_families": ["switch"],
+    "lead_families": ["luminaire", "fan"],
+    "bond_materials": ["steel"],
+    "bond_source": "NEC 250.148: every equipment grounding conductor in a box is spliced together, with a pigtail to the device's grounding terminal and, in a metal box, a bonding jumper to the box (250.148(C)); a nonmetallic box takes none (250.148(D)); a single ground that lands on the one thing it bonds needs no splice",
+    "methods": {
+      "raceway": { "feed_through": "pigtail" },
+      "MC": { "feed_through": "pigtail" },
+      "AC": { "feed_through": "pigtail" },
+      "NM": { "feed_through": "pigtail" }
+    },
+    "methods_source": "trade practice in commercial and lodging work: where a circuit continues through a device's box its conductors are spliced, with a pigtail to the device, so taking a device out never opens the circuit downstream (NEC 300.13(B) requires it for a multiwire circuit's grounded conductor); where a circuit ends at a device its conductors land on its terminals; a switch box's unused grounded conductor (NEC 404.2(C)) is capped; the alternative, feeding through a receptacle's second pair of terminals (common in one-family NM work), is a project rule: set the method's feed_through to device",
+    "source": "splices are counted per box from the conductors in it (company default; NEC 110.14(B): splices made with listed devices): at each box where a circuit continues or ends, its hots, its grounded conductor and its switch leg are spliced where two or more meet, the grounds bundled with pigtails to the devices and to a metal box, and each luminaire's leads spliced to what feeds it"
   }
 }

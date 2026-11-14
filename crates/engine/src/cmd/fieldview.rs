@@ -248,6 +248,15 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
     // Elements: what model.build made (walls, doors, windows, devices, stairs, MEP terminals and
     // equipment) as boxes, and the MEP runs from the spec as centrelines.
     let kinds: BTreeMap<String, MepKind> = sp.mep.systems.iter().map(|sy| (sy.name.clone(), sy.kind)).collect();
+    // A pipe's trade by what it carries (Q6492): its system's name and layer.
+    let pipe_trade = |system: &str| {
+        let layer = sp.mep.systems.iter().find(|sy| sy.name == system).map_or("", |sy| sy.layer.as_str());
+        match cadaddy_walk3d::pipeservice::pipe_trade(system, layer) {
+            "mechanical" => "mech",
+            "fire" => "fire",
+            _ => "plumb",
+        }
+    };
     for e in d.model.iter() {
         if pkg.elements.len() >= MAX_ELEMENTS {
             break;
@@ -283,6 +292,7 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
         let Some((lo, hi)) = mesh_box(e) else { continue };
         let trade = match kind.as_str() {
             "wall" | "door" | "window" | "stair" => "arch",
+            "pipe" => pipe_trade(&system),
             _ => trade_of(&kind, &system),
         };
         let title = tag_value(&tags, "tag").map(|t| format!(" {t}")).unwrap_or_default();
@@ -354,7 +364,7 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
             let r = w * 0.5;
             pkg.elements.push(FieldElement {
                 id: format!("run:{}:{ri}:{si}", run.system),
-                trade: trade_of(kind, &run.system).into(),
+                trade: if kind == "pipe" { pipe_trade(&run.system) } else { trade_of(kind, &run.system) }.into(),
                 kind: kind.into(),
                 level: level.name.clone(),
                 room: String::new(),

@@ -550,6 +550,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "ui.gpu" => {
+            // `{"lose": true}`: lose the graphics device as a driver reset or a GPU out of memory
+            // would, to test the recovery (the window is made again on a new device).
+            if params.get("lose").and_then(Value::as_bool) == Some(true) {
+                return Some(Ok(crate::devicelost::lose_device(app)));
+            }
             // The 3D views' GPU limits; forced ones for tests and machines that misreport.
             if params.get("reset").and_then(Value::as_bool) == Some(true) {
                 app.gpu_caps = app.wgpu_rs.as_ref().map_or_else(crate::gpucaps::GpuCaps::default, crate::gpucaps::GpuCaps::detect);
@@ -558,7 +563,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             app.canvas.shade.reset_gpu();
             if let Some(w) = app.walk.as_mut() {
-                w.gpu = None;
+                // (Uploaded again too: a new renderer starts empty.)
+                w.reset_gpu();
             }
             Ok(app.gpu_caps.json())
         }
@@ -1482,6 +1488,9 @@ pub fn default_shortcuts() -> Vec<(egui::KeyboardShortcut, &'static str)> {
         (sc(Modifiers::NONE, Key::F10), "polar"),
         (sc(Modifiers::NONE, Key::F11), "otrack"),
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
+        // A print set's sheets, one at a time (`cadaddy_engine::sheetnav`).
+        (sc(Modifiers::NONE, Key::PageDown), "sheet.next"),
+        (sc(Modifiers::NONE, Key::PageUp), "sheet.previous"),
     ]
 }
 
@@ -1511,6 +1520,10 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
     });
     for id in fire {
         let id = id.as_str();
+        // Page Up and Page Down step through a print set's sheets; Walk moves with them.
+        if id.starts_with("sheet.") && (app.walk.is_some() || app.session.print_sheets().is_empty()) {
+            continue;
+        }
         // F1 over a menu item or toolbar/ribbon button: that command's help page.
         if id == "ui.dialog.commands"
             && let Some(hovered) = hovered_command(ctx)
@@ -1526,8 +1539,11 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
             continue;
         }
         // Toggles run transparently (they don't cancel the active command).
-        let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
-        if transparent || id.starts_with("ui.") {
+        let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle", "sheet.next", "sheet.previous"].contains(&id);
+        if id == "sheet.next" || id == "sheet.previous" {
+            // Off the UI thread when the sheet is out of memory (Q6418).
+            crate::sheetload::run_sheet(app, id, json!({}));
+        } else if transparent || id.starts_with("ui.") {
             run_transparent(app, id);
         } else {
             activate(app, id);
@@ -1750,5 +1766,70 @@ mod units_dialog_tests {
         assert!(app.ui.dialog.is_none(), "JSON calls never open dialogs");
         let h = &app.session.doc().unwrap().header;
         assert_eq!((h.i64("LUNITS", 0), h.i64("LUPREC", 0), h.i64("INSUNITS", 0)), (4, 3, 4));
+    }
+}
+
+#[cfg(test)]
+mod menu_path_tests {
+    use cadaddy_engine::Session;
+
+    use super::{Entry, UI_COMMANDS, tree};
+    use crate::{CadApp, Services, ribbon};
+
+    /// Whether the menu tree holds `id` at `path` (its top menu, its submenus, its own label).
+    fn on_menu(menus: &[(String, Vec<Entry>)], path: &[&str], id: &str) -> bool {
+        let Some((top, rest)) = path.split_first() else { return false };
+        let Some(mut entries) = menus.iter().find(|(m, _)| m == top).map(|(_, e)| e.as_slice()) else { return false };
+        let Some((last, subs)) = rest.split_last() else { return false };
+        for seg in subs {
+            let Some(children) = entries.iter().find_map(|e| match e {
+                Entry::Sub { label, children } if label == seg => Some(children.as_slice()),
+                _ => None,
+            }) else {
+                return false;
+            };
+            entries = children;
+        }
+        entries.iter().any(|e| matches!(e, Entry::Item { label, id: i, .. } if i == id && label == last))
+    }
+
+    /// Q6310 (the owner looked for BIM View under View, where its help said it was): every
+    /// command whose help names a menu path is on that menu, under that label.
+    #[test]
+    fn every_menu_path_a_commands_help_names_is_on_that_menu() {
+        let app = CadApp::new(Session::new(), Services::default());
+        let menus = tree(&app);
+        let mut missing = Vec::new();
+        for c in cadaddy_engine::command_specs().iter().filter(|c| !c.menu.is_empty()) {
+            let help = c.help_page().menu_path;
+            assert_eq!(help, c.menu.join(" > "), "{}: its help page's menu path", c.id);
+            if !on_menu(&menus, c.menu, c.id) {
+                missing.push(format!("{}: its help says Menu: {help}, but that menu has no such item", c.id));
+            }
+        }
+        for (id, _, path, _) in UI_COMMANDS.iter().filter(|c| !c.2.is_empty()) {
+            if !on_menu(&menus, path, id) {
+                missing.push(format!("{id}: listed under {}, but that menu has no such item", path.join(" > ")));
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// Q6310: View ▸ 3D BIM and the View ribbon tab's 3D BIM button, one click each, the help
+    /// naming the menu item.
+    #[test]
+    fn three_d_bim_is_on_the_view_menu_and_the_view_ribbon_tab() {
+        let app = CadApp::new(Session::new(), Services::default());
+        let menus = tree(&app);
+        assert!(on_menu(&menus, &["View", "3D BIM"], "view.bim3d"), "View ▸ 3D BIM");
+        let c = cadaddy_engine::find_command("view.bim3d").expect("the 3D BIM command");
+        assert_eq!(c.help_page().menu_path, "View > 3D BIM");
+        let view = ribbon::TABS.iter().find(|t| t.name == "View").expect("the View tab");
+        let on_tab = view.panels.iter().flat_map(|p| p.items).any(|i| match i {
+            ribbon::Item::Large(b) => b.cmd == "view.bim3d" && b.label == "3D BIM",
+            ribbon::Item::Smalls(bs) => bs.iter().any(|b| b.cmd == "view.bim3d"),
+            ribbon::Item::Layers => false,
+        });
+        assert!(on_tab, "the View tab has a 3D BIM button");
     }
 }

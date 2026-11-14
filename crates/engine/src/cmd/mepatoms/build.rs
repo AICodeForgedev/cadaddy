@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::super::propfill::WithNote;
 use super::{
     Atom, BoxRule, Pieces, WireOpts, X3, bury, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
-    wires, wires_with,
+    wires_with,
 };
 
 /// Most runs, devices and atoms the build makes (hostile specs).
@@ -30,6 +30,8 @@ struct Bare {
     level: String,
     circuit: String,
     entry: Vec3,
+    /// A luminaire whose type carries its own junction box: its leads are spliced in it (Q6349).
+    leads: bool,
 }
 
 /// The boxless device a run's end at `p` is at: within `touch` of its entry, on its level, of the
@@ -49,6 +51,11 @@ struct DevBox {
     circuit: String,
     /// The point a run enters it at (its top centre; a floor box's: its centre).
     entry: Vec3,
+    /// Its top's long way (plan unit vector), width there and height (sheet units): where the
+    /// knockouts of the runs entering it stand side by side (Q6552).
+    along: Vec2,
+    width: f64,
+    height: f64,
     atom: usize,
     /// The device's own top centre: where the router ends the device's runs (a gang box sits
     /// at its first device; the others' runs end at their own device).
@@ -56,6 +63,9 @@ struct DevBox {
     /// Where the documents draw the device when an earlier build moved it for the field (Q6252):
     /// a route read or laid before the move still ends there.
     drawn: Option<Vec3>,
+    /// What kind of box it takes (`receptacle`, `switch`, `luminaire`…, [`box_kind`]): what
+    /// its conductors are spliced to (Q6349).
+    family: &'static str,
 }
 
 /// A device's pigtail (Q6243): its size and count, the circuit conductor it is spliced to, why.
@@ -128,6 +138,10 @@ struct Method {
     panel: String,
     conductors: String,
     conductors_source: Source,
+    /// The circuits a homerun or a shared raceway holds, each its own label (its tag's
+    /// `circuits`, `LP-1,3, LP-5`), when it holds more than one: `circuit` is then the panel
+    /// and every number in one label, which names none of them.
+    circuits: String,
     estimated: bool,
     /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
     routed: bool,
@@ -808,7 +822,7 @@ pub(crate) fn body(a: &Atom, upf: f64) -> Mesh {
         // A field bend is part of its stick: a thin band marks it.
         "bend" => tube(&mut m, a.a - dir * (r * 0.3), a.a + dir * (r * 0.3), r * 1.05, SIDES),
         // A value engineering scenario's own boxes, brackets, plates and fittings (Q6202).
-        "box" | "bracket" | "nail_plate" | "fitting" => {
+        "box" | "bracket" | "nail_plate" | "fitting" | "firestop" => {
             let s = a.body_in.max(0.1) / 12.0 * upf;
             block(&mut m, a.a, plan, s, s * 0.5, s);
         }
@@ -902,6 +916,136 @@ fn wiring_method(d: &Drawing) -> Option<(String, Source)> {
     (!v.is_empty()).then(|| (v.clone(), Source::from_doc(SourceKind::Rule, &format!("project rule wiring_method/general: {v}"))))
 }
 
+/// The remedy for boxes back to back in a rated wall (Q6488): the project rule's (rules
+/// `rule_domain`/`rule_key`), else the one the job's specifications or notes name, else the
+/// rules' default; the source that says so and whether anything named it.
+pub(crate) fn rated_box_remedy(d: &Drawing, b: &super::boxclear::BackToBack) -> (super::boxclear::Remedy, String, bool) {
+    use super::boxclear::Remedy;
+    let rule = cadaddy_doc::projrules::RuleDomain::parse(&b.rule_domain).and_then(|dom| d.project_rules.get(dom, b.rule_key.trim()));
+    if let Some(r) = rule
+        && let Some(m) = b.remedy_named(&r.active.value)
+    {
+        let src = format!("project rule {}/{}: {} ({})", b.rule_domain.trim(), b.rule_key.trim(), r.active.value.trim(), r.active.source.trim());
+        return (m, src, true);
+    }
+    // Documents that forbid back-to-back devices leave the pads no choice (Q6553).
+    if let Some((src, _)) = back_to_back_forbid(d, b) {
+        return (Remedy::Separate, src, true);
+    }
+    let methods = super::super::conduitroute::Methods::stored(d);
+    if let Some(m) = b.remedy_named(&methods.rated_box_remedy).filter(|_| !methods.rated_box_remedy.trim().is_empty()) {
+        return (m, methods.rated_box_remedy_source.clone(), true);
+    }
+    let m = b.remedy_named(&b.remedy).unwrap_or(Remedy::Separate);
+    (m, b.remedy_source.clone(), false)
+}
+
+/// Where back-to-back devices are forbidden (Q6553): the project rule's (rules `rule_domain`/
+/// `forbid_rule_key`; one allowing them overrides the documents), else the job's documents' (a
+/// general note, a keynote, a specification); the source that says so, and whether only in
+/// fire-rated walls.
+pub(crate) fn back_to_back_forbid(d: &Drawing, b: &super::boxclear::BackToBack) -> Option<(String, bool)> {
+    let rule = cadaddy_doc::projrules::RuleDomain::parse(&b.rule_domain).and_then(|dom| d.project_rules.get(dom, b.forbid_rule_key.trim()));
+    if let Some(r) = rule
+        && let Some(said) = b.forbid_value(&r.active.value)
+    {
+        let src =
+            format!("project rule {}/{}: {} ({})", b.rule_domain.trim(), b.forbid_rule_key.trim(), r.active.value.trim(), r.active.source.trim());
+        return said.map(|rated_only| (src, rated_only));
+    }
+    let methods = super::super::conduitroute::Methods::stored(d);
+    let src = methods.back_to_back_forbidden.trim();
+    (!src.is_empty()).then(|| (src.to_string(), methods.back_to_back_forbidden_rated_only))
+}
+
+/// The devices an earlier build moved off a back-to-back partner (their location's correction
+/// is the back-to-back rule's), put back where the documents draw them: the project's remedy
+/// is now the putty pads at the drawn spots (Q6488). How many.
+fn replace_back_to_back_moves(d: &mut Drawing, b2b_rules: &[&str], upf: f64) -> usize {
+    let rules: Vec<&str> = b2b_rules.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
+    if rules.is_empty() {
+        return 0;
+    }
+    let moved: Vec<(Handle, Vec2)> = d
+        .model
+        .iter()
+        .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("device"))
+        .take(MAX_DEVICES)
+        .filter_map(|e| {
+            let ps = props::read(&e.common.xdata);
+            let why = ps.get("correction:location").map(Prop::text)?;
+            rules.iter().any(|r| why.starts_with(r)).then_some(())?;
+            Some((e.handle, moved_for_field(&ps, upf)?))
+        })
+        .collect();
+    let mut n = 0usize;
+    for (h, m) in moved {
+        let back = Vec3::new(-m.x, -m.y, 0.0);
+        let ok = d.modify_entity(h, |e| {
+            if let EntityKind::Mesh(mesh) = &mut e.kind {
+                for v in mesh.vertices.iter_mut().take(100_000) {
+                    *v = *v + back;
+                }
+            }
+            let mut ps = props::read(&e.common.xdata);
+            let nums =
+                |p: Option<&Prop>| -> Vec<f64> { p.map(Prop::text).unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect() };
+            let (design, now) = (nums(ps.get("design:location")), nums(ps.get("location")));
+            if let ([x, y, dz], [_, _, z]) = (&design[..], &now[..]) {
+                let src = ps.get("design:location").map(|p| p.source.clone());
+                let level = (dz - z).abs() < 1e-6;
+                if let Some(src) = src {
+                    let mut p = Prop::new(format!("{x:.2}, {y:.2}, {z:.2}"), src);
+                    p.note = None;
+                    ps.set("location", p);
+                }
+                if level {
+                    ps.remove("design:location");
+                    ps.remove("correction:location");
+                } else if let Some(g) = ps.get("correction:mount_height").cloned() {
+                    // Still at its gang's height: that correction is the one left.
+                    ps.set("correction:location", g);
+                }
+            }
+            let x = props::write(&e.common.xdata, &ps);
+            e.common.xdata = x.into();
+        });
+        n += usize::from(ok.is_ok());
+    }
+    n
+}
+
+/// The lowest and highest z of a mesh's vertices (none for an empty or non-finite one).
+pub(crate) fn z_range(m: &Mesh) -> Option<(f64, f64)> {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for v in m.vertices.iter().take(1_000_000) {
+        if v.z.is_finite() {
+            lo = lo.min(v.z);
+            hi = hi.max(v.z);
+        }
+    }
+    (lo.is_finite() && hi.is_finite() && hi >= lo).then_some((lo, hi))
+}
+
+/// What a piece's built body says of its height (Q6592), above its level's floor `floor` (in
+/// drawing units, `upf` a foot): `elevation` its bottom, and for a vertical piece (a drop, a
+/// riser) or one that rises a foot or more `elevation_top` its top too. Measured off its own geometry, so a re-route that cuts
+/// the piece again writes it again; `src` says where the height came from (computed for a piece
+/// the router cut, the run's height source for a duct or pipe whose height was assumed).
+pub(crate) fn elevation_props(z0: f64, z1: f64, floor: f64, upf: f64, vertical: bool, src: &Source) -> Vec<(&'static str, Prop)> {
+    if !(z0.is_finite() && z1.is_finite() && floor.is_finite() && upf.is_finite() && upf > 0.0) {
+        return Vec::new();
+    }
+    let ft = |z: f64| ((z - floor) / upf * 100.0).round() / 100.0;
+    let mut out = vec![("elevation", Prop::new(ft(z0), src.clone()).with_unit("ft").with_note("bottom, above the level"))];
+    // A drop or a rise (straight, or a bent piece with a leg up or down): its top too.
+    if vertical || z1 - z0 >= upf {
+        out.push(("elevation_top", Prop::new(ft(z1), src.clone()).with_unit("ft").with_note("top, above the level")));
+    }
+    out
+}
+
 /// The tags that make an atom a built MEP element (its level, source, system, kind and part).
 pub(crate) fn mep_tags(level: &str, source: Handle, system: &str, kind: &str, size: &str, item: &str, mepid: &str) -> Vec<RawTag> {
     let t = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
@@ -967,6 +1111,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if !matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
             continue;
         }
+        // The fire alarm circuits' legs are cut on their own, end to end between the elements
+        // their tags name (Q6503).
+        if super::super::conduitroute::fa::is_system(&r.system) {
+            continue;
+        }
         let Some(level) = sp.level(&r.level) else { continue };
         let pts = run_path(r, level.elevation_ft * upf, upf);
         if pts.len() < 2 {
@@ -990,6 +1139,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let (circuit, panel) = tag.map_or_else(Default::default, |t| {
             (field(t, "circuit").map(|v| v.0).unwrap_or_default(), field(t, "panel").map(|v| v.0).unwrap_or_default())
         });
+        let circuits = tag
+            .and_then(|t| field(t, "circuits"))
+            .map(|v| super::circuit_list(&v.0))
+            .filter(|l| l.len() > 1)
+            .map(|l| l.join(", "))
+            .unwrap_or_default();
         let (conductors, csrc) = tag.and_then(|t| field(t, "conductors")).map_or_else(
             || {
                 (
@@ -1089,7 +1244,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             None => match feeder.and_then(|fi| sp.mep.feeders.get(fi)) {
                 Some(f) => {
                     let doc = if f.source.is_empty() { format!("feeder {}", f.tag) } else { format!("feeder {}: {}", f.tag, f.source) };
-                    (cable, name, source, feeder_makeup(f), Source::from_doc(SourceKind::Print, &doc), ctag)
+                    // A feeder the documents leave unsized and that was sized by code or practice
+                    // (Q6359) is an assumption, never print-read.
+                    let kind = if f.source.trim_start().starts_with("inferred") { SourceKind::Rule } else { SourceKind::Print };
+                    (cable, name, source, feeder_makeup(f), Source::from_doc(kind, &doc), ctag)
                 }
                 None => (cable, name, source, conductors, csrc, ctag),
             },
@@ -1107,7 +1265,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .collect()
             })
             .unwrap_or_default();
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder, buried };
+        let m =
+            Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, circuits, estimated, routed, devices, feeder, buried };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
     // The raceway the model lays for a circuit (routed or estimated), laid once along each route
@@ -1223,6 +1382,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Each box atom's stock (its knockouts), and the largest raceway landing in it (Q6243).
     let mut box_rule_at: HashMap<usize, BoxRule> = HashMap::new();
     let mut box_raceway: HashMap<usize, f64> = HashMap::new();
+    // The remedy for boxes back to back in a rated wall (Q6488); pads put back what an earlier
+    // build moved for the other remedy.
+    let (remedy, remedy_src, remedy_named) = rated_box_remedy(d, &rl.box_clear.back_to_back);
+    let pads_first = remedy == super::boxclear::Remedy::Putty;
+    // The documents forbid back-to-back devices (Q6553; a project rule choosing the pads over them
+    // is the project's answer): every pair in the walls they name is separated.
+    let forbid = back_to_back_forbid(d, &rl.box_clear.back_to_back).filter(|_| !pads_first);
+    let replaced = if pads_first {
+        replace_back_to_back_moves(d, &[&rl.box_clear.back_to_back.source, &rl.box_clear.back_to_back.forbid_source], upf)
+    } else {
+        0
+    };
     let devices: Vec<(Handle, String, Props, String, Bounds2, f64, f64)> = d
         .model
         .iter()
@@ -1335,7 +1506,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         gangs.push(hs);
     }
     // Each ganged group's box once made: its atom and the point its runs enter it.
-    let mut gang_box: HashMap<usize, (usize, Vec3)> = HashMap::new();
+    let mut gang_box: HashMap<usize, (usize, Vec3, Vec2, f64, f64)> = HashMap::new();
     let centre_of: HashMap<Handle, (Vec2, f64)> = devices.iter().map(|(h, _, _, _, plan, z0, z1)| (*h, (plan.center(), (z0 + z1) / 2.0))).collect();
     // The boxes made, by why (the device's kind, ganged or alone), and the devices in a shared one.
     let mut box_reasons: BTreeMap<String, usize> = BTreeMap::new();
@@ -1361,7 +1532,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 && bare.len() < MAX_DEVICES
             {
                 let c = plan.center();
-                bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+                bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1), leads: false });
             }
             continue;
         };
@@ -1394,7 +1565,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let circuit = ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty()).unwrap_or_default();
                 let c = plan.center();
                 if bare.len() < MAX_DEVICES {
-                    bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+                    bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1), leads: true });
                 }
                 continue;
             }
@@ -1428,7 +1599,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A device ganged with its neighbours: in their one box, once it is made.
         let gang = gang_of.get(h).copied();
         let members: &[Handle] = gang.and_then(|g| gangs.get(g)).map_or(&[], Vec::as_slice);
-        if let Some((bi, entry)) = gang.and_then(|g| gang_box.get(&g)).copied() {
+        if let Some((bi, entry, along, width, height)) = gang.and_then(|g| gang_box.get(&g)).copied() {
             external.push((bi, *h));
             let c = plan.center();
             boxes.push(DevBox {
@@ -1436,9 +1607,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 level: level.clone(),
                 circuit,
                 entry,
+                along,
+                width,
+                height,
                 atom: bi,
                 at: Vec3::new(c.x, c.y, *z1),
                 drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
+                family: bk,
             });
             ganged_devices += 1;
             continue;
@@ -1554,7 +1729,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 // In its wall, its front on the wall's face (where the device's is: on the face,
                 // or flush in it); with no face found, behind the device.
                 let depth_plan = (plan.max - plan.min).dot(Vec2::new(o.x.abs(), o.y.abs()));
-                let found = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, None)
+                // Only a wall standing at the box's height hosts it (Q6500): a device above or
+                // below a wall (on the roof over it) whose plan point is on it is not in it.
+                let found = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, Some(zmid))
                     .filter(|f| f.out.dot(o) > 0.5);
                 wall_of_box = found.as_ref().map(|f| f.wall);
                 let face = found.map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
@@ -1573,6 +1750,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             level: level.clone(),
             system: String::new(),
             circuit: circuit.clone(),
+            circuits: String::new(),
             panel: ps.get("panel").map(Prop::text).unwrap_or_default(),
             run: String::new(),
             estimated: false,
@@ -1604,7 +1782,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         atoms.push((a, ctx.clone()));
         external.push((bi, *h));
         if let Some(g) = gang {
-            gang_box.insert(g, (bi, entry));
+            gang_box.insert(g, (bi, entry, along, bw, bh));
             ganged_devices += 1;
         }
         let why = if lv_bracket.is_some() {
@@ -1677,24 +1855,33 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             level: level.clone(),
             circuit,
             entry,
+            along,
+            width: bw,
+            height: bh,
             atom: bi,
             at: Vec3::new(c.x, c.y, *z1),
             drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
+            family: bk,
         });
     }
 
     // -- Boxes never share space (Q6252): a wall box over another moves along its face clear of
     // it; boxes back to back in one rated wall end up the code's distance apart (else putty
     // pads). Its devices move with it; the design spot is kept beside the corrected one. --
-    let cr = &rl.box_clear;
-    let rated_walls: BTreeSet<Handle> = clear_boxes
-        .iter()
-        .filter_map(|b| b.wall)
-        .filter(|w| !cr.back_to_back.rated_only || d.model.get(*w).is_some_and(|e| wall_rated(e, sp)))
-        .collect();
+    let mut cr_rule = rl.box_clear.clone();
+    cr_rule.back_to_back.pads = pads_first;
+    cr_rule.back_to_back.forbidden = forbid.is_some();
+    let cr = &cr_rule;
+    let fire_walls: BTreeSet<Handle> =
+        clear_boxes.iter().filter_map(|b| b.wall).filter(|w| d.model.get(*w).is_some_and(|e| wall_rated(e, sp))).collect();
+    // Where the documents forbid back-to-back devices in any wall, the rule is every wall's.
+    let every_wall = forbid.as_ref().is_some_and(|(_, rated_only)| !rated_only) || !cr.back_to_back.rated_only;
+    let rated_walls: BTreeSet<Handle> = clear_boxes.iter().filter_map(|b| b.wall).filter(|w| every_wall || fire_walls.contains(w)).collect();
+    let forbid_src = forbid.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
     for b in &mut clear_boxes {
         b.rated = b.wall.is_some_and(|w| rated_walls.contains(&w));
     }
+    let fire_rated = |i: usize| clear_boxes.get(i).and_then(|b| b.wall).is_some_and(|w| fire_walls.contains(&w));
     // The wall pieces near each box that can move (its own and any meeting it), once: a move
     // looks only at them.
     let reach = (cr.max_move_in.max(0.0) + 24.0) * inch;
@@ -1744,10 +1931,48 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .any(|(bb, z0, z1)| *z0 < hi && *z1 > lo && front.x >= bb.min.x && front.x <= bb.max.x && front.y >= bb.min.y && front.y <= bb.max.y)
     };
     let lands = |i: usize, p: Vec3| -> bool { clear_boxes.get(i).is_some_and(|b| !behind(b, p) || behind(b, b.centre)) };
-    let cleared = super::boxclear::clear(&clear_boxes, cr, inch, &fits, &lands);
+    // A wall box never stands in an opening's jamb studs (Q6623): the king stud stays where the
+    // opening needs it, and the electrician sets the box against its far face, in the bay. The
+    // jambs are where the trades' stud layout puts them (its wall type's framing and rules).
+    let jamb_walls: BTreeSet<Handle> = clear_boxes.iter().filter(|b| b.movable).filter_map(|b| b.wall).collect();
+    let (jambs, jamb_src) = super::super::tradeatoms::jambs_of(d, sp, &jamb_walls);
+    let mut off_jamb: Vec<(usize, Vec2)> = Vec::new();
+    let mut in_jamb_left = 0usize;
+    for (i, b) in clear_boxes.iter().enumerate() {
+        let Some(js) = b.wall.filter(|_| b.movable).and_then(|w| jambs.get(&w)) else { continue };
+        let Some(first) = js.first() else { continue };
+        let hw = b.along.dot(first.u).abs() * b.w / 2.0 + b.out.dot(first.u).abs() * b.t / 2.0;
+        let Some(shift) = super::super::tradeatoms::off_jambs(b.centre, hw, b.h / 2.0, js) else { continue };
+        let p = b.centre + Vec3::new(shift.x, shift.y, 0.0);
+        if super::super::tradeatoms::off_jambs(p, hw, b.h / 2.0, js).is_none() && fits(i, p) && lands(i, p) {
+            off_jamb.push((i, shift));
+        } else {
+            in_jamb_left += 1;
+        }
+    }
+    // The other boxes are cleared from where these stand now.
+    let mut from_jambs = clear_boxes.clone();
+    for (i, shift) in &off_jamb {
+        if let Some(b) = from_jambs.get_mut(*i) {
+            b.centre = b.centre + Vec3::new(shift.x, shift.y, 0.0);
+        }
+    }
+    let cleared = super::boxclear::clear(&from_jambs, cr, inch, &fits, &lands);
     let mut device_moves: HashMap<Handle, (Vec3, String, String)> = HashMap::new();
     let mut box_moves: BTreeMap<usize, (Vec3, Vec<String>, String)> = BTreeMap::new();
+    for (i, shift) in &off_jamb {
+        let Some((bi, _, _)) = clear_of.get(*i) else { continue };
+        let why = format!(
+            "moved {} along its wall: it stood in the jamb studs of the opening beside it; set against the jamb's far face, in the bay",
+            super::super::walltypes::frac(shift.len() / inch)
+        );
+        let e = box_moves.entry(*bi).or_insert_with(|| (Vec3::new(0.0, 0.0, 0.0), Vec::new(), jamb_src.clone()));
+        e.0 = e.0 + Vec3::new(shift.x, shift.y, 0.0);
+        e.1.push(why);
+    }
     let (mut moved_overlap, mut moved_back) = (0usize, 0usize);
+    // The remedy each back-to-back box took and why (Q6553): kept on the box.
+    let mut remedy_of: BTreeMap<usize, (String, String)> = BTreeMap::new();
     let describe = |i: usize| -> String {
         clear_of
             .get(i)
@@ -1768,14 +1993,26 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             super::boxclear::Why::BackToBack => {
                 moved_back += 1;
+                for k in [m.index, m.from] {
+                    if let Some((b, _, _)) = clear_of.get(k) {
+                        remedy_of.insert(*b, (super::boxclear::Remedy::Separate.as_str().to_string(), remedy_src.clone()));
+                    }
+                }
+                // A fire-rated wall's pair is the code's; any other wall's is the documents'.
+                let (wall, rule) = if fire_rated(m.index) {
+                    ("its fire-rated wall", cr.back_to_back.source.clone())
+                } else {
+                    ("its wall", cr.back_to_back.forbid_source.clone())
+                };
                 (
                     format!(
-                        "moved {} along its wall: back to back with {} on the other face of its fire-rated wall, closer than {} apart",
+                        "moved {} along its wall: back to back with {} on the other face of {wall}, closer than {} apart{}",
                         super::super::walltypes::frac(inches),
                         describe(m.from),
-                        super::super::walltypes::frac(cr.back_to_back.min_apart_in)
+                        super::super::walltypes::frac(cr.back_to_back.min_apart_in),
+                        if forbid.is_some() { format!(" (the documents forbid back-to-back devices: {forbid_src})") } else { String::new() }
                     ),
-                    cr.back_to_back.source.clone(),
+                    rule,
                 )
             }
         };
@@ -1824,24 +2061,61 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         e.1 = if e.1.is_empty() { why.clone() } else { format!("{}; {why}", e.1) };
     }
     let mut putty_pads = 0usize;
-    for (i, j) in &cleared.putty {
+    // One pad a box, whatever pairs it stands in.
+    let mut padded: BTreeSet<usize> = BTreeSet::new();
+    // Pairs the documents forbid that no move clears (Q6553): a review; in a fire-rated wall the
+    // pads stay as the code's protection.
+    let left_pads: Vec<(usize, usize)> = cleared.unseparated.iter().copied().filter(|(i, _)| fire_rated(*i)).collect();
+    for (i, j) in &cleared.unseparated {
+        let padded_too = fire_rated(*i);
+        for k in [*i, *j] {
+            if let Some((b, _, _)) = clear_of.get(k) {
+                let what = if padded_too { "review: back to back, putty pads" } else { "review: back to back" };
+                remedy_of.insert(*b, (what.to_string(), format!("{}; {forbid_src}", cr.back_to_back.forbid_source)));
+            }
+        }
+    }
+    for (i, j) in cleared.putty.iter().chain(&left_pads) {
+        let forbidden_left = cleared.unseparated.contains(&(*i, *j));
         for k in [*i, *j] {
             let Some((bi, _, _)) = clear_of.get(k) else { continue };
+            if !forbidden_left {
+                remedy_of.insert(*bi, (super::boxclear::Remedy::Putty.as_str().to_string(), remedy_src.clone()));
+            }
+            if !padded.insert(*bi) {
+                continue;
+            }
             let Some((at, mut ctx)) = atoms.get(*bi).map(|(a, c)| (a.a, c.clone())) else { continue };
             let other = describe(if k == *i { *j } else { *i });
             let kept = [*i, *j].iter().filter_map(|x| clear_boxes.get(*x)).any(|b| b.keep);
-            let why = format!(
-                "back to back with {other} on the other face of its fire-rated wall{} and no spot within {} along an unbroken stretch of its wall clears it ({})",
-                if kept { format!(", a box that keeps its spot ({})", cr.back_to_back.keep_source) } else { String::new() },
-                super::super::walltypes::frac(if cr.back_to_back.max_move_in > 0.0 { cr.back_to_back.max_move_in } else { cr.max_move_in }),
-                cr.stud_bay_source
-            );
+            let why = if forbidden_left {
+                format!(
+                    "back to back with {other} on the other face of its fire-rated wall: the documents forbid back-to-back devices ({forbid_src}) but no spot within {} along an unbroken stretch of its wall clears it, for either box: listed putty pads as the code's protection, and a review",
+                    super::super::walltypes::frac(cr.max_move_in)
+                )
+            } else if pads_first {
+                format!(
+                    "back to back with {other} on the other face of its fire-rated wall, closer than {} apart: listed putty pads on both boxes, the devices where the documents put them ({}; {remedy_src})",
+                    super::super::walltypes::frac(cr.back_to_back.min_apart_in),
+                    cr.back_to_back.putty_choice_source
+                )
+            } else {
+                format!(
+                    "back to back with {other} on the other face of its fire-rated wall{} and no spot within {} along an unbroken stretch of its wall clears it ({})",
+                    if kept { format!(", a box that keeps its spot ({})", cr.back_to_back.keep_source) } else { String::new() },
+                    super::super::walltypes::frac(if cr.back_to_back.max_move_in > 0.0 { cr.back_to_back.max_move_in } else { cr.max_move_in }),
+                    cr.stud_bay_source
+                )
+            };
             if let Some(b) = atoms.get_mut(*bi) {
                 b.0.extra.push(("design:firestop", "none".into(), "computed: the box as placed".into()));
                 b.0.extra.push(("firestop", cr.back_to_back.putty_item.clone(), cr.back_to_back.putty_source.clone()));
                 b.0.extra.push(("correction:firestop", format!("{}: {why}", cr.back_to_back.putty_source), cr.back_to_back.putty_source.clone()));
             }
-            ctx.body = None;
+            // The pad wraps the box's back and sides: its body just round the box's (an element
+            // of its own, so the takeoff counts it; without a body it was never made).
+            let pad_in = 0.125 * inch;
+            ctx.body = ctx.body.map(|(c, along, w, t, h)| (c, along, w + 2.0 * pad_in, t + pad_in, h + 2.0 * pad_in));
             ctx.src = rule_source(&cr.back_to_back.putty_source);
             let mut pad = Atom::fitting(
                 "firestop",
@@ -1858,6 +2132,56 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             atoms.push((pad, ctx));
             putty_pads += 1;
         }
+    }
+    if (!off_jamb.is_empty() || in_jamb_left > 0) && notes.len() < 200 {
+        notes.push(format!(
+            "{} wall box(es) moved along their walls off the jamb studs of the opening beside them{} ({jamb_src})",
+            off_jamb.len(),
+            if in_jamb_left > 0 {
+                format!("; {in_jamb_left} with no spot along their wall's face clear of the jambs: a review")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    // Which remedy the pairs took, and why (Q6488).
+    let pairs = moved_back + cleared.putty.len() + cleared.unseparated.len();
+    for (bi, (what, src)) in remedy_of {
+        if let Some((a, _)) = atoms.get_mut(bi) {
+            a.extra.push(("back_to_back_remedy", what, src));
+        }
+    }
+    if let Some((_, rated_only)) = forbid.as_ref().filter(|_| pairs > 0 && notes.len() < 200) {
+        notes.push(format!(
+            "back-to-back devices are forbidden by the documents ({forbid_src}) in {}: {moved_back} pair(s) separated, one box moved along its wall ({} past the next stud bays or the box that would keep its spot){}",
+            if *rated_only { "fire-rated walls" } else { "every wall" },
+            cleared.moved_farther,
+            if cleared.unseparated.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} pair(s) no move along their walls clears: a review ({} in fire-rated walls keep listed putty pads as the code's protection)",
+                    cleared.unseparated.len(),
+                    left_pads.len()
+                )
+            }
+        ));
+    } else if (pairs > 0 || replaced > 0) && notes.len() < 200 {
+        notes.push(if pads_first {
+            format!(
+                "rated-wall boxes back to back: {} pair(s) take putty pads at the drawn positions ({remedy_src}){}; the alternative, separating the boxes by distance, is project rule {}/{}: separate",
+                cleared.putty.len(),
+                if replaced > 0 { format!("; {replaced} device(s) an earlier build moved put back where the documents draw them") } else { String::new() },
+                cr.back_to_back.rule_domain,
+                cr.back_to_back.rule_key
+            )
+        } else {
+            format!(
+                "rated-wall boxes back to back: {moved_back} pair(s) separated by distance, one box moved to the next stud bays{} ({}{remedy_src})",
+                if cleared.putty.is_empty() { String::new() } else { format!(", {} pair(s) with nowhere to move take putty pads", cleared.putty.len()) },
+                if remedy_named { "" } else { "nothing names the remedy: " }
+            )
+        });
     }
     if !cleared.stuck.is_empty() && notes.len() < 200 {
         notes.push(format!(
@@ -1889,8 +2213,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         ctx.src = rule_source(&terms.source);
         let ft = terms.pigtail_in.clamp(6.0, 36.0) / 12.0;
         let up = Vec3::new(0.0, 0.0, ft * upf);
-        // Each conductor the device lands, and its ground.
-        for (i, ground) in (0..pg.count.clamp(1, 6)).map(|_| false).chain([true]).enumerate() {
+        // Each conductor the device lands, and its ground (their splices: the box's, below).
+        for ground in (0..pg.count.clamp(1, 6)).map(|_| false).chain([true]) {
             let (item, ty) = if ground {
                 ("Copper ground, green".to_string(), "bare or green".to_string())
             } else {
@@ -1913,19 +2237,6 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             w.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
             w.source = terms.source.clone();
             atoms.push((w, ctx.clone()));
-            let mut c = Atom::fitting(
-                "connector",
-                terms.connector.clone(),
-                "",
-                &format!("#{} to {}", pg.landing, super::wire_size(&pg.size)),
-                at,
-                Vec3::new(0.0, 0.0, 0.01 * upf * (i as f64 + 1.0)),
-                0.4,
-                &terms.source,
-            );
-            c.connects = vec![bx.atom];
-            c.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
-            atoms.push((c, ctx.clone()));
         }
     }
 
@@ -1940,6 +2251,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let panel_reach = rl.panel_reach_ft.max(0.0) * upf;
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let mut taken_direct: BTreeSet<usize> = BTreeSet::new();
+    // Each box's knockouts taken (by its atom): the runs entering one box come in side by side,
+    // each by its own (Q6552), never down one line.
+    let mut knocked: HashMap<usize, Vec<i64>> = HashMap::new();
+    let spacing = rl.knockout_spacing_in.max(0.0) / 12.0 * upf;
+    let keep = super::super::conduitroute::rules().clearance_in("conduit") / 12.0 * upf;
+    // Every routed run's end in a box, its knockout chosen with the others' coming into it.
+    // A drop into a knockout never stands in a framing member over the level (Q6631: a knockout
+    // moved off the box's centre went down through a joist's depth): its column from the run's
+    // height down to the box clear of every joist, rim and truss, as the router keeps its rises.
+    let frame_cols: std::cell::OnceCell<FrameCols> = std::cell::OnceCell::new();
+    let drop_r = (spacing - keep).max(0.0) / 2.0;
+    let dr: &Drawing = d;
+    let col_clear = |b: &DevBox, at: Vec3, top: f64| frame_cols.get_or_init(|| FrameCols::of(dr, sp, &moves, upf)).clear(&b.level, at, top, drop_r);
+    let mut planned = plan_knockouts(&paths, &boxes, &gear, &moves, routed_touch, spacing, keep, upf, &col_clear, &mut knocked);
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
     // Buried raceway that comes up into the raceway above the floor: the project's wiring method
@@ -2043,6 +2368,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         level: key.level.clone(),
                         system: key.system.clone(),
                         circuit: m.circuit.clone(),
+                        circuits: m.circuits.clone(),
                         panel: m.panel.clone(),
                         run: String::new(),
                         estimated: m.estimated,
@@ -2112,7 +2438,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 // that box is on (a homerun group's taps meet in its lead's box). Never a nearer
                 // box of its own circuit label elsewhere (its own start, the next unit's).
                 if m.routed && m.devices.is_empty() && m.feeder.is_none() {
-                    if let Some(g) = touched_gear(&gear, &key.level, &m.panel, p, routed_touch, &moves) {
+                    let at_equipment = direct
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| x.level.eq_ignore_ascii_case(&key.level))
+                        .map(|(xi, x)| (xi, x.device, super::dist(x.at, p)))
+                        .filter(|(.., d)| *d <= routed_touch)
+                        .min_by(|a, b| a.2.total_cmp(&b.2));
+                    // Equipment fed in its own wiring compartment is fed at its connection: an end
+                    // at a connection lands in it, never on the unit around it (the unit's body
+                    // holds its connection), whatever circuit the connection is on (a homerun
+                    // group's taps meet at its lead's, as in its lead's box); only the run's own
+                    // panel comes first.
+                    let on_gear = touched_gear(&gear, &key.level, &m.panel, p, routed_touch, &moves)
+                        .filter(|g| at_equipment.is_none() || gear.iter().any(|x| x.handle == *g && is_panel(&x.tag, &m.panel)));
+                    if let Some(g) = on_gear {
                         *land = Some(Land::Gear(g));
                         routed_on_gear += 1;
                         continue;
@@ -2122,7 +2462,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     {
                         taken.insert(bi);
                         let before = super::path_ft(&c.pts, upf);
-                        land_on(&mut c.pts, end, b.entry, upf);
+                        let came = came_from(&c.pts, end, upf);
+                        let top = drop_top(&c.pts, end, upf);
+                        let entry = planned_entry(&mut planned, b.atom, p, came)
+                            .unwrap_or_else(|| knockout(b, knocked.entry(b.atom).or_default(), came, spacing, keep, &|q: Vec3| col_clear(b, q, top)));
+                        land_on(&mut c.pts, end, entry, upf);
                         landing_ft += super::path_ft(&c.pts, upf) - before;
                         if let Some(l) = landed.get_mut(end) {
                             *l = Some(bi);
@@ -2131,13 +2475,6 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         routed_on_box += 1;
                         continue;
                     }
-                    let at_equipment = direct
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, x)| x.level.eq_ignore_ascii_case(&key.level))
-                        .map(|(xi, x)| (xi, x.device, super::dist(x.at, p)))
-                        .filter(|(.., d)| *d <= routed_touch)
-                        .min_by(|a, b| a.2.total_cmp(&b.2));
                     if let Some((xi, dv, _)) = at_equipment {
                         taken_direct.insert(xi);
                         *land = Some(Land::Device(dv));
@@ -2167,8 +2504,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 } else {
                     box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box, other)
                 };
-                let near_box = near.filter(|bi| m.feeder.is_none() && Some(*bi) != other).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
-                if let Some((bi, entry, atom)) = near_box {
+                let near_box = near.filter(|bi| m.feeder.is_none() && Some(*bi) != other).and_then(|bi| boxes.get(bi).map(|b| (bi, b, b.atom)));
+                if let Some((bi, b, atom)) = near_box {
+                    let entry = if m.estimated || m.routed {
+                        let came = came_from(&c.pts, end, upf);
+                        let top = drop_top(&c.pts, end, upf);
+                        planned_entry(&mut planned, atom, p, came)
+                            .unwrap_or_else(|| knockout(b, knocked.entry(atom).or_default(), came, spacing, keep, &|q: Vec3| col_clear(b, q, top)))
+                    } else {
+                        b.entry
+                    };
                     taken.insert(bi);
                     if let Some(l) = landed.get_mut(end) {
                         *l = Some(bi);
@@ -2265,6 +2610,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 level: key.level.clone(),
                 system: key.system.clone(),
                 circuit: m.circuit.clone(),
+                circuits: m.circuits.clone(),
                 panel: m.panel.clone(),
                 run: run_id.clone(),
                 estimated: m.estimated,
@@ -2304,7 +2650,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .unwrap_or_default();
                 let voltage = gear_voltage(sp, &m.panel).unwrap_or_else(|| rl.default_voltage.clone());
                 let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
-                for mut w in wires(&c.pts, upf, &m.conductors, &nums, &voltage, rl) {
+                // The circuits' phases by their panel's own phase count (a single-phase panel
+                // has no phase C).
+                let mk = rl.makeup_ft.max(0.0);
+                let opts = WireOpts { kind: None, makeup_ft: [mk, mk], makeup_source: &rl.makeup_source, phases: panel_phases(sp, &m.panel) };
+                for mut w in wires_with(&c.pts, upf, &m.conductors, &nums, &voltage, rl, &opts) {
                     w.connects = ends.clone();
                     panel_makeup(&mut w, &at_panel, rl);
                     w.extra.push(("conductors_of_circuit", m.conductors.clone(), m.conductors_source.doc.clone().unwrap_or_default()));
@@ -2346,6 +2696,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())),
                     makeup_ft: ends_mk,
                     makeup_source: &rl.feeder_makeup_source,
+                    // Its phase conductors are counted (`phases`): 1, 3, 5 give them A, B, C.
+                    phases: 3,
                 };
                 let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
                 let doc = m.conductors_source.doc.clone().unwrap_or_default();
@@ -2486,6 +2838,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             level: st.level.clone(),
             system: st.feeder.clone(),
             circuit: String::new(),
+            circuits: String::new(),
             panel: f.from.clone(),
             run: format!("feeder:{}@{}", st.feeder, st.gear),
             estimated: false,
@@ -2516,7 +2869,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let material = f.material.trim().to_ascii_lowercase();
         let kind = rl.feeder_conductors.get(&material).or_else(|| rl.feeder_conductors.get("cu"));
         let m = rl.makeup_ft.max(0.0);
-        let opts = WireOpts { kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())), makeup_ft: [m, m], makeup_source: &rl.makeup_source };
+        let opts = WireOpts {
+            kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())),
+            makeup_ft: [m, m],
+            makeup_source: &rl.makeup_source,
+            phases: 3,
+        };
         for mut w in wires_with(&path, upf, &makeup, &phases, &voltage, rl, &opts) {
             w.connects = ends.clone();
             let mut wctx = ctx.clone();
@@ -2566,8 +2924,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
+    // -- The fire alarm circuits' cable (Q6503), each leg from the element it leaves to the one
+    // it reaches. --
+    let fa_report = fa_atoms(sp, upf, &boxes, &mut atoms, &mut external);
+
+    // -- The splices in each box (Q6349) and the connectors they take. --
+    let splice_report = splice_atoms(&mut atoms, &boxes, &bare, &external, &box_rule_at, &pigtails, upf);
+
     // -- Into the model: each atom an element; then what it connects to, by handle. --
     let mut handles: Vec<Option<Handle>> = Vec::with_capacity(atoms.len());
+    // Each piece's body from its bottom to its top (Q6592): its elevation, read off its own
+    // geometry as it is cut.
+    let mut heights: Vec<Option<(f64, f64)>> = Vec::with_capacity(atoms.len());
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (a, ctx) in &atoms {
         let mesh = match ctx.body {
@@ -2580,8 +2948,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         if mesh.faces.is_empty() {
             handles.push(None);
+            heights.push(None);
             continue;
         }
+        heights.push(z_range(&mesh));
         let system = if ctx.system.is_empty() { "ELECTRICAL BOXES".to_string() } else { ctx.system.clone() };
         let layer = super::super::mep::mep_layer_name(&system, &ctx.level);
         if d.layer(&layer).is_none() {
@@ -2649,8 +3019,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         // Straight up or down (a drop in a wall's cavity, its fittings).
         let dir = a.b - a.a;
-        if a.path.is_empty() && dir.len() > 1e-9 && dir.z.abs() > 0.9 * dir.len() {
+        let vertical = a.path.is_empty() && dir.len() > 1e-9 && dir.z.abs() > 0.9 * dir.len();
+        if vertical {
             ps.set("vertical", Prop::new("true", computed()));
+        }
+        if let Some((z0, z1)) = heights.get(i).copied().flatten() {
+            let floor = sp.level(&ctx.level).map_or(0.0, |l| l.elevation_ft * upf);
+            for (key, p) in elevation_props(z0, z1, floor, upf, vertical, &computed()) {
+                ps.set(key, p);
+            }
         }
         if a.angle_deg > 0.0 {
             ps.set("angle_deg", Prop::new(format!("{}", a.angle_deg), computed()).with_unit("deg"));
@@ -2660,6 +3037,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         if !ctx.circuit.is_empty() {
             ps.set("circuit", Prop::new(ctx.circuit.clone(), computed()));
+        }
+        // A homerun's or shared raceway's pieces: each circuit they hold, so a circuit's raceway
+        // is found by its own label (`bim.props.find` reads the list as the piece's circuits).
+        if !ctx.circuits.is_empty() {
+            ps.set("circuits", Prop::new(ctx.circuits.clone(), computed()).with_note("the circuits it holds, each its own label"));
         }
         if !ctx.panel.is_empty() {
             ps.set("panel", Prop::new(ctx.panel.clone(), computed()));
@@ -2775,6 +3157,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         back.entry(*b).or_default().push(*a);
         feeders += 1;
     }
+    // Equipment fed in its own wiring compartment: fed by the pieces that end in it, as a boxed
+    // device by those that end at its box.
+    let fed_in_own: BTreeSet<Handle> = direct.iter().map(|x| x.device).collect();
     for (g, hs) in &back {
         let up = fed_from.get(g).copied();
         let feeder = up.and_then(|u| {
@@ -2789,6 +3174,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             all.sort_unstable();
             all.dedup();
             ps.set("connects", Prop::new(all.iter().take(2000).map(|h| h.hex()).collect::<Vec<_>>().join(","), Source::computed()));
+            if fed_in_own.contains(g) {
+                ps.set(
+                    "fed_by",
+                    Prop::new(all.iter().take(2000).map(|h| h.hex()).collect::<Vec<_>>().join(","), Source::computed())
+                        .with_note("the raceway or cable ends in its own wiring compartment"),
+                );
+            }
             if let Some(u) = up {
                 let mut p = Prop::new(u.hex(), Source::from_doc(SourceKind::Print, "the feeder schedule"));
                 if let Some(f) = feeder {
@@ -2800,6 +3192,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             e.common.xdata = x.into();
         });
     }
+    fa_links(d, sp);
     let rows = super::reindex(d);
     let total: usize = by_kind.values().sum();
     for (why, n) in &no_box {
@@ -2827,6 +3220,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             rl.one_raceway_source
         ));
     }
+    // Where the documents forbid back-to-back devices (Q6553): what the build did about it.
+    let b2b_forbidden = forbid.as_ref().map_or(Value::Null, |(src, rated_only)| {
+        json!({"source": src, "ratedOnly": rated_only, "movedFarther": cleared.moved_farther, "unseparated": cleared.unseparated.len(), "padsLeft": left_pads.len()})
+    });
     json!({
         "atoms": total,
         "atomsByKind": by_kind,
@@ -2848,6 +3245,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "devicesPigtailed": pigtailed,
         "boxClearance": {
             "movedOffOverlap": moved_overlap,
+            "movedOffJambs": off_jamb.len(),
+            "inJambsReview": in_jamb_left,
             "movedOffBackToBack": moved_back,
             "devicesMoved": device_moves.len(),
             "puttyPads": putty_pads,
@@ -2856,6 +3255,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             "overlapReview": cleared.stuck.len(),
             "source": cr.source,
             "backToBackSource": cr.back_to_back.source,
+            "ratedWallRemedy": remedy.as_str(),
+            "ratedWallRemedySource": remedy_src,
+            "devicesPutBack": replaced,
+            "backToBackForbidden": b2b_forbidden,
         },
         "boxesSizedForRaceway": boxes_for_raceway,
         "boxesRacewayReview": raceway_reviews,
@@ -2877,7 +3280,351 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomIndexRows": rows,
         "atomsMs": (started.elapsed().as_secs_f64() * 1000.0).round(),
         "atomNotes": notes,
+        "fireAlarm": fa_report,
+        "splices": splice_report,
     })
+}
+
+/// The splices in every box and every luminaire's own junction box (Q6349): from the
+/// conductors of each run end in it, by circuit and what each conductor is, the devices in it and
+/// its material; each connector one atom in the box. The count by box kind, size and conductor.
+fn splice_atoms(
+    atoms: &mut Vec<(Atom, AtomCtx)>,
+    boxes: &[DevBox],
+    bare: &[Bare],
+    external: &[(usize, Handle)],
+    box_rule_at: &HashMap<usize, BoxRule>,
+    pigtails: &HashMap<Handle, Pigtail>,
+    upf: f64,
+) -> Value {
+    use super::splices::{Conductor, DeviceIn, box_splices, entry_conductors};
+    let rl = rules();
+    let mut sr = rl.splices.clone();
+    if sr.item.trim().is_empty() {
+        sr.item = super::super::conduitroute::rules().terminals.connector.clone();
+    }
+    if sr.item.trim().is_empty() || sr.connectors.is_empty() {
+        return json!({"connectors": 0, "note": "no splice rules"});
+    }
+    // Each run end's wires (a raceway's conductors connect to both its ends).
+    let mut wires_at: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, (a, _)) in atoms.iter().enumerate() {
+        if a.kind == "wire" && !a.extra.iter().any(|x| x.0 == "pigtail_of" || x.0 == "conductors_of_feeder") {
+            for &e in a.connects.iter().take(4) {
+                wires_at.entry(e).or_default().push(i);
+            }
+        }
+    }
+    let extra = |a: &Atom, k: &str| a.extra.iter().find(|x| x.0 == k).map(|x| x.1.clone()).unwrap_or_default();
+    // The conductors a run end brings in, and its wiring method (`raceway`, `NM`…).
+    let entry_of = |e: usize| -> Option<(Vec<Conductor>, String)> {
+        let (ea, _) = atoms.get(e)?;
+        if let Some(ws) = wires_at.get(&e) {
+            let (mut ins, mut gr, mut size, mut gsize, mut circuit) = (0u32, 0u32, String::new(), String::new(), String::new());
+            for (w, wctx) in ws.iter().filter_map(|i| atoms.get(*i)) {
+                if circuit.is_empty() {
+                    circuit = wctx.circuit.clone();
+                }
+                if extra(w, "conductor") == "ground" {
+                    gr += 1;
+                    if gsize.is_empty() {
+                        gsize = w.size.clone();
+                    }
+                } else {
+                    ins += 1;
+                    if size.is_empty() {
+                        size = w.size.clone();
+                    }
+                }
+            }
+            return (ins > 0).then(|| (entry_conductors(&circuit, ins, gr, &size, &gsize), "raceway".to_string()));
+        }
+        let ci = if ea.kind == "cable" { Some(e) } else { ea.connects.iter().copied().find(|c| atoms.get(*c).is_some_and(|x| x.0.kind == "cable")) }?;
+        let (ca, cctx) = atoms.get(ci)?;
+        // `NM 12/2 w/G`: a power cable of the rules (a fire alarm or low-voltage cable is not
+        // spliced in a twist-on).
+        let mut words = ca.ty.split_whitespace();
+        let kind = words.next()?.to_ascii_uppercase();
+        rl.cables.get(&kind)?;
+        let (sz, n) = words.next()?.split_once('/')?;
+        let n: u32 = n.trim().parse().ok()?;
+        let g = u32::from(ca.ty.to_ascii_uppercase().contains("W/G"));
+        Some((entry_conductors(&cctx.circuit, n, g, sz, sz), kind))
+    };
+    let mut made: Vec<(Atom, AtomCtx)> = Vec::new();
+    let mut by_kind: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut by_size: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_role: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut capped, mut split) = (0usize, 0usize);
+    let basis = super::super::provenance::rule("E-SPLICES").basis_for("");
+    let src = rule_source(&format!("{} — {}", sr.source, sr.connectors_source));
+    let mut put =
+        |made: &mut Vec<(Atom, AtomCtx)>, at: Vec3, connect: usize, mut ctx: AtomCtx, list: Vec<super::splices::Connector>, kind: String| {
+            if list.is_empty() {
+                return;
+            }
+            let row = by_kind.entry(kind).or_default();
+            row.0 += 1;
+            row.1 += list.len();
+            ctx.body = None;
+            ctx.src = src.clone();
+            ctx.made = Made::Inferred;
+            ctx.basis = basis.clone();
+            if list.windows(2).any(|w| matches!(w, [a, b] if a.role == b.role && a.circuit == b.circuit && a.why == b.why)) {
+                split += 1;
+            }
+            for (i, c) in list.into_iter().enumerate().take(400) {
+                *by_size.entry(format!("{} {}", c.item, c.size)).or_default() += 1;
+                *by_role.entry(c.role.as_str()).or_default() += 1;
+                capped += usize::from(c.cap);
+                let joins = c.conductors.iter().map(|s| format!("#{s}")).collect::<Vec<_>>().join(", ");
+                let mut a = Atom::fitting(
+                    "connector",
+                    c.item,
+                    "wire connector",
+                    &c.size,
+                    at,
+                    Vec3::new(0.0, 0.0, 0.01 * upf * (i as f64 + 1.0)),
+                    0.4,
+                    &sr.source,
+                );
+                a.connects = vec![connect];
+                a.extra.push(("splice", c.role.as_str().to_string(), "computed".into()));
+                a.extra.push(("splice_circuit", c.circuit.clone(), "computed".into()));
+                a.extra.push(("conductors", c.conductors.len().to_string(), "computed".into()));
+                a.extra.push(("joins", joins, "computed".into()));
+                a.extra.push(("splice_why", c.why, sr.source.clone()));
+                a.extra.push(("connector_rule", sr.connectors_source.clone(), sr.connectors_source.clone()));
+                made.push((a, ctx.clone()));
+            }
+        };
+    // Each box: the run ends it connects to, its devices, its material.
+    let mut devices_of: BTreeMap<usize, Vec<&DevBox>> = BTreeMap::new();
+    for b in boxes {
+        devices_of.entry(b.atom).or_default().push(b);
+    }
+    for j in 0..atoms.len() {
+        let Some((bx, bctx)) = atoms.get(j) else { continue };
+        if bx.kind != "box" {
+            continue;
+        }
+        let mut entries: Vec<Vec<Conductor>> = Vec::new();
+        let mut method = "raceway".to_string();
+        for &e in bx.connects.iter().take(64) {
+            if let Some((c, m)) = entry_of(e) {
+                if m != "raceway" {
+                    method = m;
+                }
+                entries.push(c);
+            }
+        }
+        if entries.is_empty() {
+            continue;
+        }
+        let devs: Vec<DeviceIn> = devices_of
+            .get(&j)
+            .into_iter()
+            .flatten()
+            .map(|b| DeviceIn { family: b.family.to_string(), circuit: b.circuit.clone(), pigtail: pigtails.get(&b.device).map(|p| p.size.clone()) })
+            .collect();
+        let material = box_rule_at.get(&j).map(|r| r.material.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| extra(bx, "material"));
+        let list = box_splices(&entries, &devs, sr.bonds(&material), &method, &sr);
+        let kind = devices_of.get(&j).and_then(|d| d.first()).map_or_else(|| "junction box".to_string(), |b| b.family.to_string());
+        put(&mut made, bx.a, j, bctx.clone(), list, kind);
+    }
+    // A luminaire whose type carries its own junction box: its leads spliced in it.
+    let lum: HashMap<Handle, &Bare> = bare.iter().filter(|b| b.leads).map(|b| (b.device, b)).collect();
+    let mut ends_of: BTreeMap<Handle, Vec<usize>> = BTreeMap::new();
+    for (e, h) in external.iter().take(MAX_ATOMS) {
+        if lum.contains_key(h) {
+            ends_of.entry(*h).or_default().push(*e);
+        }
+    }
+    for (h, ends) in ends_of {
+        let Some(b) = lum.get(&h) else { continue };
+        let entries: Vec<(Vec<Conductor>, String)> = ends.iter().filter_map(|e| entry_of(*e)).collect();
+        let (Some(first), Some(ctx)) = (ends.first().copied(), ends.first().and_then(|e| atoms.get(*e)).map(|x| x.1.clone())) else { continue };
+        let method = entries.iter().map(|x| x.1.clone()).find(|m| m != "raceway").unwrap_or_else(|| "raceway".into());
+        let entries: Vec<Vec<Conductor>> = entries.into_iter().map(|x| x.0).collect();
+        let devs = [DeviceIn { family: "luminaire".into(), circuit: b.circuit.clone(), pigtail: None }];
+        let list = box_splices(&entries, &devs, false, &method, &sr);
+        put(&mut made, b.entry, first, ctx, list, "luminaire (its own junction box)".into());
+    }
+    let n = made.len();
+    let room = MAX_ATOMS.saturating_sub(atoms.len());
+    atoms.extend(made.into_iter().take(room));
+    json!({
+        "connectors": n.min(room),
+        "boxes": by_kind.values().map(|v| v.0).sum::<usize>(),
+        "byBoxKind": by_kind.iter().map(|(k, (b, c))| (k.clone(), json!({"boxes": b, "connectors": c}))).collect::<serde_json::Map<String, Value>>(),
+        "bySize": by_size,
+        "bySplice": by_role,
+        "capped": capped,
+        "splitBundles": split,
+        "source": sr.source,
+        "connectorSource": sr.connectors_source,
+        "groundSource": sr.bond_source,
+        "methodSource": sr.methods_source,
+    })
+}
+
+/// Join atoms `i` and `j` both ways.
+fn join(atoms: &mut [(Atom, AtomCtx)], i: usize, j: usize) {
+    if let Some(a) = atoms.get_mut(i) {
+        a.0.connects.push(j);
+    }
+    if let Some(b) = atoms.get_mut(j) {
+        b.0.connects.push(i);
+    }
+}
+
+/// The fire alarm circuits' cable (Q6503): each leg of each circuit's tag one cable per piece
+/// (across, up or down the riser, across), the pieces joined end to end, the first landing on the
+/// element the leg leaves (a device's box when it has one) and the last on the one it reaches;
+/// and the raceway the documents call for below a height, along the cable there.
+fn fa_atoms(sp: &BuildingSpec, upf: f64, boxes: &[DevBox], atoms: &mut Vec<(Atom, AtomCtx)>, external: &mut Vec<(usize, Handle)>) -> Value {
+    use super::super::conduitroute::fa;
+    let fr = fa::rules();
+    let rl = rules();
+    let box_of: HashMap<Handle, usize> = boxes.iter().map(|b| (b.device, b.atom)).collect();
+    let (mut cables, mut legs, mut ft, mut raceway_ft) = (0usize, 0usize, 0.0f64, 0.0f64);
+    let mut by_system: BTreeMap<String, f64> = BTreeMap::new();
+    for t in sp.tags.iter().filter(|t| t.kind == fa::TAG_KIND).take(MAX_RUNS) {
+        let f = |k: &str| t.fields.get(k).map(|x| x.value.trim().to_string()).unwrap_or_default();
+        let system = f("system");
+        if !fa::is_system(&system) {
+            continue;
+        }
+        let (circuit, source_tag, size) = (f("circuit"), f("source"), f("cable_size"));
+        let ty = format!("{} {size}", f("cable_type")).trim().to_string();
+        let item = format!("{}, {ty}", if f("cable_item").is_empty() { "Fire alarm cable".to_string() } else { f("cable_item") });
+        let src = Source::from_doc(SourceKind::Rule, &f("cable_source"));
+        let basis = f("basis");
+        let raceway = Some(f("raceway")).filter(|r| !r.is_empty()).and_then(|r| {
+            let rw = rl.raceways.get(&r)?;
+            let below = f("raceway_below_ft").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(f64::INFINITY);
+            Some((r, rw, below, f("raceway_source")))
+        });
+        for (from, to, runs) in fa::legs_of(t, &sp.mep.runs) {
+            let (mut first, mut prev): (Option<usize>, Option<usize>) = (None, None);
+            for r in runs {
+                let Some(level) = sp.level(&r.level) else { continue };
+                let floor = level.elevation_ft * upf;
+                let path = run_path(r, floor, upf);
+                let (Some(p0), Some(p1)) = (path.first().copied(), path.last().copied()) else { continue };
+                if path.len() < 2 || atoms.len() >= MAX_ATOMS {
+                    continue;
+                }
+                let len = super::path_ft(&path, upf);
+                let ctx = AtomCtx {
+                    level: level.name.clone(),
+                    system: system.clone(),
+                    circuit: circuit.clone(),
+                    circuits: String::new(),
+                    panel: source_tag.clone(),
+                    run: r.id.clone(),
+                    estimated: false,
+                    source: Handle(0),
+                    body: None,
+                    src: src.clone(),
+                    made: Made::Inferred,
+                    basis: basis.clone(),
+                };
+                let i = atoms.len();
+                atoms.push((
+                    Atom {
+                        kind: "cable",
+                        item: item.clone(),
+                        ty: ty.clone(),
+                        size: size.clone(),
+                        body_in: fr.cables.body_in.max(0.1),
+                        length_ft: len,
+                        a: p0,
+                        b: p1,
+                        path: path.clone(),
+                        extra: vec![
+                            ("circuit_role", f("role"), "computed".into()),
+                            ("circuit_class", f("class"), f("cable_source")),
+                            ("conductors", format!("2 #{}", f("cable_awg")), f("cable_source")),
+                        ],
+                        source: f("cable_source"),
+                        ..Atom::default()
+                    },
+                    ctx.clone(),
+                ));
+                if let Some(p) = prev {
+                    join(atoms, p, i);
+                }
+                first.get_or_insert(i);
+                prev = Some(i);
+                cables += 1;
+                ft += len;
+                *by_system.entry(system.clone()).or_default() += len;
+                // In its raceway where the documents call for one (below a height, or all of it).
+                if let Some((name, rw, below, why)) = &raceway {
+                    let z = if below.is_finite() { floor + below * upf } else { f64::INFINITY };
+                    for sub in fa::below(&path, z) {
+                        let pieces = raceway_pieces(&sub, upf, fr.documents.raceway_in, name, rw, false, rl);
+                        raceway_ft += pieces.length_ft;
+                        let base = atoms.len();
+                        let mut rctx = ctx.clone();
+                        rctx.src = Source::from_doc(SourceKind::Print, why);
+                        for mut a in pieces.atoms {
+                            for x in &mut a.connects {
+                                *x += base;
+                            }
+                            atoms.push((a, rctx.clone()));
+                        }
+                    }
+                }
+            }
+            // Its ends: a device's box where it has one, else the device or the gear itself.
+            for (end, h) in [(first, from), (prev, to)] {
+                let Some(i) = end else { continue };
+                match box_of.get(&h) {
+                    Some(j) => join(atoms, i, *j),
+                    None => external.push((i, h)),
+                }
+            }
+            legs += 1;
+        }
+    }
+    json!({
+        "cables": cables, "legs": legs, "cableFt": (ft * 10.0).round() / 10.0,
+        "cableFtBySystem": by_system.iter().map(|(k, v)| (k.clone(), json!((v * 10.0).round() / 10.0))).collect::<serde_json::Map<_, _>>(),
+        "racewayFt": (raceway_ft * 10.0).round() / 10.0,
+    })
+}
+
+/// Each fire alarm element its circuit's names (`fa_circuit`, `fa_system`, `fa_source`), what
+/// `bim.chain` walks by; each power supply fed from the control panel its start circuit leaves.
+fn fa_links(d: &mut Drawing, sp: &BuildingSpec) {
+    use super::super::conduitroute::fa;
+    for t in sp.tags.iter().filter(|t| t.kind == fa::TAG_KIND).take(MAX_RUNS) {
+        let f = |k: &str| t.fields.get(k).map(|x| x.value.trim().to_string()).unwrap_or_default();
+        let (circuit, system, source, role) = (f("circuit"), f("system"), f("source"), f("role"));
+        let from = Handle::parse_hex(&f("source_handle"));
+        let why = Source::from_doc(SourceKind::Rule, &f("basis"));
+        for h in f("members").split(',').filter_map(|x| Handle::parse_hex(x.trim())).take(MAX_DEVICES) {
+            let _ = d.modify_entity(h, |e| {
+                let mut ps = props::read(&e.common.xdata);
+                ps.set("fa_circuit", Prop::new(circuit.clone(), why.clone()).with_note("the fire alarm circuit it is wired on"));
+                ps.set("fa_system", Prop::new(system.clone(), Source::computed()));
+                ps.set("fa_source", Prop::new(source.clone(), why.clone()).with_note("the panel or power supply its circuit leaves"));
+                if role == "power supply start"
+                    && let Some(u) = from
+                {
+                    ps.set(
+                        "fed_from",
+                        Prop::new(u.hex(), why.clone())
+                            .with_note(&format!("started by {source} over its circuit {circuit} (and powered by its own 120 V branch circuit)")),
+                    );
+                }
+                let x = props::write(&e.common.xdata, &ps);
+                e.common.xdata = x.into();
+            });
+        }
+    }
 }
 
 /// The plaster rings as their devices' walls need them (`mud_ring`, which `bim.props.fill`
@@ -2935,6 +3682,8 @@ struct AtomCtx {
     level: String,
     system: String,
     circuit: String,
+    /// The circuits it holds when more than one ([`Method::circuits`]).
+    circuits: String,
     panel: String,
     run: String,
     estimated: bool,
@@ -3067,6 +3816,237 @@ fn touched_box(boxes: &[DevBox], level: &str, p: Vec3, touch: f64, not: Option<u
 /// the run goes on square at that height (along the way it arrived, then across) to over or
 /// under the entry, and plumb into it. A run arriving level at the box's own height (no drop)
 /// jogs square at that height. Never a chord across the room at the box's height.
+/// The plan point a run comes to its end `end` from (the last one off its end's drop), if any.
+fn came_from(pts: &[Vec3], end: usize, upf: f64) -> Option<Vec2> {
+    let tiny = upf / 192.0;
+    let plan = |p: &Vec3| Vec2::new(p.x, p.y);
+    let last = plan(if end == 0 { pts.first()? } else { pts.last()? });
+    let mut it: Box<dyn Iterator<Item = &Vec3>> = if end == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+    it.find(|q| plan(q).dist(last) > tiny).map(plan)
+}
+
+/// A run end's key among the planned knockouts: its box, its end and where it comes from
+/// (eighths of a sheet unit).
+type KnockKey = (usize, [i64; 3], [i64; 2]);
+
+fn knock_key(atom: usize, p: Vec3, came: Option<Vec2>) -> KnockKey {
+    let q = |v: f64| if v.is_finite() { (v * 8.0).round().clamp(-1e15, 1e15) as i64 } else { 0 };
+    let c = came.unwrap_or(Vec2::new(p.x, p.y));
+    (atom, [q(p.x), q(p.y), q(p.z)], [q(c.x), q(c.y)])
+}
+
+/// The planned knockout of a run's end at `p` in the box `atom`, coming from `came`.
+fn planned_entry(planned: &mut HashMap<KnockKey, Vec<Vec3>>, atom: usize, p: Vec3, came: Option<Vec2>) -> Option<Vec3> {
+    planned.get_mut(&knock_key(atom, p, came)).and_then(Vec::pop)
+}
+
+/// The top of a run's drop at its end `end` (0: its first point; else its last): the highest of
+/// the points over that end's plan point; its end's own height when it has none.
+fn drop_top(pts: &[Vec3], end: usize, upf: f64) -> f64 {
+    let tiny = upf / 192.0;
+    let plan = |v: &Vec3| Vec2::new(v.x, v.y);
+    let Some(p) = (if end == 0 { pts.first() } else { pts.last() }).copied() else { return 0.0 };
+    let it: Box<dyn Iterator<Item = &Vec3>> = if end == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+    it.take_while(|q| plan(q).dist(plan(&p)) <= tiny).fold(p.z, |z, q| z.max(q.z))
+}
+
+/// The framing over each level (its joists, rim boards and trusses, as the router sees them, on
+/// the level's plan; Q6631): where a run's drop into a box may not stand.
+#[derive(Default)]
+struct FrameCols {
+    /// By level (lowercased): each member's centreline ends, half its thickness, its bottom and top.
+    by_level: HashMap<String, Vec<(Vec2, Vec2, f64, f64, f64)>>,
+}
+
+impl FrameCols {
+    fn of(d: &Drawing, sp: &BuildingSpec, moves: &HashMap<String, Vec2>, upf: f64) -> FrameCols {
+        let members = super::super::tradeatoms::framing_members(d, sp);
+        let by_level = super::super::conduitroute::framing_over_levels(d, sp, &members, moves, upf)
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().map(|(o, f)| (f.a, f.b, f.t / 2.0, o.lo.z, o.hi.z)).collect()))
+            .collect();
+        FrameCols { by_level }
+    }
+
+    /// Whether a drop at `at` (its plan point; radius `r`) from its height up to `top` stands
+    /// clear of every member over `level` (a member it reaches into it would go through the depth of).
+    fn clear(&self, level: &str, at: Vec3, top: f64, r: f64) -> bool {
+        let Some(list) = self.by_level.get(&level.to_ascii_lowercase()) else { return true };
+        if !(at.is_finite() && top.is_finite() && r.is_finite()) {
+            return true;
+        }
+        let (lo, hi) = (at.z.min(top), at.z.max(top));
+        let p = Vec2::new(at.x, at.y);
+        !list.iter().any(|(a, b, half, zb, zt)| hi > *zb && lo < *zt && super::super::conduitroute::seg_dist(p, *a, *b) < half + r)
+    }
+}
+
+/// Each box's knockouts for the routed runs ending in it (Q6552), chosen together so that no run
+/// passes through another's drop: the runs coming along the box's long way from one end take its
+/// knockouts from that end in, the lowest first (a higher run passes over a lower one's elbow);
+/// the runs coming across it the middle ones left; one run, its centre. More runs than its top's
+/// knockouts: one into each of its ends too (down beside it, into its side), the lowest from that
+/// end; more still, its side's nearest again. `knocked`: each box's knockouts taken.
+#[allow(clippy::too_many_arguments)]
+fn plan_knockouts(
+    paths: &BTreeMap<GroupKey, (Method, Vec<Path3>)>,
+    boxes: &[DevBox],
+    gear: &[Gear],
+    moves: &HashMap<String, Vec2>,
+    touch: f64,
+    spacing: f64,
+    keep: f64,
+    upf: f64,
+    clear: &dyn Fn(&DevBox, Vec3, f64) -> bool,
+    knocked: &mut HashMap<usize, Vec<i64>>,
+) -> HashMap<KnockKey, Vec<Vec3>> {
+    let mut out: HashMap<KnockKey, Vec<Vec3>> = HashMap::new();
+    if !(spacing.is_finite() && spacing > 0.0) {
+        return out;
+    }
+    let tiny = upf / 192.0;
+    let plan = |v: Vec3| Vec2::new(v.x, v.y);
+    // Each box's arrivals: (side along it: -1, 1, or 0 across; height it comes at; key).
+    let mut at_box: BTreeMap<usize, (usize, Vec<(i8, f64, KnockKey)>)> = BTreeMap::new();
+    let mut n_ends = 0usize;
+    for (key, (m, ps)) in paths {
+        if !(m.routed && m.devices.is_empty() && m.feeder.is_none()) {
+            continue;
+        }
+        for path in ps {
+            for end in 0..2 {
+                n_ends += 1;
+                if n_ends > 2 * MAX_ATOMS {
+                    return out;
+                }
+                let Some(p) = (if end == 0 { path.pts.first() } else { path.pts.last() }).copied() else { continue };
+                if touched_gear(gear, &key.level, &m.panel, p, touch, moves).is_some() {
+                    continue;
+                }
+                let Some(bi) = touched_box(boxes, &key.level, p, touch, None) else { continue };
+                let Some(b) = boxes.get(bi) else { continue };
+                let came = came_from(&path.pts, end, upf);
+                // The height it comes at: the top of its drop.
+                let top = drop_top(&path.pts, end, upf);
+                let side = came.map_or(0, |c| {
+                    let v = c - plan(b.entry);
+                    let along = v.dot(b.along);
+                    let across = (v - b.along * along).len();
+                    if along.abs() > across + tiny { if along > 0.0 { 1 } else { -1 } } else { 0 }
+                });
+                at_box.entry(b.atom).or_insert((bi, Vec::new())).1.push((side, top, knock_key(b.atom, p, came)));
+            }
+        }
+    }
+    for (atom, (bi, mut arrivals)) in at_box {
+        let Some(b) = boxes.get(bi) else { continue };
+        if !(b.width.is_finite() && b.along.is_finite()) || arrivals.len() > 64 {
+            continue;
+        }
+        let n = knockouts_each_side(b, spacing, keep);
+        arrivals.sort_by(|x, y| x.1.total_cmp(&y.1));
+        let taken = knocked.entry(atom).or_default();
+        // A knockout whose drop from `top` stands clear of the framing (Q6631).
+        let ok = |k: i64, top: f64| clear(b, knockout_at(b, k, n, spacing, keep), top);
+        // One run into it: its centre; where a framing member stands over it, the nearest clear
+        // knockout of its top, then of its ends.
+        if let [(_, top, key)] = arrivals.as_slice() {
+            let mut near: Vec<i64> = (-(n + 1)..=(n + 1)).collect();
+            near.sort_by_key(|k| (k.abs() > n, k.abs(), *k));
+            let k = near.into_iter().find(|k| ok(*k, *top)).unwrap_or(0);
+            taken.push(k);
+            out.entry(*key).or_default().push(knockout_at(b, k, n, spacing, keep));
+            continue;
+        }
+        // Its knockouts from one end to the other (steps); more runs than its top takes: one
+        // into each of its ends too.
+        let mut free: Vec<i64> = (-n..=n).collect();
+        // A knockout a framing member stands over is none of its top's (Q6631).
+        let highest = arrivals.iter().map(|a| a.1).fold(f64::NEG_INFINITY, f64::max);
+        let shut = free.iter().filter(|k| !ok(**k, highest)).count();
+        if arrivals.len() + shut > free.len() {
+            free.insert(0, -(n + 1));
+            free.push(n + 1);
+        }
+        for (side, top, key) in arrivals.iter().filter(|a| a.0 != 0).chain(arrivals.iter().filter(|a| a.0 == 0)) {
+            // From its own end inward; across: the middle; none free: its side's again. Each the
+            // first whose drop clears the framing (Q6631), else as if none stood there.
+            let pick = match side {
+                -1 => free.iter().copied().find(|k| ok(*k, *top)).or_else(|| free.first().copied()),
+                1 => free.iter().rev().copied().find(|k| ok(*k, *top)).or_else(|| free.last().copied()),
+                _ => free.iter().copied().filter(|k| ok(*k, *top)).min_by_key(|k| k.abs()).or_else(|| free.iter().copied().min_by_key(|k| k.abs())),
+            };
+            let k = pick.unwrap_or(match side {
+                -1 => -n,
+                1 => n,
+                _ => 0,
+            });
+            free.retain(|x| *x != k);
+            taken.push(k);
+            out.entry(*key).or_default().push(knockout_at(b, k, n, spacing, keep));
+        }
+    }
+    out
+}
+
+/// How many knockouts box `b`'s top has each side of its centre (Q6552): `spacing` apart centre
+/// to centre along its long way, each raceway's outside (`spacing` less the clearance `keep`)
+/// within its width.
+fn knockouts_each_side(b: &DevBox, spacing: f64, keep: f64) -> i64 {
+    let outside = (spacing - keep).max(0.0) / 2.0;
+    (((b.width / 2.0 - outside).max(0.0) / spacing + 1e-6).floor() as i64).clamp(0, 16)
+}
+
+/// Knockout `k` of box `b`: steps from its centre along its top, past the top's `n` each side
+/// one in its end (beside it, at half its height); `keep` the conduit clearance.
+fn knockout_at(b: &DevBox, k: i64, n: i64, spacing: f64, keep: f64) -> Vec3 {
+    let (off, z) = if k.abs() <= n {
+        ((k as f64) * spacing, b.entry.z)
+    } else {
+        ((k.signum() as f64) * (b.width / 2.0 + (spacing - keep).max(0.0) / 2.0), b.entry.z - b.height.max(0.0) / 2.0)
+    };
+    let o = b.along * off;
+    Vec3::new(b.entry.x + o.x, b.entry.y + o.y, z)
+}
+
+/// Where a run enters box `b` (Q6552): its own knockout ([`knockouts_each_side`]); the box's
+/// first, its centre, then the free one of its top nearest the side it comes from (`from`), then
+/// one in its end on that side; every one taken, the nearest of its top's. `taken`: the box's
+/// knockouts so far.
+fn knockout(b: &DevBox, taken: &mut Vec<i64>, from: Option<Vec2>, spacing: f64, keep: f64, clear: &dyn Fn(Vec3) -> bool) -> Vec3 {
+    if !(spacing.is_finite() && spacing > 0.0 && b.width.is_finite() && b.along.is_finite()) || taken.len() > 64 {
+        return b.entry;
+    }
+    let n = knockouts_each_side(b, spacing, keep);
+    let side = from.map_or(0.0, |q| (q - Vec2::new(b.entry.x, b.entry.y)).dot(b.along));
+    // Its top's first, then its ends; the nearest the run's side.
+    let rank = |k: &i64| {
+        let at = knockout_at(b, *k, n, spacing, keep);
+        (k.abs() > n, ((Vec2::new(at.x, at.y) - Vec2::new(b.entry.x, b.entry.y)).dot(b.along) - side).abs() + (*k as f64).abs() * 1e-6)
+    };
+    let by = |a: &i64, c: &i64| {
+        let (x, y) = (rank(a), rank(c));
+        x.0.cmp(&y.0).then(x.1.total_cmp(&y.1))
+    };
+    let all: Vec<i64> = (-(n + 1)..=(n + 1)).collect();
+    // Its drop clear of the framing over the box (Q6631): a free knockout clear of it first.
+    let ok = |k: &i64| clear(knockout_at(b, *k, n, spacing, keep));
+    let k = if taken.is_empty() && ok(&0) {
+        0
+    } else {
+        all.iter()
+            .copied()
+            .filter(|k| !taken.contains(k) && ok(k))
+            .min_by(by)
+            .or_else(|| taken.is_empty().then_some(0))
+            .or_else(|| all.iter().copied().filter(|k| !taken.contains(k)).min_by(by))
+            .or_else(|| all.iter().copied().filter(|k| k.abs() <= n).min_by(by))
+            .unwrap_or(0)
+    };
+    taken.push(k);
+    knockout_at(b, k, n, spacing, keep)
+}
+
 fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
     if end == 0 {
         pts.reverse();
@@ -3080,6 +4060,30 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
             k -= 1;
         }
         pts.truncate(k + 1);
+        // A knockout on its way in (Q6552): it turns down there, never past it and back; one
+        // beside its last stretch, a dogleg over onto it just before.
+        if let (Some(&top), Some(&before)) = (pts.last(), k.checked_sub(1).and_then(|j| pts.get(j))) {
+            let (a, p, q) = (plan(before), plan(top), plan(entry));
+            let d = p - a;
+            let l2 = d.dot(d);
+            if l2 > tiny * tiny && p.dist(q) > tiny && (before.z - top.z).abs() <= tiny {
+                let t = (q - a).dot(d) / l2;
+                let m = a + d * t;
+                let side = q - m;
+                if (0.0..=1.0).contains(&t) {
+                    let back = m - d * (side.len().min(t * l2.sqrt()) / l2.sqrt());
+                    if let Some(last) = pts.last_mut() {
+                        *last = Vec3::new(back.x, back.y, top.z);
+                    }
+                    if side.len() > tiny {
+                        pts.push(Vec3::new(back.x + side.x, back.y + side.y, top.z));
+                        if (back + side).dist(q) > tiny {
+                            pts.push(Vec3::new(q.x, q.y, top.z));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(&top) = pts.last() {
             let (p, q) = (plan(top), plan(entry));
             let came = k.checked_sub(1).and_then(|j| pts.get(j)).map(|a| p - plan(*a));
@@ -3097,6 +4101,8 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
             }
         }
     }
+    // No piece of no length where a turn landed on a point already there.
+    pts.dedup_by(|b, a| super::dist(*a, *b) <= tiny);
     if end == 0 {
         pts.reverse();
     }
@@ -3235,7 +4241,8 @@ enum Cut {
 
 /// Whether end `end` of a feeder's chain `pts` (on `level`; `buried`: the buried raceway's) is
 /// where the model cut its riser (Q6347): a vertical end at a floor it passes (its foot at its
-/// level's floor over a level below, its head at a higher level's floor) or at the slab level's
+/// level's floor over a level below, its head at a higher level's floor; Q6453: the levels whose
+/// plan holds it, [`super::super::risercut::riser_levels`]) or at the slab level's
 /// stub-up top (the underground rules' stub height over the floor). Such an end lands in no gear
 /// or box: it runs on in the next piece.
 fn feeder_cut(sp: &BuildingSpec, level: &str, buried: bool, pts: &[Vec3], end: usize, tol: f64, upf: f64) -> Option<Cut> {
@@ -3249,15 +4256,20 @@ fn feeder_cut(sp: &BuildingSpec, level: &str, buried: bool, pts: &[Vec3], end: u
         return None;
     }
     let up = p.z > q.z;
-    let mut floors = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite());
     if on_slab && stub.is_finite() && near(p.z, (here + stub) * upf) && up == buried {
         return Some(Cut::Stub(buried));
     }
-    if up && floors.any(|f| f > here + 1e-6 && near(p.z, f * upf)) {
+    // Only the floors the riser passes where it stands (Q6453): a mezzanine or partial level
+    // elsewhere at the same height is no floor it was cut at.
+    let floors: Vec<f64> =
+        super::super::risercut::riser_levels(sp, level, [p.x, p.y], &|q, from, to| super::super::gearbuild::feeder_carry(sp, q, from, to))
+            .into_iter()
+            .map(|l| l.elevation_ft)
+            .collect();
+    if up && floors.iter().any(|f| *f > here + 1e-6 && near(p.z, f * upf)) {
         return Some(Cut::Floor(true));
     }
-    (!up && !on_slab && sp.levels.iter().any(|l| l.elevation_ft.is_finite() && l.elevation_ft < here - 1e-6) && near(p.z, here * upf))
-        .then_some(Cut::Floor(false))
+    (!up && !on_slab && floors.iter().any(|f| *f < here - 1e-6) && near(p.z, here * upf)).then_some(Cut::Floor(false))
 }
 
 /// The joints of a feeder chain's cut ends (`cut`, from [`feeder_cut`]; the buried piece's
@@ -3335,6 +4347,38 @@ pub(crate) fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
     parts.join(" + ")
 }
 
+/// A panel's phase count (1 or 3) by its schedule header's `volts/phase` (or a `phase` entry),
+/// else its equipment row's properties; 3 when neither says (most panelboards are three phase).
+pub(crate) fn panel_phases(sp: &BuildingSpec, panel: &str) -> u32 {
+    let p = panel.trim();
+    if p.is_empty() {
+        return 3;
+    }
+    let is_volt_or_phase = |k: &str| {
+        let k = k.to_ascii_uppercase();
+        k.contains("VOLT") || k.contains("PHASE")
+    };
+    let from_schedule = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|s| s.panel.trim().eq_ignore_ascii_case(p))
+        .flat_map(|s| s.header.iter())
+        .filter(|(k, _)| is_volt_or_phase(k))
+        .find_map(|(_, v)| super::phases_in(v));
+    from_schedule
+        .or_else(|| {
+            sp.mep
+                .equipment
+                .iter()
+                .filter(|e| e.tag.trim().eq_ignore_ascii_case(p))
+                .flat_map(|e| e.properties.iter())
+                .filter(|(k, _)| is_volt_or_phase(k))
+                .find_map(|(_, v)| super::phases_in(v))
+        })
+        .unwrap_or(3)
+}
+
 /// A panel's voltage from its schedule row's properties (`VOLTS`, `VOLTAGE`), as the colour
 /// table names it.
 pub(crate) fn gear_voltage(sp: &BuildingSpec, panel: &str) -> Option<String> {
@@ -3363,6 +4407,128 @@ mod tests {
         ps.iter().map(|p| p.pts.windows(2).map(|w| if let [a, b] = w { super::super::dist(*a, *b) } else { 0.0 }).sum::<f64>()).sum()
     }
 
+    /// A 4" box at (48, 0), its top at 20 (sheet inches), its long way along x.
+    fn box_at_48() -> DevBox {
+        DevBox {
+            device: Handle(0x10),
+            level: "L1".into(),
+            circuit: "LP1-1".into(),
+            entry: Vec3::new(48.0, 0.0, 20.0),
+            along: Vec2::new(1.0, 0.0),
+            width: 4.0,
+            height: 4.0,
+            atom: 0,
+            at: Vec3::new(48.0, 0.0, 18.0),
+            drawn: None,
+            family: "receptacle",
+        }
+    }
+
+    #[test]
+    fn a_run_turns_down_at_its_knockout_on_its_way_in_never_past_it_and_back() {
+        // Q6552: from the west at 100 to the box's centre; its knockout is 1-1/2" short of it.
+        let mut pts = vec![Vec3::new(0.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 20.0)];
+        land_on(&mut pts, 1, Vec3::new(46.5, 0.0, 20.0), 12.0);
+        assert!(pts.iter().all(|p| p.x <= 46.5 + 1e-9), "{pts:?}");
+        assert_eq!(pts.last().copied(), Some(Vec3::new(46.5, 0.0, 20.0)));
+        assert_eq!(pts.get(pts.len() - 2).copied(), Some(Vec3::new(46.5, 0.0, 100.0)));
+        // One beside its last stretch: a dogleg over onto it just before, square; the stretch
+        // itself stays where it was laid.
+        let mut pts = vec![Vec3::new(0.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 100.0), Vec3::new(48.0, 0.0, 20.0)];
+        land_on(&mut pts, 1, Vec3::new(48.0, 1.5, 20.0), 12.0);
+        assert_eq!(pts.get(pts.len() - 2).copied(), Some(Vec3::new(48.0, 1.5, 100.0)), "{pts:?}");
+        assert!(pts.iter().filter(|p| p.y > 1e-9).all(|p| p.x >= 46.5 - 1e-9), "{pts:?}");
+        assert!(pts.windows(2).all(|w| matches!(w, [a, b] if (a.x - b.x).abs() < 1e-9 || (a.y - b.y).abs() < 1e-9)), "{pts:?}");
+    }
+
+    #[test]
+    fn runs_into_one_box_from_one_end_take_its_knockouts_from_that_end_the_lowest_first() {
+        // Q6552: three runs come along the box's long way from the west at 108, 100 and 104, one
+        // from the east at 100.
+        let key =
+            GroupKey { system: "E-BRANCH".into(), level: "L1".into(), circuit_tag: "c".into(), cable: false, buried: false, steel: false, copy: 0 };
+        let m = Method { routed: true, ..Method::default() };
+        let run = |from_x: f64, z: f64| Path3 { pts: vec![Vec3::new(from_x, 0.0, z), Vec3::new(48.0, 0.0, z), Vec3::new(48.0, 0.0, 20.0)], run: 0 };
+        let mut paths = BTreeMap::new();
+        paths.insert(key, (m, vec![run(0.0, 108.0), run(10.0, 100.0), run(20.0, 104.0), run(96.0, 100.0)]));
+        let mut knocked = HashMap::new();
+        let mut planned = plan_knockouts(&paths, &[box_at_48()], &[], &HashMap::new(), 6.0, 1.5, 0.5, 12.0, &|_, _, _| true, &mut knocked);
+        let mut at = |from_x: f64| planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(from_x, 0.0))).expect("planned");
+        // Four into a box of three knockouts: the lowest from the west into its west end
+        // (beside it, into its side at half its height), the next ones further in; the east one
+        // into its east end.
+        assert_eq!(at(10.0), Vec3::new(45.5, 0.0, 18.0));
+        assert_eq!(at(96.0), Vec3::new(50.5, 0.0, 18.0));
+        assert_eq!(at(20.0), Vec3::new(46.5, 0.0, 20.0));
+        assert_eq!(at(0.0), Vec3::new(48.0, 0.0, 20.0));
+        assert_eq!(knocked.get(&0).map(Vec::len), Some(4));
+        // Each once: a second run with the same end and way in gets none planned.
+        assert!(planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).is_none());
+        // Unplanned, one at a time: the first at the centre, then the free one of its top nearest
+        // its side.
+        assert_eq!(knockout(&box_at_48(), &mut vec![], Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(48.0, 0.0, 20.0));
+        let mut taken = vec![0];
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(46.5, 0.0, 20.0));
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(49.5, 0.0, 20.0));
+        // Its top full: into its end on the run's side.
+        assert_eq!(knockout(&box_at_48(), &mut taken, Some(Vec2::new(0.0, 0.0)), 1.5, 0.5, &|_| true), Vec3::new(45.5, 0.0, 18.0));
+        let _ = knockout(&box_at_48(), &mut vec![], Some(Vec2::new(f64::NAN, 0.0)), f64::NAN, 0.5, &|_| true);
+    }
+
+    #[test]
+    fn a_drop_into_a_knockout_never_stands_in_a_framing_member() {
+        // Q6631: an I-joist (1-3/4" wide, 90 to 110 sheet inches) runs square to the box's long
+        // way over one of its knockouts; a run's drop there would go through the joist's depth.
+        let joist_at =
+            |x: f64| FrameCols { by_level: HashMap::from([("l1".to_string(), vec![(Vec2::new(x, -50.0), Vec2::new(x, 50.0), 0.875, 90.0, 110.0)])]) };
+        let r = (1.5 - 0.5) / 2.0;
+        let in_joist = |q: Vec3, x: f64| (q.x - x).abs() < 0.875 + r;
+        // The column's own test: under the joist's bottom, or beside it, it is clear.
+        let fc = joist_at(46.5);
+        assert!(!fc.clear("L1", Vec3::new(46.5, 0.0, 20.0), 100.0, r));
+        assert!(fc.clear("L1", Vec3::new(46.5, 0.0, 20.0), 80.0, r), "a drop wholly under the joist");
+        assert!(fc.clear("L1", Vec3::new(48.0, 0.0, 20.0), 100.0, r));
+        assert!(fc.clear("L2", Vec3::new(46.5, 0.0, 20.0), 100.0, r), "another level's framing");
+        let key =
+            GroupKey { system: "E-BRANCH".into(), level: "L1".into(), circuit_tag: "c".into(), cable: false, buried: false, steel: false, copy: 0 };
+        let run = |from_x: f64, z: f64| Path3 { pts: vec![Vec3::new(from_x, 0.0, z), Vec3::new(48.0, 0.0, z), Vec3::new(48.0, 0.0, 20.0)], run: 0 };
+        let plan = |runs: Vec<Path3>, x: f64| {
+            let fc = joist_at(x);
+            let clear = |b: &DevBox, q: Vec3, top: f64| fc.clear(&b.level, q, top, r);
+            let mut paths = BTreeMap::new();
+            paths.insert(key.clone(), (Method { routed: true, ..Method::default() }, runs));
+            plan_knockouts(&paths, &[box_at_48()], &[], &HashMap::new(), 6.0, 1.5, 0.5, 12.0, &clear, &mut HashMap::new())
+        };
+        // Two from the west: the lowest would take the west knockout (46.5), in the joist; it
+        // takes the centre, the next the east one.
+        let mut planned = plan(vec![run(10.0, 100.0), run(0.0, 104.0)], 46.5);
+        let low = planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).expect("planned");
+        let high = planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(0.0, 0.0))).expect("planned");
+        assert!(!in_joist(low, 46.5) && !in_joist(high, 46.5), "{low:?} {high:?}");
+        assert_eq!((low, high), (Vec3::new(48.0, 0.0, 20.0), Vec3::new(49.5, 0.0, 20.0)));
+        // Three runs (west, east, across) into a box of three knockouts, one shut by the joist:
+        // none takes the shut one; the box's end is opened for the third.
+        let across = Path3 { pts: vec![Vec3::new(48.0, 60.0, 104.0), Vec3::new(48.0, 0.0, 104.0), Vec3::new(48.0, 0.0, 20.0)], run: 0 };
+        let mut planned = plan(vec![run(10.0, 100.0), run(96.0, 100.0), across], 46.5);
+        let entries: Vec<Vec3> = [Vec2::new(10.0, 0.0), Vec2::new(96.0, 0.0), Vec2::new(48.0, 60.0)]
+            .iter()
+            .map(|c| planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(*c)).expect("planned"))
+            .collect();
+        assert!(entries.iter().all(|q| !in_joist(*q, 46.5)), "{entries:?}");
+        assert!(entries.iter().enumerate().all(|(i, q)| entries.iter().skip(i + 1).all(|o| o != q)), "each its own: {entries:?}");
+        // One run, the joist over the box's centre: the nearest knockout clear of it.
+        let mut planned = plan(vec![run(10.0, 100.0)], 48.0);
+        let one = planned_entry(&mut planned, 0, Vec3::new(48.0, 0.0, 20.0), Some(Vec2::new(10.0, 0.0))).expect("planned");
+        assert_eq!(one, Vec3::new(46.5, 0.0, 20.0));
+        // Unplanned, one at a time: the same.
+        let fc = joist_at(48.0);
+        let clear = |q: Vec3| fc.clear("L1", q, 100.0, r);
+        let first = knockout(&box_at_48(), &mut vec![], Some(Vec2::new(96.0, 0.0)), 1.5, 0.5, &clear);
+        assert_eq!(first, Vec3::new(49.5, 0.0, 20.0), "the clear one nearest the run's side");
+        // No clear one at all: as before (the centre), never no knockout.
+        assert_eq!(knockout(&box_at_48(), &mut vec![], None, 1.5, 0.5, &|_| false), Vec3::new(48.0, 0.0, 20.0));
+    }
+
     #[test]
     fn a_route_laid_before_its_device_moved_still_lands_in_its_box() {
         // Test finding (fix-box-collisions): a device moved 2 ft for the field; the router's
@@ -3375,9 +4541,13 @@ mod tests {
             level: "L1".into(),
             circuit: "LP1-3".into(),
             entry: drawn + moved + Vec3::new(0.0, 0.0, 2.0),
+            along: Vec2::new(1.0, 0.0),
+            width: 4.0,
+            height: 4.0,
             atom: 0,
             at: drawn + moved,
             drawn: drawn_at,
+            family: "receptacle",
         };
         assert_eq!(touched_box(&[b(Some(drawn))], "L1", drawn, 6.0, None), Some(0));
         assert_eq!(touched_box(&[b(None)], "L1", drawn, 6.0, None), None, "without its drawn spot the route finds nothing");
@@ -3537,6 +4707,45 @@ mod tests {
         let r3 = build(&mut d3, &sp);
         assert_eq!(r3["racewayLaidOnce"]["ft"], json!(20.0), "{r3}");
         assert_eq!(r3["junctionBoxes"], json!(1), "the shared raceway meets the homerun: {r3}");
+    }
+
+    #[test]
+    fn the_rated_wall_remedy_is_the_project_rules_else_the_documents_else_the_default() {
+        use super::super::boxclear::Remedy;
+        let b = &super::super::rules().box_clear.back_to_back;
+        let mut d = Drawing::default();
+        let (r, src, named) = rated_box_remedy(&d, b);
+        assert_eq!((r, named), (Remedy::Separate, false));
+        assert!(src.contains("putty pads"), "the default names the alternative: {src}");
+        // The job's documents named the pads.
+        let m = super::super::super::conduitroute::Methods {
+            rated_box_remedy: "putty pads".into(),
+            rated_box_remedy_source: "spec 26 05 33: protect boxes with listed putty pads".into(),
+            ..Default::default()
+        };
+        m.store(&mut d);
+        let (r, src, named) = rated_box_remedy(&d, b);
+        assert_eq!((r, named), (Remedy::Putty, true));
+        assert!(src.starts_with("spec 26 05 33"), "{src}");
+        // A note forbidding back-to-back devices over the pads the documents name (Q6553).
+        let mut m = m;
+        m.back_to_back_forbidden = "Sheet X-9 note 4: DO NOT INSTALL DEVICES BACK-TO-BACK".into();
+        m.store(&mut d);
+        let (r, src, _) = rated_box_remedy(&d, b);
+        assert_eq!(r, Remedy::Separate);
+        assert!(src.starts_with("Sheet X-9 note 4"), "{src}");
+        assert_eq!(back_to_back_forbid(&d, b).map(|f| f.1), Some(false));
+        // A project rule allowing them over the note: the documents' pads again.
+        let v = cadaddy_doc::projrules::RuleValue::new("permitted").with_source("RFI 8");
+        d.project_rules.set(cadaddy_doc::projrules::RuleDomain::Clearance, "back_to_back_boxes", v, "answered");
+        assert_eq!(back_to_back_forbid(&d, b), None);
+        assert_eq!(rated_box_remedy(&d, b).0, Remedy::Putty);
+        // A project rule over them.
+        let v = cadaddy_doc::projrules::RuleValue::new("separate").with_source("RFI 7");
+        d.project_rules.set(cadaddy_doc::projrules::RuleDomain::Clearance, "rated_wall_boxes", v, "answered");
+        let (r, src, _) = rated_box_remedy(&d, b);
+        assert_eq!(r, Remedy::Separate);
+        assert!(src.contains("RFI 7"), "{src}");
     }
 
     /// Two routed runs of one circuit leaving a box the same way: the circuit's shared stretch is

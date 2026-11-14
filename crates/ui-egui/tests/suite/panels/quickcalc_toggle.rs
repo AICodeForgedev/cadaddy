@@ -13,6 +13,9 @@ fn harness() -> Harness<'static, CadApp> {
     // the classic workspace (tool bar and Tool Sets); the default is the ribbon
     app.ui.ribbon = false;
     app.ui.show_toolsets = true;
+    // the palettes docked (pinned) as they stood before the rail
+    app.ui.docking = cadaddy_ui_egui::docking::Workspace::docked();
+    app.ui.show_palettes = true;
     app.ui.start_tab = false;
     app.ui.in_window_menu = false;
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_ui_state(
@@ -26,7 +29,7 @@ fn harness() -> Harness<'static, CadApp> {
     h
 }
 
-/// In these tests QuickCalc floats alone; scope to its body to avoid the Properties text fields.
+/// In these tests QuickCalc stands alone in its group; scope to its body to avoid the Properties text fields.
 /// Its first text input is the expression, before conversion values and variable definitions.
 fn expression<'a>(h: &'a Harness<'_, CadApp>) -> egui_kittest::Node<'a> {
     h.get_by_role_and_label(Role::Tab, "QuickCalc").parent().unwrap().get_all_by_role(Role::TextInput).next().unwrap()
@@ -46,7 +49,8 @@ fn platform_shortcut_toggles_with_expression_focus_and_preserves_drafting() {
         h.key_press_modifiers(modifiers, Key::Num8);
         h.run_steps(5);
         assert!(h.state().ui.docking.layout.contains(&Panel::QuickCalc));
-        let floating = h.state().ui.docking.layout.floating.iter().find(|group| group.panels.contains(&Panel::QuickCalc)).unwrap().rect;
+        // It opens beside the palette rail, like every palette.
+        let place = h.state().ui.docking.layout.location(&Panel::QuickCalc).unwrap();
         expression(&h).click();
         h.run_steps(3);
         expression(&h).type_text("2+3");
@@ -58,7 +62,7 @@ fn platform_shortcut_toggles_with_expression_focus_and_preserves_drafting() {
         h.key_press_modifiers(modifiers, Key::Num8);
         h.run_steps(5);
         assert_eq!(h.get(by().role(Role::TextInput).value("2+3")).value().as_deref(), Some("2+3"));
-        assert_eq!(h.state().ui.docking.layout.floating.iter().find(|group| group.panels.contains(&Panel::QuickCalc)).unwrap().rect, floating);
+        assert_eq!(h.state().ui.docking.layout.location(&Panel::QuickCalc).unwrap(), place);
         assert_eq!(h.state().session.running.as_ref().unwrap().id, "line");
         assert_eq!(h.state().cmd.buffer, "12,34");
         assert_eq!(h.state().session.doc().unwrap(), &drawing);
@@ -100,6 +104,8 @@ fn toggle_restores_floating_or_docked_location_without_hiding_other_panels() {
         let mut app = CadApp::new(Session::default(), Services::default());
         app.ui.ribbon = false;
         app.ui.show_toolsets = true;
+        app.ui.docking = cadaddy_ui_egui::docking::Workspace::docked();
+        app.ui.show_palettes = true;
         app.run("ui.panel.quickcalc", Value::Null).unwrap();
         let params = if floating {
             json!({"operation":"float", "panel":"quickCalc", "rect":[80,120,360,480]})
@@ -123,6 +129,8 @@ fn explicit_opens_still_reveal_and_calculations_do_not_open_the_palette() {
     let mut app = CadApp::new(Session::default(), Services::default());
     app.ui.ribbon = false;
     app.ui.show_toolsets = true;
+    app.ui.docking = cadaddy_ui_egui::docking::Workspace::docked();
+    app.ui.show_palettes = true;
     let value = app.run("cal", json!({"expr":"2+3"})).unwrap();
     assert_eq!(value["value"], 5.0);
     assert!(app.cmdline(r#"quickcalc {"expr":"2+3"}"#).is_none());

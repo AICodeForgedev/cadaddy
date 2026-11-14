@@ -806,7 +806,8 @@ impl crate::Session {
         s.orthomode ^= q.shift;
         let angbase = self.angle_settings().angbase;
         let Ok(st) = self.state() else { return CursorSnap { point: raw, ..Default::default() } };
-        let (doc, space) = (st.doc.clone(), st.edit_space());
+        // With a print set's sheet open, only its objects are snapped to (`sheetnav`).
+        let (doc, space) = (self.view_doc().unwrap_or_else(|_| st.doc.clone()), st.edit_space());
         if !raw.is_finite() {
             return CursorSnap { point: raw, ..Default::default() };
         }
@@ -820,7 +821,9 @@ impl crate::Session {
         }
         let osmode = s.osmode | if s.osnaphatch { mode::HATCH } else { 0 };
         let ix = crate::spatial::index(&doc, &space);
-        let (hit, near_prims) = super::osnap_with_neighborhood(&doc, &space, &ix, raw, q.aperture, osmode, q.base, q.deferred);
+        // Only what the screen draws in full (its detail level, `cadaddy_render::detail`).
+        let detail = self.screen_detail();
+        let (hit, near_prims) = super::osnap_with_neighborhood(&doc, &space, &ix, raw, q.aperture, osmode, q.base, q.deferred, detail.as_ref());
         let cand = match (osmode & mode::HATCH, near_prims.as_deref()) {
             (0, Some(prims)) => candidate_with_prims(raw, hit.as_ref(), q.aperture, &cfg, q.base, prims),
             _ => candidate(&doc, &space, raw, hit.as_ref(), q.aperture, &cfg, q.base),

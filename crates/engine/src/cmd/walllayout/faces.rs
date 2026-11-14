@@ -86,10 +86,11 @@ pub(crate) fn pieces(d: &Drawing, upf: f64) -> Vec<Piece> {
     out
 }
 
-/// A room as the faces see it: its label (number, else name), level and outline.
+/// A room as the faces see it: its label (number, else name), its name, level and outline.
 #[derive(Clone, Debug)]
 pub(crate) struct RoomRef {
     pub label: String,
+    pub name: String,
     pub level: Option<String>,
     pub outline: Vec<Vec2>,
 }
@@ -606,7 +607,7 @@ mod tests {
     }
 
     fn room(label: &str, pts: &[(f64, f64)]) -> RoomRef {
-        RoomRef { label: label.into(), level: Some("L1".into()), outline: pts.iter().map(|p| Vec2::new(p.0, p.1)).collect() }
+        RoomRef { label: label.into(), name: String::new(), level: Some("L1".into()), outline: pts.iter().map(|p| Vec2::new(p.0, p.1)).collect() }
     }
 
     #[test]

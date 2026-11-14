@@ -46,8 +46,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         Some(i) => q["issue"] = json!(i),
         None => q["unresolved"] = json!(false),
     }
-    let r = app.session.execute("tags.list", &q).unwrap_or(Value::Null);
-    let list: Vec<Value> = r["tags"].as_array().cloned().unwrap_or_default();
+    // Asked once per state of the drawing and of the filter, not on every frame (Q6573).
+    let r = crate::asked::ask(app, ctx, "tags.list", &q);
+    let list: &[Value] = r["tags"].as_array().map_or(&[], Vec::as_slice);
     let mut act: Option<(&str, Value)> = None;
     egui::Window::new(crate::tl!("Element Tags"))
         .id(egui::Id::new("Element Tags"))
@@ -68,11 +69,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.label(RichText::new(crate::tf!("{n} elements", n = r["total"].as_u64().unwrap_or(0))).small().color(t.text_dim));
             });
             ui.separator();
-            egui::ScrollArea::vertical().id_salt("tags-list").max_height(300.0).show(ui, |ui| {
-                if list.is_empty() {
-                    ui.label(RichText::new(crate::tl!("No element tags: read the electrical plans first.")).color(t.text_dim));
-                }
-                for item in &list {
+            if list.is_empty() {
+                ui.label(RichText::new(crate::tl!("No element tags: read the electrical plans first.")).color(t.text_dim));
+            }
+            // Only the rows on screen are laid out.
+            let row_height = ui.spacing().interact_size.y;
+            egui::ScrollArea::vertical().id_salt("tags-list").max_height(300.0).show_rows(ui, row_height, list.len(), |ui, rows| {
+                for item in list.get(rows).into_iter().flatten() {
                     let tid = item["id"].as_str().unwrap_or_default().to_string();
                     let mut on = st.picked.contains(&tid);
                     ui.horizontal(|ui| {

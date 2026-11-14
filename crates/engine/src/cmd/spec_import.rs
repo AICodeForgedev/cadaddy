@@ -1119,6 +1119,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
         if (!cut_sheets && upper.starts_with("SECTION ")) || is_csi_section(line).is_some() {
             // Save any pending submittal.
             if let Some(sub) = current_submittal.take() {
+                settle_category(&mut current_types, &blocks, &sub.spec_section);
                 settle_dimming(&mut current_types, &blocks, &mut result, &mut rfi_counter);
                 finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
                 current_types.clear();
@@ -1174,6 +1175,7 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
 
     // Finalize last submittal.
     if let Some(sub) = current_submittal.take() {
+        settle_category(&mut current_types, &blocks, &sub.spec_section);
         settle_dimming(&mut current_types, &blocks, &mut result, &mut rfi_counter);
         finalize_submittal(sub, &current_types, &type_stamps, existing, &mut result, &mut rfi_counter);
     }
@@ -1184,13 +1186,21 @@ fn parse_submittal_text(text: &str, existing: &bimspec::BimTypes) -> SpecImportR
     result
 }
 
-/// One proposal per mark: a product whose pages run on into another section of the package
-/// keeps its first reading, and gains what the later pages add.
+/// One proposal per mark and category: a product whose pages run on into another section of the
+/// package keeps its first reading, and gains what the later pages add. The same mark in another
+/// category (luminaire type A, panelboard A; Q6588) is another product.
 fn merge_repeated_marks(proposals: &mut Vec<SpecProposal>) {
     let mut kept: Vec<SpecProposal> = Vec::with_capacity(proposals.len());
     for p in proposals.drain(..) {
-        match kept.iter_mut().find(|k| k.bim_type.mark == p.bim_type.mark) {
+        let (cat, mark) = (super::submittals::category_of(&p.bim_type.category), &p.bim_type.mark);
+        match kept.iter_mut().find(|k| {
+            let kc = super::submittals::category_of(&k.bim_type.category);
+            k.bim_type.mark == *mark && (kc == cat || kc.is_empty() || cat.is_empty())
+        }) {
             Some(k) => {
+                if k.bim_type.category.is_empty() {
+                    k.bim_type.category.clone_from(&p.bim_type.category);
+                }
                 for (key, field) in p.bim_type.fields {
                     k.bim_type.fields.entry(key).or_insert(field);
                 }
@@ -1499,13 +1509,38 @@ fn code_words(text: &str) -> impl Iterator<Item = String> + '_ {
         .map(str::to_ascii_uppercase)
 }
 
+/// Pieces of a catalog number compared in order against its cut sheet's body.
+const MAX_HEADER_PIECES: usize = 32;
+/// Body pieces searched for a header's catalog number printed whole.
+const MAX_BODY_PIECES: usize = 200_000;
+
+/// Whether a cut sheet's body prints the header's catalog number word for word (Q6465), in the same
+/// form the header is read in: one of its words squeezed to letters and digits starts with the
+/// header's squeezed `key` (`4817-W`, `4817W,`), or the header's own pieces stand in that order in
+/// it (`4817 W`). Pieces of separate words never join up (`7 A 12 B` is no `7A12B`); unlike
+/// [`code_words`], all-digit and short pieces count, so a number like `4817-W` or `3-QX-20K` is seen.
+fn printed_whole(catalog: &str, key: &str, body: &[&str]) -> bool {
+    let squeeze = |w: &str| w.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    let pieces = |t: &str| t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect::<Vec<_>>();
+    if body.iter().flat_map(|x| x.split_whitespace()).take(MAX_BODY_PIECES).any(|w| squeeze(w).starts_with(key)) {
+        return true;
+    }
+    let header = pieces(catalog);
+    if header.is_empty() || header.len() > MAX_HEADER_PIECES {
+        return false;
+    }
+    let text: Vec<String> = body.iter().flat_map(|x| pieces(x)).take(MAX_BODY_PIECES).collect();
+    text.windows(header.len()).any(|w| w == header.as_slice())
+}
+
 /// What a cut sheet's own pages (its lines without the header's fields) say of the header's
 /// catalog number and maker.
 #[derive(Debug, PartialEq)]
 enum HeaderCheck {
     /// The body is too short to say (a scan, a header-only page), or nothing to check.
     Unread,
-    /// One of the body's ordering codes starts the header's catalog number (or it is whole there).
+    /// One of the body's ordering codes starts the header's catalog number, or the body prints it
+    /// whole ([`printed_whole`]).
     Backed,
     /// No code on its pages builds the header's catalog number: whether its pages name the
     /// header's maker, and the codes they do show.
@@ -1538,7 +1573,7 @@ fn check_header(catalog: &str, maker: &str, lines: &[String]) -> HeaderCheck {
             words.push(w);
         }
     }
-    if words.iter().any(|w| key.starts_with(w.as_str()) || w.starts_with(key.as_str())) {
+    if words.iter().any(|w| key.starts_with(w.as_str()) || w.starts_with(key.as_str())) || printed_whole(catalog, &key, &body) {
         return HeaderCheck::Backed;
     }
     let maker_word: String =
@@ -1592,6 +1627,32 @@ fn header_against_body(p: &mut SpecProposal, lines: &[String], result: &mut Spec
     }
 }
 
+/// What kind of product each of a submittal's products is (Q6588), where nothing has said: its
+/// submittal's CSI section's (`submittals.section_category`), else what its pages say of it
+/// (`submittals.product_category`: a panelboard's cut sheet). A luminaire is told by its lighting
+/// words after this ([`settle_dimming`]). A type mark is unique only within a category, so
+/// `bim.submittals` puts a product only on the elements of its own.
+fn settle_category(types: &mut [SpecProposal], blocks: &[Vec<String>], section: &str) {
+    let by_section = super::submittals::section_category(section);
+    for (i, p) in types.iter_mut().enumerate() {
+        if !p.bim_type.category.is_empty() {
+            continue;
+        }
+        if let Some(c) = by_section {
+            p.bim_type.category = c.to_string();
+            continue;
+        }
+        let mut text = blocks.get(i).map(|b| b.join(" ")).unwrap_or_default().to_ascii_uppercase();
+        if let Some(d) = p.bim_type.get_field(bimspec::keys::DESCRIPTION) {
+            text.push(' ');
+            text.push_str(&d.value.to_ascii_uppercase());
+        }
+        if let Some(r) = cadaddy_mepfix::wordrules::first_rule("submittals.product_category", |w| super::submittals::has_word(&text, w)) {
+            p.bim_type.category = r.value.to_string();
+        }
+    }
+}
+
 fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &mut SpecImportResult, counter: &mut u32) {
     for (i, p) in types.iter_mut().enumerate() {
         let lines = blocks.get(i).map(Vec::as_slice).unwrap_or(&[]);
@@ -1628,6 +1689,26 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
             let source = format!("{} (its cut sheet: {w})", p.file_source);
             p.bim_type.set_field(JUNCTION_BOX, SpecField::new(w).with_source(source));
         }
+        // What its cut sheet says the ordered product does (Q6590): its CCT, CRI, lumens and
+        // wattage, from its catalog number, then its performance table or lines.
+        if p.bim_type.category == "luminaire" {
+            let catalog = p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).map(|f| f.value.clone()).unwrap_or_default();
+            let perf = super::lighting::performance(&catalog, lines);
+            let page = p.file_source.clone();
+            let values = [
+                (bimspec::keys::CCT, perf.cct.map(|(k, how)| (format!("{k}K"), how))),
+                (CRI, perf.cri.map(|(n, how)| (n.to_string(), how))),
+                (bimspec::keys::LUMENS, perf.lumens.map(|(l, how)| (l.to_string(), how))),
+                (bimspec::keys::WATTAGE, perf.watts.map(|(w, how)| (format!("{} W", (w * 10.0).round() / 10.0), how))),
+            ];
+            for (key, said) in values {
+                if let Some((v, how)) = said
+                    && p.bim_type.get_field(key).is_none()
+                {
+                    p.bim_type.set_field(key, SpecField::new(v).with_source(format!("{page} ({how})")));
+                }
+            }
+        }
         if p.bim_type.get_field(bimspec::keys::DIMMING).is_some() {
             continue;
         }
@@ -1658,6 +1739,9 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
 
 /// A submitted product's field: how many were ordered.
 pub(crate) const QUANTITY: &str = "quantity";
+
+/// A submitted luminaire's field: its colour rendering index, as its cut sheet orders it.
+pub(crate) const CRI: &str = "cri";
 
 /// A submitted luminaire's field: what its cut sheet says of its junction box (`canless`,
 /// `integral junction box`, `compatible junction box`…).
@@ -2356,6 +2440,56 @@ Dimming   Non-Dimming   0-10V
         assert!(rfis.iter().any(|q| q["mark"] == "Q8" && q["field"] == "dimming"), "Q8's dimming is a question: {r}");
     }
 
+    /// Q6590: a luminaire's cut sheet gives the ordered product's CCT, CRI, lumens and wattage:
+    /// from its catalog number's codes (`40K`, `80CRI`, `1500LM`), the performance table's row of
+    /// that CCT and CRI, a line stating them together; a sheet that lists options says none.
+    #[test]
+    fn a_cut_sheet_gives_the_ordered_luminaires_cct_cri_lumens_and_wattage() {
+        let mut s = session();
+        let text = "\
+--- page 1 of 3 ---
+Type : P1
+Manufacturer : ACME LIGHTING
+Model Number : PLX6-40K-80CRI-1500LM-MVOLT
+LED downlight luminaire
+CCT   CRI   Delivered Lumens   Input Watts
+3000K   80   1380   11.8
+4000K   80   1450   11.8
+4000K   90   1290   12.6
+--- page 2 of 3 ---
+Type : P2
+Manufacturer : ACME LIGHTING
+Model Number : SL2
+LED surface luminaire, 3000K, 90 CRI, 1180 lm, 11.9 W
+--- page 3 of 3 ---
+Type : P3
+Manufacturer : ACME LIGHTING
+Model Number : TRF24
+LED troffer luminaire
+Available in 3000K, 3500K, 4000K
+Lumens: 3000, 4000, 5000
+";
+        let r = s.execute("bim.spec_import", &json!({"text": text, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let field =
+            |mark: &str, key: &str| proposals.iter().find(|p| p["mark"] == mark).map(|p| p["fields"][key]["value"].clone()).unwrap_or_default();
+        assert_eq!(
+            [field("P1", "cct"), field("P1", "cri"), field("P1", "lumens"), field("P1", "wattage")],
+            [json!("4000K"), json!("80"), json!("1500"), json!("11.8 W")],
+            "the catalog's codes, the table's 4000K 80 CRI row: {r}"
+        );
+        let src = proposals.iter().find(|p| p["mark"] == "P1").map(|p| p["fields"]["wattage"]["source"].clone()).unwrap_or_default();
+        assert!(src.as_str().is_some_and(|x| x.contains("performance table") && x.contains("4000K")), "{src}");
+        assert_eq!(
+            [field("P2", "cct"), field("P2", "cri"), field("P2", "lumens"), field("P2", "wattage")],
+            [json!("3000K"), json!("90"), json!("1180"), json!("11.9 W")],
+            "{r}"
+        );
+        for k in ["cct", "cri", "lumens", "wattage"] {
+            assert!(field("P3", k).is_null(), "options are not the ordered product's {k}: {r}");
+        }
+    }
+
     /// Q6336: a cut sheet whose page header names another product (copied from the next type's
     /// sheet) doesn't give its type that product: the cut sheet's body outranks its header.
     #[test]
@@ -2430,6 +2564,47 @@ Every sign glows from a strip of diodes, keeps running for an hour and a half, a
         }
         assert_eq!(super::check_header("EU2-B-K-4M", "BRIGHTCO", &lines), super::HeaderCheck::Backed);
         assert_eq!(super::check_header("EU2BK", "BRIGHTCO", &lines[..3]), super::HeaderCheck::Unread, "the header alone says nothing");
+    }
+
+    /// Q6465: a catalog number its cut sheet prints word for word is backed, whatever its pieces
+    /// are (all digits, one letter): both sides are compared in the same form.
+    #[test]
+    fn a_catalog_number_its_sheet_prints_whole_is_backed() {
+        let body = [
+            "Plainco wall plates cover one device box and snap onto a sub plate, so no screw shows on the face of the wall.",
+            "They are made of a tough nylon that does not crack when a screw is driven too far, and they wipe clean with soap.",
+            "Order 4817-W for white, 4817-I for ivory; kits 3-QX-20K hold forty plates, sizes 7 A 12 B.",
+        ];
+        let lines = |cat: &str| -> Vec<String> {
+            ["Job Name : SOME JOB   Type : WP1".to_string(), "Manufacturer : PLAINCO".to_string(), format!("Model Number : {cat}")]
+                .into_iter()
+                .chain(body.iter().map(|l| l.to_string()))
+                .map(|l| super::squash_colon(&l))
+                .collect()
+        };
+        let printed = ["4817-W", "4817W", "4817 W", "4817-I", "3-QX-20K", "3QX20K"];
+        let not_backed: Vec<&str> =
+            printed.into_iter().filter(|cat| super::check_header(cat, "PLAINCO", &lines(cat)) != super::HeaderCheck::Backed).collect();
+        assert!(not_backed.is_empty(), "printed whole but not backed: {not_backed:?} of {}", printed.len());
+        // A number its sheet doesn't print stays contradicted, and pieces from separate words
+        // never join up into one.
+        let absent = ["4817-X", "7A12B", "QX12"];
+        let backed: Vec<&str> = absent
+            .into_iter()
+            .filter(|cat| !matches!(super::check_header(cat, "PLAINCO", &lines(cat)), super::HeaderCheck::Contradicted { .. }))
+            .collect();
+        assert!(backed.is_empty(), "not on its sheet but not contradicted: {backed:?} of {}", absent.len());
+
+        // Through the import: the number stays, no header field moved aside, no question.
+        let mut s = session();
+        let text = format!("--- page 1 of 1 ---\n{}\n", lines("4817-W").join("\n"));
+        let r = s.execute("bim.spec_import", &json!({"text": text, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let field = |key: &str| proposals.iter().find(|p| p["mark"] == "WP1").map(|p| p["fields"][key].clone()).unwrap_or_default();
+        assert_eq!(field("catalogNumber")["value"], "4817-W", "{r}");
+        assert_eq!(field("manufacturer")["value"], "PLAINCO", "{r}");
+        assert!(field("headerCatalogNumber").is_null(), "{r}");
+        assert!(!arr(&r["rfis"]).iter().any(|q| q["mark"] == "WP1"), "no false question: {r}");
     }
 
     #[test]

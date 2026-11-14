@@ -442,6 +442,70 @@ fn resolving_records_on_the_item_reranks_and_keeps_an_audit_trail() {
     assert!(!every(&mut j.s, "open").iter().any(|i| i["id"] == id.as_str()));
 }
 
+/// The item's status on the next listing, and the open/resolved counts there.
+fn listed(s: &mut Session, id: &str) -> (String, u64, u64) {
+    let v = list(s, json!({"status": "all", "limit": 50}));
+    let all = every(s, "all");
+    let st = by(&all, |i| i["id"] == id).map_or("missing".to_string(), |i| i["status"].as_str().unwrap().to_string());
+    (st, v["open"].as_u64().unwrap(), v["resolved"].as_u64().unwrap())
+}
+
+fn rfi_status(s: &mut Session, rfi: &str) -> String {
+    let rl = s.execute("rfi.list", &json!({})).unwrap();
+    rl["items"].as_array().unwrap().iter().find(|x| x["id"] == rfi).map_or("missing".into(), |x| x["status"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn a_reopen_lists_open_whatever_the_source_and_sets_back_what_its_rfi_sent_set() {
+    let mut j = job(0.75);
+    let s = &mut j.s;
+    let all = every(s, "open");
+    let start = listed(s, "-");
+    let rfi = by(&all, |i| i["rfi"] == "RFI-901").unwrap()["id"].as_str().unwrap().to_string();
+    let finding = by(&all, |i| i["source"] == "finding").unwrap()["id"].as_str().unwrap().to_string();
+    // Every reply's status is the status the next listing shows, for an RFI and for a finding.
+    for id in [&rfi, &finding] {
+        for action in ["rfi_sent", "reopen", "accept", "reopen", "rfi_sent", "change", "reopen"] {
+            let r = s.execute("review.impact.resolve", &json!({"id": id, "action": action, "note": "RFI 7 sent"})).unwrap();
+            let (now, open, resolved) = listed(s, id);
+            assert_eq!(r["status"].as_str(), Some(now.as_str()), "{id} {action}: replied {r}, listed {now}");
+            if action == "reopen" {
+                assert_eq!((now.as_str(), open, resolved), ("open", start.1, start.2), "{id} reopened: {r}");
+            }
+        }
+    }
+    // The RFI list is back where it was: the reopen took back what rfi_sent set there.
+    assert_eq!(rfi_status(s, "RFI-901"), "open");
+    let r = s.execute("review.impact.resolve", &json!({"id": rfi, "action": "rfi_sent"})).unwrap();
+    assert_eq!(r["rfi"]["status"], "sent", "{r}");
+    let r = s.execute("review.impact.resolve", &json!({"id": rfi, "action": "reopen"})).unwrap();
+    assert_eq!((r["rfi"]["status"].as_str(), r["rfi"]["undid"].as_str()), (Some("open"), Some("rfi_sent")), "{r}");
+    assert_eq!(rfi_status(s, "RFI-901"), "open");
+
+    // An RFI sent on the RFI list itself: settled on the review list until reopened there; the
+    // reopen holds it open here and says the RFI stays sent.
+    let other = by(&all, |i| i["rfi"] == "RFI-902").unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("rfi.set", &json!({"id": "RFI-902", "status": "sent"})).unwrap();
+    assert_eq!(listed(s, &other).0, "rfi_sent");
+    let r = s.execute("review.impact.resolve", &json!({"id": other, "action": "reopen", "note": "a second look"})).unwrap();
+    assert_eq!((r["status"].as_str(), r["rfi"]["status"].as_str()), (Some("open"), Some("sent")), "{r}");
+    assert!(r["rfi"]["kept"].as_str().is_some_and(|k| k.contains("rfi.set")), "{r}");
+    assert_eq!(listed(s, &other), ("open".to_string(), start.1, start.2));
+    assert_eq!(rfi_status(s, "RFI-902"), "sent", "the RFI list keeps what was set there");
+    let open = every(s, "open");
+    let shown = by(&open, |i| i["id"] == other.as_str()).unwrap();
+    assert!(shown["resolution"]["note"].as_str().unwrap().starts_with("a second look"), "{shown}");
+    // Again: nothing changes; settled once more, it lists settled; reopened, open again.
+    assert_eq!(s.execute("review.impact.resolve", &json!({"id": other, "action": "reopen"})).unwrap()["changed"], false);
+    for (action, want) in [("accept", "accept"), ("reopen", "open"), ("rfi_sent", "rfi_sent"), ("reopen", "open")] {
+        let r = s.execute("review.impact.resolve", &json!({"id": other, "action": action})).unwrap();
+        assert_eq!((r["status"].as_str(), listed(s, &other).0.as_str()), (Some(want), want), "{action}: {r}");
+    }
+    // Answered on the RFI list, it is settled there and leaves the review list.
+    s.execute("rfi.set", &json!({"id": "RFI-902", "status": "answered"})).unwrap();
+    assert_eq!(listed(s, &other).0, "missing");
+}
+
 #[test]
 fn an_item_opens_on_its_sheet_and_at_its_elements() {
     let mut j = job(0.75);

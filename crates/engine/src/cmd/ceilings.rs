@@ -45,6 +45,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 "{level?: name} → {rows: [{level, part (ceiling, ceiling framing, soffit bottom, soffit sides, soffit framing, top track, bottom track), assembly, material, layer (board layer from the room face, 1 first; 0 framing and track), quantity, unit (sf|lf)}], totals: {part: quantity}, csv}: board area by type and layer, framing and track lengths, from the spec's ceiling and soffit types and the wall types' heads",
             )
             .noundo(),
+        CommandSpec::new("rcp.type", "Ceiling Types", run_type).params(
+            "{type: ceiling type (the ceiling legend's) | clear: true, rooms?: [room name or number], unit_type?: unit type, basis?: text (rooms whose ceiling height source says it), level?: name, force?: bool (also over a type already given or the reflected ceiling plan's), relayout?: bool (default true: the ceilings' trade pieces laid out again), preview?: bool} → {type, rooms: [{name, number, level, was?}], kept: [{name?, number?, level, type, why}], ceilings (built ceilings retagged), relaid?, preview}: gives the rooms the selectors name (all of them) a ceiling type: the spec's rooms keep it (a rebuild's ceilings take it) and their built ceilings take it now",
+        ),
         CommandSpec::new("rcp.colour", "Colour by Assembly", run_colour).params(
             "{by: type|layers|soffit|head|none} → {legend: [{key, color (ACI)}], coloured}: colours the built ceilings, soffits and walls — by ceiling, soffit and wall type; by number of board layers; soffits built under a ceiling or hung from the structure; walls by head of wall condition — `none` puts them back to their layers' colours",
         ),
@@ -189,6 +192,429 @@ fn colour_key(e: &Entity, sp: &BuildingSpec, by: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+// ---------------- ceiling types by room ----------------
+
+/// Most rooms one `rcp.type` names, and the longest text it takes.
+const MAX_SELECT: usize = 10_000;
+const MAX_TEXT: usize = 200;
+
+/// The build tags of the ceiling type given a room (`type:<name>`, `type_source:<who>`).
+pub(crate) fn room_type_tags(r: &cadaddy_walk3d::SpecRoom) -> Vec<RawTag> {
+    let Some(t) = r.ceiling_type.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { return Vec::new() };
+    let clip = |v: &str| v.chars().take(240).collect::<String>();
+    let who = r.ceiling_type_source.as_deref().map(str::trim).filter(|w| !w.is_empty()).unwrap_or("the room's ceiling type");
+    vec![RawTag { code: 1000, value: format!("type:{}", clip(t)) }, RawTag { code: 1000, value: format!("type_source:{}", clip(who)) }]
+}
+
+/// Whether a built element's room tag (`OFFICE or 101`, `101`, `OFFICE`) is the spec room's.
+pub(crate) fn tag_is_room(tag: &str, r: &cadaddy_walk3d::SpecRoom) -> bool {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return false;
+    }
+    let num = r.number.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    tag.eq_ignore_ascii_case(super::bspec::room_label(r).trim())
+        || num.is_some_and(|n| tag.eq_ignore_ascii_case(n) || tag.eq_ignore_ascii_case(&format!("{} {n}", r.name.trim())))
+        // A name alone names the room only when it has no number (names repeat: OFFICE, STORAGE).
+        || (num.is_none() && !r.name.trim().is_empty() && tag.eq_ignore_ascii_case(r.name.trim()))
+}
+
+/// The spec room a built ceiling on `level` tagged `room` is, when one is.
+pub(crate) fn spec_room_of<'a>(sp: &'a BuildingSpec, level: &str, room: &str) -> Option<&'a cadaddy_walk3d::SpecRoom> {
+    sp.rooms
+        .iter()
+        .take(MAX_SELECT * 10)
+        .find(|r| r.level.as_deref().is_none_or(|l| l.trim().eq_ignore_ascii_case(level.trim())) && tag_is_room(room, r))
+}
+
+// ---------------- a built ceiling's properties (Q6595) ----------------
+//
+// Every built ceiling, soffit and ceiling grid carries what the build knew of it as build tags
+// after its source, and `bim.props.get` / `bim.props.find` / `bim.completeness` read them as its
+// derived properties ([`props_of`]), each with where its value came from:
+// - `room:<label>` (the plan's), `room_number:` / `room_name:` (its spec room's);
+// - `height_ft:` above its level, `height_kind:` (a property source kind), `height_from:` (where
+//   it was read: the RCP tag and sheet, the room list, the level's height when nothing gives one);
+// - `type:` (and `type_source:` when a room's or `rcp.type` gave it, `type_guess:` when it is a
+//   guess; a grid's `ceiling_type:` is its ceiling's), `assembly:` and `type_finish:` from the
+//   type's legend row, `type_doc:` naming it;
+// - `finish:` / `finish_from:` (the room finish schedule's ceiling finish);
+// - `area_sf:` (its plan area).
+
+fn tag_of(key: &str, value: &str) -> RawTag {
+    RawTag { code: 1000, value: format!("{key}:{}", value.trim().chars().take(240).collect::<String>()) }
+}
+
+/// The tags naming a built ceiling's spec room (its number and name) and the room finish
+/// schedule's ceiling finish for it.
+pub(crate) fn room_tags(r: &cadaddy_walk3d::SpecRoom) -> Vec<RawTag> {
+    let mut out = Vec::new();
+    if let Some(n) = r.number.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        out.push(tag_of("room_number", n));
+    }
+    if !r.name.trim().is_empty() {
+        out.push(tag_of("room_name", &r.name));
+    }
+    if let Some(f) = r.materials.ceiling.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        out.push(tag_of("finish", f));
+        out.push(tag_of("finish_from", "room finish schedule"));
+    }
+    out
+}
+
+/// The tags of a built ceiling's height above its level (feet), the kind of source and where it
+/// was read. None for a height that isn't a number.
+pub(crate) fn height_tags(ft: f64, kind: cadaddy_doc::props::SourceKind, from: &str) -> Vec<RawTag> {
+    if !ft.is_finite() || ft.abs() > 10_000.0 {
+        return Vec::new();
+    }
+    let mut out = vec![tag_of("height_ft", &format!("{}", (ft * 10_000.0).round() / 10_000.0)), tag_of("height_kind", kind.as_str())];
+    if !from.trim().is_empty() {
+        out.push(tag_of("height_from", from));
+    }
+    out
+}
+
+/// What a source text says of where a height came from: a read (the print, a schedule, a note,
+/// the room list) or an assumption (derived by a rule, a default).
+fn height_kind_of(said: &str) -> cadaddy_doc::props::SourceKind {
+    use cadaddy_doc::props::SourceKind;
+    let s = said.trim().to_ascii_lowercase();
+    if s.starts_with("derived") || s.starts_with("inferred") || s.contains("rule") {
+        SourceKind::Rule
+    } else if s.contains("default") || s.contains("typical") || s.contains("estimat") || s.contains("assum") {
+        SourceKind::Default
+    } else if s.contains("schedule") {
+        SourceKind::Schedule
+    } else if s.contains("note") {
+        SourceKind::Note
+    } else if s.is_empty() {
+        SourceKind::Spec
+    } else {
+        SourceKind::Print
+    }
+}
+
+/// The height tags of a room's ceiling: its own height (its source said where it was read), else
+/// the level's ceiling height, a default.
+pub(crate) fn room_height_tags(r: Option<&cadaddy_walk3d::SpecRoom>, level: &cadaddy_walk3d::Level) -> Vec<RawTag> {
+    match r.and_then(|r| r.ceiling_ft.filter(|f| f.is_finite() && *f > 0.0).map(|f| (r, f))) {
+        Some((r, f)) => {
+            let said = r.ceiling_source.as_deref().unwrap_or_default();
+            let from = if said.trim().is_empty() { "the room list's ceiling height" } else { said };
+            height_tags(f, height_kind_of(said), from)
+        }
+        None => height_tags(
+            level.ceiling_ft,
+            cadaddy_doc::props::SourceKind::Default,
+            "the level's ceiling height (no room or reflected ceiling plan height)",
+        ),
+    }
+}
+
+/// The tags of what a ceiling (or soffit) type is from its legend row: its assembly (the
+/// description, else its layers from the room's face up) and its finish (the face layer).
+pub(crate) fn type_detail_tags(sp: &BuildingSpec, ty: Option<&str>, soffit: bool) -> Vec<RawTag> {
+    let Some(ty) = ty.map(str::trim).filter(|t| !t.is_empty()) else { return Vec::new() };
+    let (description, layers) = if soffit {
+        match sp.soffit_types.iter().find(|t| t.name.trim().eq_ignore_ascii_case(ty)) {
+            Some(t) => (t.description.as_str(), t.bottom.iter().chain(&t.framing).collect::<Vec<_>>()),
+            None => return Vec::new(),
+        }
+    } else {
+        match sp.ceiling_types.iter().find(|t| t.name.trim().eq_ignore_ascii_case(ty)) {
+            Some(t) => (t.description.as_str(), t.layers.iter().collect()),
+            None => return Vec::new(),
+        }
+    };
+    let joined = layers.iter().take(12).map(|l| l.material.trim()).filter(|m| !m.is_empty()).collect::<Vec<_>>().join(" / ");
+    let assembly = if description.trim().is_empty() { joined.as_str() } else { description };
+    let mut out = Vec::new();
+    if !assembly.trim().is_empty() {
+        out.push(tag_of("assembly", assembly));
+    }
+    if let Some(face) = layers.first().map(|l| l.material.trim()).filter(|m| !m.is_empty()) {
+        out.push(tag_of("type_finish", face));
+    }
+    if !out.is_empty() {
+        out.push(tag_of("type_doc", &format!("{} type {ty}", if soffit { "soffit" } else { "ceiling" })));
+    }
+    out
+}
+
+/// Whether a build tag is one [`type_detail_tags`] or [`room_type_tags`] wrote (`rcp.type`
+/// writes them again).
+fn is_type_tag(value: &str) -> bool {
+    let key = value.split_once(':').map_or("", |(k, _)| k);
+    key == "type" || key == "type_source" || key == "type_guess" || key == "assembly" || key == "type_finish" || key == "type_doc"
+}
+
+/// The tag of an outline's plan area, square feet.
+pub(crate) fn area_tag(poly: &[Vec2], upf: f64) -> Option<RawTag> {
+    let n = poly.len();
+    if n < 3 || !upf.is_finite() || upf <= 0.0 {
+        return None;
+    }
+    let twice: f64 = (0..n).filter_map(|i| Some(poly.get(i)?.cross(*poly.get((i + 1) % n)?))).sum();
+    let sf = (twice.abs() / 2.0) / (upf * upf);
+    (sf.is_finite() && sf > 0.0).then(|| tag_of("area_sf", &format!("{}", (sf * 100.0).round() / 100.0)))
+}
+
+/// A built ceiling's, soffit's or ceiling grid's derived properties, from its build tags (see
+/// above): type, height, finish, assembly, area, room and room name, each with its source.
+pub(crate) fn props_of(e: &Entity) -> Vec<(&'static str, cadaddy_doc::props::Prop)> {
+    use cadaddy_doc::props::{Prop, Source, SourceKind};
+    let tag = |k: &str| super::bimlook::made_tag(e, k).filter(|v| !v.is_empty());
+    let mut out = Vec::new();
+    if let Some(t) = tag("ceiling_type").filter(|_| tag("type").is_none()) {
+        // A ceiling grid: its ceiling's type.
+        out.push(("type", Prop::new(t, Source::from_doc(SourceKind::Print, "the reflected ceiling plan's type of the ceiling it hangs in"))));
+    }
+    if let Some(t) = tag("type") {
+        let src = match (tag("type_guess"), tag("type_source")) {
+            (Some(g), _) => Source::from_doc(SourceKind::Rule, g),
+            (None, Some(w)) if w.starts_with("rcp.type") => Source { kind: SourceKind::User, doc: Some(w.to_string()), at: None },
+            (None, Some(w)) => Source::from_doc(SourceKind::Spec, w),
+            (None, None) => Source::from_doc(SourceKind::Print, "the reflected ceiling plan's type"),
+        };
+        out.push(("type", Prop::new(t, src)));
+    }
+    if let Some(h) = tag("height_ft").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()) {
+        let kind = tag("height_kind").and_then(SourceKind::parse).unwrap_or(SourceKind::Default);
+        out.push(("height", Prop::new(h, Source::from_doc(kind, tag("height_from").unwrap_or_default())).with_unit("ft")));
+    }
+    let type_doc = tag("type_doc").unwrap_or_default();
+    if let Some(f) = tag("finish") {
+        out.push(("finish", Prop::new(f, Source::from_doc(SourceKind::Schedule, tag("finish_from").unwrap_or("room finish schedule")))));
+    } else if let Some(f) = tag("type_finish") {
+        out.push(("finish", Prop::new(f, Source::from_doc(SourceKind::Legend, type_doc))));
+    }
+    if let Some(a) = tag("assembly") {
+        out.push(("assembly", Prop::new(a, Source::from_doc(SourceKind::Legend, type_doc))));
+    }
+    if let Some(a) = tag("area_sf").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0) {
+        out.push(("area", Prop::new(a, Source::computed()).with_unit("sf")));
+    }
+    // The room by its number (a room-keyed filter: `where room = <number>`), else as the plan names it.
+    let room = tag("room_number").or_else(|| tag("room"));
+    if let Some(r) = room {
+        let src = if tag("room_number").is_some() { Source::computed() } else { Source::from_doc(SourceKind::Print, "the plan's room label") };
+        out.push(("room", Prop::new(r, src)));
+    }
+    if let Some(n) = tag("room_name") {
+        out.push(("room_name", Prop::new(n, Source::computed())));
+    }
+    out
+}
+
+/// A list of room names or numbers.
+fn text_list(cmd: &str, p: &Value, key: &str) -> Result<Vec<String>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(a)) => a
+            .iter()
+            .take(MAX_SELECT)
+            .map(|v| match v {
+                Value::String(t) => Ok(t.trim().chars().take(MAX_TEXT).collect::<String>()),
+                Value::Number(n) => Ok(n.to_string()),
+                _ => Err(bad(cmd, format!("`{key}` is a list of room names or numbers"))),
+            })
+            .filter(|t| t.as_ref().map_or(true, |t| !t.is_empty()))
+            .collect(),
+        Some(_) => Err(bad(cmd, format!("`{key}` is a list of room names or numbers"))),
+    }
+}
+
+/// An optional text parameter, trimmed and capped; empty is none, not text is refused.
+fn opt_text(cmd: &str, p: &Value, key: &str) -> Result<Option<String>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(t)) => Ok(Some(t.trim().chars().take(MAX_TEXT).collect::<String>()).filter(|t| !t.is_empty())),
+        Some(_) => Err(bad(cmd, format!("`{key}` must be text"))),
+    }
+}
+
+/// The (level, number) of each unit instance of unit type `ty` (its id, or its name in the unit
+/// types).
+fn unit_rooms(sp: &BuildingSpec, ty: &str) -> Vec<(String, String)> {
+    let t = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let mut ids: Vec<String> = vec![ty.to_string()];
+    for u in sp.unit_types.as_array().into_iter().flatten().take(MAX_SELECT) {
+        if t(u, "name").eq_ignore_ascii_case(ty) || t(u, "tag").eq_ignore_ascii_case(ty) {
+            ids.extend([t(u, "id"), t(u, "tag")].into_iter().filter(|x| !x.is_empty()));
+        }
+    }
+    sp.unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_SELECT * 10)
+        .filter(|u| {
+            let it = if t(u, "type").is_empty() { t(u, "unit_type") } else { t(u, "type") };
+            ids.iter().any(|i| i.eq_ignore_ascii_case(&it))
+        })
+        .map(|u| (t(u, "level"), if t(u, "number").is_empty() { t(u, "room") } else { t(u, "number") }))
+        .filter(|(_, n)| !n.is_empty())
+        .collect()
+}
+
+fn run_type(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "rcp.type";
+    let clear = super::bool_param(CMD, p, "clear")?.unwrap_or(false);
+    let force = super::bool_param(CMD, p, "force")?.unwrap_or(false);
+    let preview = super::bool_param(CMD, p, "preview")?.unwrap_or(false);
+    let relayout = super::bool_param(CMD, p, "relayout")?.unwrap_or(true);
+    let (mut sp, _) = current(s, CMD)?;
+    let ty = match (opt_text(CMD, p, "type").map_err(|_| bad(CMD, "`type` is a ceiling type's name (the ceiling legend's)"))?, clear) {
+        (Some(_), true) => return Err(bad(CMD, "give `type` or `clear: true`, not both")),
+        (None, false) => return Err(bad(CMD, "`type` (a ceiling type of the ceiling legend) is required, or `clear: true`")),
+        (None, true) => None,
+        (Some(t), false) => match sp.ceiling_types.iter().find(|c| c.name.trim().eq_ignore_ascii_case(&t)) {
+            Some(c) => Some(c.name.trim().to_string()),
+            None => {
+                let known: Vec<&str> = sp.ceiling_types.iter().take(40).map(|c| c.name.as_str()).collect();
+                return Err(bad(CMD, format!("no ceiling type `{t}` in the building spec (its ceiling types: {known:?})")));
+            }
+        },
+    };
+    let rooms = text_list(CMD, p, "rooms")?;
+    let unit = opt_text(CMD, p, "unit_type")?;
+    let basis = opt_text(CMD, p, "basis")?;
+    let level = opt_text(CMD, p, "level")?;
+    if rooms.is_empty() && unit.is_none() && basis.is_none() {
+        return Err(bad(CMD, "say which rooms: `rooms` (names or numbers), `unit_type` or `basis` (with `level` to keep to one level)"));
+    }
+    let units = unit.as_deref().map(|u| unit_rooms(&sp, u));
+    let mut said: Vec<String> = Vec::new();
+    if !rooms.is_empty() {
+        said.push(format!("rooms {}", rooms.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if let Some(u) = &unit {
+        said.push(format!("unit type {u}"));
+    }
+    if let Some(b) = &basis {
+        said.push(format!("ceiling height basis \"{b}\""));
+    }
+    if let Some(l) = &level {
+        said.push(format!("level {l}"));
+    }
+    let who: String = format!("rcp.type ({})", said.join("; ")).chars().take(MAX_TEXT * 2).collect();
+    let eq = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+    let mut changed: Vec<Value> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
+    let mut set: Vec<usize> = Vec::new();
+    for (i, r) in sp.rooms.iter().enumerate().take(MAX_SELECT * 10) {
+        let lv = r.level.as_deref().unwrap_or_default();
+        if level.as_deref().is_some_and(|l| !eq(l, lv)) {
+            continue;
+        }
+        let num = r.number.as_deref().unwrap_or_default();
+        if !rooms.is_empty()
+            && !rooms.iter().any(|x| {
+                eq(x, &r.name)
+                    || (!num.trim().is_empty() && eq(x, num))
+                    || r.label.as_deref().is_some_and(|l| eq(x, l))
+                    || eq(x, &super::bspec::room_label(r))
+            })
+        {
+            continue;
+        }
+        if let Some(us) = &units
+            && !us.iter().any(|(ul, un)| !num.trim().is_empty() && eq(un, num) && (ul.is_empty() || lv.is_empty() || eq(ul, lv)))
+        {
+            continue;
+        }
+        if let Some(b) = &basis
+            && !r.ceiling_source.as_deref().is_some_and(|src| src.to_ascii_lowercase().contains(&b.to_ascii_lowercase()))
+        {
+            continue;
+        }
+        let was = r.ceiling_type.clone().filter(|w| !w.trim().is_empty());
+        let row = json!({"name": r.name, "number": r.number, "level": r.level, "was": was});
+        match (&was, &ty) {
+            (Some(w), Some(t)) if !force && !eq(w, t) => {
+                kept.push(json!({"name": r.name, "number": r.number, "level": r.level, "type": w,
+                    "why": format!("given before ({}); force: true replaces it", r.ceiling_type_source.as_deref().unwrap_or("a type of its own"))}));
+            }
+            _ => {
+                changed.push(row);
+                set.push(i);
+            }
+        }
+    }
+    for i in &set {
+        if let Some(r) = sp.rooms.get_mut(*i) {
+            r.ceiling_type.clone_from(&ty);
+            r.ceiling_type_source = ty.as_ref().map(|_| who.clone());
+        }
+    }
+    // The built ceilings of those rooms take it now. One the reflected ceiling plan typed keeps
+    // its type (the drawn type outranks a room's) unless `force`.
+    let mut retag: Vec<(Handle, Vec<RawTag>)> = Vec::new();
+    {
+        let d = s.doc()?;
+        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("ceiling")).take(MAX_ITEMS * 10) {
+            let lv = super::bspec::made_level(e).unwrap_or_default();
+            let Some(room_tag) = super::bimlook::made_tag(e, "room").map(str::to_string) else { continue };
+            let Some(r) =
+                set.iter().filter_map(|i| sp.rooms.get(*i)).find(|r| r.level.as_deref().is_none_or(|l| eq(l, &lv)) && tag_is_room(&room_tag, r))
+            else {
+                continue;
+            };
+            let had = super::bimlook::made_tag(e, "type").map(str::to_string);
+            let by_room = super::bimlook::made_tag(e, "type_source").is_some();
+            if let Some(h) = had.as_deref().filter(|_| !by_room && !force)
+                && ty.as_deref().is_none_or(|t| !eq(t, h))
+            {
+                kept.push(json!({"number": r.number, "name": r.name, "level": lv, "type": h,
+                    "why": "the reflected ceiling plan types this ceiling; force: true replaces it"}));
+                continue;
+            }
+            let x: Vec<RawTag> = e.common.xdata.iter().cloned().collect();
+            let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP)) else { continue };
+            let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |k| at + 1 + k);
+            let mut out: Vec<RawTag> = Vec::with_capacity(x.len() + 2);
+            for (k, t) in x.iter().enumerate() {
+                let ours = k > at + 3 && k < end && is_type_tag(&t.value);
+                if !ours {
+                    out.push(t.clone());
+                }
+                if k + 1 == end {
+                    out.extend(room_type_tags(r));
+                    // Its assembly and finish are the new type's (Q6595).
+                    out.extend(type_detail_tags(&sp, r.ceiling_type.as_deref(), false));
+                }
+            }
+            retag.push((e.handle, out));
+        }
+    }
+    let ceilings = retag.len();
+    let mut out = json!({"type": ty, "cleared": clear, "rooms": changed, "kept": kept, "ceilings": ceilings, "preview": preview});
+    if preview {
+        return Ok(out);
+    }
+    {
+        let d = s.doc_mut()?;
+        for (h, x) in retag {
+            d.modify_entity(h, |e| e.common.xdata = x.into())?;
+        }
+        if !set.is_empty() {
+            d.building_spec = Some(sp.to_json()).into();
+        }
+    }
+    // The ceilings' boards, tiles and paint laid out again when the model has its trade pieces.
+    let has_pieces = s.doc()?.model.iter().any(|e| super::tradeatoms::is_trade_piece(e));
+    if relayout && ceilings > 0 && has_pieces {
+        let only: std::collections::BTreeSet<String> = ["drywall", "finishes"].iter().map(|t| t.to_string()).collect();
+        let d = s.doc_mut()?;
+        super::tradeatoms::remove(d, Some(&only));
+        let r = super::tradeatoms::build(d, &sp, Some(&only));
+        out["relaid"] = r["tradePieces"].clone();
+    }
+    s.touch();
+    Ok(out)
 }
 
 fn run_colour(s: &mut Session, p: &Value) -> Result<Value> {
@@ -402,7 +828,11 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
                     plan_notes.iter().any(|(_, n, nat, _)| cadaddy_geom::point_in_polygon(&on_plan, *nat) && super::bspec::names_room(r, n))
                 })
             })
-            .map(|r| r.name.clone());
+            // Known by its number alone: by that (every such room's name is blank).
+            .map(|r| match r.number.as_deref().map(str::trim).filter(|n| !n.is_empty() && r.name.trim().is_empty()) {
+                Some(n) => n.to_string(),
+                None => r.name.clone(),
+            });
         ceilings.push((
             CeilingArea { level: level.name.clone(), room, outline: moved(&q), height_ft: h, grid, ceiling_type: None, guess: None, source: None },
             q,
@@ -482,7 +912,10 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         sp.rcp.soffits.retain(|c| c.level != lv);
         sp.rcp.items.retain(|c| c.level != lv);
         for (c, _) in &ceilings {
-            if let Some(r) = c.room.as_ref().and_then(|n| sp.rooms.iter_mut().find(|r| &r.name == n)) {
+            let named = |r: &cadaddy_walk3d::SpecRoom, n: &str| {
+                if r.name.trim().is_empty() { r.number.as_deref().is_some_and(|m| m.trim() == n) } else { r.name == n }
+            };
+            if let Some(r) = c.room.as_ref().filter(|n| !n.trim().is_empty()).and_then(|n| sp.rooms.iter_mut().find(|r| named(r, n))) {
                 r.ceiling_ft = Some(c.height_ft);
             }
         }
@@ -529,7 +962,7 @@ fn panel(poly: &[Vec2], z: f64) -> Option<Mesh> {
     let vertices = poly.iter().map(|q| Vec3::new(q.x, q.y, z)).collect();
     let id = |i: usize| u32::try_from(i).unwrap_or(0);
     let faces = tris.iter().map(|t| MeshFace { v: vec![id(t[0]), id(t[2]), id(t[1])], hidden: 0 }).collect();
-    Some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    Some(super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
 /// The RCP's ceilings, grids, soffits and items into model space (sheet units). On a level with
@@ -572,8 +1005,25 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let poly: Vec<Vec2> = c.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect();
         let mut extra: Vec<String> = c.room.iter().map(|r| format!("room:{r}")).collect();
         extra.extend(c.ceiling_type.iter().map(|t| format!("type:{t}")));
+        let spec_room = c.room.as_deref().and_then(|room| spec_room_of(sp, &level.name, room));
+        // An area the plan doesn't type takes its room's (`rcp.type`).
+        let typed = c.ceiling_type.as_deref().is_some_and(|t| !t.trim().is_empty());
+        if typed {
+            extra.extend(c.guess.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(|g| tag_of("type_guess", g).value));
+        } else if let Some(r) = spec_room {
+            extra.extend(room_type_tags(r).into_iter().map(|t| t.value));
+        }
+        // What the build knew of it, its properties (Q6595): its room's number, name and finish,
+        // the RCP's height and where it was read, its type's assembly and finish, its area.
+        let ty = if typed { c.ceiling_type.clone() } else { spec_room.and_then(|r| r.ceiling_type.clone()) };
+        let mut known: Vec<RawTag> = spec_room.map(room_tags).unwrap_or_default();
+        let from = c.source.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("the reflected ceiling plan's height tag");
+        known.extend(height_tags(c.height_ft, cadaddy_doc::props::SourceKind::Print, from));
+        known.extend(type_detail_tags(sp, ty.as_deref(), false));
+        known.extend(area_tag(&poly, upf));
+        extra.extend(known.into_iter().map(|t| t.value));
         if let Some(m) = panel(&poly, z)
-            && add(d, "3D-Ceilings", tag("ceiling", &level.name, extra), m)
+            && add(d, "3D-Ceilings", tag("ceiling", &level.name, extra.clone()), m)
         {
             ceilings += 1;
         }
@@ -597,7 +1047,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     i += 1.0;
                 }
             }
-            if add(d, "3D-Ceiling-Grid", tag("grid", &level.name, Vec::new()), m) {
+            // The grid hangs in the area's ceiling: it is that ceiling's (its room, height, type as
+            // `ceiling_type:`: a `type:` tag would make the grid a covering of its own).
+            let of_ceiling: Vec<String> = extra
+                .iter()
+                .filter(|v| !v.starts_with("area_sf:") && !v.starts_with("type_source:") && !v.starts_with("type_guess:"))
+                .map(|v| v.strip_prefix("type:").map_or_else(|| v.clone(), |t| format!("ceiling_type:{t}")))
+                .collect();
+            if add(d, "3D-Ceiling-Grid", tag("grid", &level.name, of_ceiling), m) {
                 grids += 1;
             }
         }
@@ -613,7 +1070,27 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A soffit hung from the structure goes on past the ceiling.
         let st = sf.soffit_type.as_ref().and_then(|n| sp.soffit_types.iter().find(|t| t.name.eq_ignore_ascii_case(n)));
         let past = st.filter(|t| t.hangs_from == cadaddy_walk3d::Hang::Structure).map_or(0.0, |t| t.above_ceiling_in.clamp(0.0, 120.0) / 12.0);
-        let extra: Vec<String> = sf.soffit_type.iter().map(|t| format!("type:{t}")).collect();
+        let mut extra: Vec<String> = sf.soffit_type.iter().map(|t| format!("type:{t}")).collect();
+        // Its properties (Q6595): the room of the RCP ceiling it hangs in, its height, its type's
+        // assembly and finish, its area.
+        let mid = poly.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / poly.len().max(1) as f64);
+        let host = sp
+            .rcp
+            .ceilings
+            .iter()
+            .filter(|c| c.level == sf.level)
+            .find(|c| cadaddy_geom::point_in_polygon(&c.outline.iter().map(|p| Vec2::new(p[0], p[1])).collect::<Vec<_>>(), mid));
+        let mut known: Vec<RawTag> = Vec::new();
+        if let Some(room) = host.and_then(|c| c.room.as_deref()).map(str::trim).filter(|r| !r.is_empty()) {
+            known.push(tag_of("room", room));
+            known.extend(
+                spec_room_of(sp, &level.name, room).map(room_tags).unwrap_or_default().into_iter().filter(|t| !t.value.starts_with("finish")),
+            );
+        }
+        known.extend(height_tags(sf.height_ft, cadaddy_doc::props::SourceKind::Print, "the reflected ceiling plan's soffit"));
+        known.extend(type_detail_tags(sp, sf.soffit_type.as_deref(), true));
+        known.extend(area_tag(&poly, upf));
+        extra.extend(known.into_iter().map(|t| t.value));
         // Its underside and the drop round its edge up to the ceiling.
         if let Some(m) = super::bspec::prism(&poly, z, (level.elevation_ft + top + past) * upf)
             && add(d, "3D-Ceilings", tag("soffit", &level.name, extra), m)

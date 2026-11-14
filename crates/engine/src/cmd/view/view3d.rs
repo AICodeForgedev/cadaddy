@@ -14,8 +14,9 @@ use cadaddy_render::shade::VisualStyle;
 type CommandFn = fn(&mut Session, &Value) -> Result<Value>;
 
 pub(super) fn specs() -> Vec<CommandSpec> {
-    // View ▸ 3D Views, in AutoCAD's order.
+    // View ▸ 3D BIM (the built model in one click), then View ▸ 3D Views, in AutoCAD's order.
     let mut v = vec![
+        super::super::bimlook::bim3d_spec(),
         CommandSpec::new("view.top", "Top", |s, _| preset_view(s, "top")).menu(&["View", "3D Views", "Top"]).noundo().transparent(),
         CommandSpec::new("view.bottom", "Bottom", |s, _| preset_view(s, "bottom")).menu(&["View", "3D Views", "Bottom"]).noundo().transparent(),
         CommandSpec::new("view.left", "Left", |s, _| preset_view(s, "left")).menu(&["View", "3D Views", "Left"]).noundo().transparent(),
@@ -193,6 +194,7 @@ pub fn set_dir(s: &mut Session, dir: Vec3, fit: bool) -> Result<Value> {
     st.view_dir = if view3::is_plan(dir) { Vec3::Z } else { dir.normalized() };
     // A new direction comes with the standard orientation (as PLAN and the ViewCube faces do).
     st.view_twist = 0.0;
+    st.keep_model_twist();
     let center = match st.projection() {
         Some(p) => p.project(target),
         None => target.xy(),

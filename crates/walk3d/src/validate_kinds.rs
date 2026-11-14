@@ -193,7 +193,7 @@ pub const KIND_CATEGORIES: &[(&str, &str)] = &[("fan_coil_unit", "IfcUnitaryEqui
 
 /// Kinds the PDF→BIM job builds that no producer above makes and no family holds (a rule may
 /// name them).
-pub const JOB_KINDS: &[&str] = &["equipment_connection"];
+pub const JOB_KINDS: &[&str] = &["equipment_connection", "emergency_light"];
 
 /// How deep families nest, at most (the table is checked to be shallower).
 const MAX_FAMILY_DEPTH: usize = 6;

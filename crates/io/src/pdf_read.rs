@@ -101,6 +101,11 @@ pub struct PdfOptions {
     /// painted as fills) become one solid hatch per layer and colour, not one hatch each: the
     /// sheet looks the same with far fewer objects (off by default; on for print-set jobs).
     pub merge_small_fills: bool,
+    /// Read the sheet's scale from its scale notes (its text, or lettering read from its shapes;
+    /// on by default). Off: a sheet given no `scale` is scaled from its dimension strings, else
+    /// left at paper size, as one whose notes don't read is: for a plan whose only notes are its
+    /// details' (Q6518).
+    pub scale_notes: bool,
 }
 
 /// The largest side (sheet inches) of a fill [`PdfOptions::merge_small_fills`] merges: smaller
@@ -122,6 +127,15 @@ pub const HIDDEN_TEXT_LAYER: &str = "PDF-HIDDEN-TEXT";
 /// corner and a dash as `EL`.  Readers that take text as evidence (duct sizes and heights) skip
 /// this style.
 pub const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+/// The text style of an OCR reading no hidden text confirms that reads unsure (its weakest
+/// character under [`OCR_CELL_LOW_CONFIDENCE`]): marked so a reader (or a person) can find the
+/// readings to check. It starts with [`OCR_TEXT_STYLE`]'s name.
+pub const OCR_UNSURE_STYLE: &str = "PDF-SHX-OCR-UNSURE";
+
+/// Whether a text style is one of the OCR's ([`OCR_TEXT_STYLE`], [`OCR_UNSURE_STYLE`]).
+pub fn is_ocr_style(style: &str) -> bool {
+    style.get(..OCR_TEXT_STYLE.len()).is_some_and(|s| s.eq_ignore_ascii_case(OCR_TEXT_STYLE))
+}
 
 /// The layer (off) that keeps the strokes recovered text was read from: the TEXT replaces them
 /// on the sheet, and the plotted lettering is still there to check a reading against.
@@ -130,6 +144,20 @@ pub const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
 /// that read like no word (a lone letter, mostly marks: a tick, a corner or a circle misread):
 /// kept for review, not drawn as the sheet's lettering.
 pub const OCR_REVIEW_LAYER: &str = "PDF-OCR-REVIEW";
+
+/// The layer content classification ([`LayerMode::Content`]) puts a sheet's heavy black lines on:
+/// the walls as cut.
+pub fn content_wall_layer() -> &'static str {
+    content_class_layer(ContentClass::Wall)
+}
+
+/// Whether a layer is one content classification ([`LayerMode::Content`]) leaves the linework on
+/// that it called nothing in particular: thin short strokes (dimensions, leaders) and every other
+/// line (casework, equipment, a wall's finish and insulation lines). The heavy cut lines went to
+/// [`content_wall_layer`].
+pub fn is_content_leftover_layer(layer: &str) -> bool {
+    [ContentClass::Anno, ContentClass::Geometry].into_iter().any(|c| layer.eq_ignore_ascii_case(content_class_layer(c)))
+}
 
 impl Default for PdfOptions {
     fn default() -> Self {
@@ -149,6 +177,7 @@ impl Default for PdfOptions {
             recover_text: true,
             e_sheet_at_note_scale: false,
             merge_small_fills: false,
+            scale_notes: true,
         }
     }
 }
@@ -292,6 +321,12 @@ fn load_cached(bytes: &[u8]) -> Result<std::sync::Arc<Document>> {
     }
 }
 
+/// Whether the parsed file of `bytes` is kept for the next pages ([`load_cached`]).
+pub fn is_cached(bytes: &[u8]) -> bool {
+    let key = fingerprint(bytes);
+    DOC_CACHE.lock().is_ok_and(|cache| cache.iter().any(|(k, n, _)| *k == key && *n == bytes.len()))
+}
+
 /// Forget the parsed files kept for the next pages (their memory is freed once no read uses them).
 pub fn clear_cache() {
     if let Ok(mut cache) = DOC_CACHE.lock() {
@@ -348,11 +383,25 @@ struct Gs {
     /// Constant alpha (ExtGState ca / CA).
     fill_alpha: f64,
     stroke_alpha: f64,
+    /// Painted with a darkening blend mode (ExtGState BM Multiply or Darken: a reviewer's
+    /// highlight): on white paper its colour only tints what is under it.
+    under: bool,
 }
 
 impl Default for Gs {
     fn default() -> Self {
-        Gs { ctm: M::ID, stroke: [0.0; 3], fill: [0.0; 3], width: 1.0, fill_n: 1, stroke_n: 1, clip: None, fill_alpha: 1.0, stroke_alpha: 1.0 }
+        Gs {
+            ctm: M::ID,
+            stroke: [0.0; 3],
+            fill: [0.0; 3],
+            width: 1.0,
+            fill_n: 1,
+            stroke_n: 1,
+            clip: None,
+            fill_alpha: 1.0,
+            stroke_alpha: 1.0,
+            under: false,
+        }
     }
 }
 
@@ -386,6 +435,9 @@ struct Fill {
     order: usize,
     /// Filled by the even-odd rule (`f*`), else non-zero winding.
     even_odd: bool,
+    /// Painted with a darkening blend mode ([`Gs::under`]): drawn under the page's other
+    /// objects, so the lettering it highlights stays legible.
+    under: bool,
 }
 
 /// A raster image painted on the page: its pixels and where the unit square of image space
@@ -452,6 +504,17 @@ fn transp(alpha: f64) -> u8 {
         return 0;
     }
     ((1.0 - alpha.clamp(0.0, 1.0)) * 100.0).round().clamp(0.0, 90.0) as u8
+}
+
+/// Whether an ExtGState blend mode (`BM`: a name, or a list of them, the first one the reader
+/// knows applying) only darkens what lies under it: Multiply or Darken. On white paper such a
+/// fill shows its colour and lets the lettering under it through.
+fn darkens(doc: &Document, bm: &Object) -> bool {
+    match deref(doc, bm) {
+        Object::Name(n) => matches!(n.as_slice(), b"Multiply" | b"Darken"),
+        Object::Array(a) => a.iter().take(16).find_map(|o| deref(doc, o).as_name().ok()).is_some_and(|n| matches!(n, b"Multiply" | b"Darken")),
+        _ => false,
+    }
 }
 
 fn rgb8(c: [f64; 3]) -> [u8; 3] {
@@ -1045,6 +1108,9 @@ impl<'a> Interp<'a> {
                         if let Some(v) = dict_get(self.doc, eg, b"LW").and_then(num) {
                             gs.width = v;
                         }
+                        if let Some(bm) = dict_get(self.doc, eg, b"BM") {
+                            gs.under = darkens(self.doc, bm);
+                        }
                     }
                 }
                 "G" => gs.stroke = to_rgb(&n),
@@ -1580,7 +1646,7 @@ impl<'a> Interp<'a> {
                 }
             }
             if !loops.is_empty() {
-                self.out.fills.push(Fill { loops, pen, layer: layer.clone(), order, even_odd });
+                self.out.fills.push(Fill { loops, pen, layer: layer.clone(), order, even_odd, under: gs.under });
             }
         }
         if stroke {
@@ -1813,14 +1879,134 @@ fn key_pts(pts: &[(f64, f64)]) -> Vec<(i64, i64)> {
     pts.iter().map(|(x, y)| ((x * 100.0).round() as i64, (y * 100.0).round() as i64)).collect()
 }
 
-/// Join open strokes of one pen and layer whose ends touch, end to end.
-fn join(strokes: Vec<Stroke>) -> Vec<Stroke> {
+/// A door swing's sweep, degrees: a quarter-ish circle.
+const SWING_DEG: std::ops::RangeInclusive<f64> = 60.0..=100.0;
+/// Points on a door swing's circle lie this close to it (share of the radius).
+const SWING_ROUND: f64 = 0.03;
+/// A door swing's hinge or end meets the other linework this close (share of the radius; at
+/// least [`SWING_MEET_MIN`] points).
+const SWING_MEET: f64 = 0.02;
+const SWING_MEET_MIN: f64 = 0.1;
+/// A door's leaf is the swing's radius long, within this share.
+const LEAF_LEN: f64 = 0.05;
+/// Strokes looked at for door swings, at most (hostile files).
+const MAX_SWING_SCAN: usize = 2_000_000;
+
+/// An open stroke drawn round one circle through a door swing's sweep: its centre, radius and two
+/// ends. Four points at least (a flattened curve, not a line or a corner).
+fn swing_arc(s: &Stroke) -> Option<((f64, f64), f64, [(f64, f64); 2])> {
+    if s.closed || s.pts.len() < 4 {
+        return None;
+    }
+    let (first, last) = (*s.pts.first()?, *s.pts.last()?);
+    let mid = *s.pts.get(s.pts.len() / 2)?;
+    let d = 2.0 * (first.0 * (mid.1 - last.1) + mid.0 * (last.1 - first.1) + last.0 * (first.1 - mid.1));
+    if !d.is_finite() || d.abs() < 1e-9 {
+        return None;
+    }
+    let sq = |p: (f64, f64)| p.0 * p.0 + p.1 * p.1;
+    let (a2, b2, c2) = (sq(first), sq(mid), sq(last));
+    let c = (
+        (a2 * (mid.1 - last.1) + b2 * (last.1 - first.1) + c2 * (first.1 - mid.1)) / d,
+        (a2 * (last.0 - mid.0) + b2 * (first.0 - last.0) + c2 * (mid.0 - first.0)) / d,
+    );
+    let dist = |p: (f64, f64)| (p.0 - c.0).hypot(p.1 - c.1);
+    let r = dist(first);
+    if !(c.0.is_finite() && c.1.is_finite() && r.is_finite() && r > 0.0) || s.pts.iter().any(|p| (dist(*p) - r).abs() > SWING_ROUND * r) {
+        return None;
+    }
+    // The sweep from the first to the last point, the way through the middle one; every point
+    // turns the same way (a circle's arc, not a wiggle on it).
+    let ang = |p: (f64, f64)| (p.1 - c.1).atan2(p.0 - c.0);
+    let turn = |a: (f64, f64), b: (f64, f64)| (ang(b) - ang(a) + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+    let turns: Vec<f64> = s.pts.windows(2).filter_map(|w| Some(turn(*w.first()?, *w.get(1)?))).collect();
+    let sweep: f64 = turns.iter().sum();
+    if turns.iter().any(|t| t.abs() > 1e-12 && t.signum() != sweep.signum()) {
+        return None;
+    }
+    SWING_DEG.contains(&sweep.abs().to_degrees()).then_some((c, r, [first, last]))
+}
+
+/// The door swings (and their leaves) of a page's strokes that are kept out of joining: a swing
+/// is an arc through a quarter-ish circle whose centre — the hinge — is at the end of a straight
+/// stroke (its leaf, or the wall's face or jamb it hangs on), with its leaf drawn from the hinge
+/// to one of its ends or its other end on a straight stroke (the jamb it closes on). Joined
+/// with the wall's lines of the same pen, a swing and its leaf became one outline with the room's
+/// faces: no door read there, and the outline round the swing taken for no wall's face.
+fn door_swings_apart(strokes: &[Stroke]) -> HashSet<usize> {
+    let mut out = HashSet::new();
+    let arcs: Vec<(usize, ((f64, f64), f64, [(f64, f64); 2]))> =
+        strokes.iter().enumerate().take(MAX_SWING_SCAN).filter_map(|(i, s)| swing_arc(s).map(|a| (i, a))).collect();
+    if arcs.is_empty() {
+        return out;
+    }
+    // The ends of the straight strokes (two points), filed by cell.
+    const CELL: f64 = 1.0; // points
+    let key = |p: (f64, f64)| ((p.0 / CELL).floor() as i64, (p.1 / CELL).floor() as i64);
+    let mut ends: HashMap<(i64, i64), Vec<(usize, usize)>> = HashMap::new();
+    for (i, s) in strokes.iter().enumerate().take(MAX_SWING_SCAN) {
+        if s.closed || s.pts.len() != 2 {
+            continue;
+        }
+        for (j, p) in s.pts.iter().enumerate() {
+            if p.0.is_finite() && p.1.is_finite() {
+                ends.entry(key(*p)).or_default().push((i, j));
+            }
+        }
+    }
+    // The straight strokes with an end within `tol` of `p`: (stroke, which end).
+    let near = |p: (f64, f64), tol: f64| -> Vec<(usize, usize)> {
+        let (cx, cy) = key(p);
+        let k = (tol / CELL).ceil() as i64;
+        let mut v = Vec::new();
+        for dx in -k..=k {
+            for dy in -k..=k {
+                for &(i, j) in ends.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if strokes.get(i).and_then(|s| s.pts.get(j)).is_some_and(|q| (q.0 - p.0).hypot(q.1 - p.1) <= tol) {
+                        v.push((i, j));
+                    }
+                }
+            }
+        }
+        v
+    };
+    for (a, (c, r, arc_ends)) in arcs {
+        let tol = (SWING_MEET * r).max(SWING_MEET_MIN);
+        let at_hinge = near(c, tol);
+        if at_hinge.is_empty() {
+            continue;
+        }
+        // The leaf: from the hinge to an end of the swing, the radius long.
+        let leaf = at_hinge.iter().find_map(|&(i, j)| {
+            let s = strokes.get(i)?;
+            let other = *s.pts.get(1 - j)?;
+            let long = (other.0 - c.0).hypot(other.1 - c.1);
+            ((long - r).abs() <= LEAF_LEN * r && arc_ends.iter().any(|e| (e.0 - other.0).hypot(e.1 - other.1) <= tol)).then_some(i)
+        });
+        let on_jamb = || arc_ends.iter().any(|&e| near(e, tol).iter().any(|&(i, _)| !at_hinge.iter().any(|h| h.0 == i)));
+        match leaf {
+            Some(l) => {
+                out.insert(a);
+                out.insert(l);
+            }
+            None if on_jamb() => {
+                out.insert(a);
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// Join open strokes of one pen and layer whose ends touch, end to end. The strokes `apart` (by
+/// index: door swings and their leaves, [`door_swings_apart`]) stay as the drawing drew them.
+fn join(strokes: Vec<Stroke>, apart: &HashSet<usize>) -> Vec<Stroke> {
     const EPS: f64 = 0.05; // points
     let q = |p: (f64, f64)| ((p.0 / EPS).round() as i64, (p.1 / EPS).round() as i64);
     let mut out: Vec<Stroke> = Vec::new();
     let mut open: Vec<Option<Stroke>> = Vec::new();
-    for s in strokes {
-        if s.closed || s.pts.len() < 2 {
+    for (i, s) in strokes.into_iter().enumerate() {
+        if s.closed || s.pts.len() < 2 || apart.contains(&i) {
             out.push(s);
         } else {
             open.push(Some(s));
@@ -2177,6 +2363,9 @@ fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f
         text: String,
         count: usize,
         priority: u8, // 0 = best (title block layer), 1 = bottom-right, 2 = anywhere
+        /// read as a paper/real pair with no "=" and no SCALE word: never outranks a note
+        /// that has either (Q6466)
+        inferred: bool,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -2198,9 +2387,10 @@ fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f
         let Some(k) = k else { continue };
         // a pair with no "=": a standard scale, standing as a note (never a lone pair among a
         // plan's dimension strings)
-        let k = if !up.contains('=') && up.contains('\'') && parse_scale_pair(v).is_some() {
+        let inferred = !up.contains('=') && up.contains('\'') && parse_scale_pair(v).is_some();
+        let k = if inferred {
             match standard_pair_scale(v) {
-                Some(k) if stands_as_note(t, own, texts, context, sheet) => k,
+                Some(k) if stands_as_note(t, own, texts, context) => k,
                 _ => continue,
             }
         } else {
@@ -2225,14 +2415,16 @@ fn detect_scale_note_in(texts: &[NoteText], context: &[NoteText], sheet: (f64, f
                 if priority < c.priority {
                     c.priority = priority;
                 }
+                c.inferred &= inferred;
             }
         } else {
             seen.insert(key.clone(), candidates.len());
-            candidates.push(Candidate { scale: k, text: key, count: 1, priority });
+            candidates.push(Candidate { scale: k, text: key, count: 1, priority, inferred });
         }
     }
-    // best = lowest priority, then most occurrences
-    candidates.sort_by(|a, b| a.priority.cmp(&b.priority).then(b.count.cmp(&a.count)));
+    // best = a note with its "=" or SCALE word before any inferred pair, then lowest priority,
+    // then most occurrences
+    candidates.sort_by(|a, b| a.inferred.cmp(&b.inferred).then(a.priority.cmp(&b.priority)).then(b.count.cmp(&a.count)));
     candidates.into_iter().next().map(|c| (c.scale, c.text))
 }
 
@@ -2269,10 +2461,11 @@ const MAX_NOTE_CONTEXT_TEXTS: usize = 20_000;
 
 /// Whether a paper/real pair stands as a scale note (Q6395): after a SCALE word (its own, or a
 /// SCALE label just before or over it), under or beside a view title (lettering of words at
-/// least its size), or in the title block (a title-block layer, the sheet's bottom-right) — and,
-/// but for a SCALE word, not among dimension strings (another one within a few text heights).
+/// least its size), or on a title-block layer — and, but for a SCALE word, not among dimension
+/// strings (another one within a few text heights). Where it stands on the sheet is no
+/// evidence (Q6466): two dimension strings in the bottom-right corner read the same way.
 /// `own` are the indices in `texts` of the pieces the note was read from.
-fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context: &[NoteText], sheet: (f64, f64)) -> bool {
+fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context: &[NoteText]) -> bool {
     let h = note.height;
     if !(h.is_finite() && h > 0.0) {
         return false;
@@ -2293,10 +2486,7 @@ fn stands_as_note(note: &NoteText, own: [usize; 2], texts: &[NoteText], context:
         }
     }
     let layer_up = note.layer.as_deref().unwrap_or("").to_ascii_uppercase();
-    let in_title_block = layer_up.contains("TITLE")
-        || layer_up.contains("BORDER")
-        || layer_up.contains("TBLOCK")
-        || (note.at.0 / 72.0 > sheet.0 * 0.6 && note.at.1 / 72.0 < sheet.1 * 0.3);
+    let in_title_block = layer_up.contains("TITLE") || layer_up.contains("BORDER") || layer_up.contains("TBLOCK");
     let mut titled = false;
     let mut scale_label = false;
     let mut dimensions = 0usize;
@@ -2695,9 +2885,38 @@ fn ocr_candidate(s: &Stroke, max_seg: f64) -> Option<[f64; 4]> {
     ((b[2] - b[0]) <= max_seg * 2.0 && (b[3] - b[1]) <= max_seg * 2.0).then_some(b)
 }
 
+/// The style a recovered text is written in: the OCR's when no hidden text confirms it, unsure
+/// under [`OCR_CELL_LOW_CONFIDENCE`].
+fn ocr_style(rt: &RecoveredText) -> &'static str {
+    match (rt.unconfirmed, rt.confidence) {
+        (false, _) => "Standard",
+        (true, Some(c)) if c < OCR_CELL_LOW_CONFIDENCE => OCR_UNSURE_STYLE,
+        (true, _) => OCR_TEXT_STYLE,
+    }
+}
+
 /// The confidence (0..1, its weakest character's) under which an OCR reading isn't inserted: at
 /// the template threshold it is as likely a tick, a corner or a symbol's bars as a letter.
 const OCR_MIN_CONFIDENCE: f64 = 0.2;
+
+/// An OCR reading this sure (or surer) on a page lettered in strokes alone anchors a symbol
+/// search as a real text tag does.
+const OCR_TAG_CONFIDENCE: f64 = 0.8;
+
+/// A page with at least this many characters of real (visible) text is lettered in text: its
+/// tables aren't read off strokes cell by cell, nor its tags.
+const OCR_CELLS_REAL_CHARS: usize = 500;
+
+/// Cells holding two letters or digits or more a grid of lines has at least, to be a table whose
+/// cells are read entry by entry.
+const OCR_TABLE_WORDS: usize = 3;
+
+/// A table cell's reading under this confidence is no entry (its strokes are a mark, not a
+/// letter); over it, a lone glyph in a cell is the cell's value.
+const OCR_CELL_MIN_CONFIDENCE: f64 = 0.3;
+/// A table cell's reading under this confidence is counted as unsure ([`OcrReport::cells_low`]):
+/// a table with many is asked about rather than trusted.
+pub const OCR_CELL_LOW_CONFIDENCE: f64 = 0.6;
 
 /// The OCR's readings settled against the page's hidden text. A reading inside a hidden
 /// string's box (where the PDF says that string is written: its start to its end, a letter
@@ -2771,6 +2990,7 @@ fn settle_ocr(ocr: Vec<RecoveredText>, texts: &[TextOut], strokes: &[Stroke], re
                             review: false,
                             strokes_stay: false,
                             rotation: h.rotation,
+                            in_cell: false,
                         })
                     }
                 }
@@ -3105,36 +3325,129 @@ const MAX_PIECE_PAIRS: usize = 20_000_000;
 /// pieces of one glyph stay inside its box; a neighbouring letter would widen it.
 const PIECE_GROWTH: f64 = 1.3;
 
+/// The smallest glyph the outlined-lettering reader reads (its longer side, points): smaller is
+/// a speck of a stipple or a sand hatch.
+const MIN_OUTLINE_GLYPH: f64 = 1.5;
+
+/// Grid cells (twice the page's glyph size each way) a counted piece's reach or a piece spans
+/// at most: a reach is 3.6 times a piece no bigger than two cells.
+const MAX_REACH_CELLS: i64 = 64;
+
 /// The filled glyphs of a page: each fill's glyphs ([`outline_glyphs`]), and a glyph some pages
 /// fill in several pieces (one fill per stroke: an A's two legs, a 1's stem and flag, a C's arc
 /// and its ends) joined into one, so its holes and centre lines are the whole glyph's. Pieces
 /// join when they have the same pen, their boxes overlap most of the smaller one, and the
-/// joined box stays the size of its biggest piece. More than [`MAX_OUTLINE_GLYPHS`] pieces (or
+/// joined box stays the size of its biggest piece.
+///
+/// The cheap filters run before a piece counts toward the cap, so the cap bounds the work, not
+/// the input seen: a piece bigger than a glyph is left out; one too small to make a glyph even
+/// joined ([`MIN_OUTLINE_GLYPH`] over [`PIECE_GROWTH`]) or under visible real text (that text's
+/// copy) counts for nothing and is kept only where a glyph joined round a counted piece could
+/// reach it. More than [`MAX_OUTLINE_GLYPHS`] counted pieces (or as many kept beside them, or
 /// [`MAX_PIECE_PAIRS`] pairs) sets `capped` and the rest are left out (left apart).
-fn outline_glyph_pieces(fills: &[Fill], taken_fills: &HashSet<usize>, max_seg: f64, capped: &mut bool) -> Vec<OutlineGlyph> {
-    let mut pieces: Vec<(usize, Vec<usize>, [f64; 4])> = Vec::new();
+fn outline_glyph_pieces(
+    fills: &[Fill],
+    taken_fills: &HashSet<usize>,
+    max_seg: f64,
+    cover: &TextCover,
+    glyph_orders: &HashSet<usize>,
+    capped: &mut bool,
+) -> Vec<OutlineGlyph> {
+    // whether a piece is in at all (Some), and whether it counts (true): a glyph's own piece
+    let class = |b: &[f64; 4], drawn_as_glyph: bool| -> Option<bool> {
+        let (w, h) = (b[2] - b[0], b[3] - b[1]);
+        if w > max_seg * 2.0 || h > max_seg * 2.0 {
+            return None;
+        }
+        let covered = !drawn_as_glyph && cover.covers((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        Some(w.max(h) >= MIN_OUTLINE_GLYPH / PIECE_GROWTH && !covered)
+    };
+    // (fill, its glyph's place in the fill, loops, box): in the fill's order, as drawn
+    let mut found: Vec<(usize, usize, Vec<usize>, [f64; 4])> = Vec::new();
+    let mut other_fills: Vec<usize> = Vec::new();
     'fills: for (fi, f) in fills.iter().enumerate() {
         if taken_fills.contains(&fi) || f.loops.len() > MAX_OUTLINE_LOOPS {
             continue;
         }
-        for (loops, b) in outline_glyphs(f) {
-            // a piece bigger than a glyph is no part of one
-            if b[2] - b[0] > max_seg * 2.0 || b[3] - b[1] > max_seg * 2.0 {
-                continue;
+        let drawn_as_glyph = glyph_orders.contains(&f.order);
+        let mut others = false;
+        for (k, (loops, b)) in outline_glyphs(f).into_iter().enumerate() {
+            match class(&b, drawn_as_glyph) {
+                None => {}
+                Some(false) => others = true,
+                Some(true) => {
+                    if found.len() >= MAX_OUTLINE_GLYPHS {
+                        *capped = true;
+                        break 'fills;
+                    }
+                    found.push((fi, k, loops, b));
+                }
             }
-            if pieces.len() >= MAX_OUTLINE_GLYPHS {
-                *capped = true;
-                break 'fills;
-            }
-            pieces.push((fi, loops, b));
+        }
+        if others {
+            other_fills.push(fi);
         }
     }
+    // where a glyph joined round each counted piece can reach: its box grown by its longer side
+    // times PIECE_GROWTH every way (a joined glyph stays inside that)
+    let cell = max_seg.max(1.0) * 2.0;
+    let key = |x: f64, y: f64| ((x / cell).floor() as i64, (y / cell).floor() as i64);
+    let reach: Vec<[f64; 4]> = found
+        .iter()
+        .map(|p| {
+            let b = p.3;
+            let g = (b[2] - b[0]).max(b[3] - b[1]) * PIECE_GROWTH;
+            [b[0] - g, b[1] - g, b[2] + g, b[3] + g]
+        })
+        .collect();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (ri, r) in reach.iter().enumerate() {
+        let (lo, hi) = (key(r[0], r[1]), key(r[2], r[3]));
+        // a reach spans a few cells (a box that isn't finite would span them all)
+        if grid_window_cells(lo, hi) > MAX_REACH_CELLS {
+            continue;
+        }
+        for gx in lo.0..=hi.0 {
+            for gy in lo.1..=hi.1 {
+                grid.entry((gx, gy)).or_default().push(ri);
+            }
+        }
+    }
+    let reached = |b: &[f64; 4]| {
+        let (lo, hi) = (key(b[0], b[1]), key(b[2], b[3]));
+        grid_window_cells(lo, hi) <= MAX_REACH_CELLS
+            && (lo.0..=hi.0).any(|gx| {
+                (lo.1..=hi.1).any(|gy| {
+                    grid.get(&(gx, gy)).is_some_and(|rs| {
+                        rs.iter().filter_map(|&ri| reach.get(ri)).any(|r| b[0] <= r[2] && b[2] >= r[0] && b[1] <= r[3] && b[3] >= r[1])
+                    })
+                })
+            })
+    };
+    let mut kept = 0usize;
+    'others: for fi in other_fills {
+        let Some(f) = fills.get(fi) else { continue };
+        let drawn_as_glyph = glyph_orders.contains(&f.order);
+        for (k, (loops, b)) in outline_glyphs(f).into_iter().enumerate() {
+            if class(&b, drawn_as_glyph) != Some(false) || !reached(&b) {
+                continue;
+            }
+            if kept >= MAX_OUTLINE_GLYPHS {
+                *capped = true;
+                break 'others;
+            }
+            kept += 1;
+            found.push((fi, k, loops, b));
+        }
+    }
+    found.sort_by_key(|p| (p.0, p.1));
+    let pieces: Vec<(usize, Vec<usize>, [f64; 4])> = found.into_iter().map(|(fi, _, loops, b)| (fi, loops, b)).collect();
     let n = pieces.len();
     let mut parent: Vec<usize> = (0..n).collect();
     let mut boxes: Vec<[f64; 4]> = pieces.iter().map(|p| p.2).collect();
     let mut longest: Vec<f64> = pieces.iter().map(|p| (p.2[2] - p.2[0]).max(p.2[3] - p.2[1])).collect();
     fn root(parent: &[usize], mut i: usize) -> usize {
-        for _ in 0..MAX_OUTLINE_GLYPHS {
+        for _ in 0..parent.len() {
             match parent.get(i) {
                 Some(&p) if p != i => i = p,
                 _ => break,
@@ -3236,10 +3549,10 @@ fn recover_outlined_lettering(
     // each centre line's glyph (numbered as read) and its holes; whether each glyph is bars only
     let mut outline_of: HashMap<usize, (usize, usize)> = HashMap::new();
     let mut bars: Vec<bool> = Vec::new();
-    for glyph in outline_glyph_pieces(fills, taken_fills, max_seg, &mut read.capped) {
+    for glyph in outline_glyph_pieces(fills, taken_fills, max_seg, &cover, glyph_orders, &mut read.capped) {
         let b = glyph.bbox;
         let (w, h) = (b[2] - b[0], b[3] - b[1]);
-        if w.max(h) < 1.5 || w > max_seg * 2.0 || h > max_seg * 2.0 {
+        if w.max(h) < MIN_OUTLINE_GLYPH || w > max_seg * 2.0 || h > max_seg * 2.0 {
             continue;
         }
         let drawn_as_glyph = glyph.pieces.iter().any(|&(fi, _)| fills.get(fi).is_some_and(|f| glyph_orders.contains(&f.order)));
@@ -3327,7 +3640,7 @@ fn recover_outlined_lettering(
     if shapes.is_empty() {
         return read;
     }
-    let (readings, _) = recover_shx_ocr(&shapes, sheet, &HashSet::new(), &outline_of);
+    let (readings, _) = recover_shx_ocr(&shapes, sheet, &HashSet::new(), &outline_of, false);
     // each hidden string's box, a third of a letter round (as `settle_ocr`)
     let hidden: Vec<(&TextOut, [f64; 4])> = texts
         .iter()
@@ -3378,6 +3691,7 @@ fn recover_outlined_lettering(
                         review: false,
                         strokes_stay: false,
                         rotation: h.rotation,
+                        in_cell: false,
                     });
                 }
             }
@@ -3426,6 +3740,9 @@ struct RecoveredText {
     strokes_stay: bool,
     /// The lettering's direction in degrees, counter-clockwise (90: reading up the sheet).
     rotation: f64,
+    /// Read inside a ruled table cell ([`crate::pdf_cells`]): one cell's entry, kept however
+    /// short (a `1`, a `-`).
+    in_cell: bool,
 }
 
 /// Recover SHX-stroked text by matching invisible (hidden) text entities to nearby stroke
@@ -3520,6 +3837,7 @@ fn recover_shx_from_hidden(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         });
     }
     result
@@ -3650,6 +3968,7 @@ fn recover_shx_fallback(strokes: &[Stroke], texts: &[TextOut], sheet: (f64, f64)
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         });
     }
     result
@@ -3996,11 +4315,26 @@ pub struct OcrReport {
     pub noise_dropped: usize,
     /// Texts read in lettering that runs up or down the sheet.
     pub turned: usize,
+    /// Entries read in ruled table cells, and how many of them read under
+    /// [`OCR_CELL_LOW_CONFIDENCE`].
+    pub cells: usize,
+    pub cells_low: usize,
+    /// Characters of the page's lettering: printed as text (the page's visible text), and drawn
+    /// as strokes and read back (from hidden text or by the OCR), of them read by the OCR alone.
+    pub text_chars: usize,
+    pub stroke_chars: usize,
+    pub unconfirmed_chars: usize,
     /// The texts it recovered, with their confidence.
     pub words: Vec<OcrWord>,
 }
 
 impl OcrReport {
+    /// The share of the page's lettering drawn as strokes (0 when it has none).
+    pub fn stroke_share(&self) -> f64 {
+        let all = self.text_chars + self.stroke_chars;
+        if all == 0 { 0.0 } else { self.stroke_chars as f64 / all as f64 }
+    }
+
     /// The mean confidence of the recovered texts (0 when there are none).
     pub fn mean_confidence(&self) -> f64 {
         if self.words.is_empty() { 0.0 } else { self.words.iter().map(|w| w.confidence).sum::<f64>() / self.words.len() as f64 }
@@ -4069,6 +4403,39 @@ fn drop_stacked_specks(run: &mut Vec<&MatchedGlyph>) {
     }
 }
 
+/// The character of a mark [`join_stacked_marks`] joined into the one over it: no character.
+const STACKED: char = '\u{0}';
+
+/// Marks drawn one over the other are one character: two dashes an equals sign
+/// (`LEVEL 2 = EL 14'-0"`), two specks a colon (`SCALE:`). The lower mark keeps the character,
+/// the upper one becomes [`STACKED`] (its strokes stay the text's).
+fn join_stacked_marks(word: &mut [(&MatchedGlyph, char)]) {
+    let speck = |c: char| matches!(c, '.' | ',' | '\'');
+    for i in 1..word.len() {
+        let (Some(&(a, ca)), Some(&(b, cb))) = (word.get(i - 1), word.get(i)) else { continue };
+        // one over the other: a gap between them, their middles in line (a dot is a tick as
+        // wide as nothing: in line within a quarter of the pair's height)
+        let apart = a.bb[1].max(b.bb[1]) - a.bb[3].min(b.bb[3]);
+        let span = a.bb[3].max(b.bb[3]) - a.bb[1].min(b.bb[1]);
+        let wide = (a.bb[2] - a.bb[0]).max(b.bb[2] - b.bb[0]);
+        let dx = ((a.bb[0] + a.bb[2]) - (b.bb[0] + b.bb[2])).abs() / 2.0;
+        if apart <= 0.0 || dx > (0.25 * span).max(0.25 * wide) {
+            continue;
+        }
+        let joined = match (ca, cb) {
+            ('-', '-') => '=',
+            (x, y) if speck(x) && speck(y) => ':',
+            _ => continue,
+        };
+        if let Some(first) = word.get_mut(i - 1) {
+            first.1 = joined;
+        }
+        if let Some(second) = word.get_mut(i) {
+            second.1 = STACKED;
+        }
+    }
+}
+
 /// Settle the look-alikes of a word (O/0, B/8, I/1, ...): each takes the kind (letter or
 /// digit) most of the sure characters of its part of the word are (the parts split at
 /// punctuation: "LP" and "1A" in "LP-1A"); a part that doesn't say takes its nearest
@@ -4118,7 +4485,27 @@ fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
         }
         if let Some(part) = word.get_mut(a..b) {
             digit_tail(part);
+            number_lead(part);
         }
+    }
+}
+
+/// A part that starts with a sure digit is a number with its unit after it (`40W`, `2000A`,
+/// `60A`): the rings that follow its digits, up to its first sure letter, are zeros. (Only the
+/// ring: a number's ordinal or unit can start with an S or an I, `1ST`.)
+fn number_lead(part: &mut [(&MatchedGlyph, char)]) {
+    if !part.first().is_some_and(|(g, c)| g.alt.is_none() && c.is_ascii_digit()) {
+        return;
+    }
+    for (g, ch) in part.iter_mut().skip(1) {
+        if ch.is_ascii_digit() {
+            continue;
+        }
+        if *ch == 'O' && g.alt == Some('0') {
+            *ch = '0';
+            continue;
+        }
+        break;
     }
 }
 
@@ -4152,16 +4539,18 @@ fn digit_tail(part: &mut [(&MatchedGlyph, char)]) {
 /// strokes (a word read upside down too), the reading with more letters wins, then the surer.
 ///
 /// `shapes`: for strokes that are a filled glyph's centre lines, (which glyph, its holes) — the
-/// holes narrow the characters it can be.
+/// holes narrow the characters it can be. `cells`: read the lettering in the page's ruled table
+/// cells cell by cell ([`crate::pdf_cells`]); a cell's entry stands like a word, however short.
 fn recover_shx_ocr(
     strokes: &[Stroke],
     sheet: (f64, f64),
     excluded: &HashSet<usize>,
     shapes: &HashMap<usize, (usize, usize)>,
+    cells: bool,
 ) -> (Vec<RecoveredText>, OcrReport) {
-    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded, shapes);
+    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded, shapes, cells);
     let alnum = |rt: &RecoveredText| rt.value.chars().filter(char::is_ascii_alphanumeric).count();
-    let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2);
+    let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2 || rt.in_cell);
     let mut taken: HashSet<usize> = excluded.clone();
     for rt in &result {
         taken.extend(&rt.stroke_indices);
@@ -4183,7 +4572,7 @@ fn recover_shx_ocr(
                 order: s.order,
             })
             .collect();
-        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken, shapes);
+        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken, shapes, false);
         for mut rt in texts.into_iter().filter(|rt| alnum(rt) >= 2) {
             rt.at = back(rt.at);
             rt.rotation = rotation;
@@ -4204,12 +4593,14 @@ fn recover_shx_ocr(
     (result, report)
 }
 
-/// Read the lettering that runs across the sheet (left to right, upright or slanted).
+/// Read the lettering that runs across the sheet (left to right, upright or slanted); with
+/// `cells`, the lettering in ruled table cells cell by cell.
 fn recover_shx_ocr_upright(
     strokes: &[Stroke],
     sheet: (f64, f64),
     excluded: &HashSet<usize>,
     shapes: &HashMap<usize, (usize, usize)>,
+    cells: bool,
 ) -> (Vec<RecoveredText>, OcrReport) {
     let mut report = OcrReport::default();
     let templates = shx_templates();
@@ -4218,6 +4609,10 @@ fn recover_shx_ocr_upright(
     }
 
     let max_seg = ocr_max_seg(sheet);
+    // The page's table rules: never letters themselves (a column drawn a piece per row reads
+    // like an `I`), and the cells they close are read entry by entry.
+    let rules =
+        if cells { crate::pdf_cells::Cells::of(strokes.iter().map(|s| (s.pts.as_slice(), s.closed))) } else { crate::pdf_cells::Cells::default() };
 
     // ---- phase 1: find candidate SHX strokes ----
     struct Cand {
@@ -4227,7 +4622,7 @@ fn recover_shx_ocr_upright(
     }
     let mut cands: Vec<Cand> = Vec::new();
     for (i, s) in strokes.iter().enumerate() {
-        if excluded.contains(&i) {
+        if excluded.contains(&i) || rules.rule_strokes.contains(&i) {
             continue;
         }
         if let Some(b) = ocr_candidate(s, max_seg) {
@@ -4486,10 +4881,47 @@ fn recover_shx_ocr_upright(
     }
 
     // ---- phase 4: lines by baseline and height, then texts by spacing ----
+    // the page's letter height: its letters' median (a lone dash's line has none)
+    let letter_h = {
+        let mut hs: Vec<f64> = matched.iter().filter(|g| !small_glyph(g.ch)).map(|g| g.bb[3] - g.bb[1]).filter(|h| h.is_finite()).collect();
+        hs.sort_by(f64::total_cmp);
+        hs.get(hs.len() / 2).copied().unwrap_or(0.0)
+    };
     let lines = ocr_lines(&mut matched);
+    // Each glyph's ruled table cell, by the height of its line (a dash alone on its line by the
+    // page's letter height). A grid of lines is a table when its cells hold words, more of them
+    // than cells holding straight strokes only: plan linework ruled like one (a roof's trusses,
+    // a dashed line across them, a label between) holds dashes and ticks mostly.
+    let cell_h =
+        |line: &TextLine| if line.members.iter().filter_map(|&m| matched.get(m)).all(|g| small_glyph(g.ch)) { letter_h } else { line.height };
+    // per cell: its table, its letters and digits, its glyphs, whether they are all straight
+    let mut in_cells: HashMap<[i64; 4], ((i64, i64), usize, usize, bool)> = HashMap::new();
+    for line in &lines {
+        let h = cell_h(line);
+        for g in line.members.iter().filter_map(|&m| matched.get(m)) {
+            if let Some((c, table)) = rules.cell_of(g.bb, h) {
+                let e = in_cells.entry(c.map(|v| (v * 8.0).round() as i64)).or_insert((table, 0, 0, true));
+                e.1 += usize::from(g.ch.is_ascii_alphanumeric());
+                e.2 += 1;
+                e.3 &= g.straight;
+            }
+        }
+    }
+    // per table: (cells holding words, cells holding straight strokes only)
+    let mut table_cells: HashMap<(i64, i64), (usize, usize)> = HashMap::new();
+    for (table, letters, glyphs, straight) in in_cells.values() {
+        let e = table_cells.entry(*table).or_default();
+        // (two dashes of two dashed lines side by side are no word)
+        e.0 += usize::from(*letters >= 2 && !*straight);
+        e.1 += usize::from(*glyphs >= 1 && *straight);
+    }
+    let worded: HashMap<(i64, i64), usize> =
+        table_cells.into_iter().filter(|(_, (words, sticks))| words >= sticks).map(|(t, (words, _))| (t, words)).collect();
 
     let mut result: Vec<RecoveredText> = Vec::new();
     let mut marks: Vec<RecoveredText> = Vec::new();
+    // the texts read in each table cell so far: (cell, index in `result`)
+    let mut cell_texts: Vec<([i64; 4], usize)> = Vec::new();
     for mut line in lines {
         line.members.sort_by(|&a, &b| {
             let (ax, bx) = (matched.get(a).map_or(0.0, |g| g.bb[0]), matched.get(b).map_or(0.0, |g| g.bb[0]));
@@ -4508,18 +4940,29 @@ fn recover_shx_ocr_upright(
             let (cx, w) = ((g.bb[0] + g.bb[2]) / 2.0, (g.bb[2] - g.bb[0]).max(nominal));
             (cx - w / 2.0, cx + w / 2.0)
         };
-        // split the line into texts at wide gaps (about two spaces); a narrower gap is a space
-        let mut runs: Vec<Vec<&MatchedGlyph>> = Vec::new();
+        // each glyph's ruled table cell (its corners in eighths of a point; none off the tables)
+        let line_h = cell_h(&line);
+        let cell_of = |g: &MatchedGlyph| {
+            rules
+                .cell_of(g.bb, line_h)
+                .filter(|(_, table)| worded.get(table).is_some_and(|n| *n >= OCR_TABLE_WORDS))
+                .map(|(c, _)| c.map(|v| (v * 8.0).round() as i64))
+        };
+        // split the line into texts at wide gaps (about two spaces); a narrower gap is a space.
+        // A cell's lettering is one text whatever its gaps, and no text runs on past its cell.
+        let mut runs: Vec<(Option<[i64; 4]>, Vec<&MatchedGlyph>)> = Vec::new();
         let mut prev_end = f64::MIN;
         for g in line.members.iter().filter_map(|&m| matched.get(m)) {
             let (x0, x1) = span(g);
+            let cell = cell_of(g);
             match runs.last_mut() {
-                Some(run) if x0 - prev_end <= cw * 1.8 => run.push(g),
-                _ => runs.push(vec![g]),
+                Some((in_cell, run)) if *in_cell == cell && (cell.is_some() || x0 - prev_end <= cw * 1.8) => run.push(g),
+                _ => runs.push((cell, vec![g])),
             }
             prev_end = prev_end.max(x1);
         }
-        for mut run in runs {
+        for (cell, mut run) in runs {
+            let in_cell = cell.is_some();
             drop_stacked_specks(&mut run);
             // words (split at spaces), each glyph with the character it reads as
             let mut words: Vec<Vec<(&MatchedGlyph, char)>> = Vec::new();
@@ -4551,11 +4994,12 @@ fn recover_shx_ocr_upright(
             let run: Vec<&MatchedGlyph> = words.iter().flatten().map(|(g, _)| *g).collect();
             let mut value = String::new();
             for word in &mut words {
+                join_stacked_marks(word);
                 settle_look_alikes(word);
                 if !value.is_empty() {
                     value.push(' ');
                 }
-                value.extend(word.iter().map(|(_, c)| *c));
+                value.extend(word.iter().map(|(_, c)| *c).filter(|c| *c != STACKED));
             }
             // two ticks side by side are a double quote
             let value = value.replace("''", "\"");
@@ -4565,11 +5009,16 @@ fn recover_shx_ocr_upright(
             // linework reads as lone glyphs and runs of straight strokes (hatching: "////"); a
             // lone loop is a small circle or box as often as an O, and a row of nothing but
             // loops is a row of circles or boxes ("OOO", or "DDD" for boxes read turned)
-            let noise =
-                alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7));
+            // In a table cell the entry is all there is: a lone `1`, a `-` for none, an `O` are
+            // its values (only specks and a reading under the cell floor are not).
+            let noise = if in_cell {
+                value.chars().all(|c| matches!(c, '.' | ',' | '\'' | ' ')) || confidence < OCR_CELL_MIN_CONFIDENCE
+            } else {
+                alnum == 0 || run.iter().all(|g| g.straight) || run.iter().all(|g| g.ring) || (lone && run.iter().any(|g| g.confidence < 0.7))
+            };
             // a lone letter or digit can still be a mark (a circuit number, a fixture type):
             // it is judged once the page's words give its letter heights
-            let mark = noise && lone && alnum == 1 && run.first().is_some_and(|g| lone_mark_shape(g, strokes));
+            let mark = !in_cell && noise && lone && alnum == 1 && run.first().is_some_and(|g| lone_mark_shape(g, strokes));
             if noise && !mark {
                 report.noise_dropped += 1;
                 continue;
@@ -4577,12 +5026,18 @@ fn recover_shx_ocr_upright(
             let Some(first) = run.first() else { continue };
             let x0 = run.iter().map(|g| g.bb[0]).fold(f64::MAX, f64::min);
             let y0 = run.iter().filter(|g| !small_glyph(g.ch)).map(|g| g.bb[1]).fold(f64::MAX, f64::min);
-            let y0 = if y0 == f64::MAX { first.bb[1] } else { y0 };
+            // A cell's lone dash stands as its row's lettering does: on the baseline (half a
+            // letter under it), a letter high.
+            let (y0, height) = match y0 {
+                y if y < f64::MAX => (y, h),
+                _ if in_cell && letter_h > 0.0 => (first.bb[1] - 0.5 * letter_h, letter_h),
+                _ => (first.bb[1], h),
+            };
             let stroke_indices: HashSet<usize> = run.iter().flat_map(|g| g.indices.iter().copied()).collect();
             let layer = first.indices.first().and_then(|&i| strokes.get(i)).and_then(|s| s.layer.clone());
             let text = RecoveredText {
                 at: (x0, y0),
-                height: h,
+                height,
                 value,
                 stroke_indices,
                 pen: line.pen,
@@ -4592,10 +5047,31 @@ fn recover_shx_ocr_upright(
                 review: false,
                 strokes_stay: false,
                 rotation: 0.0,
+                in_cell,
             };
-            if mark { marks.push(text) } else { result.push(text) }
+            if mark {
+                marks.push(text);
+                continue;
+            }
+            // A cell's pieces on one baseline (a line the spacing split) are one entry.
+            if let Some(key) = cell {
+                let near = |t: &RecoveredText| (t.at.1 - text.at.1).abs() <= t.height.max(text.height) * 0.3 && t.pen == text.pen;
+                let same = cell_texts.iter().find(|(k, _)| *k == key).map(|(_, i)| *i).filter(|&i| result.get(i).is_some_and(near));
+                if let Some(t) = same.and_then(|i| result.get_mut(i)) {
+                    let (first, second) = if t.at.0 <= text.at.0 { (t.value.clone(), text.value) } else { (text.value, t.value.clone()) };
+                    t.value = format!("{first} {second}");
+                    t.at = (t.at.0.min(text.at.0), t.at.1.min(text.at.1));
+                    t.stroke_indices.extend(text.stroke_indices);
+                    t.confidence = t.confidence.zip(text.confidence).map(|(a, b)| a.min(b));
+                    continue;
+                }
+                cell_texts.push((key, result.len()));
+            }
+            result.push(text);
         }
     }
+    report.cells = result.iter().filter(|t| t.in_cell).count();
+    report.cells_low = result.iter().filter(|t| t.in_cell && t.confidence.unwrap_or(1.0) < OCR_CELL_LOW_CONFIDENCE).count();
     let kept = keep_lone_marks(marks, &result, strokes, max_seg);
     report.noise_dropped += kept.1;
     result.extend(kept.0);
@@ -5090,6 +5566,7 @@ fn reduce_masks(
             order: max_order,
             layer: None,
             even_odd: false,
+            under: false,
         });
     }
     (result, capped)
@@ -5576,7 +6053,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Initial scale detection — may be overridden after SHX text recovery if a DO NOT SCALE
     // note only exists in stroked (hidden) text.
     let do_not_scale_visible = if opts.recover_text { has_do_not_scale_note(&out.texts) } else { false };
-    let mut best_note = if opts.scale.is_some() {
+    let mut best_note = if opts.scale.is_some() || !opts.scale_notes {
         None
     } else if opts.recover_text {
         detect_scale_note(&out.texts, sheet)
@@ -5672,7 +6149,15 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
     }
     let raw_strokes = strokes.len();
-    let strokes = if opts.join { join(strokes) } else { strokes };
+    let strokes = if opts.join {
+        let apart = door_swings_apart(&strokes);
+        if !apart.is_empty() {
+            stats.insert("door swings and leaves not joined to other lines".into(), apart.len());
+        }
+        join(strokes, &apart)
+    } else {
+        strokes
+    };
     if opts.join && strokes.len() < raw_strokes {
         stats.insert("pieces joined".into(), raw_strokes - strokes.len());
     }
@@ -5858,7 +6343,14 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
         let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
         if has_shx_evidence || lettering_is_strokes {
-            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new());
+            // A page lettered in strokes: no real text on it beyond a few labels. Its tables are
+            // read cell by cell, and its sure readings are its tags. A page lettered in real text
+            // has its tables and tags in that text: the strokes left in its cells are symbols (a
+            // legend's), and what the OCR reads off its linework is no tag.
+            let visible_chars: usize =
+                texts.iter().filter(|t| t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)).map(|t| t.value.trim().chars().count()).sum();
+            let stroke_lettered = visible_chars < OCR_CELLS_REAL_CHARS;
+            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new(), stroke_lettered);
             // What the PDF's hidden text says is written where the OCR read takes that string;
             // a circle and a reading under the confidence floor aren't inserted (their strokes
             // stay linework).
@@ -5879,6 +6371,10 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 stats.insert("SHX OCR glyph clusters".into(), report.clusters);
                 stats.insert("SHX OCR glyphs matched".into(), report.glyphs);
                 stats.insert("SHX OCR lone glyphs dropped".into(), report.noise_dropped);
+                if report.cells > 0 {
+                    stats.insert("SHX OCR table cell entries".into(), report.cells);
+                    stats.insert("SHX OCR table cell entries unsure".into(), report.cells_low);
+                }
                 if report.turned > 0 {
                     stats.insert("SHX OCR turned texts".into(), report.turned);
                 }
@@ -5908,10 +6404,17 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     boxes.push(bbox(&own).unwrap_or([f64::NAN; 4]));
                 }
                 let first_ocr = texts.len() + base;
+                // On a page lettered in strokes alone (no hidden text, little real text) the OCR's
+                // sure readings are the page's tags, as real text's are: a circuit beside its
+                // receptacle (`P1-2`) stands among the device's other notes.
+                let stroke_page = !has_hidden_text && stroke_lettered;
                 let anchors: Vec<TagAnchor> = ocr_texts
                     .iter()
                     .enumerate()
-                    .filter(|(i, rt)| is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                    .filter(|(i, rt)| {
+                        (is_ocr_device_tag(&rt.value) && stands_alone(first_ocr + i, rt.height, &boxes))
+                            || (stroke_page && !rt.in_cell && rt.confidence.unwrap_or(0.0) >= OCR_TAG_CONFIDENCE && is_device_tag(&rt.value))
+                    })
                     .filter(|(_, rt)| !instances.iter().any(|inst| (inst.center.0 - rt.at.0).hypot(inst.center.1 - rt.at.1) < max_size))
                     .map(|(i, rt)| TagAnchor { value: &rt.value, at: rt.at, height: rt.height, text_idx: None, ocr_idx: Some(base + i) })
                     .collect();
@@ -5952,7 +6455,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             stats.insert("outlined lettering lone glyphs and bar shapes dropped".into(), outlined.plain);
         }
         if outlined.capped {
-            notes.push(format!("outlined lettering: more than {MAX_OUTLINE_GLYPHS} glyph-sized outline pieces; the rest were not read"));
+            notes.push(format!(
+                "outlined lettering: more than {MAX_OUTLINE_GLYPHS} glyph-sized outline pieces not under real text; the rest were not read"
+            ));
         }
         if !outlined.texts.is_empty() {
             let confirmed = outlined.texts.iter().filter(|t| !t.unconfirmed).count();
@@ -5973,7 +6478,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         // A scale note drawn as lettering (strokes or outlines) is the sheet's scale when its
         // text gave none: the lettering is read from the same shapes the sheet prints.
-        if opts.scale.is_none() && best_note.is_none() {
+        if opts.scale.is_none() && opts.scale_notes && best_note.is_none() {
             let readings: Vec<NoteText> = recovered_texts.iter().map(NoteText::of_reading).collect();
             let page: Vec<NoteText> = texts.iter().map(NoteText::of_text).collect();
             if let Some((k, note)) = detect_scale_note_in(&readings, &page, sheet) {
@@ -6209,13 +6714,14 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             added += 1;
         }
     };
-    // everything in the PDF's painting order: a mask covers what was drawn before it, not after
-    let mut paint: Vec<(usize, u8, usize)> = Vec::with_capacity(strokes.len() + fills.len() + masks.len() + texts.len());
-    paint.extend(strokes.iter().enumerate().map(|(i, s)| (s.order, 0, i)));
-    paint.extend(fills.iter().enumerate().map(|(i, f)| (f.order, 1, i)));
-    paint.extend(masks.iter().enumerate().map(|(i, f)| (f.order, 2, i)));
-    paint.extend(texts.iter().enumerate().map(|(i, t)| (t.order, 3, i)));
-    paint.extend(images.iter().enumerate().map(|(i, im)| (im.order, 4, i)));
+    // everything in the PDF's painting order: a mask covers what was drawn before it, not after;
+    // a fill that only darkens (a highlight) goes under everything, as it looks on white paper
+    let mut paint: Vec<(bool, usize, u8, usize)> = Vec::with_capacity(strokes.len() + fills.len() + masks.len() + texts.len());
+    paint.extend(strokes.iter().enumerate().map(|(i, s)| (true, s.order, 0, i)));
+    paint.extend(fills.iter().enumerate().map(|(i, f)| (!f.under, f.order, 1, i)));
+    paint.extend(masks.iter().enumerate().map(|(i, f)| (true, f.order, 2, i)));
+    paint.extend(texts.iter().enumerate().map(|(i, t)| (true, t.order, 3, i)));
+    paint.extend(images.iter().enumerate().map(|(i, im)| (true, im.order, 4, i)));
     paint.sort_unstable();
     // small fills merged: (layer, colour, transparency) → (placed layer, colour, weight, outlines)
     let mut small_fills: BTreeMap<(String, [u8; 3], u8), (String, Color, Lineweight, Vec<HatchLoop>)> = BTreeMap::new();
@@ -6354,7 +6860,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         }
         result
     };
-    for (_, kind, i) in paint {
+    for (_, _, kind, i) in paint {
         match kind {
             0 => {
                 let Some(s) = strokes.get(i) else { continue };
@@ -6445,7 +6951,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 if loops.is_empty() {
                     continue;
                 }
-                if opts.merge_small_fills && !outline_fills.contains(&i) && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
+                if opts.merge_small_fills && !f.under && !outline_fills.contains(&i) && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
                     let e = small_fills
                         .entry((f.layer.clone().unwrap_or_default(), f.pen.rgb, f.pen.transp))
                         .or_insert_with(|| (layer, color, lw, Vec::new()));
@@ -6603,6 +7109,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // Fix 3: emit recovered SHX text entities (replacing the strokes that formed them)
     // using glyph-matched characters instead of '?' placeholders
     let mut recovered_count = 0usize;
+    ocr_report.text_chars =
+        texts.iter().filter(|t| t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)).map(|t| t.value.chars().filter(|c| !c.is_whitespace()).count()).sum();
     for (i, rt) in recovered_texts.iter().enumerate() {
         // skip empty or all-unrecognised clusters (they stay as linework), and device marks
         // that became a symbol's TAG
@@ -6623,15 +7131,20 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             rotation: rt.rotation.to_radians(),
             width_factor: 1.0,
             oblique: 0.0,
-            style: if rt.unconfirmed { OCR_TEXT_STYLE.into() } else { "Standard".into() },
+            style: ocr_style(rt).into(),
             halign: HAlign::default(),
             valign: VAlign::default(),
         };
-        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(OCR_TEXT_STYLE)) {
-            d.text_styles.push(TextStyle { name: OCR_TEXT_STYLE.into(), ..TextStyle::default() });
+        if rt.unconfirmed && !d.text_styles.iter().any(|st| st.name.eq_ignore_ascii_case(&text.style)) {
+            d.text_styles.push(TextStyle { name: text.style.clone(), ..TextStyle::default() });
         }
         add(&mut d, layer, color, lw, rt.pen.transp, EntityKind::Text(text));
         recovered_count += 1;
+        let chars = rt.value.chars().filter(|c| !c.is_whitespace()).count();
+        ocr_report.stroke_chars += chars;
+        if rt.unconfirmed {
+            ocr_report.unconfirmed_chars += chars;
+        }
         if let Some(confidence) = rt.confidence {
             ocr_report.words.push(OcrWord { value: rt.value.clone(), at: (p.x, p.y), confidence });
         }
@@ -7284,8 +7797,8 @@ fn write_images(_folder: &str, _images: &[(String, std::sync::Arc<cadaddy_render
 
 /// PDFIMPORT's JSON options → the converted page and a report: `{page?, scale?: number | "auto",
 /// layers?: "pdf" | "pen" | "object", whiteFills?, text?, join?, layout?, markups?, images?,
-/// imageFolder?, imagePrefix?, fills?: "each" | "merge"}` (`merge`: small fills as one hatch per
-/// layer and colour, [`PdfOptions::merge_small_fills`]). Images are written as PNG files in `imageFolder` (created
+/// imageFolder?, imagePrefix?, fills?: "each" | "merge", scaleNotes?}` (`merge`: small fills as one hatch per
+/// layer and colour, [`PdfOptions::merge_small_fills`]; `scaleNotes: false`, [`PdfOptions::scale_notes`]). Images are written as PNG files in `imageFolder` (created
 /// when missing) and their pixels handed to the image cache, so they show at once.
 pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Drawing, serde_json::Value), String> {
     use serde_json::{Value, json};
@@ -7323,6 +7836,7 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
     // (still reported do_not_scale + needs_registration) so it reads at building size.
     o.e_sheet_at_note_scale = true;
     o.merge_small_fills = p.get("fills").and_then(Value::as_str).is_some_and(|f| f.eq_ignore_ascii_case("merge"));
+    o.scale_notes = flag("scaleNotes", true);
     o.image_folder = p.get("imageFolder").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
     if let Some(prefix) = p.get("imagePrefix").and_then(Value::as_str) {
         let clean: String = prefix.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
@@ -7359,6 +7873,12 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
             "noise_dropped": r.ocr.noise_dropped,
             "mean_confidence": (r.ocr.mean_confidence() * 1000.0).round() / 1000.0,
             "low_confidence": r.ocr.words.iter().filter(|w| w.confidence < 0.5).count(),
+            "cells": r.ocr.cells,
+            "cells_low": r.ocr.cells_low,
+            "text_chars": r.ocr.text_chars,
+            "stroke_chars": r.ocr.stroke_chars,
+            "unconfirmed_chars": r.ocr.unconfirmed_chars,
+            "stroke_share": (r.ocr.stroke_share() * 1000.0).round() / 1000.0,
             "words": r.ocr.words.iter().take(500).map(|w| json!({"value": w.value, "at": [w.at.0, w.at.1], "confidence": (w.confidence * 1000.0).round() / 1000.0})).collect::<Vec<_>>(),
         },
         "notes": r.notes,
@@ -7487,6 +8007,7 @@ mod tests {
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         };
         let ocr = vec![read("U", (300.0, 300.0)), read("M L#.'", (320.0, 300.0)), read("151", (400.0, 300.0)), read("A-1", (420.0, 300.0))];
         let kept = settle_ocr(ocr, &[hidden], &[], &mut []).kept;
@@ -7586,6 +8107,7 @@ mod tests {
             review: false,
             strokes_stay: false,
             rotation: 0.0,
+            in_cell: false,
         };
         let readings = vec![read("268", 5.0), read("--.'", 5.0), read("Q7K", 30.0), read("--.'", 30.0), read("905Z", 49.0), read("-L-", 60.0)];
         let s = settle_ocr(readings, &texts, &[], &mut []);
@@ -7653,6 +8175,76 @@ mod tests {
         assert_eq!(lineweight(1.2), 40);
     }
 
+    /// The page's strokes joined as the reader joins them.
+    fn joined(strokes: Vec<Stroke>) -> Vec<Stroke> {
+        let apart = door_swings_apart(&strokes);
+        join(strokes, &apart)
+    }
+
+    /// A room's inner face in one pen, with a door in its bottom side's gap (hinge `h`, the gap
+    /// `w` wide): the swing as a flattened curve from the jamb across the gap to the open leaf.
+    fn room_with_door(leaf: bool, w: f64) -> Vec<Stroke> {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let h = (40.0, 10.0);
+        let mut v = vec![
+            st(vec![(10.0, 10.0), h]),
+            st(vec![(h.0 + w, 10.0), (110.0, 10.0)]),
+            st(vec![(110.0, 10.0), (110.0, 90.0)]),
+            st(vec![(110.0, 90.0), (10.0, 90.0)]),
+            st(vec![(10.0, 90.0), (10.0, 10.0)]),
+        ];
+        let swing: Vec<(f64, f64)> =
+            (0..=8).map(|i| (f64::from(i) * 11.25f64).to_radians()).map(|a| (h.0 + w * a.cos(), h.1 + w * a.sin())).collect();
+        v.push(st(swing));
+        if leaf {
+            v.push(st(vec![h, (h.0, h.1 + w)]));
+        }
+        v
+    }
+
+    #[test]
+    fn a_door_swing_and_its_leaf_stay_apart_from_the_walls_they_touch() {
+        for leaf in [true, false] {
+            let joined = joined(room_with_door(leaf, 30.0));
+            // The faces join into one outline open at the door; the swing (and the leaf) stay
+            // their own strokes: no closed outline runs round the swing.
+            assert!(joined.iter().all(|s| !s.closed), "leaf {leaf}: {:?}", joined.iter().map(|s| s.pts.len()).collect::<Vec<_>>());
+            assert_eq!(joined.iter().filter(|s| s.pts.len() == 9).count(), 1, "leaf {leaf}: the swing alone");
+            assert_eq!(joined.len(), if leaf { 3 } else { 2 }, "leaf {leaf}");
+            if leaf {
+                assert!(joined.iter().any(|s| s.pts == vec![(40.0, 10.0), (40.0, 40.0)]), "the leaf alone");
+            }
+        }
+    }
+
+    #[test]
+    fn a_round_corner_or_a_short_curve_still_joins() {
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        // A rounded corner: a quarter circle whose centre is no end of any line.
+        let corner: Vec<(f64, f64)> =
+            (0..=8).map(|i| (f64::from(i) * 11.25f64).to_radians()).map(|a| (90.0 + 10.0 * a.cos(), 90.0 + 10.0 * a.sin())).collect();
+        let strokes = vec![
+            st(vec![(0.0, 0.0), (100.0, 0.0)]),
+            st(vec![(100.0, 0.0), (100.0, 90.0)]),
+            st(corner),
+            st(vec![(90.0, 100.0), (0.0, 100.0)]),
+            st(vec![(0.0, 100.0), (0.0, 0.0)]),
+        ];
+        let joined = joined(strokes);
+        assert_eq!(joined.len(), 1);
+        assert!(joined.first().is_some_and(|s| s.closed));
+        // Not a swing: a third of a circle, a wiggle, a line.
+        let arc = |deg: f64| -> Vec<(f64, f64)> {
+            (0..=8).map(|i| (f64::from(i) * deg / 8.0).to_radians()).map(|a| (10.0 * a.cos(), 10.0 * a.sin())).collect()
+        };
+        assert!(swing_arc(&st(arc(90.0))).is_some());
+        assert!(swing_arc(&st(arc(120.0))).is_none());
+        assert!(swing_arc(&st(arc(30.0))).is_none());
+        assert!(swing_arc(&st(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)])).is_none());
+    }
+
     #[test]
     fn touching_pieces_join_and_round_loops_become_circles() {
         let pen = Pen { rgb: [0, 0, 0], lw: 25, transp: 0 };
@@ -7670,7 +8262,7 @@ mod tests {
             .chain((0..=8).map(|i| (f64::from(i) / 8.0 * 1.2 - 0.6 - std::f64::consts::FRAC_PI_2).sin_cos()).map(|(s, c)| (5.0 * c, 5.0 * s)))
             .collect();
         assert!(as_circle(&Stroke { pts: lens, closed: true, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 }).is_none());
-        let joined = join(strokes);
+        let joined = joined(strokes);
         assert_eq!(joined.len(), 1);
         let c = joined.first().and_then(as_circle);
         assert!(c.is_some_and(|((x, y), r)| (x - 10.0).abs() < 0.01 && (y - 10.0).abs() < 0.01 && (r - 5.0).abs() < 0.05), "{c:?}");
@@ -7772,7 +8364,7 @@ mod tests {
     /// A white mask over the box `[x0, y0, x1, y1]`, painted `order`th.
     fn white_box(b: [f64; 4], order: usize) -> Fill {
         let loops = vec![vec![(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])]];
-        Fill { loops, pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, layer: None, order, even_odd: false }
+        Fill { loops, pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, layer: None, order, even_odd: false, under: false }
     }
 
     fn mask_boxes(masks: &[Fill]) -> Vec<[f64; 4]> {
@@ -8172,6 +8764,7 @@ mod tests {
                 review: false,
                 strokes_stay: false,
                 rotation: 0.0,
+                in_cell: false,
             };
             let words = [RecoveredText { value: "AB".into(), stroke_indices: HashSet::new(), ..mark(1e12) }];
             keep_lone_marks(vec![mark(1e12)], &words, &strokes, 2.0).1
@@ -8234,9 +8827,11 @@ mod tests {
     #[test]
     fn a_scale_note_in_stroked_lettering_scales_the_sheet() {
         // The note is plotter lettering: the reader reads it without its "=" (no such
-        // character), split at the gap the "=" leaves, a 0 perhaps as an O.
+        // character), split at the gap the "=" leaves, a 0 perhaps as an O. It stands under
+        // its view title (a note with no SCALE word needs one, or a SCALE label: Q6466).
         for (note, k) in [("SCALE 1/8\" = 1'-0\"", 96.0), ("1/4\" = 1'-0\"", 48.0), ("SCALE 3/16\"=1'-0\"", 64.0)] {
-            let content = [stroked(note, (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat();
+            let content =
+                [stroked("PARTIAL PLAN", (500.0, 76.0), 9.0), stroked(note, (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat();
             let r = read_page(&content);
             assert_eq!(r.scale, k, "{note}: {} {:?}", r.scale_source, r.notes);
             assert!(r.scale_source.starts_with("scale note") && r.scale_source.contains("lettering"), "{}", r.scale_source);
@@ -8247,6 +8842,11 @@ mod tests {
             });
             assert!(plan.is_some_and(|p| (p.y - 300.0 / 72.0 * k).abs() < 0.05 * k), "{plan:?}");
         }
+        // Q6466: the same lettering with no SCALE word, title or SCALE label is a paper/real
+        // pair on its position alone: no scale note, the sheet stays at paper size and says so
+        let r = read_page(&[stroked("1/4\" = 1'-0\"", (500.0, 60.0), 9.0), stroked("FLOOR PLAN", (100.0, 300.0), 9.0)].concat());
+        assert_eq!(r.scale, 1.0, "{} {:?}", r.scale_source, r.notes);
+        assert!(r.notes.iter().any(|n| n.starts_with("scale not read")), "{:?}", r.notes);
         // A DO NOT SCALE sheet keeps sheet size, and says what it read.
         let content = [stroked("SCALE 1/8\" = 1'-0\"", (500.0, 60.0), 9.0), stroked("DO NOT SCALE", (100.0, 60.0), 9.0)].concat();
         let r = read_page(&content);
@@ -8322,6 +8922,39 @@ mod tests {
         assert_eq!(r.scale, 48.0, "{}", r.scale_source);
     }
 
+    /// Q6518: a page read without its scale notes (a plan whose only notes are its details') is
+    /// scaled from its dimension strings, else left at paper size, whatever its notes say.
+    #[test]
+    fn a_page_read_without_its_scale_notes_is_scaled_from_its_dimension_strings() {
+        let note = "BT /F1 8 Tf 600 60 Td (SCALE: 3\" = 1'-0\") Tj ET";
+        // the dimension strings of the sheet scaled from them above (96x)
+        let dims = [
+            dimension((100.0, 100.0), 180.0, "20'-0\"", false),
+            dimension((100.0, 200.0), 112.5, "12'-6\"", false),
+            dimension((400.0, 100.0), 72.0, "8'-0\"", true),
+            dimension((400.0, 300.0), 100.0, "40'-0\"", false),
+        ]
+        .concat();
+        let without = PdfOptions { scale_notes: false, ..PdfOptions::default() };
+        let read_with = |content: &str, o: &PdfOptions| match read(&pdf_with(content.as_bytes()), o) {
+            Ok(r) => r,
+            Err(e) => panic!("{e}"),
+        };
+        // with its notes: the note's 4x
+        assert_eq!(read_page(&[dims.as_str(), note].concat()).scale, 4.0);
+        // without: its dimension strings' 96x
+        let r = read_with(&[dims.as_str(), note].concat(), &without);
+        assert_eq!(r.scale, 96.0, "{}", r.scale_source);
+        assert!(r.scale_source.starts_with("dimension strings"), "{}", r.scale_source);
+        // without, and no dimension strings: paper size
+        let r = read_with(note, &without);
+        assert_eq!(r.scale, 1.0, "{}", r.scale_source);
+        assert!(r.scale_source.starts_with("none"), "{}", r.scale_source);
+        // a scale given still stands
+        let r = read_with(note, &PdfOptions { scale: Some(48.0), ..without });
+        assert_eq!(r.scale, 48.0);
+    }
+
     #[test]
     fn dimension_strings_read_as_lengths() {
         assert_eq!(dimension_length("12'-6\""), Some(150.0));
@@ -8395,12 +9028,65 @@ mod tests {
     }
 
     #[test]
+    fn a_pair_on_position_alone_never_outranks_the_explicit_scale_note() {
+        // Q6466: a sheet's real "SCALE: ... = ..." note under its view title at mid-sheet, and
+        // in the sheet's bottom-right corner an inch string and a feet-inch string on one
+        // baseline (`6"` then `4'-0"`, a standard 1-1/2" scale read as a pair) with no SCALE
+        // word, title or title-block layer. The corner is no evidence: the explicit note wins.
+        let note = |value: &str, at: (f64, f64), height: f64, layer: Option<&str>| NoteText {
+            value: value.into(),
+            at,
+            height,
+            rotation: 0.0,
+            layer: layer.map(String::from),
+        };
+        for (sheet, explicit) in [((36.0, 24.0), "SCALE: 1/8\" = 1'-0\""), ((24.0, 36.0), "1/8\" = 1'-0\""), ((42.0, 30.0), "SCALE 1/8\" 1'-0\"")] {
+            let (w, h) = (sheet.0 * 72.0, sheet.1 * 72.0);
+            let mid = (w * 0.45, h * 0.5);
+            let corner = (w * 0.85, h * 0.1);
+            for (inch, feet) in [("6\"", "4'-0\""), ("1\"", "4'-0\""), ("1/2\"", "4'-0\"")] {
+                let texts = vec![
+                    note("FLOOR PLAN", (mid.0, mid.1 + 14.0), 9.0, None),
+                    note(explicit, mid, 6.0, None),
+                    note(inch, corner, 6.0, None),
+                    note(feet, (corner.0 + 30.0, corner.1), 6.0, None),
+                ];
+                let got = detect_scale_note_in(&texts, &[], sheet);
+                assert_eq!(got.as_ref().map(|g| g.0), Some(96.0), "{sheet:?} {explicit} beside {inch} {feet}: {got:?}");
+                // in either order, and with the pieces as page text around lettering readings
+                let mut rev = texts.clone();
+                rev.reverse();
+                assert_eq!(detect_scale_note_in(&rev, &[], sheet).map(|g| g.0), Some(96.0), "{sheet:?} reversed");
+            }
+        }
+        // the corner pair alone, no SCALE word, title or title-block layer: no scale note at all
+        let sheet = (36.0, 24.0);
+        let corner = (36.0 * 72.0 * 0.85, 24.0 * 72.0 * 0.1);
+        let lone = vec![note("6\"", corner, 6.0, None), note("4'-0\"", (corner.0 + 30.0, corner.1), 6.0, None)];
+        assert_eq!(detect_scale_note_in(&lone, &[], sheet), None);
+        // with positive evidence the pair still reads: a title-block layer, a SCALE label over it
+        let on_layer = vec![note("1/4\"", (100.0, 100.0), 6.0, Some("TITLEBLOCK")), note("1'-0\"", (130.0, 100.0), 6.0, Some("TITLEBLOCK"))];
+        assert_eq!(detect_scale_note_in(&on_layer, &[], sheet).map(|g| g.0), Some(48.0));
+        let labelled = vec![
+            note("SCALE", (corner.0, corner.1 + 10.0), 6.0, None),
+            note("1/4\"", corner, 6.0, None),
+            note("1'-0\"", (corner.0 + 30.0, corner.1), 6.0, None),
+        ];
+        assert_eq!(detect_scale_note_in(&labelled, &[], sheet).map(|g| g.0), Some(48.0));
+        // and on a page: an explicit note mid-sheet beats the corner pair
+        let r = read_page(
+            "BT /F1 9 Tf 300 320 Td (FLOOR PLAN) Tj ET BT /F1 6 Tf 300 306 Td (SCALE: 1/8\" = 1'-0\") Tj ET BT /F1 6 Tf 640 60 Td (6\") Tj ET BT /F1 6 Tf 670 60 Td (4'-0\") Tj ET",
+        );
+        assert_eq!(r.scale, 96.0, "{} {:?}", r.scale_source, r.notes);
+    }
+
+    #[test]
     fn a_slash_between_digits_in_stroked_lettering_reads_as_a_slash() {
         // Q6395: in `1/8"` the 1 and the slash are the row's only straight strokes; the slash
         // leans by design and must not set the row's slant (it read as an oblique I, so `1/8"`
         // came in as `118"` and the note was lost)
         for (note, k) in [("1/8\" = 1'-0\"", 96.0), ("3/16\" = 1'-0\"", 64.0), ("3/32\" = 1'-0\"", 128.0)] {
-            let r = read_page(&stroked(note, (500.0, 60.0), 9.0));
+            let r = read_page(&[stroked("FLOOR PLAN", (500.0, 76.0), 9.0), stroked(note, (500.0, 60.0), 9.0)].concat());
             assert_eq!(r.scale, k, "{note}: {} {:?}", r.scale_source, r.ocr.words.iter().map(|w| &w.value).collect::<Vec<_>>());
         }
     }

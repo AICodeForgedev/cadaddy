@@ -104,6 +104,11 @@ pub struct BuildingSpec {
     /// Elevator hoistways with their pits (`arch.read`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elevators: Vec<Hoistway>,
+    /// What the elevator submittal (or the enlarged elevator plan) says of the hoistway: its
+    /// clear size, pit depth and overhead (`elevator.read`); `model.build` builds the shaft,
+    /// its pit and the overrun above the roof from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevator_data: Option<ElevatorData>,
     /// Each storey's corridors, stairs and elevator hoistways, traced from their labels inside the
     /// shell before the rooms: the rooms are traced in what they leave.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -127,6 +132,12 @@ pub struct BuildingSpec {
     /// documents).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub floor_framing: Vec<RoofFraming>,
+    /// What each floor is built of, as the notes on its plans say (Q6408: `4" THICK SLAB ON
+    /// GRADE`, `3/4" GYPSUM CONCRETE ON 3/4" SHEATHING ON 11 7/8" I-JOISTS`): the notes as read,
+    /// by level, with their sheet; the build reads the floor's assembly (its slab, or its topping
+    /// and deck) from them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floor_notes: Vec<FloorNote>,
     /// Ceilings, soffits and what is set in them, from the reflected ceiling plans.
     #[serde(default, skip_serializing_if = "Rcp::is_empty")]
     pub rcp: Rcp,
@@ -156,6 +167,11 @@ pub struct BuildingSpec {
     /// Walls whose type (and height) the plans give: the wall built on each centreline gets them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<WallMark>,
+    /// Built walls moved, resized or deleted and walls added (Q6613): by `wall.edit`, or by a
+    /// change to [`Self::walls`] (an entry moved, removed or added). Every build honours them,
+    /// in the order made, whatever the plan's line pairs build there ([`crate::walledits`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_edits: Vec<crate::walledits::WallEdit>,
     /// Gaps and conflicts in the prints the readers found (with the sheets involved), and their
     /// status and answers: see [`crate::rfi`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -570,6 +586,10 @@ pub struct CeilingType {
     pub grid_in: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_rating: Option<String>,
+    /// Its height above the floor, feet, when the legend gives one (`C1 … @ 9'-0" AFF`): a room
+    /// of this type whose own RCP and unit RCP print none takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,6 +645,23 @@ impl Assembly {
     /// The overall thickness, inches: every layer but the insulation inside the stud cavity.
     pub fn thickness_in(&self) -> f64 {
         self.layers.iter().filter(|l| !l.in_cavity).map(|l| l.thickness_in).sum()
+    }
+
+    /// Two framing layers of the same depth on the same side (`(first, second)` layer indexes):
+    /// one wall framed twice at the same place, most likely a build-up given again on top of the
+    /// old one (a steel stud layer beside a wood one). A wall really built with two rows of studs
+    /// (a chase wall, a staggered stud wall) has them, so it is a flag, never a fix.
+    pub fn duplicate_framing(&self) -> Option<(usize, usize)> {
+        let framing: Vec<(usize, &AssemblyLayer)> = self
+            .layers
+            .iter()
+            .enumerate()
+            .take(MAX_ASSEMBLY_LAYERS)
+            .filter(|(_, l)| l.category.trim().eq_ignore_ascii_case("framing") && !l.in_cavity && l.thickness_in.is_finite())
+            .collect();
+        framing.iter().enumerate().find_map(|(n, (i, a))| {
+            framing.iter().skip(n + 1).find(|(_, b)| b.side == a.side && (b.thickness_in - a.thickness_in).abs() < 1.0 / 32.0).map(|(j, _)| (*i, *j))
+        })
     }
 }
 
@@ -730,12 +767,19 @@ fn is_six(v: &f64) -> bool {
     (*v - 6.0).abs() < 1e-9
 }
 
-/// A room, found by its tag text (`name`, or `number`) on the plan.
+/// A room, found by its tag text (`name`, or `number`, or `label`) on the plan. In a spec it is
+/// one entry per room: keyed by its level and number when it has a number, else by its name
+/// ([`merge`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Room {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
+    /// The plan's label for the room when `name` and `number` correct it (a misread name, a room
+    /// labelled with the wrong number or by its number alone): the room is found by this text
+    /// and takes the entry's name and number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// The level it's on; none = whichever level's region holds its tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
@@ -745,6 +789,13 @@ pub struct Room {
     /// Where `ceiling_ft` was read (`9'-0" on A-501 ENLARGED UNIT RCP`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ceiling_source: Option<String>,
+    /// Its ceiling's build-up ([`CeilingType::name`]) where no RCP area types it: given by room,
+    /// unit type or height basis (`rcp.type`); its built ceiling takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type: Option<String>,
+    /// Who or what gave `ceiling_type` (`rcp.type: rooms 101`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_type_source: Option<String>,
     #[serde(default)]
     pub materials: Surfaces,
     /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).
@@ -884,6 +935,18 @@ impl Exterior {
     }
 }
 
+/// A note on a floor's plans that says what the floor is built of (its slab, or its topping and
+/// deck on the framing), as read: the level, the note's words, and where it was read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FloorNote {
+    pub level: String,
+    pub text: String,
+    /// The sheet it is on (`S-2`), or another source.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
 /// A roof level's framing: members (`truss` or `joist`) bearing on the walls under it at
 /// `bearing_ft` (the top of plate or truss bearing the sections mark), at a spacing, as deep as
 /// they are; the roof deck on them. The level's elevation is the roof's surface, on the deck, so
@@ -903,6 +966,13 @@ pub struct RoofFraming {
     /// Where the members bear, feet (the level's elevation less the members and deck when none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearing_ft: Option<f64>,
+    /// The deck on the members, inches: the roof sheathing or deck the notes give (`5/8"`,
+    /// `1 1/2" METAL DECK`), a project rule, else the framing rule's usual one (`deck_status`
+    /// default). None: the rule's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deck_in: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deck_status: Option<ValueStatus>,
     /// The note that names the framing, and its sheet (`S-1: ROOF TRUSSES @ 24" OC`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
@@ -1275,6 +1345,26 @@ pub struct Hoistway {
     pub source: String,
 }
 
+/// What an elevator's documents say of its hoistway (`elevator.read`, from the elevator
+/// submittal's text): the clear sizes read (feet; each value the pages give, first read first: a
+/// shop drawing repeats them and its lettering may be misread, so the build keeps the one the
+/// plan's walls agree with), the pit depth below the lowest landing and the overhead above the
+/// top landing (feet), and where each was read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ElevatorData {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub width_ft: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depth_ft: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pit_ft: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overhead_ft: Option<f64>,
+    /// Where each value was read: `size`, `pit`, `overhead` → `file p.N`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, String>,
+}
+
 /// A structural column at a grid intersection: its outline's size and shape, from its level's
 /// floor up through `to_level` (none: its own storey).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1327,6 +1417,15 @@ pub struct Mep {
     /// and panels'), as printed: what the model's load calculation is compared with.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub load_summaries: Vec<LoadSummary>,
+    /// The wire-length tables the documents print (each size good to a length, by breaker and
+    /// voltage when the table says), as read when the job read its pages: the drawing may not
+    /// hold the sheet they are on, and the router and Validate read them by one rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wire_length_tables: Vec<WireLengthTable>,
+    /// The job's pages looked at for them and when (empty: never looked, a model built before
+    /// the job kept them).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub wire_length_read: String,
     /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
     /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1340,6 +1439,9 @@ pub struct Mep {
     /// The light fixture schedule as printed: each type's basis of design and data.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fixture_schedule: Vec<FixtureType>,
+    /// The air device schedule as printed: each diffuser, register and grille type by its mark.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub air_device_schedule: Vec<AirDeviceType>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1376,6 +1478,81 @@ pub struct Mep {
     /// finished floor the slab level's buried drains are sloped between.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inverts: Vec<MepInvert>,
+    /// The changes people and agents made to single elements (a duct or pipe added, a register
+    /// moved, a pipe deleted, a unit's type mark changed), oldest first: kept apart from the
+    /// lists the readers write and applied to them on every build, so reading the prints again
+    /// never loses one ([`MepEdit`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<MepEdit>,
+}
+
+/// One change to one MEP element (a run, an air terminal or sprinkler head, a piece of
+/// equipment), made by a person or an agent. The element is found again on every build by what
+/// the edit recorded of it (its level, system, tag and where it stood, or the edit that added
+/// it); what the edit changes goes on it as a correction (the documents' value kept beside it,
+/// with the reason), and an element an edit adds carries its provenance and basis.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MepEdit {
+    /// `ME-1`, in the order the edits were made.
+    pub id: String,
+    /// `add`, `move`, `resize`, `delete` or `set`.
+    pub op: String,
+    /// `run` (a duct or pipe), `terminal` (an air terminal or a sprinkler head) or `equipment`.
+    pub element: String,
+    /// The element changed: its level, system (runs and terminals), tag (equipment), and its plan
+    /// points when the edit was made (a run's path; a terminal's spot; equipment's box centre),
+    /// sheet units. An element an earlier edit added is known by that edit's id (`added_by`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub system: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<[f64; 2]>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub added_by: String,
+    /// `move`: by how much in plan (sheet units), and a new bottom (feet above the floor).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bottom_ft: Option<f64>,
+    /// `move`: how far up (feet; below 0 down) every height of the element goes: each of a run's
+    /// bottoms (a sloped run keeps its slope) and a riser's top, a terminal's or equipment's
+    /// bottom (an approved clash fix's raise or drop, Q6381).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rise_ft: Option<f64>,
+    /// `resize`: a run's or terminal's size (inches), equipment's plan size (sheet units, along x
+    /// and y) and height (feet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_in: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_ft: Option<f64>,
+    /// `set`: a type mark, a system, a kind (terminal or equipment), and properties (an empty
+    /// value removes one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_mark: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
+    /// `add`: the element added (exactly one of them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<MepRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<MepTerminal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub equipment: Option<MepEquipment>,
+    /// Why, and who: `user` or `agent`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub by: String,
 }
 
 /// An invert a plan prints by a drain: where (drawing units, as the runs), its level, and the
@@ -1630,9 +1807,12 @@ impl Mep {
             && self.feeders.is_empty()
             && self.panel_schedules.is_empty()
             && self.load_summaries.is_empty()
+            && self.wire_length_tables.is_empty()
+            && self.wire_length_read.is_empty()
             && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
+            && self.air_device_schedule.is_empty()
             && self.gear_rules.is_none()
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
@@ -1900,6 +2080,13 @@ pub struct MepEquipment {
     /// A panel's schedule: its circuits, what each feeds and where (its directory).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub circuits: Vec<PanelCircuit>,
+    /// Its BIM type mark, when one was given to it (an edit: [`MepEdit`]); empty: none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub type_mark: String,
+    /// What was changed on it against the documents (an edit), each value as installed beside
+    /// the design value, with the reason and the rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
 }
 
 /// One circuit in a panel schedule.
@@ -2021,6 +2208,30 @@ pub struct ExtraCircuit {
     pub qty: u32,
 }
 
+/// A wire-length table as printed: the sheet it is on, its title and its cells.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WireLengthTable {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sheet: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    pub bands: Vec<WireLengthBand>,
+}
+
+/// One cell of a wire-length table: `size` (`12`, `1/0`) is good to `max_ft`, for a breaker of
+/// `amps` at `volts` when the table says.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WireLengthBand {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volts: Option<f64>,
+    pub size: String,
+    pub max_ft: f64,
+}
+
 /// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest
 /// room has): its circuits, and the legend its breaker codes are read with.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2105,6 +2316,29 @@ pub struct MepTerminal {
     /// rule it was inferred by. Empty for a drawn one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub basis: String,
+    /// What was changed on it against the documents (an edit: [`MepEdit`]), each value as
+    /// installed beside the design value, with the reason and the rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
+    /// Its type mark, as its plan tag gives it (`SD-4`: the air device schedule's row). Empty:
+    /// its tag names none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+    /// Its airflow, CFM, as its plan tag gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cfm: Option<f64>,
+}
+
+/// One type of air device (diffuser, register, grille) as the air device schedule prints it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AirDeviceType {
+    /// Its mark (`SD-1`).
+    pub tag: String,
+    /// The row as printed: column → text (`MANUFACTURER`, `MODEL`, `FACE SIZE (IN)`).
+    pub properties: BTreeMap<String, String>,
+    /// The sheet it was read from.
+    pub source: String,
 }
 
 /// One change a revision of the prints made to a run: the revision log.
@@ -2347,6 +2581,12 @@ pub struct MepRun {
     /// value, with the reason and the rule. Empty: built as the documents give it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<RunCorrection>,
+    /// A riser's plan point on other storeys it passes, by level name (sheet units, on that
+    /// level's own plan), where what each storey's plan draws puts it (a stack lined up by its
+    /// chase on every floor, Q6550): a storey's piece stands there, not where the levels' base
+    /// points carry its own point. Empty: carried by the base points.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub storey_points: BTreeMap<String, [f64; 2]>,
 }
 
 /// One value of a run the build corrected for the field: the property (`route`), the design
@@ -2717,8 +2957,12 @@ impl BuildingSpec {
                 "rooms",
                 format!("rooms/{name}"),
                 format!("{name}{on}: {ceiling}{}", if mats.is_empty() { String::new() } else { format!("; {mats}") }),
-                // Rooms merge by name: one without a name can't be picked out.
-                if r.name.trim().is_empty() { None } else { named(&["rooms"], "name", &r.name) },
+                // Rooms merge by number, else by name ([`room_at`]).
+                match r.number.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    Some(n) => named(&["rooms"], "number", n),
+                    None if r.name.trim().is_empty() => None,
+                    None => named(&["rooms"], "name", &r.name),
+                },
             );
         }
         for f in &self.families {
@@ -2860,6 +3104,9 @@ impl BuildingSpec {
             }
             if let Some(r) = &c.fire_rating {
                 let _ = write!(text, "; {r}");
+            }
+            if let Some(h) = c.height_ft.filter(|h| h.is_finite() && *h > 0.0) {
+                let _ = write!(text, "; at {}", feet(h));
             }
             put("ceiling_types", format!("ceiling_types/{}", c.name), text, named(&["ceiling_types"], "name", &c.name));
         }
@@ -3042,11 +3289,13 @@ impl BuildingSpec {
             site: None,
             stairs: Vec::new(),
             elevators: Vec::new(),
+            elevator_data: None,
             circulation: Vec::new(),
             shells: BTreeMap::new(),
             buildings: Buildings::default(),
             exterior: Exterior::default(),
             floor_framing: Vec::new(),
+            floor_notes: Vec::new(),
             rcp: Rcp::default(),
             mep: Mep::default(),
             concrete: crate::concrete::Concrete::default(),
@@ -3054,6 +3303,7 @@ impl BuildingSpec {
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
+            wall_edits: Vec::new(),
             rfis: Vec::new(),
             procurement: None,
             prints: None,
@@ -3205,6 +3455,16 @@ impl BuildingSpec {
         self.level_matching(name).and_then(|i| self.levels.get(i))
     }
 
+    /// The notes that say what a floor is built of ([`BuildingSpec::floor_notes`]): the level's,
+    /// by its name or a name for the same level.
+    pub fn floor_notes_of(&self, level: &str) -> Vec<&FloorNote> {
+        let want = self.level_matching(level);
+        self.floor_notes
+            .iter()
+            .filter(|n| n.level.trim().eq_ignore_ascii_case(level.trim()) || (want.is_some() && self.level_matching(&n.level) == want))
+            .collect()
+    }
+
     /// How a floor is framed, as its framing plans' notes say ([`BuildingSpec::floor_framing`]):
     /// the entry of the level, by its name or the spec level it matches.
     pub fn floor_framing_of(&self, level: &str) -> Option<&RoofFraming> {
@@ -3332,6 +3592,12 @@ impl BuildingSpec {
                 }
                 if !(fin(a.above_ceiling_in) && (0.0..=120.0).contains(&a.above_ceiling_in)) {
                     out.push(Issue::error(format!("{at}.assembly.above_ceiling_in"), "from 0 to 120 inches above the ceiling"));
+                }
+                if let Some((x, y)) = a.duplicate_framing() {
+                    out.push(Issue::warning(
+                        format!("{at}.assembly.layers[{y}]"),
+                        format!("framed twice: layers[{x}] and layers[{y}] are framing of the same depth on the same side (likely a duplicate)"),
+                    ));
                 }
                 let sum = a.thickness_in();
                 if !a.layers.is_empty() && fin(sum) && (sum - t.thickness_in).abs() > 0.125 {
@@ -3622,6 +3888,9 @@ impl BuildingSpec {
             if c.grid_in.is_some_and(|g| !g.iter().all(|v| fin(*v) && (6.0..=120.0).contains(v))) {
                 out.push(Issue::error(format!("ceiling_types[{i}].grid_in"), "a grid's tiles are 6\" to 120\""));
             }
+            if c.height_ft.is_some_and(|h| !(fin(h) && (6.0..=60.0).contains(&h))) {
+                out.push(Issue::error(format!("ceiling_types[{i}].height_ft"), "a ceiling is 6' to 60' above the floor"));
+            }
         }
         for (i, t) in self.soffit_types.iter().enumerate().take(MAX_ITEMS) {
             layers_ok(format!("soffit_types[{i}].bottom"), &t.bottom, &mut out);
@@ -3776,10 +4045,68 @@ fn envelope_assembly_issues(at: &str, a: &Assembly, out: &mut Vec<Issue>) {
     }
 }
 
+/// A spec text as a key: trimmed, spacing collapsed, case ignored; none when blank.
+fn key_text(v: Option<&serde_json::Value>) -> Option<String> {
+    let t = v?.as_str()?.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    (!t.is_empty()).then_some(t)
+}
+
+/// The room of `items` a rooms patch item `c` is: keyed by its level and number when it has a
+/// number, else by its plan label, else by its name. A patch without a level (or an item without
+/// one) is the one item of that number or label when only one has it. A name alone is the
+/// unnumbered room of that name, else the only room of it: a name every room of a unit type
+/// shares picks out none of them.
+fn room_at(items: &[serde_json::Value], c: &serde_json::Value) -> Option<usize> {
+    let level = key_text(c.get("level"));
+    let by = |field: &str, id: &str| {
+        let same: Vec<usize> = items.iter().enumerate().filter(|(_, x)| key_text(x.get(field)).as_deref() == Some(id)).map(|(i, _)| i).collect();
+        let exact = same.iter().copied().find(|i| items.get(*i).is_some_and(|x| key_text(x.get("level")) == level));
+        exact.or_else(|| {
+            let loose: Vec<usize> =
+                same.iter().copied().filter(|i| level.is_none() || items.get(*i).is_some_and(|x| key_text(x.get("level")).is_none())).collect();
+            (loose.len() == 1).then(|| loose.first().copied()).flatten()
+        })
+    };
+    if let Some(n) = key_text(c.get("number")) {
+        return by("number", &n);
+    }
+    if let Some(l) = key_text(c.get("label")) {
+        return by("label", &l);
+    }
+    let name = key_text(c.get("name"))?;
+    let named: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| key_text(x.get("name")).as_deref() == Some(name.as_str()))
+        .filter(|(_, x)| level.is_none() || key_text(x.get("level")).is_none_or(|l| Some(l) == level))
+        .map(|(i, _)| i)
+        .collect();
+    named
+        .iter()
+        .copied()
+        .find(|i| items.get(*i).is_some_and(|x| key_text(x.get("number")).is_none()))
+        .or_else(|| (named.len() == 1).then(|| named.first().copied()).flatten())
+}
+
+/// Whether a list under a keyed name is a list of named items `key` picks out (so it merges
+/// item by item), not an ordered list that only shares the name: an assembly's build-up
+/// `layers` (no `layer` names), an elevator's `levels` (plain names). Every change must be an
+/// object and some item, old or new, must carry the key (rooms: a number, label or name). An
+/// ordered list is replaced whole: merging it would append the new build-up to the old one.
+fn keyed_items(items: &[serde_json::Value], changes: &[serde_json::Value], key: &str, rooms: bool) -> bool {
+    let names = |x: &serde_json::Value| {
+        let has = |k: &str| x.get(k).and_then(serde_json::Value::as_str).is_some();
+        if rooms { has("number") || has("label") || has("name") } else { has(key) }
+    };
+    changes.iter().all(serde_json::Value::is_object) && items.iter().chain(changes).any(names)
+}
+
 /// Merge `patch` into `base` (both spec JSON): objects merge key by key, `null` removes a key; a
-/// list of named items (levels, wall, ceiling and soffit types, rooms, families, stairs,
-/// elevators, MEP systems by `name`; layers by `layer`) merges item by item, an item with
-/// `"remove": true` removing it; other lists are replaced.
+/// list of named items (levels, wall, ceiling and soffit types, families, stairs, elevators,
+/// MEP systems by `name`; layer roles by `layer`; rooms by level and number, else name:
+/// [`room_at`]) merges item by item, an item with `"remove": true` removing it; other lists,
+/// and ordered lists under those names (an assembly's build-up `layers`: [`keyed_items`]), are
+/// replaced.
 pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
     use serde_json::Value;
     match (base, patch) {
@@ -3797,12 +4124,17 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                     _ => None,
                 };
                 match (b.get_mut(k), key, v) {
-                    (Some(Value::Array(items)), Some(key), Value::Array(changes)) => {
+                    (Some(Value::Array(items)), Some(key), Value::Array(changes)) if keyed_items(items, changes, key, k == "rooms") => {
+                        let rooms = k == "rooms";
                         for c in changes.iter().take(MAX_ITEMS) {
-                            let id = c.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase);
-                            let at = id.as_ref().and_then(|id| {
-                                items.iter().position(|x| x.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase).as_ref() == Some(id))
-                            });
+                            let at = if rooms {
+                                room_at(items, c)
+                            } else {
+                                let id = c.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase);
+                                id.as_ref().and_then(|id| {
+                                    items.iter().position(|x| x.get(key).and_then(Value::as_str).map(str::to_ascii_lowercase).as_ref() == Some(id))
+                                })
+                            };
                             let remove = c.get("remove").and_then(Value::as_bool) == Some(true);
                             match (at, remove) {
                                 (Some(i), true) => {
@@ -3810,10 +4142,13 @@ pub fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
                                 }
                                 (Some(i), false) => {
                                     if let Some(x) = items.get_mut(i) {
-                                        // The item keeps its own spelling of the name.
+                                        // The item keeps its own spelling of the name. A room
+                                        // takes the patch's (an entry may rename its room), but
+                                        // not a blank one: that gives no name.
                                         let id = x.get(key).cloned();
+                                        let blank = c.get(key).and_then(Value::as_str).is_some_and(|n| n.trim().is_empty());
                                         merge(x, c);
-                                        if let (Some(id), Value::Object(o)) = (id, x) {
+                                        if let (true, Some(id), Value::Object(o)) = (!rooms || blank, id, x) {
                                             o.insert(key.to_string(), id);
                                         }
                                     }
@@ -4036,6 +4371,147 @@ mod tests {
         assert_eq!(base, serde_json::json!({"levels": [{"name": "L2", "height_ft": 12}, {"name": "L3", "height_ft": 9}]}));
     }
 
+    /// A wall type set again with a new build-up (Q6506): its `layers` are the new ones, never
+    /// the old ones with the new appended; the same holds for a ceiling type's layers, a roof's
+    /// assembly and an elevator's level list. The spec's layer roles still merge by layer.
+    #[test]
+    fn a_build_up_set_again_replaces_the_old_one() {
+        let wt = |material: &str| {
+            serde_json::json!({"wall_types": [{"name": "T1", "thickness_in": 5, "assembly": {"tag": "T1", "layers": [
+                {"material": material, "thickness_in": 3.5, "side": "core", "category": "framing"}]}}]})
+        };
+        let mut base = wt("metal studs");
+        merge(&mut base, &wt("2x4 wood studs"));
+        let layers = &base["wall_types"][0]["assembly"]["layers"];
+        assert_eq!(layers.as_array().map(Vec::len), Some(1), "{layers}");
+        assert_eq!(layers[0]["material"], "2x4 wood studs");
+        assert_eq!(base["wall_types"][0]["assembly"]["tag"], "T1", "the rest of the type still merges key by key");
+        // Set a third time with two layers, then one: always what was given last.
+        merge(
+            &mut base,
+            &serde_json::json!({"wall_types": [{"name": "t1", "assembly": {"layers": [
+                {"material": "5/8 gyp", "thickness_in": 0.625, "side": "side1", "category": "board"},
+                {"material": "2x4 wood studs", "thickness_in": 3.5, "side": "core", "category": "framing"}]}}]}),
+        );
+        assert_eq!(base["wall_types"][0]["assembly"]["layers"].as_array().map(Vec::len), Some(2));
+        assert_eq!(base["wall_types"][0]["name"], "T1");
+        let sp: BuildingSpec = serde_json::from_value(base).unwrap_or_default();
+        assert_eq!(sp.wall_types.len(), 1);
+        assert!(sp.wall_types[0].assembly.as_ref().is_some_and(|a| a.duplicate_framing().is_none()));
+
+        // A ceiling type's layers and a roof assembly's layers: replaced too.
+        let mut base = serde_json::json!({"ceiling_types": [{"name": "C1", "layers": [{"material": "a", "thickness_in": 0.5}]}],
+            "exterior": {"roofs": [{"level": "R", "assembly": {"layers": [{"material": "x", "thickness_in": 1}]}}]}});
+        merge(&mut base, &serde_json::json!({"ceiling_types": [{"name": "C1", "layers": [{"material": "b", "thickness_in": 0.625}]}]}));
+        assert_eq!(base["ceiling_types"][0]["layers"], serde_json::json!([{"material": "b", "thickness_in": 0.625}]));
+        // An empty build-up clears it.
+        merge(&mut base, &serde_json::json!({"ceiling_types": [{"name": "C1", "layers": []}]}));
+        assert_eq!(base["ceiling_types"][0]["layers"], serde_json::json!([]));
+
+        // An elevator read again with fewer levels: its level list is the new one.
+        let mut base = serde_json::json!({"elevators": [{"name": "E1", "levels": ["L1", "L2", "L3"]}]});
+        merge(&mut base, &serde_json::json!({"elevators": [{"name": "E1", "levels": ["L1", "L2"]}]}));
+        assert_eq!(base["elevators"][0]["levels"], serde_json::json!(["L1", "L2"]));
+
+        // The spec's layer roles still merge by layer: one changed, one removed, one added; an
+        // empty change list leaves named items alone.
+        let mut base =
+            serde_json::json!({"layers": [{"layer": "A-WALL", "role": "wall"}, {"layer": "A-DOOR", "role": "door"}], "wall_types": [{"name": "T1"}]});
+        merge(
+            &mut base,
+            &serde_json::json!({"layers": [{"layer": "a-wall", "role": "curtain_wall"}, {"layer": "A-DOOR", "remove": true}, {"layer": "A-GLAZ", "role": "window"}], "wall_types": []}),
+        );
+        assert_eq!(
+            base,
+            serde_json::json!({"layers": [{"layer": "A-WALL", "role": "curtain_wall"}, {"layer": "A-GLAZ", "role": "window"}], "wall_types": [{"name": "T1"}]})
+        );
+    }
+
+    /// Two framing layers of the same depth on the same side are flagged (a warning, the spec
+    /// stays valid); framing on different sides or of different depths is not.
+    #[test]
+    fn an_assembly_framed_twice_is_flagged() {
+        let l = |m: &str, t: f64, side: LayerSide, cat: &str| AssemblyLayer {
+            material: m.into(),
+            thickness_in: t,
+            side,
+            category: cat.into(),
+            ..Default::default()
+        };
+        let twice = Assembly {
+            layers: vec![
+                l("gyp", 0.625, LayerSide::Side1, "board"),
+                l("metal studs", 3.5, LayerSide::Core, "framing"),
+                l("wood studs", 3.5, LayerSide::Core, "Framing"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(twice.duplicate_framing(), Some((1, 2)));
+        let chase = Assembly {
+            layers: vec![l("studs", 3.5, LayerSide::Side1, "framing"), l("studs", 3.5, LayerSide::Side2, "framing")],
+            ..Default::default()
+        };
+        assert_eq!(chase.duplicate_framing(), None);
+        let mixed = Assembly {
+            layers: vec![l("studs", 3.5, LayerSide::Core, "framing"), l("furring", 0.875, LayerSide::Core, "framing")],
+            ..Default::default()
+        };
+        assert_eq!(mixed.duplicate_framing(), None);
+
+        let mut sp = BuildingSpec::default();
+        sp.wall_types.push(WallType { name: "T1".into(), height_ft: None, thickness_in: 7.625, from: WallFrom::Pairs, assembly: Some(twice) });
+        let issues = sp.check();
+        let flag = issues.iter().find(|i| i.path == "wall_types[0].assembly.layers[2]");
+        assert!(flag.is_some_and(|i| i.message.contains("framed twice")), "{issues:?}");
+    }
+
+    /// Rooms merge by level and number when they have one, else by plan label, else by name
+    /// (Q6426): number-only rooms never share a key, an entry renames its room, a level's 101 is
+    /// not another level's.
+    #[test]
+    fn rooms_merge_by_level_and_number() {
+        let mut base = serde_json::json!({"rooms": []});
+        let two = serde_json::json!({"rooms": [{"name": "", "number": "101", "ceiling_ft": 9}, {"name": "", "number": "102", "ceiling_ft": 8}]});
+        merge(&mut base, &two);
+        merge(&mut base, &two);
+        assert_eq!(base, two, "set twice: still one entry each");
+        // A per-room edit touches only its room.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": " 102 ", "ceiling_ft": 7}]}));
+        assert_eq!(base["rooms"][0]["ceiling_ft"], 9);
+        assert_eq!(base["rooms"][1]["ceiling_ft"], 7);
+        // Named and renamed by number; a blank name in an edit keeps the room's.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "Storage", "number": "101"}]}));
+        assert_eq!(base["rooms"][0], serde_json::json!({"name": "Storage", "number": "101", "ceiling_ft": 9}));
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "ceiling_ft": 9}]}));
+        assert_eq!(base["rooms"][0]["name"], "Storage");
+        // Another level's 101 is another room; once levels tell them apart, each is its own.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "level": "L2", "ceiling_ft": 8}]}));
+        assert_eq!(base["rooms"][0]["level"], "L2", "the one 101 without a level takes it");
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "level": "L3", "ceiling_ft": 10}]}));
+        assert_eq!(base["rooms"].as_array().map(Vec::len), Some(3));
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "level": "l3", "ceiling_ft": 11}]}));
+        assert_eq!(base["rooms"][0]["ceiling_ft"], 8);
+        assert_eq!(base["rooms"][2]["ceiling_ft"], 11);
+        // Two 101s and no level: which one is unknown, so it is a new entry, not either room.
+        merge(&mut base, &serde_json::json!({"rooms": [{"name": "", "number": "101", "ceiling_ft": 12}]}));
+        assert_eq!(base["rooms"].as_array().map(Vec::len), Some(4));
+        // A name shared by numbered rooms (a unit type) picks out none of them.
+        let mut units = serde_json::json!({"rooms": [{"name": "UNIT", "number": "201"}, {"name": "UNIT", "number": "202"}]});
+        merge(&mut units, &serde_json::json!({"rooms": [{"name": "unit", "ceiling_ft": 9}]}));
+        assert_eq!(units["rooms"].as_array().map(Vec::len), Some(3));
+        assert!(units["rooms"][0].get("ceiling_ft").is_none() && units["rooms"][1].get("ceiling_ft").is_none());
+        merge(&mut units, &serde_json::json!({"rooms": [{"name": "UNIT", "ceiling_ft": 8.5}]}));
+        assert_eq!(units["rooms"][2]["ceiling_ft"], 8.5, "the unnumbered UNIT entry");
+        // A plan label keys an entry that corrects it; removing by number removes only that room.
+        let mut fix = serde_json::json!({"rooms": [{"name": "STORAGE", "label": "ST0RAGE"}, {"name": "", "number": "104"}]});
+        merge(&mut fix, &serde_json::json!({"rooms": [{"name": "STOR", "label": "st0rage"}, {"number": "104", "remove": true}]}));
+        assert_eq!(fix, serde_json::json!({"rooms": [{"name": "STOR", "label": "st0rage"}]}));
+        // A room with neither a name nor a number is never another room.
+        let mut blank = serde_json::json!({"rooms": [{"name": "", "number": "1"}]});
+        merge(&mut blank, &serde_json::json!({"rooms": [{"name": ""}]}));
+        assert_eq!(blank["rooms"].as_array().map(Vec::len), Some(2));
+    }
+
     #[test]
     fn roof_and_band_assemblies() {
         let mut s = BuildingSpec::from_rules(&Rules::fallback());
@@ -4161,6 +4637,7 @@ mod tests {
             ("wall_types/WT2", at("/wall_types/1")),
             ("walls", at("/walls")),
             ("rooms/Office", at("/rooms/0")),
+            ("rooms/102", at("/rooms/1")),
             ("families/W1", at("/families/1")),
             ("stairs/S1", at("/stairs/0")),
             ("facades/South", at("/exterior/facades/1")),
@@ -4187,11 +4664,8 @@ mod tests {
             assert_eq!(&p.path.as_ref().unwrap().get(&v), want, "{key}");
         }
         for p in &d {
-            // The room with only a number can't be picked out by name: no path.
-            let Some(path) = &p.path else {
-                assert_eq!(p.key, "rooms/102");
-                continue;
-            };
+            // Every part has a path (a room known by its number alone too, Q6426).
+            let path = p.path.as_ref().unwrap_or_else(|| panic!("{} has no path", p.key));
             assert!(!path.get(&v).is_null(), "{}", p.key);
             // Put back unchanged: the spec is identical.
             let mut same = v.clone();

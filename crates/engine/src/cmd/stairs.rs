@@ -73,6 +73,11 @@ struct Found {
     /// The direction is from an UP/DN note.
     known: bool,
     stringers: bool,
+    /// The tread lines (indices into the segments looked at).
+    treads_at: Vec<usize>,
+    /// Both ends of every tread stop on a line across the run (a stringer, a handrail, the
+    /// enclosure's face): a flight, not just a row of parallel lines.
+    bounded: bool,
 }
 
 /// Rows of parallel, equal, evenly spaced lines: stair runs (bottom → top as drawn; the notes
@@ -151,17 +156,83 @@ fn runs(segs: &[Seg], k: f64) -> Vec<Found> {
                 })
                 .collect();
             let stringers = along.len() >= 2;
+            let bounded = ends_bounded(segs, &chain, u, n, k, &span);
             let mut objects: Vec<Handle> = chain.iter().filter_map(|c| segs.get(c.1)).map(|s| s.handle).collect();
             objects.extend(along.iter().map(|s| s.handle));
             objects.sort_by_key(|h| h.0);
             objects.dedup();
-            out.push(Found { from, to, treads: u32::try_from(chain.len() - 1).unwrap_or(u32::MAX), width, objects, known: false, stringers });
+            let treads_at = chain.iter().map(|c| c.1).collect();
+            out.push(Found {
+                from,
+                to,
+                treads: u32::try_from(chain.len() - 1).unwrap_or(u32::MAX),
+                width,
+                objects,
+                known: false,
+                stringers,
+                treads_at,
+                bounded,
+            });
             if out.len() >= MAX_STAIRS {
                 return out;
             }
         }
     }
     out
+}
+
+/// How near (inches) a tread's end comes to the line across the run it stops on.
+const TREAD_END_IN: f64 = 3.0;
+
+/// Whether a row of tread lines (`chain`: offset across the run, segment index) stops at both
+/// ends on lines across it: at each end, some line running across the run (along `n`), within
+/// [`TREAD_END_IN`] of the treads' ends there, spanning at least half the row. That is a flight
+/// between its stringers or the stair enclosure's walls; a wall's faces never stop so, row after
+/// row, a tread apart.
+fn ends_bounded(segs: &[Seg], chain: &[(f64, usize, usize)], u: Vec2, n: Vec2, k: f64, span: &dyn Fn(usize) -> Option<(f64, f64)>) -> bool {
+    let spans: Vec<(f64, f64)> = chain.iter().filter_map(|c| span(c.1)).collect();
+    let (Some(first), Some(last)) = (chain.first(), chain.last()) else { return false };
+    if spans.len() != chain.len() {
+        return false;
+    }
+    let (o0, o1) = (first.0.min(last.0), first.0.max(last.0));
+    let tol = TREAD_END_IN * k;
+    let fold = |f: fn(&(f64, f64)) -> f64| spans.iter().map(f).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    let starts = fold(|s| s.0);
+    let ends = fold(|s| s.1);
+    let stops_at = |(lo, hi): (f64, f64)| {
+        segs.iter().any(|s| {
+            let d = s.b - s.a;
+            let len = d.len();
+            if len.is_nan() || len <= 1e-9 || (d.dot(n) / len).abs() <= 0.99 {
+                return false;
+            }
+            let at = (u.dot(s.a) + u.dot(s.b)) / 2.0;
+            let (a, b) = (n.dot(s.a).min(n.dot(s.b)), n.dot(s.a).max(n.dot(s.b)));
+            at >= lo - tol && at <= hi + tol && b.min(o1) - a.max(o0) >= 0.5 * (o1 - o0)
+        })
+    };
+    stops_at(starts) && stops_at(ends)
+}
+
+/// Which of `lines` are a stair's tread lines: rows of at least four parallel lines of one length
+/// (2'–12'), evenly spaced a tread apart (8"–14"), both ends stopping on lines across the row
+/// (stringers, handrails, the enclosure's walls). `k` is drawing units per inch. The wall tracer
+/// leaves them out: two treads side by side are no wall's faces.
+pub(crate) fn tread_lines(lines: &[(Vec2, Vec2)], k: f64) -> Vec<bool> {
+    let mut treads = vec![false; lines.len()];
+    if !k.is_finite() || k <= 0.0 {
+        return treads;
+    }
+    let segs: Vec<Seg> = lines.iter().take(MAX_SEGS).map(|&(a, b)| Seg { a, b, handle: Handle(0) }).collect();
+    for f in runs(&segs, k).into_iter().filter(|f| f.bounded) {
+        for i in f.treads_at {
+            if let Some(t) = treads.get_mut(i) {
+                *t = true;
+            }
+        }
+    }
+    treads
 }
 
 /// UP / DN notes (and slope notes for ramps).

@@ -60,6 +60,9 @@ struct Grid {
     a: Vec2,
     b: Vec2,
     bubble: Vec2,
+    /// Its line is drawn (a line or polyline run from its bubble); else laid across its row of
+    /// bubbles (a dashed grid's pieces too short to be its line).
+    drawn: bool,
 }
 
 /// A grid label: 1–4 letters, digits and dots (`A`, `12`, `C.1`, `AA`).
@@ -161,7 +164,8 @@ fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
 /// The grid bubbles among some objects: each one's centre, radius and label. A bubble's grid line
 /// (10' or more) ends at it and points through its centre; or it stands in a row of bubbles of
 /// its family, each label once, in sequence (a dashed grid's pieces are too short to be its line). `strict` (an electrical plan, whose circuit and leader lines end
-/// at its devices the same way): both. A device reader must not take a grid's label (`A`, `C`,
+/// at its devices the same way): its line, and its row or the sheet's grids found so (the other
+/// end of one of theirs, or past them on a grid square to theirs). A device reader must not take a grid's label (`A`, `C`,
 /// `F`) for a device's type mark.
 pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: bool) -> Vec<(Vec2, f64, String)> {
     let found = bubbles(d, ents, k);
@@ -169,13 +173,7 @@ pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: b
         return Vec::new();
     }
     let lines = grid_lines(ents, k);
-    let pointed = |b: &Bubble| {
-        lines.iter().any(|(a, c)| {
-            let near = a.dist(b.at).min(c.dist(b.at));
-            let len = a.dist(*c);
-            near <= 1.3 * b.r && len > 1e-9 && ((*c - *a).cross(b.at - *a)).abs() / len <= GRID_THROUGH * b.r
-        })
-    };
+    let pointed = |b: &Bubble| pointing(&lines, b).is_some();
     let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
     // A grid's row: bubbles of its family on one line across or down, each label once (a
     // corridor's alternating fixture marks, `E G E G`, repeat theirs), three of them in sequence
@@ -204,7 +202,126 @@ pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: b
         row(&|o: &Bubble| (o.at.x - b.at.x).abs() <= 0.5 * b.r, &|p: Vec2| p.y)
             || row(&|o: &Bubble| (o.at.y - b.at.y).abs() <= 0.5 * b.r, &|p: Vec2| p.x)
     };
-    found.iter().filter(|b| if strict { pointed(b) && in_row(b) } else { pointed(b) || in_row(b) }).map(|b| (b.at, b.r, b.label.clone())).collect()
+    if !strict {
+        return found.iter().filter(|b| pointed(b) || in_row(b)).map(|b| (b.at, b.r, b.label.clone())).collect();
+    }
+    // On an electrical plan, the bubbles both tests hold for are the sheet's grids; a bubble its
+    // line points through that isn't in such a row (a partial plan shows one grid of its family,
+    // or a row cut off) is still a grid's when those grids say so (fix-grid-bubble-as-fixture).
+    let sure: Vec<(&Bubble, Vec2, Vec2)> =
+        found.iter().filter(|b| in_row(b)).filter_map(|b| pointing(&lines, b).map(|(a, c)| (b, a, c))).take(MAX_ITEMS).collect();
+    found
+        .iter()
+        .filter(|b| match pointing(&lines, b) {
+            None => false,
+            Some(line) => in_row(b) || other_end_of_a_grid(b, line, &sure) || beyond_the_grids(b, line, &sure),
+        })
+        .map(|b| (b.at, b.r, b.label.clone()))
+        .collect()
+}
+
+/// Which of `points` (a device's read point and mark, drawing units; `k` units an inch) stand at a
+/// grid bubble of that label: a bubble round the point labelled so that a grid line (10' or more)
+/// ends at and points through, or one in a row of its family ([`grid_bubbles`], not strict: the
+/// device stands outside the building with no circuit, so no wire of its ends there). The build
+/// leaves out only such marks, not every device outside the building
+/// (fix-grid-bubble-as-fixture-rw1).
+pub(crate) fn at_grid_bubbles(d: &Drawing, points: &[(Vec2, String)], k: f64) -> Vec<bool> {
+    if points.is_empty() || !(k.is_finite() && k > 0.0) {
+        return vec![false; points.len()];
+    }
+    // A bubble is 96" in radius at most: what stands within that and a little of the point.
+    let reach = 120.0 * k;
+    let near = |e: &Entity, p: Vec2| {
+        let close = |q: Vec2| q.dist(p) <= reach;
+        match &e.kind {
+            EntityKind::Line(l) => close(l.a.xy()) || close(l.b.xy()),
+            EntityKind::LwPolyline(pl) => pl.vertices.iter().take(MAX_ITEMS).any(|v| close(v.p)) || pl.vertices.last().is_some_and(|v| close(v.p)),
+            EntityKind::Circle(c) => close(c.center.xy()),
+            EntityKind::Text(t) => close(t.insert.xy()),
+            EntityKind::MText(t) => close(t.insert.xy()),
+            EntityKind::Insert(i) => close(i.insert.xy()),
+            _ => false,
+        }
+    };
+    let mut around: Vec<Vec<&Arc<Entity>>> = vec![Vec::new(); points.len()];
+    for e in d.model.iter() {
+        for ((p, _), ents) in points.iter().zip(around.iter_mut()) {
+            if ents.len() < MAX_ITEMS && near(e, *p) {
+                ents.push(e);
+            }
+        }
+    }
+    points
+        .iter()
+        .zip(around)
+        .map(|((p, label), ents)| {
+            !label.trim().is_empty()
+                && grid_bubbles(d, &ents, k, false).iter().any(|(o, r, l)| l.eq_ignore_ascii_case(label.trim()) && o.dist(*p) <= 1.3 * r)
+        })
+        .collect()
+}
+
+/// The longest line (10' or more) with an end at bubble `b` that points through its centre, its
+/// end at the bubble first.
+fn pointing(lines: &[(Vec2, Vec2)], b: &Bubble) -> Option<(Vec2, Vec2)> {
+    lines
+        .iter()
+        .filter(|(a, c)| {
+            let near = a.dist(b.at).min(c.dist(b.at));
+            let len = a.dist(*c);
+            near <= 1.3 * b.r && len > 1e-9 && ((*c - *a).cross(b.at - *a)).abs() / len <= GRID_THROUGH * b.r
+        })
+        .max_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)))
+        .map(|&(a, c)| if a.dist(b.at) <= c.dist(b.at) { (a, c) } else { (c, a) })
+}
+
+/// A bubble at the other end of a grid line the sheet's grids (`sure`) label: the line pointing
+/// through it runs to a grid bubble of the same label (a grid bubbled at both ends, the row at
+/// this end cut off).
+fn other_end_of_a_grid(b: &Bubble, (_, far): (Vec2, Vec2), sure: &[(&Bubble, Vec2, Vec2)]) -> bool {
+    sure.iter()
+        .any(|(s, ..)| !std::ptr::eq(*s, b) && s.label.eq_ignore_ascii_case(&b.label) && far.dist(s.at) <= 1.3 * s.r && s.at.dist(b.at) > 2.0 * s.r)
+}
+
+/// Grid bubbles of one sheet differ in size by at most this share.
+const SAME_SIZE: f64 = 0.15;
+
+/// A bubble beyond the sheet's grids (`sure`) on a grid of the other direction: its size theirs,
+/// its line square to theirs and crossing their span, and the bubble outside the outermost of them
+/// (a grid's bubble stands past the grids it crosses; a device a wire ends at stands among them).
+fn beyond_the_grids(b: &Bubble, (near, far): (Vec2, Vec2), sure: &[(&Bubble, Vec2, Vec2)]) -> bool {
+    let v = far - near;
+    let lv = v.len();
+    if !(lv.is_finite() && lv > 1e-9) {
+        return false;
+    }
+    let v = v * (1.0 / lv);
+    // The grids square to this one, of its size: their direction `u` and lines.
+    let across: Vec<(Vec2, &Bubble, Vec2, Vec2)> = sure
+        .iter()
+        .filter(|(s, ..)| (s.r - b.r).abs() <= SAME_SIZE * s.r)
+        .filter_map(|&(s, a, c)| {
+            let w = c - a;
+            let lw = w.len();
+            (lw > 1e-9 && (w * (1.0 / lw)).dot(v).abs() <= 0.02).then(|| (w * (1.0 / lw), s, a, c))
+        })
+        .collect();
+    let Some(&(u, ..)) = across.first() else { return false };
+    let n = Vec2::new(-u.y, u.x);
+    // Along their direction the grids span from their lines' lowest end to their highest; across
+    // it they stand from the first grid to the last.
+    let (mut lo, mut hi, mut first, mut last) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    for (_, s, a, c) in across.iter().filter(|(w, ..)| w.dot(u).abs() >= 0.98) {
+        for p in [s.at, *a, *c] {
+            lo = lo.min(p.dot(u));
+            hi = hi.max(p.dot(u));
+        }
+        first = first.min(s.at.dot(n));
+        last = last.max(s.at.dot(n));
+    }
+    let (t, x) = (b.at.dot(u), b.at.dot(n));
+    t >= lo && t <= hi && (x < first - b.r || x > last + b.r)
 }
 
 /// A grid label's place in its sequence: a number's value, a letter's place in the alphabet grids
@@ -342,8 +459,9 @@ fn grids_with(d: &Drawing, ents: &[&Arc<Entity>], k: f64, placing: bool, one_flo
         };
         // The row of bubbles first (a wall or leader passing a bubble is no grid), its own line
         // for a bubble alone.
-        let line = if placing { from_row().or(touching.copied()) } else { touching.copied().or_else(from_row) };
-        let Some((a, b)) = line else { continue };
+        let (row, drawn) = (if placing { from_row() } else { None }, touching.copied());
+        let line = row.map(|l| (l, false)).or(drawn.map(|l| (l, true))).or_else(|| from_row().map(|l| (l, false)));
+        let Some(((a, b), drawn)) = line else { continue };
         // From the bubble end to the far end.
         let (a, b) = if a.dist(o) <= b.dist(o) { (a, b) } else { (b, a) };
         // Placing, a grid runs across the whole plan: a dashed one's first piece is only its direction.
@@ -357,9 +475,10 @@ fn grids_with(d: &Drawing, ents: &[&Arc<Entity>], k: f64, placing: bool, one_flo
             let (lo, hi) = [(a - a0).dot(u), (b - a0).dot(u)].iter().fold((0.0_f64, len), |(lo, hi), t| (lo.min(*t), hi.max(*t)));
             g.a = a0 + u * lo;
             g.b = a0 + u * hi;
+            g.drawn |= drawn;
             continue;
         }
-        out.push(Grid { label, a, b, bubble: o });
+        out.push(Grid { label, a, b, bubble: o, drawn });
         if out.len() >= MAX_ITEMS {
             break;
         }
@@ -974,6 +1093,286 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     n
 }
 
+/// The build part of a structural grid line (`bim.tree`: Structure ▸ Grids; IFC: an axis of the
+/// storey's `IfcGrid`). Not `grid`: that is a ceiling grid.
+pub const GRID_PART: &str = "structural-grid";
+/// The layer the built grid lines are on.
+const GRID_LAYER: &str = "3D-Grids";
+
+/// The building's structural grid as `model.build` builds it: the level whose plan it was read
+/// from, its lines (label, from, to, plan coordinates) and the sheets read.
+#[derive(Debug, Default)]
+pub(crate) struct BuiltGrid {
+    pub level: String,
+    pub lines: Vec<(String, Vec2, Vec2)>,
+    pub plan: Vec<String>,
+}
+
+impl BuiltGrid {
+    pub(crate) fn to_json(&self) -> Value {
+        if self.lines.is_empty() {
+            return json!({ "lines": 0 });
+        }
+        let mut v = json!({
+            "level": self.level,
+            "lines": self.lines.len(),
+            "labels": self.lines.iter().map(|l| l.0.clone()).collect::<Vec<_>>(),
+        });
+        if !self.plan.is_empty() {
+            v["plan"] = json!(self.plan);
+        }
+        v
+    }
+}
+
+/// The part of the segment `a`–`b` inside the box `lo`–`hi` (Liang–Barsky); none when it misses.
+fn clip(a: Vec2, b: Vec2, lo: Vec2, hi: Vec2) -> Option<(Vec2, Vec2)> {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [(-d.x, a.x - lo.x), (d.x, hi.x - a.x), (-d.y, a.y - lo.y), (d.y, hi.y - a.y)] {
+        if p.abs() < 1e-12 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some((a + d * t0, a + d * t1))
+}
+
+/// A label a structural grid carries: a number (`1`–`999`), a letter (not `I` or `O`, which
+/// grids skip), a doubled letter (`AA`), or a grid between two of those (`C.8`, `4.5`). A sheet
+/// reference in a callout bubble (`Q901`), a room number with a letter (`250C`) or a tag (`T7`)
+/// is not one.
+fn model_grid_label(label: &str) -> bool {
+    let l = label.trim().to_ascii_uppercase();
+    let (head, tail) = match l.split_once('.') {
+        Some((h, t)) => (h, Some(t)),
+        None => (l.as_str(), None),
+    };
+    let digits = |t: &str, n: usize| !t.is_empty() && t.len() <= n && t.bytes().all(|b| b.is_ascii_digit());
+    let letters = match head.as_bytes() {
+        [c] => c.is_ascii_uppercase() && *c != b'I' && *c != b'O',
+        [a, b] => a.is_ascii_uppercase() && a == b,
+        _ => false,
+    };
+    (letters || digits(head, 3)) && tail.is_none_or(|t| digits(t, 2))
+}
+
+/// Whether bubble `b` stands in a row of grid bubbles of its family (numbers, or letters): on one
+/// line across or down, at least three different grid labels of it in sequence (`A B C`), at
+/// least three quarters of the row's labels different. A label the drawing repeats in the row
+/// (a misread letter) doesn't break it, as it does [`grid_bubbles`]'s row; a corridor's
+/// alternating marks (`E G E G`) are still no row.
+fn in_grid_row(all: &[Bubble], b: &Bubble) -> bool {
+    let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let row = |same: &dyn Fn(&Bubble) -> bool, along: &dyn Fn(Vec2) -> f64| {
+        let mut row: Vec<(f64, String)> = all
+            .iter()
+            .filter(|o| same(o) && family(&o.label) == family(&b.label) && model_grid_label(&o.label))
+            .map(|o| (along(o.at), o.label.to_ascii_uppercase()))
+            .take(MAX_ITEMS)
+            .collect();
+        let distinct: std::collections::BTreeSet<&str> = row.iter().map(|(_, l)| l.as_str()).collect();
+        if distinct.len() < 3 || (distinct.len() as f64) < 0.75 * row.len() as f64 {
+            return false;
+        }
+        row.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut ords: Vec<i64> = row.iter().filter_map(|(_, l)| grid_ordinal(l)).collect();
+        ords.dedup();
+        ords.windows(3).any(|w| {
+            let (d1, d2) = (w[1] - w[0], w[2] - w[1]);
+            d1 == d2 && d1.abs() == 1
+        })
+    };
+    row(&|o: &Bubble| (o.at.x - b.at.x).abs() <= 0.5 * b.r, &|p: Vec2| p.y) || row(&|o: &Bubble| (o.at.y - b.at.y).abs() <= 0.5 * b.r, &|p: Vec2| p.x)
+}
+
+/// The structural grid one plan shows: its grids ([`grids_with`]) that carry a grid's
+/// label and have a grid bubble on their line (a line ends at it through its centre, or it stands
+/// in a row of its family: [`grid_bubbles`], [`in_grid_row`]), each label once (its longest
+/// line), each line laid across a row of bubbles cut to the grid's extent.
+fn plan_grid(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Grid> {
+    let all = bubbles(d, ents, k);
+    let mut ok: Vec<(Vec2, f64, String)> = grid_bubbles(d, ents, k, false).into_iter().filter(|b| model_grid_label(&b.2)).collect();
+    for b in all.iter().filter(|b| model_grid_label(&b.label)) {
+        if ok.len() < MAX_ITEMS && !ok.iter().any(|(at, _, l)| l == &b.label && at.dist(b.at) <= 0.5 * b.r) && in_grid_row(&all, b) {
+            ok.push((b.at, b.r, b.label.clone()));
+        }
+    }
+    // A grid bubble of its label on the grid's line (at either end).
+    let on_line = |g: &Grid| {
+        let (u, len) = (g.b - g.a, g.a.dist(g.b));
+        ok.iter().any(|(at, r, l)| {
+            l.eq_ignore_ascii_case(&g.label) && len > 1e-9 && u.cross(*at - g.a).abs() / len <= *r && {
+                let t = u.dot(*at - g.a) / len;
+                t >= -2.0 * r && t <= len + 2.0 * r
+            }
+        })
+    };
+    let mut one: Vec<Grid> = Vec::new();
+    // Every bubble (a label on more than both ends of a line, as a keynote's or a tag's number
+    // repeats it, is checked by its own bubbles, not dropped): a drawn line first, then the longest.
+    for g in grids_with(d, ents, k, false, false) {
+        if !model_grid_label(&g.label) || !on_line(&g) {
+            continue;
+        }
+        match one.iter_mut().find(|o| o.label.eq_ignore_ascii_case(&g.label)) {
+            Some(o) if (o.drawn, o.a.dist(o.b)) < (g.drawn, g.a.dist(g.b)) => *o = g,
+            Some(_) => {}
+            None => one.push(g),
+        }
+    }
+    if one.len() < 2 {
+        return Vec::new();
+    }
+    // The grid's extent: its bubbles and drawn lines, and a bubble's size round them. A line
+    // laid across a row of bubbles is cut to it; a drawn line is kept as drawn.
+    let extent = cadaddy_geom::Bounds2::from_points(one.iter().flat_map(|g| {
+        let line = g.drawn.then_some([g.a, g.b]);
+        std::iter::once(g.bubble).chain(line.into_iter().flatten())
+    }));
+    let pad = 24.0 * k;
+    let (lo, hi) = (extent.min - Vec2::new(pad, pad), extent.max + Vec2::new(pad, pad));
+    one.into_iter()
+        .filter_map(|g| {
+            let (a, b) = if g.drawn { (g.a, g.b) } else { clip(g.a, g.b, lo, hi)? };
+            (a.dist(b) >= 120.0 * k).then_some(Grid { a, b, ..g })
+        })
+        .collect()
+}
+
+/// How good a plan's grid is as the building's: lines both ways first, then how many.
+fn grid_score(gs: &[Grid]) -> (bool, usize) {
+    let Some(first) = gs.first() else { return (false, 0) };
+    let u = first.b - first.a;
+    let across = gs.iter().any(|g| {
+        let v = g.b - g.a;
+        u.cross(v).abs() > 0.17 * u.len() * v.len()
+    });
+    (across, gs.len())
+}
+
+/// The box of the walls built on each level (before the levels are stacked), by level name.
+fn built_walls(d: &Drawing) -> Vec<(String, cadaddy_geom::Bounds2)> {
+    let mut out: Vec<(String, cadaddy_geom::Bounds2)> = Vec::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall")) {
+        let Some(level) = super::bspec::made_level(e) else { continue };
+        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        if b.is_empty() {
+            continue;
+        }
+        if let Some(x) = out.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&level)) {
+            x.1 = x.1.union(&b);
+        } else if out.len() < MAX_ITEMS {
+            out.push((level, b));
+        }
+    }
+    out
+}
+
+/// The building's one structural grid: read from the lowest storey drawn in this drawing whose
+/// architectural plan shows at least two grids, on the plan its walls are built from (the grid
+/// is in the model's coordinates). Each of the storey's architectural plan sheets (as the set's
+/// sheet links place them: its floor plan, its enlarged plans, each repeating part of the grid)
+/// that holds the middle of its built walls is read alone, and the one with the best grid
+/// ([`grid_score`]) is the reference; a sheet elsewhere in the set (an enlarged plan, another
+/// wing's plan) is not, whatever its grid. A storey without links, or with no walls built, is
+/// read from its region (as `levels.align` reads it).
+fn reference_grid(d: &Drawing, sp: &BuildingSpec) -> Option<(String, Vec<Grid>, Vec<String>)> {
+    let k = units_per_inch(d);
+    let all = plan_objects(d);
+    let walls = built_walls(d);
+    let mut centres: Option<Vec<Option<Vec2>>> = None;
+    let mut here: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
+    here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    for l in here.into_iter().take(MAX_ITEMS) {
+        let (mut own, _) = plan_rects(sp, &l.name, l.region, PLAN_DISCIPLINE);
+        own.dedup_by(|a, b| a.0 == b.0);
+        // Round its built walls: the walls' box and as much again round it, 40' at least (a grid's
+        // bubbles stand off the building).
+        let near = walls.iter().find(|(n, _)| n.eq_ignore_ascii_case(&l.name)).map(|(_, w)| {
+            let pad = (0.5 * w.width().max(w.height())).max(480.0 * k);
+            own.retain(|(r, _)| holds(r, w.center()));
+            [w.min.x - pad, w.min.y - pad, w.max.x + pad, w.max.y + pad]
+        });
+        let mut best: Option<(Vec<Grid>, Vec<String>)> = None;
+        let mut consider = |gs: Vec<Grid>, plan: Vec<String>| {
+            if gs.len() >= 2 && best.as_ref().is_none_or(|(b, _)| grid_score(&gs) > grid_score(b)) {
+                best = Some((gs, plan));
+            }
+        };
+        if own.is_empty() {
+            let (mut mine, plan) = level_objects(d, sp, l, &all, PLAN_DISCIPLINE);
+            if let Some(r) = &near {
+                mine.retain(|e| {
+                    let b = cadaddy_doc::entity_bounds(d, e, 0);
+                    !b.is_empty() && holds(r, b.center())
+                });
+            }
+            consider(plan_grid(d, &mine, k), plan);
+        } else {
+            let cs = centres.get_or_insert_with(|| {
+                all.iter()
+                    .map(|e| {
+                        let b = cadaddy_doc::entity_bounds(d, e, 0);
+                        (!b.is_empty()).then(|| b.center())
+                    })
+                    .collect()
+            });
+            for (r, number) in own.iter().take(MAX_ITEMS) {
+                let mine: Vec<&Arc<Entity>> = all.iter().zip(cs.iter()).filter(|(_, c)| c.is_some_and(|c| holds(r, c))).map(|(e, _)| *e).collect();
+                consider(plan_grid(d, &mine, k), vec![number.clone()]);
+            }
+        }
+        if let Some((gs, plan)) = best {
+            return Some((l.name.clone(), gs, plan));
+        }
+    }
+    None
+}
+
+/// The building's structural grid into model space (Q6407): each grid line a model element on its
+/// level's floor, labelled, drawn (read from the plan's bubbles and lines), so the model tree,
+/// views and IFC export (`IfcGrid`) hold it. `model.build` stacks it with its level and copies it
+/// to every building the plan stands for.
+pub(crate) fn build_grid(d: &mut Drawing, sp: &BuildingSpec) -> BuiltGrid {
+    let Some((level, lines, plan)) = reference_grid(d, sp) else { return BuiltGrid::default() };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let z = sp.level(&level).map_or(0.0, |l| l.elevation_ft * upf);
+    if d.layer(GRID_LAYER).is_none() {
+        d.layers.push(cadaddy_doc::Layer { name: GRID_LAYER.into(), color: cadaddy_doc::color::Color::Index(8), ..cadaddy_doc::Layer::default() });
+    }
+    let mut out = BuiltGrid { level: level.clone(), lines: Vec::new(), plan };
+    for g in lines.iter().take(MAX_ITEMS) {
+        let t = |code: i32, v: String| RawTag { code, value: v };
+        let label: String = g.label.trim().chars().take(16).collect();
+        let mut xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, GRID_PART.into()),
+            t(1000, level.chars().take(255).collect()),
+            t(1000, String::new()),
+            t(1000, format!("grid:{label}")),
+            t(1000, format!("type:Grid {label}")),
+        ];
+        xdata.extend(super::provenance::tags(cadaddy_walk3d::Made::Drawn, ""));
+        let kind = EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(g.a.x, g.a.y, z), b: cadaddy_geom::Vec3::new(g.b.x, g.b.y, z) });
+        if d.add(&Space::Model, Common { layer: GRID_LAYER.into(), xdata: xdata.into(), ..Common::default() }, kind).is_ok() {
+            out.lines.push((label, g.a, g.b));
+        }
+    }
+    out
+}
+
 /// Grid intersections per level (on its architectural plan) and per sheet, to put a point of an
 /// enlarged or partial plan onto its level's plan by the grid lines its view shows (a view of an
 /// enlarged sheet shares no room number with the floor plan, but shows the same grid bubbles).
@@ -1267,28 +1666,79 @@ pub(crate) fn line_samples(ents: &[&Arc<Entity>], step: f64) -> Vec<Vec2> {
     out
 }
 
+/// Cells an occupancy keeps as a bitmap over their box, at most (8 MB); a wider spread is a set.
+const MAX_OCCUPANCY_BITS: usize = 64 << 20;
+
 /// Cells holding linework, for scoring an overlay.
 struct Occupancy {
     cell: f64,
-    cells: std::collections::HashSet<(i64, i64)>,
+    cells: OccupiedCells,
+}
+
+/// An occupancy's cells: a bitmap over their box (a lookup is a few operations; a linework fit
+/// asks millions), or a set when the box is too large for one.
+enum OccupiedCells {
+    Bits { x0: i64, y0: i64, w: usize, h: usize, bits: Vec<u64> },
+    Set(std::collections::HashSet<(i64, i64)>),
 }
 
 impl Occupancy {
     /// `pts` in cells of `cell`, each grown by `grow` cells (a tolerance).
     fn new(pts: &[Vec2], cell: f64, grow: i64) -> Self {
-        let mut cells = std::collections::HashSet::new();
+        let at = |p: &Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
         for p in pts {
-            let (i, j) = ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
-            for di in -grow..=grow {
-                for dj in -grow..=grow {
-                    cells.insert((i + di, j + dj));
-                }
-            }
+            let (i, j) = at(p);
+            (x0, y0, x1, y1) = (x0.min(i), y0.min(j), x1.max(i), y1.max(j));
         }
+        let (x0, y0, x1, y1) = (x0.saturating_sub(grow), y0.saturating_sub(grow), x1.saturating_add(grow), y1.saturating_add(grow));
+        let size = |a: i64, b: i64| b.checked_sub(a).and_then(|d| d.checked_add(1)).and_then(|d| usize::try_from(d).ok());
+        let cells = match size(x0, x1).zip(size(y0, y1)).and_then(|(w, h)| Some((w, h, w.checked_mul(h)?))) {
+            Some((w, h, n)) if !pts.is_empty() && n <= MAX_OCCUPANCY_BITS => {
+                let mut bits = vec![0u64; n.div_ceil(64)];
+                for p in pts {
+                    let (i, j) = at(p);
+                    for di in -grow..=grow {
+                        for dj in -grow..=grow {
+                            let k = usize::try_from(i.saturating_add(di) - x0).ok().zip(usize::try_from(j.saturating_add(dj) - y0).ok());
+                            if let Some(b) = k.map(|(x, y)| x * h + y)
+                                && let Some(word) = bits.get_mut(b / 64)
+                            {
+                                *word |= 1 << (b % 64);
+                            }
+                        }
+                    }
+                }
+                OccupiedCells::Bits { x0, y0, w, h, bits }
+            }
+            _ => {
+                let mut cells = std::collections::HashSet::new();
+                for p in pts {
+                    let (i, j) = at(p);
+                    for di in -grow..=grow {
+                        for dj in -grow..=grow {
+                            cells.insert((i.saturating_add(di), j.saturating_add(dj)));
+                        }
+                    }
+                }
+                OccupiedCells::Set(cells)
+            }
+        };
         Occupancy { cell, cells }
     }
     fn hit(&self, p: Vec2) -> bool {
-        self.cells.contains(&((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64))
+        let (i, j) = ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64);
+        match &self.cells {
+            OccupiedCells::Bits { x0, y0, w, h, bits } => {
+                let (Some(x), Some(y)) =
+                    (i.checked_sub(*x0).and_then(|d| usize::try_from(d).ok()), j.checked_sub(*y0).and_then(|d| usize::try_from(d).ok()))
+                else {
+                    return false;
+                };
+                x < *w && y < *h && bits.get((x * h + y) / 64).is_some_and(|word| word >> ((x * h + y) % 64) & 1 == 1)
+            }
+            OccupiedCells::Set(cells) => cells.contains(&(i, j)),
+        }
     }
     /// The share of `pts` under `p ↦ p·s + t` that land on linework.
     fn score(&self, pts: &[Vec2], s: f64, t: Vec2) -> f64 {
@@ -1312,13 +1762,14 @@ pub(crate) fn overlay_share(pts: &[Vec2], on: &[Vec2], k: f64) -> f64 {
 /// with its score (F1 of the view's lines on the plan and the plan's lines under the view that the
 /// view has) and its margin over the best fit 10' or more away; `None` without one.
 /// Votes on a 4' grid over scales 0.4-2.5, then refines on a 1' grid.
+#[cfg(test)]
 pub(crate) fn linework_fit(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<(f64, Vec2, f64, f64)> {
     linework_fit_within(src, tgt, k, 0.4, 2.5)
 }
 
-/// [`linework_fit`] over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
+/// A whole view's linework fit over scales `lo..=hi` only (a view known to be drawn at the plan's scale).
 pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
-    fit_linework(src, tgt, k, lo, hi, true)
+    fit_linework(src, tgt, k, lo, hi, true, &mut FitStats::default())
 }
 
 /// Offsets each scale proposes for a part of a floor (an enlarged view): a repeated room's other
@@ -1332,15 +1783,322 @@ const MAX_FIT_SCALES: usize = 1_000;
 /// it may be any size under the plan's, and each scale proposes its best few offsets, so the
 /// margin says when it fits as well elsewhere (a run of identical rooms).
 pub(crate) fn linework_fit_part(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<(f64, Vec2, f64, f64)> {
-    fit_linework(src, tgt, k, lo, hi, false)
+    fit_linework(src, tgt, k, lo, hi, false, &mut FitStats::default())
 }
 
-fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool) -> Option<(f64, Vec2, f64, f64)> {
+/// [`linework_fit_part`], adding what the fit had to leave out to `stats`.
+pub(crate) fn linework_fit_part_counted(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, stats: &mut FitStats) -> Option<(f64, Vec2, f64, f64)> {
+    fit_linework(src, tgt, k, lo, hi, false, stats)
+}
+
+/// Source cell by target cell votes one scale of a linework fit counts, at most. Every pair used
+/// to be voted into a map: a sheet weighed at a site scale (`1" = 100'`) spans a couple of hundred
+/// thousand coarse cells, and its maps, one per scale in flight, held tens of GB (a job's rooms
+/// stage ran a laptop out of memory). Past it the larger side is thinned evenly
+/// ([`FitStats::thinned`]); a floor plan against its own floor's plans stays well under it.
+pub(crate) const MAX_FIT_VOTES: usize = 4_000_000;
+/// Offsets one scale's vote holds in a dense grid, at most (4 bytes each); a wider spread votes
+/// in a map of at most [`MAX_SPARSE_VOTES`] pairs.
+const MAX_DENSE_OFFSETS: usize = 4_000_000;
+/// Pairs one scale votes when its offsets are too spread out for a dense grid (each a map entry).
+const MAX_SPARSE_VOTES: usize = 1_000_000;
+/// A coarse cell's index past this is no linework's (a hostile or broken coordinate).
+const MAX_CELL_INDEX: f64 = 1e12;
+
+/// What linework fits had to leave out to stay bounded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FitStats {
+    /// Fits run.
+    pub fits: usize,
+    /// Scales whose coarse vote weighed an even sample of the cells, not every pair.
+    pub thinned: usize,
+    /// The most pairs one scale voted.
+    pub most_votes: usize,
+}
+
+/// The coarse cell of `p` (cells of `size`), none for a coordinate no linework has.
+fn coarse_cell(p: Vec2, size: f64) -> Option<(i64, i64)> {
+    let (x, y) = ((p.x / size).floor(), (p.y / size).floor());
+    (x.is_finite() && y.is_finite() && x.abs() <= MAX_CELL_INDEX && y.abs() <= MAX_CELL_INDEX).then_some((x as i64, y as i64))
+}
+
+/// At most about `keep` of `cells` (sorted), evenly: every n-th.
+fn thin_cells(cells: &[(i64, i64)], keep: usize) -> Vec<(i64, i64)> {
+    let keep = keep.max(1);
+    if cells.len() <= keep {
+        return cells.to_vec();
+    }
+    cells.iter().step_by(cells.len().div_ceil(keep)).copied().collect()
+}
+
+/// The coarse offsets (a target cell less a source cell) most source cells vote for, best first,
+/// ties to the smallest offset (the same pick every run, whatever the order counted); at most
+/// `top`. Both lists sorted, their indexes within [`MAX_CELL_INDEX`]. Counts every pair: the
+/// caller keeps them within [`MAX_FIT_VOTES`].
+fn top_offsets(scells: &[(i64, i64)], tcells: &[(i64, i64)], top: usize, dense: bool) -> Vec<((i64, i64), u32)> {
+    let mut ranked: Vec<((i64, i64), u32)> = Vec::with_capacity(top.saturating_add(1));
+    let mut offer = |o: (i64, i64), n: u32| {
+        let at = ranked.partition_point(|&(q, m)| m > n || (m == n && q < o));
+        if at < top {
+            ranked.insert(at, (o, n));
+            ranked.truncate(top);
+        }
+    };
+    if scells.is_empty() || tcells.is_empty() || top == 0 {
+        return ranked;
+    }
+    let span = |c: &[(i64, i64)], f: fn(&(i64, i64)) -> i64| c.iter().map(f).fold((i64::MAX, i64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+    let ((sx0, sx1), (sy0, sy1)) = (span(scells, |c| c.0), span(scells, |c| c.1));
+    let ((tx0, tx1), (ty0, ty1)) = (span(tcells, |c| c.0), span(tcells, |c| c.1));
+    let (ox0, oy0) = (tx0 - sx1, ty0 - sy1);
+    let (w, h) = (usize::try_from(tx1 - sx0 - ox0 + 1).unwrap_or(usize::MAX), usize::try_from(ty1 - sy0 - oy0 + 1).unwrap_or(usize::MAX));
+    if let Some(n) = w.checked_mul(h).filter(|n| dense && *n <= MAX_DENSE_OFFSETS) {
+        // Offset (x, y) at (x - ox0) * h + (y - oy0): scanned in order, the smallest offset first.
+        let mut grid = vec![0u32; n];
+        for u in scells {
+            for v in tcells {
+                let i = usize::try_from(v.0 - u.0 - ox0).ok().zip(usize::try_from(v.1 - u.1 - oy0).ok()).map(|(x, y)| x * h + y);
+                if let Some(c) = i.and_then(|i| grid.get_mut(i)) {
+                    *c += 1;
+                }
+            }
+        }
+        for (i, &c) in grid.iter().enumerate() {
+            if c > 0 {
+                offer((ox0 + (i / h) as i64, oy0 + (i % h) as i64), c);
+            }
+        }
+    } else {
+        let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
+        for u in scells {
+            for v in tcells {
+                *votes.entry((v.0 - u.0, v.1 - u.1)).or_default() += 1;
+            }
+        }
+        for (o, c) in votes {
+            offer(o, c);
+        }
+    }
+    ranked
+}
+
+/// The source and target cells one scale votes with: every pair within [`MAX_FIT_VOTES`] (or
+/// [`MAX_SPARSE_VOTES`] when the offsets are too spread out for a dense grid), else the larger
+/// side thinned evenly to fit; whether it was thinned, and whether to count densely.
+fn vote_cells(scells: Vec<(i64, i64)>, tcells: &[(i64, i64)]) -> (Vec<(i64, i64)>, Vec<(i64, i64)>, bool, bool) {
+    let span = |c: &[(i64, i64)], f: fn(&(i64, i64)) -> i64| c.iter().map(f).fold((i64::MAX, i64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+    let extent = |a: (i64, i64), b: (i64, i64)| usize::try_from((a.1 - a.0).max(0) + (b.1 - b.0).max(0) + 1).unwrap_or(usize::MAX);
+    let dense = !scells.is_empty()
+        && !tcells.is_empty()
+        && extent(span(&scells, |c| c.0), span(tcells, |c| c.0))
+            .checked_mul(extent(span(&scells, |c| c.1), span(tcells, |c| c.1)))
+            .is_some_and(|n| n <= MAX_DENSE_OFFSETS);
+    let cap = if dense { MAX_FIT_VOTES } else { MAX_SPARSE_VOTES };
+    if scells.len().saturating_mul(tcells.len()) <= cap {
+        return (scells, tcells.to_vec(), false, dense);
+    }
+    let (s, t) = if scells.len() >= tcells.len() {
+        (thin_cells(&scells, cap / tcells.len().max(1)), tcells.to_vec())
+    } else {
+        (scells.clone(), thin_cells(tcells, cap / scells.len().max(1)))
+    };
+    // One side alone over the cap (a few hundred thousand cells each): both thinned.
+    let (s, t) = if s.len().saturating_mul(t.len()) > cap {
+        let side = (cap as f64).sqrt() as usize;
+        (thin_cells(&s, side), thin_cells(&t, side))
+    } else {
+        (s, t)
+    };
+    (s, t, true, dense)
+}
+
+/// A linework fit in full: the placement, its score, its margin, and the placement that margin is
+/// over (the best one 10' or more away), so a near tie can be weighed by other evidence or
+/// reported rather than decided by the order the candidates were scored in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LineworkFit {
+    pub scale: f64,
+    pub offset: Vec2,
+    pub score: f64,
+    pub margin: f64,
+    /// The best placement 10' or more away: scale, offset and score.
+    pub runner: Option<(f64, Vec2, f64)>,
+}
+
+impl LineworkFit {
+    fn tuple(self) -> (f64, Vec2, f64, f64) {
+        (self.scale, self.offset, self.score, self.margin)
+    }
+}
+
+/// A whole view's linework laid over a floor plan at any scale 0.4-2.5, in full ([`LineworkFit`]).
+pub(crate) fn linework_fit_detail(src: &[Vec2], tgt: &[Vec2], k: f64) -> Option<LineworkFit> {
+    fit_linework_detail(src, tgt, k, 0.4, 2.5, true, &mut FitStats::default())
+}
+
+/// [`linework_fit_part`] in full ([`LineworkFit`]).
+pub(crate) fn linework_fit_part_detail(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64) -> Option<LineworkFit> {
+    fit_linework_detail(src, tgt, k, lo, hi, false, &mut FitStats::default())
+}
+
+/// A whole view's fit whose margin over every scale is under this is a near tie: which placement
+/// wins is up to a few lines (Q6606: a floor's background beat a 73% copy of itself, the floor's
+/// key plan, by two points; restoring one window's lines on the plan flipped it out).
+pub(crate) const NEAR_TIE: f64 = 0.10;
+/// A placement this share off the ratio of the printed scales is drawn at them (a percent or two
+/// is the fit's sampling, as the level views' one-to-one snap allows).
+pub(crate) const PRINTED_SCALE_BAND: f64 = 0.03;
+/// A fit re-weighed at the printed scale lands within this many inches of where the fit put the
+/// view's middle, or the printed scale is not the fit's (another drawing).
+const PRINTED_SCALE_AGREE_IN: f64 = 36.0;
+/// Scores this close are a tie (a percent of scale apart is under the fit's foot at a floor's walls).
+const SCALE_PLATEAU: f64 = 0.02;
+
+/// How a whole view's linework (a sheet's screened background) was laid on its level's plan.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ViewFit {
+    /// Decisive over every scale tried: [`NEAR_TIE`] or more over the best placement 10' away.
+    Decisive(LineworkFit),
+    /// A near tie over every scale (`tie`), settled by the scale the sheet prints: the fit at it
+    /// holds over every other placement at that scale (a copy at another scale, a key plan or a
+    /// detail, is another drawing).
+    PrintedScale { fit: LineworkFit, tie: Option<LineworkFit> },
+    /// Neither: a near tie the printed scale doesn't settle (a run of identical bays at the
+    /// printed scale), or no fit; reported, never decided by the order the placements were scored.
+    Uncertain { tie: Option<LineworkFit>, at_scale: Option<LineworkFit> },
+}
+
+impl ViewFit {
+    /// The placement to use, if any.
+    pub(crate) fn fit(&self) -> Option<LineworkFit> {
+        match self {
+            ViewFit::Decisive(f) | ViewFit::PrintedScale { fit: f, .. } => Some(*f),
+            ViewFit::Uncertain { .. } => None,
+        }
+    }
+}
+
+/// The fit of a whole view's linework `src` on a floor plan's `tgt` (`k` units per inch), the
+/// sheets' printed scales giving the ratio `ratio` (1 when unknown): [`linework_fit_detail`] over every
+/// scale, and when that is a near tie ([`NEAR_TIE`]) or too weak, the fit at the printed scale
+/// ([`PRINTED_SCALE_BAND`] about `ratio`, each scale proposing several placements so a bay over is
+/// weighed), used when it holds `min_f1` and `min_margin` over every placement at that scale.
+pub(crate) fn whole_view_fit(src: &[Vec2], tgt: &[Vec2], k: f64, ratio: f64, min_f1: f64, min_margin: f64) -> ViewFit {
+    let whole = linework_fit_detail(src, tgt, k);
+    if let Some(f) = whole.filter(|f| f.score >= min_f1 && f.margin >= NEAR_TIE) {
+        return ViewFit::Decisive(f);
+    }
+    let r = if ratio.is_finite() && ratio > 0.0 { ratio } else { 1.0 };
+    let at_scale = linework_fit_part_detail(src, tgt, k, r * (1.0 - PRINTED_SCALE_BAND), r * (1.0 + PRINTED_SCALE_BAND));
+    // Its scale within the band is the sampling's: at the ratio itself where that holds (its
+    // margin the smaller of the two, a placement 10' away as close at either counts).
+    let at_scale = at_scale.map(|f| {
+        at_printed_scale(src, tgt, k, r, f.scale, f.offset, f.score).map_or(f, |e| LineworkFit {
+            margin: e.margin.min(f.margin),
+            runner: e.runner.or(f.runner),
+            ..e
+        })
+    });
+    match at_scale.filter(|f| f.score >= min_f1 && f.margin >= min_margin) {
+        Some(fit) => ViewFit::PrintedScale { fit, tie: whole },
+        None => ViewFit::Uncertain { tie: whole, at_scale },
+    }
+}
+
+/// Steps of 3" each way a placement's best run is looked for in.
+const PLATEAU_STEPS: i32 = 4;
+/// Times the best run is looked for again about its last middle, at most.
+const PLATEAU_LOOKS: usize = 4;
+
+/// The middle of the placements of `src` at scale `s` within [`PLATEAU_STEPS`] steps of 3" of
+/// `t` that score best on `tgt` (F1 as the fit weighs it). Lines are compared on 1' cells grown
+/// by one, so a right placement scores alike over a foot or two; the fit keeps the first best it
+/// tried (the lowest offsets), the middle of the run is where the lines lie on each other.
+fn plateau_middle(src: &[Vec2], tgt: &[Vec2], k: f64, s: f64, t: Vec2) -> Vec2 {
+    if src.is_empty() || tgt.is_empty() || !(s.is_finite() && s > 0.0 && k.is_finite() && k > 0.0) {
+        return t;
+    }
+    let few: Vec<Vec2> = src.iter().step_by((src.len() / 2000).max(1)).copied().collect();
+    let dense: Vec<Vec2> = src.iter().step_by((src.len() / 12_000).max(1)).copied().collect();
+    let fine = Occupancy::new(tgt, 12.0 * k, 1);
+    let mine = Occupancy::new(&dense, 12.0 * k / s, 1);
+    let stride = (tgt.len() / 20_000).max(1);
+    let pad = 12.0 * k * f64::from(PLATEAU_STEPS);
+    let placed0 = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
+    let near: Vec<Vec2> = tgt
+        .iter()
+        .copied()
+        .filter(|p| p.x >= placed0.min.x - pad && p.x <= placed0.max.x + pad && p.y >= placed0.min.y - pad && p.y <= placed0.max.y + pad)
+        .collect();
+    let f1 = |t: Vec2| {
+        let r = fine.score(&few, s, t);
+        let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
+        let under: Vec<Vec2> = near.iter().copied().filter(|p| placed.contains(*p)).step_by(stride).collect();
+        let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit((**q - t) * (1.0 / s))).count() as f64 / under.len() as f64 };
+        if r + p > 0.0 { 2.0 * r * p / (r + p) } else { 0.0 }
+    };
+    let tries: Vec<Vec2> = (-PLATEAU_STEPS..=PLATEAU_STEPS)
+        .flat_map(|dx| (-PLATEAU_STEPS..=PLATEAU_STEPS).map(move |dy| t + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k)))
+        .collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let scored: Vec<(f64, Vec2)> = {
+        use rayon::prelude::*;
+        tries.par_iter().map(|t| (f1(*t), *t)).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let scored: Vec<(f64, Vec2)> = tries.iter().map(|t| (f1(*t), *t)).collect();
+    let best = scored.iter().map(|x| x.0).fold(0.0f64, f64::max);
+    let on: Vec<Vec2> = scored.iter().filter(|x| x.0 >= best - 1e-9).map(|x| x.1).collect();
+    if best <= 0.0 || on.is_empty() {
+        return t;
+    }
+    let m = on.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / on.len() as f64);
+    if m.x.is_finite() && m.y.is_finite() { m } else { t }
+}
+
+/// A fit (`s`, `t`, `score`) within [`PRINTED_SCALE_BAND`] of the printed scales' ratio `r`,
+/// re-weighed at `r` exactly: the scales a percent apart around it score alike (the fit's foot is
+/// wider than a percent of a floor), so which of them won is noise, and with it where the view
+/// lands. The placement at `r`, when it scores among the best and lands the view's middle where
+/// the fit did; `None` otherwise (the fit stands).
+pub(crate) fn at_printed_scale(src: &[Vec2], tgt: &[Vec2], k: f64, r: f64, s: f64, t: Vec2, score: f64) -> Option<LineworkFit> {
+    if !(r.is_finite() && r > 0.0 && (s / r - 1.0).abs() <= PRINTED_SCALE_BAND) || src.is_empty() {
+        return None;
+    }
+    let mid = src.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len() as f64);
+    let exact = linework_fit_part_detail(src, tgt, k, r, r)?;
+    // Its refinement moves the scale a few tenths of a percent: at `r` itself, about the middle,
+    // then the middle of the placements that score best there (the fit keeps the first of them).
+    let mut offset = exact.offset + mid * (exact.scale - r);
+    // Looked for about where the last look put it, until it stays (a run wider than the steps
+    // looked at is cut off on one side).
+    for _ in 0..PLATEAU_LOOKS {
+        let next = plateau_middle(src, tgt, k, r, offset);
+        let moved = next.dist(offset);
+        offset = next;
+        if moved < 0.5 * k {
+            break;
+        }
+    }
+    let agree = (mid * r + offset).dist(mid * s + t) <= PRINTED_SCALE_AGREE_IN * k;
+    (agree && exact.score >= score - SCALE_PLATEAU && offset.x.is_finite() && offset.y.is_finite()).then_some(LineworkFit {
+        scale: r,
+        offset,
+        ..exact
+    })
+}
+
+fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool, stats: &mut FitStats) -> Option<(f64, Vec2, f64, f64)> {
+    fit_linework_detail(src, tgt, k, lo, hi, whole, stats).map(LineworkFit::tuple)
+}
+
+fn fit_linework_detail(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: bool, stats: &mut FitStats) -> Option<LineworkFit> {
     if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
         return None;
     }
+    stats.fits += 1;
     let coarse = 48.0 * k;
-    let tcells: std::collections::HashSet<(i64, i64)> = tgt.iter().map(|p| ((p.x / coarse).floor() as i64, (p.y / coarse).floor() as i64)).collect();
+    let tcells: Vec<(i64, i64)> = tgt.iter().filter_map(|p| coarse_cell(*p, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
@@ -1356,41 +2114,34 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
         }
         s *= 1.01;
     }
-    // Each scale's proposals on their own (in parallel; kept in scale order).
-    let propose = |&s: &f64| -> Vec<(f64, f64, (i64, i64))> {
-        let mut cands = Vec::new();
-        let scells: std::collections::HashSet<(i64, i64)> =
-            few.iter().map(|p| ((p.x * s / coarse).floor() as i64, (p.y * s / coarse).floor() as i64)).collect();
-        let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
-        for u in &scells {
-            for v in &tcells {
-                *votes.entry((v.0 - u.0, v.1 - u.1)).or_default() += 1;
-            }
-        }
+    // Each scale's proposals on their own (in parallel; kept in scale order), with whether its
+    // vote was thinned and the pairs it voted.
+    type Proposals = (Vec<(f64, f64, (i64, i64))>, bool, usize);
+    let propose = |&s: &f64| -> Proposals {
+        let scells: Vec<(i64, i64)> =
+            few.iter().filter_map(|p| coarse_cell(*p * s, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let (scells, tcells, thinned, dense) = vote_cells(scells, &tcells);
         // The coarse grid only proposes an offset per scale: a dense plan has lines in nearly
         // every coarse cell, so placements are told apart on the fine grid.
         // Ties go to the smallest offset: a hash map's order differs run to run, and with it the
         // fit a tie picked (the same job placed 71 fewer devices one run than the next).
-        if whole {
-            if let Some((o, n)) = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))) {
-                cands.push((f64::from(n) / scells.len() as f64, s, o));
-            }
-        } else {
-            let mut ranked: Vec<((i64, i64), u32)> = votes.into_iter().collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            for (o, n) in ranked.into_iter().take(PART_OFFSETS) {
-                cands.push((f64::from(n) / scells.len() as f64, s, o));
-            }
-        }
-        cands
+        let top = if whole { 1 } else { PART_OFFSETS };
+        let cands = top_offsets(&scells, &tcells, top, dense).into_iter().map(|(o, n)| (f64::from(n) / scells.len().max(1) as f64, s, o)).collect();
+        (cands, thinned, scells.len().saturating_mul(tcells.len()))
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let cands: Vec<(f64, f64, (i64, i64))> = {
+    let proposed: Vec<Proposals> = {
         use rayon::prelude::*;
-        scales.par_iter().flat_map_iter(propose).collect()
+        scales.par_iter().map(propose).collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let cands: Vec<(f64, f64, (i64, i64))> = scales.iter().flat_map(propose).collect();
+    let proposed: Vec<Proposals> = scales.iter().map(propose).collect();
+    let mut cands: Vec<(f64, f64, (i64, i64))> = Vec::new();
+    for (c, thinned, votes) in proposed {
+        cands.extend(c);
+        stats.thinned += usize::from(thinned);
+        stats.most_votes = stats.most_votes.max(votes);
+    }
     let fine = Occupancy::new(tgt, 12.0 * k, 1);
     // Refine every scale's proposal on the 1' grid: scale ±0.5%, offset within two coarse cells.
     let refine = |&(_, s0, o): &(f64, f64, (i64, i64))| -> (f64, f64, Vec2) {
@@ -1433,46 +2184,86 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
     // `mine`: the view's lines on a grid in its own terms, made for scale near `s` (a plan point is
     // mapped back into it rather than the view mapped out for each trial placement).
     let view_grid = |s: f64| Occupancy::new(&dense, 12.0 * k / s, 1);
-    let f1 = |s: f64, t: Vec2, mine: &Occupancy| {
+    // The plan's lines under the placed view, from `near`: the plan's points (in order) that any
+    // placement weighed can hold, so a sheet's other lines aren't looked through for every one
+    // (the sample's stride stays the whole plan's: the same points as from the whole).
+    let stride = (tgt.len() / 20_000).max(1);
+    let f1 = |s: f64, t: Vec2, mine: &Occupancy, near: &[Vec2]| {
         let r = fine.score(&few, s, t);
         let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s + t));
-        let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
+        let under: Vec<Vec2> = near.iter().copied().filter(|p| placed.contains(*p)).step_by(stride).collect();
         let p = if under.is_empty() { 0.0 } else { under.iter().filter(|q| mine.hit((**q - t) * (1.0 / s))).count() as f64 / under.len() as f64 };
         if r + p > 0.0 { 2.0 * r * p / (r + p) } else { 0.0 }
     };
+    // The farthest a view point is from the origin: how far a 0.2% change of scale moves it.
+    let reach = few.iter().map(|p| p.x.abs().max(p.y.abs())).fold(0.0f64, f64::max);
     for cand in refined.iter_mut().take(4) {
         let (_, s0, t0) = *cand;
         let mine = view_grid(s0);
-        let mut best = (f1(s0, t0, &mine), s0, t0);
+        // Every placement below lies within 4 steps of 3" and 0.2% of scale of this one.
+        let placed = cadaddy_geom::Bounds2::from_points(few.iter().map(|p| *p * s0 + t0));
+        let pad = (12.0 * k + 0.0021 * s0.abs() * reach) * 1.01 + 1e-6 * (1.0 + reach * s0.abs() + t0.x.abs() + t0.y.abs());
+        let near: Vec<Vec2> = if pad.is_finite() {
+            tgt.iter()
+                .copied()
+                .filter(|p| p.x >= placed.min.x - pad && p.x <= placed.max.x + pad && p.y >= placed.min.y - pad && p.y <= placed.max.y + pad)
+                .collect()
+        } else {
+            tgt.to_vec()
+        };
+        let mut best = (f1(s0, t0, &mine, &near), s0, t0);
+        // The placements in order, scored side by side; the first best kept, as in turn.
+        let mut tries: Vec<(f64, Vec2)> = Vec::with_capacity(5 * 9 * 9);
         for si in -2..=2 {
             let s = s0 * (1.0 + 0.001 * f64::from(si));
             for dx in -4..=4 {
                 for dy in -4..=4 {
-                    let t = t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k);
-                    let sc = f1(s, t, &mine);
-                    if sc > best.0 {
-                        best = (sc, s, t);
-                    }
+                    tries.push((s, t0 + Vec2::new(f64::from(dx), f64::from(dy)) * (3.0 * k)));
                 }
+            }
+        }
+        let score = |&(s, t): &(f64, Vec2)| (f1(s, t, &mine, &near), s, t);
+        #[cfg(not(target_arch = "wasm32"))]
+        let scored: Vec<(f64, f64, Vec2)> = {
+            use rayon::prelude::*;
+            tries.par_iter().map(score).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let scored: Vec<(f64, f64, Vec2)> = tries.iter().map(score).collect();
+        for x in scored {
+            if x.0 > best.0 {
+                best = x;
             }
         }
         *cand = best;
     }
     // The rest scored the same way, so the margin compares like with like.
     for cand in refined.iter_mut().skip(4) {
-        cand.0 = f1(cand.1, cand.2, &view_grid(cand.1));
+        cand.0 = f1(cand.1, cand.2, &view_grid(cand.1), tgt);
     }
     refined.sort_by(|a, b| b.0.total_cmp(&a.0));
     let (score, s, t) = *refined.first()?;
     // The best placement well away from it (one bay over, another view).
     let probe = few.iter().fold(Vec2::new(0.0, 0.0), |a, p| a + *p) * (1.0 / few.len() as f64);
     let at = probe * s + t;
-    let second = refined.iter().skip(1).filter(|(_, s2, t2)| (probe * *s2 + *t2).dist(at) >= 120.0 * k).map(|r| r.0).fold(0.0, f64::max);
-    Some((s, t, score, score - second))
+    // The first best kept on a tie (sorted best first, stably).
+    let runner = refined.iter().skip(1).find(|(_, s2, t2)| (probe * *s2 + *t2).dist(at) >= 120.0 * k).map(|&(f, s2, t2)| (s2, t2, f));
+    let second = runner.map_or(0.0, |r| r.2.max(0.0));
+    Some(LineworkFit { scale: s, offset: t, score, margin: score - second, runner })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_grid_label_is_a_number_a_letter_or_between_two() {
+        for l in ["1", "12", "100", "A", "H", "J", "Z", "AA", "C.8", "4.5", "f.3"] {
+            assert!(model_grid_label(l), "{l}");
+        }
+        for l in ["", "I", "O", "Q901", "R12X", "250C", "T7", "XY", "1000", "C.", ".5", "C.123", "A-1"] {
+            assert!(!model_grid_label(l), "{l}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1669,6 +2460,121 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_dense_vote_picks_what_a_map_vote_picks() {
+        // The same offsets, votes and tie order (most votes, then the smallest offset) whichever
+        // way they are counted.
+        let mut seed = 7u64;
+        let mut next = |m: i64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            i64::try_from(seed >> 33).unwrap_or(0) % m
+        };
+        for _ in 0..20 {
+            let mut s: Vec<(i64, i64)> = (0..40).map(|_| (next(30) - 10, next(20))).collect();
+            let mut t: Vec<(i64, i64)> = (0..300).map(|_| (next(90) - 40, next(60) - 5)).collect();
+            s.sort_unstable();
+            s.dedup();
+            t.sort_unstable();
+            t.dedup();
+            for top in [1, PART_OFFSETS, 50] {
+                assert_eq!(top_offsets(&s, &t, top, true), top_offsets(&s, &t, top, false), "top {top}");
+            }
+        }
+        assert!(top_offsets(&[], &[(0, 0)], 3, true).is_empty() && top_offsets(&[(0, 0)], &[(1, 1)], 0, true).is_empty());
+        assert_eq!(top_offsets(&[(0, 0)], &[(2, 3)], 3, true), vec![((2, 3), 1)]);
+    }
+
+    #[test]
+    fn a_vote_never_counts_more_than_its_cap() {
+        let cells = |n: i64, w: i64| (0..n).map(|i| (i % w, i / w)).collect::<Vec<_>>();
+        // Small: every pair, no thinning.
+        let (s, t, thinned, dense) = vote_cells(cells(300, 30), &cells(3_000, 100));
+        assert!((s.len(), t.len(), thinned, dense) == (300, 3_000, false, true));
+        // A site-scale target against a floor: the target thinned evenly.
+        let (s, t, thinned, dense) = vote_cells(cells(2_000, 50), &cells(400_000, 900));
+        assert!(thinned && dense && s.len() == 2_000 && s.len() * t.len() <= MAX_FIT_VOTES, "{} x {}", s.len(), t.len());
+        // Both sides huge: both thinned.
+        let (s, t, thinned, _) = vote_cells(cells(300_000, 600), &cells(400_000, 900));
+        assert!(thinned && s.len() * t.len() <= MAX_FIT_VOTES, "{} x {}", s.len(), t.len());
+        // Offsets spread too far for a dense grid: a map, of fewer pairs.
+        let far: Vec<(i64, i64)> = vec![(0, 0), (5_000_000, 5_000_000)];
+        let (s, t, _, dense) = vote_cells(cells(2_000, 50), &far);
+        assert!(!dense && s.len() * t.len() <= MAX_SPARSE_VOTES);
+    }
+
+    #[test]
+    fn a_fit_against_a_sheet_at_a_site_scale_stays_bounded() {
+        // Q6581: a plan with no printed scale is tried at every print scale against a plan of its
+        // floor. At a site scale (1" = 100') a 36" x 24" sheet spans 3600' x 2400', its lines a few
+        // hundred thousand 4' cells; every cell of the floor voted with every one of them, a map
+        // per trial scale in flight: a job's rooms stage held 25 GB and never finished.
+        let k = 1.0;
+        let mut floor = vec![(Vec2::new(0.0, 0.0), Vec2::new(1440.0, 0.0)), (Vec2::new(0.0, 720.0), Vec2::new(1440.0, 720.0))];
+        let mut x = 0.0;
+        for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 192.0].iter().enumerate() {
+            floor.extend(room(Vec2::new(x, 0.0), *w, 360.0, 24.0 + 12.0 * i as f64));
+            x += w;
+        }
+        let src: Vec<Vec2> = sampled(&floor).into_iter().map(|p| p + Vec2::new(90_000.0, 0.0)).collect();
+        // The sheet blown up to the site scale: its hatching lines 8' apart both ways, a point a
+        // cell (48").
+        let (w, h) = (3600.0 * 12.0, 2400.0 * 12.0);
+        let mut tgt = Vec::new();
+        for j in 0..300 {
+            let y = f64::from(j) * 96.0;
+            tgt.extend((0..900).map(|i| Vec2::new(f64::from(i) * 48.0, y)));
+        }
+        for i in 0..450 {
+            let x = f64::from(i) * 96.0;
+            tgt.extend((0..600).map(|j| Vec2::new(x, f64::from(j) * 48.0)));
+        }
+        assert!(tgt.iter().all(|p| p.x <= w && p.y <= h));
+        let mut stats = FitStats::default();
+        let fit = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut stats);
+        assert_eq!(stats.fits, 1);
+        assert!(stats.thinned > 0, "the vote was over its cap: {stats:?}");
+        assert!(stats.most_votes <= MAX_FIT_VOTES, "{stats:?}");
+        // The same answer every time.
+        let again = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut FitStats::default());
+        let bits = |f: Option<(f64, Vec2, f64, f64)>| f.map(|f| [f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits(), f.2.to_bits(), f.3.to_bits()]);
+        assert_eq!(bits(fit), bits(again));
+        // A floor against its own floor's plan stays under the cap: every pair weighed.
+        let mut plain = FitStats::default();
+        let plan = sampled(&floor);
+        assert!(linework_fit_part_counted(&src, &plan, k, 0.97, 1.03, &mut plain).is_some());
+        assert_eq!(plain.thinned, 0, "{plain:?}");
+    }
+
+    #[test]
+    fn a_fit_of_two_sheets_spread_over_miles_stays_bounded() {
+        // Q6581, as measured on a restaurant set: at a trial scale far off its own, a reference's
+        // linework spread over ~9,000 coarse cells each way (about 2,000 of them occupied) and the
+        // plan's over ~10,800 (66,000 occupied). Nearly every pair of cells was an offset of its
+        // own: 127 million map entries per trial scale, several in flight, 13 GB in a minute.
+        let k = 1.0;
+        let cell = 48.0 * k;
+        // Lines across the extent `size` (cells), `n` of them each way, a point a cell.
+        let lines = |at: Vec2, size: f64, n: usize, every: usize| -> Vec<Vec2> {
+            let mut out = Vec::new();
+            for i in 0..n {
+                let c = size * (i as f64 + 0.37) / n as f64;
+                for j in (0..size as usize).step_by(every) {
+                    let along = j as f64;
+                    out.push(at + Vec2::new(along, c * 1.013) * cell);
+                    out.push(at + Vec2::new(c, along * 0.991) * cell);
+                }
+            }
+            out
+        };
+        let src = lines(Vec2::new(-200_000.0, 50_000.0), 9_000.0, 6, 27);
+        let tgt = lines(Vec2::new(0.0, 0.0), 10_800.0, 4, 1);
+        let mut stats = FitStats::default();
+        let _ = linework_fit_part_counted(&src, &tgt, k, 0.97, 1.03, &mut stats);
+        assert_eq!(stats.fits, 1);
+        assert!(stats.thinned > 0, "every pair is far over the cap: {stats:?}");
+        assert!(stats.most_votes <= MAX_SPARSE_VOTES, "spread too far for a dense vote, so the map's cap: {stats:?}");
+    }
+
     /// Line samples every foot along each segment (sheet inches).
     fn sampled(segs: &[(Vec2, Vec2)]) -> Vec<Vec2> {
         let mut out = Vec::new();
@@ -1719,6 +2625,87 @@ mod tests {
         }
         let typical: Vec<Vec2> = sampled(&room(Vec2::new(0.0, 360.0), 240.0, 360.0, 48.0)).into_iter().map(|p| p + off).collect();
         assert!(linework_fit_part(&typical, &sampled(&rep), 1.0, 0.97, 1.03).is_none_or(|f| f.3 < 0.03), "a typical room has no one place");
+    }
+
+    /// A 200' x 60' floor of rooms of different sizes and door places along a corridor wall, its
+    /// corner at `at`, drawn at `k`.
+    fn varied_floor(at: Vec2, k: f64) -> Vec<(Vec2, Vec2)> {
+        let mut segs = vec![(Vec2::new(0.0, 0.0), Vec2::new(2400.0, 0.0)), (Vec2::new(0.0, 720.0), Vec2::new(2400.0, 720.0))];
+        let mut x = 0.0;
+        for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 276.0, 192.0, 228.0, 216.0].iter().enumerate() {
+            segs.extend(room(Vec2::new(x, 360.0), *w, 360.0, 24.0 + 12.0 * i as f64));
+            segs.extend(room(Vec2::new(x, 0.0), *w, 300.0, 30.0 + 9.0 * i as f64));
+            x += w;
+        }
+        segs.into_iter().map(|(a, b)| (at + a * k, at + b * k)).collect()
+    }
+
+    #[test]
+    fn a_near_tie_with_a_copy_at_another_scale_is_settled_by_the_printed_scale() {
+        // Q6606: the floor plan sheet also draws the floor at 73% below it (a key plan). A screened
+        // background of the whole floor, drawn at the plan's printed scale on another sheet, lies
+        // on both: over every scale the fit is a coin flip between the floor and its key plan.
+        let mut plan_segs = varied_floor(Vec2::new(0.0, 0.0), 1.0);
+        plan_segs.extend(varied_floor(Vec2::new(200.0, -900.0), 0.73));
+        let plan = sampled(&plan_segs);
+        let off = Vec2::new(60_000.0, -300.0);
+        let view: Vec<Vec2> = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0)).into_iter().map(|p| p + off).collect();
+        let every = linework_fit_detail(&view, &plan, 1.0).expect("a fit");
+        assert!(every.margin < NEAR_TIE, "over every scale a near tie: {every:?}");
+        // At the sheet's printed scale (ratio 1) the key plan is another drawing: the floor wins,
+        // every other placement at that scale far behind.
+        let got = whole_view_fit(&view, &plan, 1.0, 1.0, 0.9, 0.03);
+        let ViewFit::PrintedScale { fit, .. } = got else { panic!("not settled by the printed scale: {got:?}") };
+        let corner = off * fit.scale + fit.offset;
+        assert!(fit.scale == 1.0 && corner.dist(Vec2::new(0.0, 0.0)) < 18.0, "{fit:?}, corner at {corner:?}");
+        assert!(fit.score >= 0.9 && fit.margin >= 0.03, "{fit:?}");
+        // Drawn at half the plan's printed scale (ratio 2), its fit is at that ratio.
+        let half: Vec<Vec2> = view.iter().map(|p| *p * 0.5).collect();
+        let at_two = whole_view_fit(&half, &plan, 1.0, 2.0, 0.9, 0.03).fit().expect("a fit at ratio 2");
+        assert!(at_two.scale == 2.0 && (off * 0.5 * at_two.scale + at_two.offset).dist(Vec2::new(0.0, 0.0)) < 18.0, "{at_two:?}");
+    }
+
+    #[test]
+    fn a_near_tie_among_identical_bays_at_the_printed_scale_is_uncertain() {
+        // A corridor of identical rooms longer than the view of it: every bay over fits as well at
+        // the printed scale too. Never decided by which placement was scored first.
+        let bays = |n: i32| -> Vec<(Vec2, Vec2)> {
+            let mut segs = vec![(Vec2::new(0.0, 0.0), Vec2::new(240.0 * f64::from(n), 0.0))];
+            for i in 0..n {
+                segs.extend(room(Vec2::new(f64::from(i) * 240.0, 360.0), 240.0, 360.0, 48.0));
+            }
+            segs
+        };
+        let plan = sampled(&bays(16));
+        let view: Vec<Vec2> = sampled(&bays(10)).into_iter().map(|p| p + Vec2::new(60_000.0, 0.0)).collect();
+        let got = whole_view_fit(&view, &plan, 1.0, 1.0, 0.9, 0.03);
+        assert!(matches!(got, ViewFit::Uncertain { .. }), "{got:?}");
+        assert_eq!(got.fit(), None);
+    }
+
+    #[test]
+    fn a_view_fitted_a_percent_either_side_of_its_printed_scale_lands_in_one_place() {
+        // Q6606: a two-level sheet's views fitted at 0.999 and 0.989 with equal scores, and
+        // restoring one window's lines on the plan swapped them. Weighed at the printed scale,
+        // the placement is the same whichever scale a percent away won.
+        let plan = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0));
+        let off = Vec2::new(60_000.0, -300.0);
+        let view: Vec<Vec2> = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0)).into_iter().map(|p| p + off).collect();
+        let mid = view.iter().fold(Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / view.len() as f64);
+        // Two fits a percent either side of one to one, each with the view's middle in place.
+        let near = |s: f64| (s, mid * (1.0 - s) - off);
+        let (s1, t1) = near(0.989);
+        let (s2, t2) = near(1.009);
+        let a = at_printed_scale(&view, &plan, 1.0, 1.0, s1, t1, 0.97).expect("a fit at one to one");
+        let b = at_printed_scale(&view, &plan, 1.0, 1.0, s2, t2, 0.97).expect("a fit at one to one");
+        assert_eq!((a.scale.to_bits(), a.offset.x.to_bits(), a.offset.y.to_bits()), (b.scale.to_bits(), b.offset.x.to_bits(), b.offset.y.to_bits()));
+        // The middle of the placements that score alike (lines are compared a foot or two apart),
+        // not the first of them: within a few inches.
+        assert!(a.scale == 1.0 && (off + a.offset).dist(Vec2::new(0.0, 0.0)) < 6.0, "{a:?}");
+        // A fit far from where one to one puts the view (another drawing) is left as it was.
+        assert_eq!(at_printed_scale(&view, &plan, 1.0, 1.0, 1.0, -off + Vec2::new(600.0, 0.0), 0.97), None);
+        // Off the printed scale by more than the band: not this rule's.
+        assert_eq!(at_printed_scale(&view, &plan, 1.0, 1.0, 0.9, t1, 0.97), None);
     }
 
     #[test]
@@ -1800,5 +2787,47 @@ mod tests {
         let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
         let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6200.0, 1000.0]], &[]);
         assert!(g.place([5000.0 + 450.0, 150.0], "1false").is_none());
+    }
+
+    /// fix-grid-bubble-as-fixture: on an electrical plan (strict) a grid's bubble that is not in a
+    /// row of three of its family is still a grid's when the sheet's grids say so: the one letter
+    /// grid of a partial plan, past the numbered grids it crosses, and the far end of a lettered
+    /// grid whose row at that end is cut off. A fixture of the same mark, its wire ending at it
+    /// among the grids (or along a grid's line beyond its end), stays a device.
+    #[test]
+    fn a_grid_bubble_out_of_its_row_is_a_grid_by_the_sheets_other_grids() {
+        let found = |s: &crate::Session| -> Vec<(String, [i64; 2])> {
+            let d = s.doc().unwrap();
+            let ents: Vec<&Arc<Entity>> = d.model.iter().collect();
+            let mut v: Vec<(String, [i64; 2])> =
+                grid_bubbles(d, &ents, 1.0, true).into_iter().map(|(at, _, l)| (l, [at.x.round() as i64, at.y.round() as i64])).collect();
+            v.sort();
+            v
+        };
+        let fixture = |s: &mut crate::Session, label: &str, at: [f64; 2], wire_to: [f64; 2]| {
+            s.execute("circle", &json!({"center": at, "radius": 18.0})).unwrap();
+            s.execute("text", &json!({"at": [at[0] - 4.0, at[1] - 4.0], "text": label, "height": 8.0})).unwrap();
+            s.execute("line", &json!({"points": [[at[0] + 18.0, at[1]], wire_to]})).unwrap();
+        };
+        // Numbered grids 1-3 bubbled below; one lettered grid, D, bubbled left. A type D
+        // fixture among the grids, its wire running across.
+        let mut s = crate::Session::new();
+        grid_view(&mut s, [0.0, 0.0], 1.0, &[(0.0, "1"), (300.0, "2"), (600.0, "3")], &[(300.0, "D")]);
+        fixture(&mut s, "D", [300.0, 450.0], [900.0, 450.0]);
+        let v = found(&s);
+        assert!(v.contains(&("D".into(), [-96, 300])), "the lettered grid's bubble: {v:?}");
+        assert!(!v.iter().any(|(_, at)| *at == [300, 450]), "the fixture: {v:?}");
+        assert_eq!(v.len(), 4, "{v:?}");
+        // Lettered grids A-C bubbled left, C bubbled at its right end too (the row there cut
+        // off); an A fixture along grid A's line past its end.
+        let mut s = crate::Session::new();
+        grid_view(&mut s, [0.0, 0.0], 1.0, &[], &[(0.0, "A"), (300.0, "B"), (600.0, "C")]);
+        s.execute("circle", &json!({"center": [1018.0, 600.0], "radius": 18.0})).unwrap();
+        s.execute("text", &json!({"at": [1014.0, 596.0], "text": "C", "height": 8.0})).unwrap();
+        fixture(&mut s, "A", [1600.0, 0.0], [2000.0, 0.0]);
+        let v = found(&s);
+        assert!(v.contains(&("C".into(), [1018, 600])), "the grid's other end: {v:?}");
+        assert!(!v.iter().any(|(_, at)| *at == [1600, 0]), "the fixture: {v:?}");
+        assert_eq!(v.len(), 4, "{v:?}");
     }
 }

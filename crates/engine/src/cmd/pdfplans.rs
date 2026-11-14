@@ -143,6 +143,49 @@ fn circle3(a: Vec2, b: Vec2, c: Vec2) -> Option<(Vec2, f64)> {
     (r.is_finite() && r > 0.0).then_some((o, r))
 }
 
+/// The doors of a plan, one per swing: a swing is the same door as one already counted when its
+/// hinge is within 5% of the radius and the radius agrees to 5% (the swing found by two rules, or
+/// a swing and its leaf). Hinges are bucketed by a grid of `cell` (at least the largest such
+/// tolerance), so counting stays linear on hostile sheets with many arcs.
+struct DoorSwings {
+    cell: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<(Vec2, f64)>>,
+    count: usize,
+}
+
+impl DoorSwings {
+    /// `k`: drawing units per real inch (door radii run 16"–54").
+    fn new(k: f64) -> Self {
+        let cell = if k.is_finite() && k > 0.0 { 3.0 * k } else { 1.0 };
+        Self { cell, cells: std::collections::HashMap::new(), count: 0 }
+    }
+
+    fn key(&self, c: Vec2) -> (i64, i64) {
+        // Saturating float → int casts; non-finite hinges are filtered by the caller.
+        ((c.x / self.cell).floor() as i64, (c.y / self.cell).floor() as i64)
+    }
+
+    /// Counts the swing hinged at `c` with radius `r`, unless it is a door already counted.
+    fn add(&mut self, c: Vec2, r: f64) {
+        if !(c.x.is_finite() && c.y.is_finite() && r.is_finite() && r > 0.0) {
+            return;
+        }
+        let (x, y) = self.key(c);
+        let tol = 0.05 * r;
+        let seen = (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                self.cells
+                    .get(&(x.saturating_add(dx), y.saturating_add(dy)))
+                    .is_some_and(|v| v.iter().any(|(q, s)| q.dist(c) <= tol.max(0.05 * s) && (s - r).abs() <= 0.05 * r.max(*s)))
+            })
+        });
+        if !seen {
+            self.cells.entry((x, y)).or_default().push((c, r));
+            self.count += 1;
+        }
+    }
+}
+
 fn dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let d = b - a;
     let l2 = d.dot(d);
@@ -323,10 +366,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             walls.insert(e.handle);
         }
     }
-    // Doors: swing arcs and their leaves.
+    // Doors: swing arcs and their leaves. `doors` holds every door piece (moved onto A-DOOR);
+    // `swings` counts the doors: one per swing, by its hinge and radius, so a swing and the leaf
+    // from its hinge (kept apart by the PDF reader) are one door, and a swing found by more than
+    // one rule below is counted once.
     let ops = openings(d, &ents, &all_segs, k);
     let mut doors: HashSet<Handle> = HashSet::new();
+    let mut door_swings = DoorSwings::new(k);
     for o in ops.iter().filter(|o| o.kind == "door" && o.swing.is_some()) {
+        door_swings.add(o.at, o.width);
         doors.insert(o.handle);
         if let Some((_, ends)) = o.swing {
             let tol = o.width * 0.05;
@@ -374,6 +422,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         });
         let Some((a, b, c, r, leaf)) = fit else { continue };
         swings.push((e.handle, c, r, a, b, leaf));
+        door_swings.add(c, r);
         let (a, b) = (&a, &b);
         doors.insert(e.handle);
         walls.remove(&e.handle);
@@ -395,14 +444,21 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if doors.contains(&e.handle) {
             continue;
         }
-        let swing = cadaddy_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed }.segments().into_iter().any(|sg| match sg {
-            cadaddy_geom::Segment::Arc { arc, .. } => {
-                let sweep = (arc.end - arc.start).rem_euclid(std::f64::consts::TAU).to_degrees();
-                (16.0 * k..=54.0 * k).contains(&arc.radius) && (60.0..=100.0).contains(&sweep)
-            }
-            _ => false,
-        });
-        if swing {
+        let arcs: Vec<(Vec2, f64)> = cadaddy_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed }
+            .segments()
+            .into_iter()
+            .filter_map(|sg| match sg {
+                cadaddy_geom::Segment::Arc { arc, .. } => {
+                    let sweep = (arc.end - arc.start).rem_euclid(std::f64::consts::TAU).to_degrees();
+                    ((16.0 * k..=54.0 * k).contains(&arc.radius) && (60.0..=100.0).contains(&sweep)).then_some((arc.center, arc.radius))
+                }
+                _ => None,
+            })
+            .collect();
+        for (c, r) in &arcs {
+            door_swings.add(*c, *r);
+        }
+        if !arcs.is_empty() {
             doors.insert(e.handle);
             walls.remove(&e.handle);
         }
@@ -472,7 +528,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "raster_only": false,
         "scale": { "factor": factor, "source": source },
         "walls": { "objects": walls.len(), "pairs": found.len(), "lineweight_mm": wall_weight },
-        "doors": doors.len(),
+        "doors": door_swings.count,
         "rooms": rooms.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>(),
         "sheet": { "number": sheet.get("number").cloned().unwrap_or(Value::Null), "title": sheet.get("title").cloned().unwrap_or(Value::Null) },
     });
@@ -545,6 +601,38 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
 
+    /// One door per swing: the same swing found twice (or a little off, as chords fit it) counts
+    /// once; a second hinge, a different radius or a far hinge is another door; junk is ignored.
+    #[test]
+    fn a_door_is_counted_once_per_swing() {
+        use cadaddy_geom::Vec2;
+        let k = 1.0 / 48.0;
+        let mut d = super::DoorSwings::new(k);
+        let r = 36.0 * k;
+        d.add(Vec2::new(1.0, 1.0), r);
+        d.add(Vec2::new(1.0 + 0.02 * r, 1.0), r * 1.01);
+        assert_eq!(d.count, 1);
+        // Hinges either side of a grid line still match.
+        let edge = 3.0 * k;
+        let mut e = super::DoorSwings::new(k);
+        e.add(Vec2::new(edge - 0.01 * r, 0.0), r);
+        e.add(Vec2::new(edge + 0.01 * r, 0.0), r);
+        assert_eq!(e.count, 1);
+        // A double door: two hinges a leaf apart.
+        d.add(Vec2::new(1.0 + 2.0 * r, 1.0), r);
+        // The same hinge, a door half the size.
+        d.add(Vec2::new(1.0, 1.0), r * 0.5);
+        assert_eq!(d.count, 3);
+        d.add(Vec2::new(f64::NAN, 1.0), r);
+        d.add(Vec2::new(f64::INFINITY, 1.0), r);
+        d.add(Vec2::new(0.0, 0.0), f64::NAN);
+        d.add(Vec2::new(0.0, 0.0), -1.0);
+        assert_eq!(d.count, 3);
+        let mut z = super::DoorSwings::new(f64::NAN);
+        z.add(Vec2::new(1e300, -1e300), 1.0);
+        assert_eq!(z.count, 1);
+    }
+
     /// The grid never misses a pair a face is near: every pair the full scan finds is among
     /// the grid's candidates (random pairs and faces, and the degenerate cases).
     #[test]
@@ -570,7 +658,7 @@ mod tests {
         for _ in 0..2_000 {
             let a = Vec2::new(rnd(), rnd());
             let b = if rnd() < 500.0 { a + Vec2::new(rnd() / 50.0, rnd() / 50.0) } else { Vec2::new(rnd(), rnd()) };
-            let sg = Seg { a, b, layer: String::new(), outline_width: f64::INFINITY };
+            let sg = Seg { a, b, layer: String::new(), outline_width: f64::INFINITY, unit_run: false };
             let cand: Vec<usize> = grid.near(a, b).collect();
             for (i, pr) in pairs.iter().enumerate() {
                 if near(&sg, pr) {

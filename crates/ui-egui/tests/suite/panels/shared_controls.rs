@@ -119,12 +119,15 @@ fn drafting_palette_pointer_and_keyboard_start_the_same_commands() {
 
 #[test]
 fn right_palettes_collapse_arrow_hides_menu() {
+    // The palettes view drawn directly shows while its switch is on (off by default: the rail).
+    let mut app = app();
+    app.ui.show_palettes = true;
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
         |ui, app: &mut CadApp| {
             app.logic(&ui.ctx().clone());
             cadaddy_ui_egui::palettes::right_palettes(app, ui);
         },
-        app(),
+        app,
     );
     h.run_steps(5);
     assert!(h.state().ui.show_palettes);

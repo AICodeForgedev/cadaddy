@@ -23,6 +23,7 @@ mod rare;
 mod refedit;
 mod section;
 pub mod shared;
+pub mod sheetstore;
 mod solid;
 mod store;
 mod surface;
@@ -36,7 +37,7 @@ pub use cadaddy_color as color;
 pub use cadaddy_geom as geom;
 pub use constraint::*;
 pub use entity::*;
-pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use extents::{BlockBoundsCache, MAX_BLOCK_DEPTH, entities_bounds, entity_bounds, entity_bounds_cached, mtext_quad, text_quad};
 pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
@@ -45,7 +46,7 @@ pub use rare::{Rare, RareEmpty};
 pub use refedit::{RefEdit, WorkItem};
 pub use section::*;
 pub use solid::*;
-pub use store::{ChunkRef, EntityStore, KIND_DIMENSION, KIND_HATCH, KIND_INSERT, KIND_OTHER, KIND_TABLE, kind_bit};
+pub use store::{CHUNK_STEP, ChunkRef, EntityStore, KIND_DIMENSION, KIND_HATCH, KIND_INSERT, KIND_OTHER, KIND_TABLE, kind_bit};
 pub use surface::*;
 pub use tables::*;
 pub use transform3::*;
@@ -236,6 +237,10 @@ pub struct Drawing {
     /// saving writes them again, so links into the file from outside stay valid.
     pub kept_handles: shared::Shared<BTreeMap<String, u64>>,
     pub field_values: BTreeMap<Handle, Vec<String>>,
+    /// A print set's sheets kept out of memory (in the interface: every sheet but the open and
+    /// recent ones), as the .cdy file stores them ([`sheetstore`]). Empty for any other drawing;
+    /// model space then holds everything.
+    pub sheet_store: sheetstore::SheetStore,
 }
 
 impl Default for Drawing {
@@ -419,6 +424,7 @@ impl Drawing {
             skipped_records: BTreeMap::new(),
             field_values: BTreeMap::new(),
             kept_handles: Default::default(),
+            sheet_store: Default::default(),
         }
     }
 
@@ -606,10 +612,13 @@ impl Drawing {
     /// Bounds of all visible entities in a space.
     pub fn extents(&self, space: &Space) -> cadaddy_geom::Bounds2 {
         let mut b = cadaddy_geom::Bounds2::EMPTY;
+        // One block-bounds cache for the whole space: every reference to a block reuses its
+        // measured contents instead of measuring the definition again.
+        let mut cache = BlockBoundsCache::default();
         if let Some(store) = self.space(space) {
             for e in store.iter() {
                 if self.is_visible(e) {
-                    b = b.union(&entity_bounds(self, e, 0));
+                    b = b.union(&entity_bounds_cached(self, e, 0, &mut cache));
                 }
             }
         }

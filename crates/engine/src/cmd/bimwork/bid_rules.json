@@ -1,6 +1,7 @@
 {
-  "_about": "bim.bid (Q6196): how a takeoff line is put in a bid system, the trades a bid covers, and the words of its letter. Rules data, no job's values: classes of work by the words of the takeoff's own items and categories. First matching rule wins; a line whose category is in `inherit` takes its circuit's system (the system of the devices on that circuit), else `default_system`.",
+  "_about": "bim.bid (Q6196): how a takeoff line is put in a bid system, the trades a bid covers, and the words of its letter. Rules data, no job's values: classes of work by the words of the takeoff's own items and categories. First matching rule wins; a line whose category is in `inherit` takes its circuit's system (the system of the devices on that circuit), else `default_system`. The rules sort the lines of `rules_trades` only: another trade's line (mechanical, plumbing, fire protection, any trade a bid names) is in that trade's own system (Q6528), never an electrical one.",
   "trades": ["electrical"],
+  "rules_trades": ["electrical", "fire alarm", "low voltage"],
   "systems": [
     {"id": "power", "name": "Power"},
     {"id": "lighting", "name": "Lighting and lighting controls"},
@@ -8,7 +9,10 @@
     {"id": "low_voltage", "name": "Low voltage pathways and rough-in"},
     {"id": "site", "name": "Site and underground"},
     {"id": "gear", "name": "Gear, distribution and feeders"},
-    {"id": "general", "name": "General conditions and allowances"}
+    {"id": "general", "name": "General conditions and allowances"},
+    {"id": "trade_mechanical", "name": "Mechanical", "trade": "mechanical"},
+    {"id": "trade_plumbing", "name": "Plumbing", "trade": "plumbing"},
+    {"id": "trade_fire_protection", "name": "Fire protection", "trade": "fire protection"}
   ],
   "default_system": "power",
   "underground_system": "site",

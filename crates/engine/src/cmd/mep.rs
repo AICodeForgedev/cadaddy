@@ -26,14 +26,19 @@ use super::perceive::{feet_inches, texts};
 use super::*;
 use crate::{Result, Session};
 
+mod clashscope;
 mod homerun;
 mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
-const MAX_RUNS: usize = 20_000;
+pub(crate) const MAX_RUNS: usize = 20_000;
+/// The build property a terminal's plan-tag type mark goes in (`prop:TYPE MARK=SD-4`).
+pub(crate) const TERMINAL_MARK: &str = "TYPE MARK";
+/// The build property a terminal's plan-tag airflow goes in (`prop:CFM=260`).
+pub(crate) const TERMINAL_CFM: &str = "CFM";
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
-const SLAB_FT: f64 = 0.5;
+pub(crate) const SLAB_FT: f64 = 0.5;
 /// How far above its level's ceiling a run sits at least, feet.
 const PLENUM_CLEAR_FT: f64 = 0.25;
 
@@ -75,8 +80,12 @@ fn ceiling_along(points: &[[f64; 2]], areas: &[(Vec<Vec2>, f64)], level_ceiling:
 /// Seat the runs whose height the drawings don't give (a default, an estimated route) in their
 /// level's plenum: above the highest ceiling they pass under ([`PLENUM_CLEAR_FT`]; the reflected
 /// ceiling plans' areas, else the level's ceiling) and under the slab of the floor above
-/// ([`SLAB_FT`]), as high as they fit. One too deep for the plenum sits just above the ceiling
-/// (model.clashes reports it into the structure); a run the drawings give a height keeps it
+/// ([`SLAB_FT`]), as high as they fit. A duct stays under the structure over its level (Q6554:
+/// the floor or roof framing and deck as the documents give them,
+/// [`super::ceilingseat::structure_under`]), never up in the joist space: one too deep for the
+/// plenum hangs under the structure, below the ceiling (`ceilingseat` marks it for review). Any
+/// other run too deep for the plenum sits just above the ceiling (model.clashes reports it into
+/// the structure); a run the drawings give a height keeps it
 /// unless it is up in the floor above (then it comes under that floor's slab, its height source
 /// saying so), and a riser and the roof's keep theirs. An air terminal above the ceiling where it is comes down into it, and
 /// a diffuser, register or grille in a ceiling area is at that area's height (it is in the
@@ -91,7 +100,16 @@ pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d
     let areas = ceiling_areas(sp, more);
     let none: Vec<(Vec<Vec2>, f64)> = Vec::new();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let plenum: Vec<Option<(f64, f64)>> = sp
+    let heights = super::ceilheight::Rule::load();
+    let ducts: Vec<&str> = sp.mep.systems.iter().filter(|s| s.kind == MepKind::Duct).map(|s| s.name.as_str()).collect();
+    // A duct's top under the structure over its level (feet over its floor; else the slab's).
+    let structure: Vec<Option<f64>> = sp
+        .mep
+        .runs
+        .iter()
+        .map(|r| if ducts.contains(&r.system.as_str()) { super::ceilingseat::structure_under(sp, &r.level, &heights) } else { None })
+        .collect();
+    let plenum: Vec<Option<(f64, f64, Option<f64>)>> = sp
         .mep
         .runs
         .iter()
@@ -101,16 +119,23 @@ pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d
             let ceiling = ceiling_along(&r.points, here, l.ceiling_ft, CEILING_STEP_FT * upf);
             (ceiling.is_finite() && l.height_ft.is_finite() && l.height_ft > ceiling).then_some((ceiling, l.height_ft))
         })
+        .zip(&structure)
+        .map(|(p, s)| p.map(|(c, h)| (c, h, *s)))
         .collect();
     let mut moved = 0;
     for (r, p) in sp.mep.runs.iter_mut().zip(plenum) {
-        let Some((ceiling, height)) = p else { continue };
+        let Some((ceiling, height, structure)) = p else { continue };
         if r.top_ft.is_some() {
             continue;
         }
         let depth = if r.size_in[1] > 0.0 { r.size_in[1] } else { r.size_in[0] }.max(0.0) / 12.0;
         let low = ceiling + PLENUM_CLEAR_FT;
-        let high = (height - SLAB_FT - depth).max(low);
+        // A duct: never up in the structure, even when that puts it under the ceiling.
+        let high = match structure {
+            Some(s) => (s - depth).max(0.0),
+            None => (height - SLAB_FT - depth).max(low),
+        };
+        let low = low.min(high);
         if !matches!(r.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route") {
             // A height the drawings give stays (one too deep for the plenum is a clash
             // model.clashes reports), unless its bottom is up in the floor above (a misread tag):
@@ -172,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|hoistway (through an elevator shaft)|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
-            .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by}], systems: [...], total, next_cursor?}")
+            .params("{level?: name, system?: name, guessed_only?: bool, cursor?: offset (0), limit?: count (50, max 200)} → {items: [{id, system, level, kind, segments, size_in, bottoms_ft, objects, confidence, size_source, height_source, reviewed, edited_by, corrections?: [{key, design, corrected, reason, rule}]}], systems: [...], total, next_cursor?}: the runs as the builds lay them (the spec's MEP edits applied)")
             .noundo(),
         CommandSpec::new("mep.edit", "Edit MEP Item", run_edit)
             .params("{id: run id (e.g. \"R1\"), system?: name, size_in?: [w,h], bottom_ft?: feet, reviewed?: bool, edited_by?: author (default \"agent\"), rebuild?: bool} → {item, rebuilt?, rebuild_error?}"),
@@ -640,6 +665,7 @@ pub(crate) fn read_with(s: &Session, sp: &BuildingSpec, only: Option<&str>, unta
                 made: Default::default(),
                 basis: String::new(),
                 corrections: Vec::new(),
+                storey_points: Default::default(),
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -1432,6 +1458,7 @@ fn read_pipes_from_tags(
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         });
         if let Some(slot) = run_of.get_mut(ci) {
             *slot = Some(runs.len() - 1);
@@ -1489,6 +1516,7 @@ fn read_pipes_from_tags(
             made: Default::default(),
             basis: String::new(),
             corrections: Vec::new(),
+            storey_points: Default::default(),
         });
     }
 
@@ -1678,7 +1706,7 @@ fn item_json(r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
         MepKind::Cable => "cable",
     });
     let level_elev = sp.level(&r.level).map_or(0.0, |l| l.elevation_ft);
-    json!({
+    let mut v = json!({
         "id": r.id,
         "system": r.system,
         "level": r.level,
@@ -1693,7 +1721,12 @@ fn item_json(r: &MepRun, sy: Option<&MepSystem>, sp: &BuildingSpec) -> Value {
         "reviewed": r.reviewed,
         "edited_by": &r.edited_by,
         "level_elevation_ft": level_elev,
-    })
+    });
+    // What an edit changed: the documents' value beside the value installed, and why.
+    if !r.corrections.is_empty() {
+        v["corrections"] = serde_json::to_value(&r.corrections).unwrap_or(Value::Null);
+    }
+    v
 }
 
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1717,6 +1750,9 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     if assigned_ids {
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
+    // Listed as the builds lay them: the spec's MEP edits applied (a moved run, an approved clash
+    // fix: Q6381), the documents' values in each run's corrections.
+    let _ = super::mepedit::apply(&mut sp);
 
     let only_level = str_param(p, "level").map(str::to_string);
     let only_system = str_param(p, "system").map(str::to_string);
@@ -1947,6 +1983,25 @@ fn turns(u: Vec2, v: Vec2) -> bool {
 /// elbow where it turns in plan, a drop where its height changes by 1/16" or more (a zero-length segment is a
 /// vertical one: a riser between the heights around it). No elbow at `skip` (a tee is there).
 /// Returns `(pieces, counts)`.
+/// A built piece's tags with its elevation (Q6592): its body's bottom above its level's floor
+/// `floor` (and its top, `vertical` for a riser or a stub), measured off its own mesh as it is
+/// built, so every rebuild writes it again.
+fn with_elevation(x: Vec<RawTag>, m: &Mesh, floor: f64, upf: f64, vertical: bool, run: Option<&MepRun>) -> Vec<RawTag> {
+    let Some((z0, z1)) = super::mepatoms::build::z_range(m) else { return x };
+    // Where its height came from: its run's height source (a default stays a default, never a
+    // reading, as `bim.props.fill` says it), else computed.
+    let src = run.map_or_else(cadaddy_doc::props::Source::computed, |r| super::propfill::source_said(&r.height_source, &r.source_sheet));
+    let found = super::mepatoms::build::elevation_props(z0, z1, floor, upf, vertical, &src);
+    if found.is_empty() {
+        return x;
+    }
+    let mut ps = cadaddy_doc::props::read(&x);
+    for (key, p) in found {
+        ps.set(key, p);
+    }
+    cadaddy_doc::props::write(&x, &ps)
+}
+
 fn pieces(run: &MepRun, base_z: f64, upf: f64, skip: &[Vec2]) -> (Vec<Piece>, PieceCounts) {
     let h = depth_in(run.size_in) / 12.0 * upf;
     let pts: Vec<Vec2> = run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect();
@@ -2042,6 +2097,9 @@ struct RunGeo<'a> {
     run: &'a MepRun,
     pts: Vec<Vec2>,
     base_z: f64,
+    /// A riser's piece: whether the riser goes on under its foot and over its head (a piece of a
+    /// riser cut at the floors it passes, Q6493), so a branch at a cut still leaves its side.
+    goes_on: [bool; 2],
 }
 
 impl RunGeo<'_> {
@@ -2050,6 +2108,12 @@ impl RunGeo<'_> {
     }
     fn h(&self, upf: f64) -> f64 {
         depth_in(self.run.size_in) / 12.0 * upf
+    }
+    /// A riser's plan point and height span (sheet units), none for a run in plan.
+    fn riser(&self, upf: f64) -> Option<(Vec2, f64, f64)> {
+        let (Some(top), [p]) = (self.run.top_ft, self.pts.as_slice()) else { return None };
+        let (z0, z1) = (self.bottom(0, upf), self.base_z + top * upf);
+        (top.is_finite() && z1 > z0 && p.is_finite()).then_some((*p, z0, z1))
     }
     /// The run's two ends (one for a single point).
     fn ends(&self, idx: usize, upf: f64) -> Vec<RunEnd> {
@@ -2098,12 +2162,14 @@ fn seg_near(p: Vec2, a: Vec2, b: Vec2) -> (f64, Vec2) {
     (p.dist(q), q)
 }
 
-/// The joints of one system's runs on one level: a run ending on another's side (a tee; two
-/// ending at the same point there, a cross), and runs ending at the same point: two of
-/// different sizes a transition (a reducer when both are round), two at an angle an elbow, three
-/// a tee, four or more a cross. Ends must also meet in height. Also, per run, the points where a
-/// tee sits on it (no elbow is drawn there).
-fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
+/// The joints of one service's runs on one level (the systems that are one service,
+/// [`cadaddy_walk3d::mepties`]: a main and its branches drawn as two systems still meet): a run
+/// ending on another's side (a tee; two ending at the same point there, a cross), a run leaving a
+/// riser's side between its foot and its head (a tee; two at one height, a cross), and runs ending
+/// at the same point: two of different sizes a transition (a reducer when both are round), two at
+/// an angle an elbow, three a tee, four or more a cross. Ends must also meet in height. Also, per
+/// run, the points where a tee sits on it (no elbow is drawn there).
+fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>, Vec<(usize, usize)>) {
     let inch = upf / 12.0;
     let half = |s: [f64; 2]| s[0] / 2.0 * inch;
     let ends: Vec<RunEnd> = geo.iter().enumerate().flat_map(|(i, g)| g.ends(i, upf)).collect();
@@ -2133,6 +2199,8 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
     let mut used = vec![false; ends.len()];
     let mut joints: Vec<Joint> = Vec::new();
     let mut skip: Vec<Vec<Vec2>> = vec![Vec::new(); geo.len()];
+    // Runs meeting end to end with no fitting between them (a straight run on, a riser's end).
+    let mut meets: Vec<(usize, usize)> = Vec::new();
     // On another run's side.
     let mut side: Vec<(usize, Vec2, Vec<usize>)> = Vec::new();
     for (ei, e) in ends.iter().enumerate() {
@@ -2162,6 +2230,43 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
         match side.iter_mut().find(|(m, p, _)| *m == main && p.dist(q) <= own) {
             Some((_, _, list)) => list.push(ei),
             None => side.push((main, q, vec![ei])),
+        }
+    }
+    // Leaving a riser's side: an end at its plan point whose height the riser passes, under it
+    // and over it (at the riser's foot or head the two meet end to end).
+    for (ri, g) in geo.iter().enumerate() {
+        let Some((p, rz0, rz1)) = g.riser(upf) else { continue };
+        let own = half(g.run.size_in) + inch;
+        // Ends by the height they leave at: (lowest, highest, ends).
+        let mut at: Vec<(f64, f64, Vec<usize>)> = Vec::new();
+        for (ei, e) in ends.iter().enumerate() {
+            if e.run == ri || e.into.is_none() || used.get(ei).copied().unwrap_or(true) || e.at.dist(p) > own {
+                continue;
+            }
+            let under = g.goes_on[0] || rz0 < e.z0 - inch / 2.0;
+            let over = g.goes_on[1] || rz1 > e.z1 + inch / 2.0;
+            if !(under && over && overlaps(e.z0, e.z1, rz0, rz1, upf)) {
+                continue;
+            }
+            if let Some(u) = used.get_mut(ei) {
+                *u = true;
+            }
+            match at.iter_mut().find(|(lo, hi, _)| overlaps(*lo, *hi, e.z0, e.z1, upf)) {
+                Some((lo, hi, list)) => {
+                    (*lo, *hi) = (lo.min(e.z0), hi.max(e.z1));
+                    list.push(ei);
+                }
+                None => at.push((e.z0, e.z1, vec![ei])),
+            }
+        }
+        for (lo, hi, list) in at {
+            // The riser's own piece of the fitting: past the branches by their size and 2".
+            let reach = list.iter().filter_map(|e| ends.get(*e)).map(|e| e.size[0] / 2.0).fold(0.0_f64, f64::max) * inch + 2.0 * inch;
+            let (z0, z1) = ((lo - reach).max(rz0), (hi + reach).min(rz1));
+            let mut je = vec![RunEnd { run: ri, at: p, z0, z1, size: g.run.size_in, into: None }];
+            je.extend(list.iter().filter_map(|e| ends.get(*e)).map(|e| RunEnd { at: p, ..*e }));
+            let kind = if list.len() >= 2 { FittingKind::Cross } else { FittingKind::Tee };
+            joints.push(Joint { kind, at: p, owner: ri, ends: je });
         }
     }
     for (main, q, list) in side {
@@ -2218,7 +2323,10 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
         let je: Vec<RunEnd> = at.iter().filter_map(|k| ends.get(*k)).copied().collect();
         let kind = match je.as_slice() {
             // A riser's end: the drop is its fitting.
-            [a, b] if a.into.is_none() || b.into.is_none() => continue,
+            [a, b] if a.into.is_none() || b.into.is_none() => {
+                meets.push((a.run, b.run));
+                continue;
+            }
             [a, b] => {
                 let turn = matches!((a.into, b.into), (Some(u), Some(v)) if turns(u, v * -1.0));
                 if turn {
@@ -2226,6 +2334,7 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
                 } else if (a.size[0] - b.size[0]).abs() > 1e-6 || (a.size[1] - b.size[1]).abs() > 1e-6 {
                     if a.size[1] > 0.0 || b.size[1] > 0.0 { FittingKind::Transition } else { FittingKind::Reducer }
                 } else {
+                    meets.push((a.run, b.run));
                     continue;
                 }
             }
@@ -2236,7 +2345,7 @@ fn joints(geo: &[RunGeo], upf: f64) -> (Vec<Joint>, Vec<Vec<Vec2>>) {
         let owner = je.iter().max_by(|a, b| (a.size[0] * a.size[1].max(1.0)).total_cmp(&(b.size[0] * b.size[1].max(1.0)))).map_or(e.run, |x| x.run);
         joints.push(Joint { kind, at: e.at, owner, ends: je });
     }
-    (joints, skip)
+    (joints, skip, meets)
 }
 
 // ---- mesh generation for pieces ----
@@ -2266,10 +2375,20 @@ fn add_round_segment(m: &mut Mesh, a: Vec2, b: Vec2, radius: f64, z0: f64, z1: f
         let j = (k + 1) % sides;
         m.faces.push(MeshFace { v: vec![base + k, base + j, base + sides + j, base + sides + k], hidden: 0 });
     }
-    // End caps.
+    cap_ends(m, base, base + sides, sides);
+}
+
+/// The flat end caps of a tube of `sides`-cornered rings starting at `first` and `last`: each
+/// a fan of triangles from its ring's first corner, facing out of the tube's ends. Only a cap's
+/// rim draws: the fan's diagonals are seams inside the one flat cap (the first triangle's edge
+/// to corner 1 and the last one's to corner `sides - 1` are rim).
+fn cap_ends(m: &mut Mesh, first: u32, last: u32, sides: u32) {
+    let end = sides.saturating_sub(2);
+    // Hidden bits: `to_next` the edge from the fan's corner to k + 1, `to_k` the edge with k.
+    let fan = |k: u32, to_next: u32, to_k: u32| (if k == end { 0 } else { 1u64 << to_next }) | (if k == 1 { 0 } else { 1u64 << to_k });
     for k in 1..sides.saturating_sub(1) {
-        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![base + sides, base + sides + k, base + sides + k + 1], hidden: 0 });
+        m.faces.push(MeshFace { v: vec![first, first + k + 1, first + k], hidden: fan(k, 0, 2) });
+        m.faces.push(MeshFace { v: vec![last, last + k, last + k + 1], hidden: fan(k, 2, 0) });
     }
 }
 
@@ -2343,11 +2462,7 @@ fn add_elbow_round(m: &mut Mesh, arc: &[(Vec2, Vec2)], radius: f64, z0: f64, z1:
             m.faces.push(MeshFace { v: vec![r0 + k, r0 + j, r1 + j, r1 + k], hidden: 0 });
         }
     }
-    let last = base + (rings - 1) * sides;
-    for k in 1..sides.saturating_sub(1) {
-        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![last, last + k, last + k + 1], hidden: 0 });
-    }
+    cap_ends(m, base, base + (rings - 1) * sides, sides);
 }
 
 /// A drop (riser) fitting: vertical from z0 to z1. Round: an upright tube of the duct's
@@ -2409,10 +2524,7 @@ fn add_loft(m: &mut Mesh, a: Vec2, b: Vec2, (sa, za): ([f64; 2], f64), (sb, zb):
         let j = (k + 1) % s;
         m.faces.push(MeshFace { v: vec![base + k, base + j, base + s + j, base + s + k], hidden: 0 });
     }
-    for k in 1..s.saturating_sub(1) {
-        m.faces.push(MeshFace { v: vec![base, base + k + 1, base + k], hidden: 0 });
-        m.faces.push(MeshFace { v: vec![base + s, base + s + k, base + s + k + 1], hidden: 0 });
-    }
+    cap_ends(m, base, base + s, s);
 }
 
 /// A joint's mesh. A tee or cross: a stub of each run from the point, each as long as the widest
@@ -2438,7 +2550,19 @@ fn joint_mesh(m: &mut Mesh, j: &Joint, upf: f64) {
         }
         _ => {
             for e in &j.ends {
-                let Some(d) = e.into else { continue };
+                let Some(d) = e.into else {
+                    // A riser's piece of its tee: upright, its own size, over the branches' height.
+                    if e.run == j.owner {
+                        let w = e.size[0] * inch;
+                        if e.size[1] > 0.0 {
+                            let half = Vec2::new(w / 2.0, 0.0);
+                            super::wallgen::add_box(m, j.at - half, j.at + half, e.size[1] * inch, e.z0, e.z1);
+                        } else {
+                            add_upright_cylinder(m, j.at, w / 2.0, e.z0, e.z1);
+                        }
+                    }
+                    continue;
+                };
                 let reach = j.ends.iter().filter(|o| !std::ptr::eq(*o, e)).map(|o| o.size[0] / 2.0).fold(0.0_f64, f64::max) + 2.0;
                 add_section(m, j.at, j.at + d * (reach * inch), e.size, e.z0, upf);
             }
@@ -2514,10 +2638,15 @@ fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
 /// tagged with its kind, tag, systems and schedule row for IFC; `only` (upper-case tags) limits it
 /// to those (gear added to a built model). The handles built.
 pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&std::collections::BTreeSet<String>>) -> Vec<Handle> {
+    build_equipment_indexed(d, sp, only).into_iter().map(|(_, h)| h).collect()
+}
+
+/// [`build_equipment`], each handle with the place of its item in the spec's equipment.
+pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: Option<&std::collections::BTreeSet<String>>) -> Vec<(usize, Handle)> {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
     // tag, systems and schedule row for IFC. --
-    let mut built: Vec<Handle> = Vec::new();
+    let mut built: Vec<(usize, Handle)> = Vec::new();
     let t = |code: i32, v: String| RawTag { code, value: v };
     // Equipment on a housekeeping pad stands on it.
     let pads = super::concrete::elements(sp, &d.bim_types);
@@ -2525,8 +2654,17 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
     // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
     let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
     // (Where the plans draw them, as the spec's positions are: a rebuild comes after the stacking.)
-    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
-    for e in sp.mep.equipment.iter().take(MAX_RUNS).filter(|e| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
+    // A through-wall unit (a PTAC) goes through the outside wall it is drawn against, in its
+    // sleeve (Q6546, M-THROUGH-WALL): the walls, and the floors that say which are outside.
+    let tw = super::throughwall::Rule::load();
+    let through = |e: &cadaddy_walk3d::MepEquipment| !e.round && tw.names(&e.kind);
+    let any_through = sp.mep.equipment.iter().any(|e| through(e) && only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase())));
+    let walls =
+        if sp.mep.equipment.iter().any(|e| panel(&e.kind)) || any_through { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
+    let fps = any_through.then(|| super::propfill::Footprints::of(d, sp));
+    // Each seated unit's sleeve opening, cut in its wall once every unit is built.
+    let mut sleeves: Vec<(super::throughwall::Seat, f64, f64)> = Vec::new();
+    for (k, e) in sp.mep.equipment.iter().enumerate().take(MAX_RUNS).filter(|(_, e)| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
         let Some(level) = sp.level(&e.level) else { continue };
         let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
         if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
@@ -2538,7 +2676,22 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
         let z0 = (level.elevation_ft + on_pad(e)) * upf;
         let z1 = z0 + e.height_ft * upf;
         let mut m = super::wallgen::empty_mesh();
-        let at = equipment_plan(e, &level.name, &walls, upf, z0, z1);
+        let (mut seated, mut review) = (None, None);
+        let at = if through(e) {
+            match super::throughwall::seat(&tw, e, &level.name, &walls, fps.as_ref(), upf, (z0 + z1) * 0.5) {
+                super::throughwall::Seated::In(st) => {
+                    let p = EquipmentPlan { a: st.unit.a, b: st.unit.b, depth: st.unit.depth, face: None };
+                    seated = Some(*st);
+                    p
+                }
+                super::throughwall::Seated::Review(why) => {
+                    review = Some(why);
+                    equipment_plan(e, &level.name, &walls, upf, z0, z1)
+                }
+            }
+        } else {
+            equipment_plan(e, &level.name, &walls, upf, z0, z1)
+        };
         let face = at.face;
         if face.is_none() && e.round {
             add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
@@ -2561,6 +2714,8 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
         for sy in e.systems.iter().take(32) {
             xdata.push(t(1000, cap(format!("system:{sy}"))));
         }
+        // Whose it is (Q6528): the trade its takeoff line and the model tree go by.
+        xdata.push(t(1000, format!("trade:{}", equipment_trade(sp, e))));
         if !e.title.is_empty() {
             xdata.push(t(1000, cap(format!("title:{}", e.title))));
         }
@@ -2578,11 +2733,56 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
             None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
             None => {}
         }
-        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
-            built.push(h);
+        // Through its outside wall: its host wall and face, its sleeve, where its place and depth
+        // came from (derived: the plan's place along the wall and the rule).
+        if let Some(st) = &seated {
+            for (k, v) in super::throughwall::seat_props(st, upf) {
+                xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
+            }
+        }
+        if let Some(why) = &review {
+            xdata.push(t(1000, cap(format!("prop:PLACEMENT={why}"))));
+        }
+        // An item an edit added: what it is by the documents and why (Q6502).
+        let edited = e.sources.get("made").and_then(|m| cadaddy_walk3d::Made::parse(m)).filter(|m| !m.is_drawn());
+        if let Some(made) = edited {
+            xdata.extend(super::provenance::tags(made, e.sources.get("basis").map_or("", String::as_str)));
+        } else if seated.is_some() {
+            // Drawn, its place derived: along the wall from the plan, through it by the rule.
+            xdata.extend(super::provenance::tags(
+                cadaddy_walk3d::Made::Derived,
+                &super::provenance::rule(super::throughwall::RULE).basis_for("its place along the wall from the plan"),
+            ));
+        }
+        // What an edit changed on it, the documents' value beside it, and its type mark (Q6502);
+        // a through-wall unit's drawn place beside its seated one.
+        let mut corrections = e.corrections.clone();
+        corrections.extend(seated.as_ref().and_then(|st| super::throughwall::location_correction(st, upf)));
+        let mut xdata = super::provenance::with_corrections(xdata, &corrections);
+        if !e.type_mark.trim().is_empty() {
+            xdata.extend(cadaddy_doc::bimspec::type_mark_xdata(&cap(e.type_mark.trim().to_string())));
+        }
+        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
+            built.push((k, h));
+            if let Some(st) = seated {
+                super::throughwall::build_parts(d, &layer, &level.name, e, &st, z0, z1, upf);
+                sleeves.push((st, z0, z1));
+            }
         }
     }
+    // Each seated unit's sleeve opening in its wall.
+    let _ = super::throughwall::cut_sleeves(d, &sleeves);
     built
+}
+
+/// Whether a panel's mounting (its schedule's `MOUNTING`) sets it into its wall: recessed or
+/// flush (the words as data), its front at the wall's face; else it hangs on the face.
+pub(crate) fn mounted_in_wall(e: &cadaddy_walk3d::MepEquipment) -> bool {
+    let words = cadaddy_mepfix::wordrules::words("equipment.in_wall_mounting_words");
+    e.properties.get("MOUNTING").is_some_and(|m| {
+        let u = m.to_ascii_uppercase();
+        words.iter().any(|w| u.contains(&w.to_ascii_uppercase()))
+    })
 }
 
 /// Where a piece of equipment stands in plan as [`build_equipment`] builds it: its box's middle
@@ -2615,7 +2815,7 @@ pub(crate) fn equipment_plan(
     };
     match face {
         Some(f) => {
-            let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+            let recessed = mounted_in_wall(e);
             let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
             let along = f.along * (w / 2.0);
             // The box's middle line, half its depth from the face (into the wall when recessed).
@@ -2643,7 +2843,19 @@ pub(crate) fn ensure_layer(d: &mut Drawing, layer: &str, color: i16) {
 }
 
 /// The xdata kind string for IFC export.
-fn kind_str(kind: MepKind) -> &'static str {
+/// The trade of a spec's piece of equipment (Q6528, [`super::elemtrade::of_equipment`]): its
+/// own TRADE property, its kind's, else the trade of the systems it is on.
+pub(crate) fn equipment_trade(sp: &BuildingSpec, e: &cadaddy_walk3d::MepEquipment) -> &'static str {
+    let on: Vec<Option<&'static str>> = e
+        .systems
+        .iter()
+        .take(32)
+        .map(|x| sp.mep.systems.iter().find(|y| y.name == *x).and_then(|y| super::elemtrade::of_system(kind_str(y.kind), x)))
+        .collect();
+    super::elemtrade::of_equipment(&e.kind, e.properties.get("TRADE").map_or("", String::as_str), &on)
+}
+
+pub(crate) fn kind_str(kind: MepKind) -> &'static str {
     match kind {
         MepKind::Duct => "duct",
         MepKind::Pipe => "pipe",
@@ -2765,6 +2977,29 @@ pub(crate) fn feeder_stubs(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimT
     out
 }
 
+/// WALLGEN's tag on each storey's piece of a riser through several (Q6493): the riser's name,
+/// the same on every piece.
+pub(crate) const RISER_TAG: &str = "riser";
+
+/// The tags of a riser's piece in one storey (Q6493): the riser it is a piece of (`riser:`), and
+/// as properties which piece it is, the level the riser is given on and the floors it passes
+/// (each a penetration with its firestop).
+fn riser_tags(c: &super::risercut::StoreyCut) -> Vec<RawTag> {
+    let t = |v: String| RawTag { code: 1000, value: v };
+    let mut x = vec![
+        t(format!("{RISER_TAG}:{}", c.riser.chars().take(200).collect::<String>())),
+        t(format!("prop:RISER_PIECE={} of {}", c.index + 1, c.count)),
+        t(format!("prop:RISER_LEVEL={}", c.given_level.chars().take(64).collect::<String>())),
+    ];
+    if !c.floors.is_empty() {
+        x.push(t(format!("prop:{FLOOR_PENETRATION}={}", c.floors.join(", ").chars().take(200).collect::<String>())));
+    }
+    x
+}
+
+/// The property naming the floors a riser's piece passes (Q6493): each a floor penetration.
+pub(crate) const FLOOR_PENETRATION: &str = "FLOOR_PENETRATION";
+
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
 pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
     let sys = sanitise(system, 40);
@@ -2797,39 +3032,47 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         sy: &'a MepSystem,
         level: String,
         base_z: f64,
+        /// A riser's piece in one storey of those it passes (Q6493).
+        cut: Option<&'a super::risercut::StoreyCut>,
     }
-    let shown: Vec<Shown> = sp
-        .mep
-        .runs
+    // A riser through several storeys is built a piece per storey, each on its own level (Q6493).
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_RUNS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(sp, given, MAX_RUNS);
+    let shown: Vec<Shown> = storeys
         .iter()
-        .take(MAX_RUNS)
-        .filter_map(|r| {
+        .filter_map(|(_, st)| {
+            let r: &MepRun = &st.run;
             let sy = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show)?;
             if atoms && matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
                 return None;
             }
             let level = sp.level(&r.level)?;
-            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf })
+            Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf, cut: st.cut.as_ref() })
         })
         .collect();
-    let mut groups: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
+    // Per service and level (Q6598): the systems that are one service (a main and its branches,
+    // a riser and its floor branches, drawn as systems of their own) meet; risers with them.
+    let mut groups: BTreeMap<(String, &str), Vec<usize>> = BTreeMap::new();
     for (i, s) in shown.iter().enumerate() {
-        // Vertical runs (risers) have one plan point and meet nothing in plan.
-        if s.run.top_ft.is_some() {
-            continue;
-        }
-        groups.entry((s.sy.name.as_str(), s.level.as_str())).or_default().push(i);
+        groups.entry((cadaddy_walk3d::mepties::service_key(s.sy), s.level.as_str())).or_default().push(i);
     }
     let mut all_joints: Vec<Joint> = Vec::new();
+    let mut all_meets: Vec<(usize, usize)> = Vec::new();
     let mut skip_at: Vec<Vec<Vec2>> = vec![Vec::new(); shown.len()];
     for members in groups.values() {
         let geo: Vec<RunGeo> = members
             .iter()
             .filter_map(|i| shown.get(*i))
-            .map(|s| RunGeo { run: s.run, pts: s.run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect(), base_z: s.base_z })
+            .map(|s| RunGeo {
+                run: s.run,
+                pts: s.run.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect(),
+                base_z: s.base_z,
+                goes_on: s.cut.map_or([false, false], |c| [c.index > 0, c.index + 1 < c.count]),
+            })
             .collect();
-        let (js, sk) = joints(&geo, upf);
+        let (js, sk, mt) = joints(&geo, upf);
         let global = |k: usize| members.get(k).copied().unwrap_or(usize::MAX);
+        all_meets.extend(mt.into_iter().map(|(a, b)| (global(a), global(b))));
         for (k, pts) in sk.into_iter().enumerate() {
             if let Some(s) = skip_at.get_mut(global(k)) {
                 *s = pts;
@@ -2868,6 +3111,14 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         if let Some(dt) = duct_type_str(sy) {
             x.push(t(1000, format!("duct_type:{dt}")));
         }
+        // What a pipe carries, by its system's name and layer (Q6492): its trade in the model
+        // tree, the clash trades and the takeoff.
+        if sy.kind == MepKind::Pipe {
+            let service = cadaddy_walk3d::pipeservice::pipe_service(&sy.name, &sy.layer);
+            if !service.is_empty() {
+                x.push(t(1000, format!("carries:{service}")));
+            }
+        }
         for (k, s) in sizes.iter().enumerate().take(2) {
             if s[0] > 0.0 && s[0].is_finite() {
                 x.push(t(1000, format!("{}:{}", if k == 0 { "size" } else { "size2" }, size_text(*s))));
@@ -2892,6 +3143,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         x.extend(super::provenance::tags(made, &basis));
         x
     };
+    // What is laid, for joining the ducts and pipes (`bim.chain` walks them, Q6502).
+    let mut seg_of: Vec<Option<Handle>> = vec![None; shown.len()];
+    let mut fittings_of: Vec<Vec<Handle>> = vec![Vec::new(); shown.len()];
+    let mut joint_handles: Vec<(Handle, Vec<usize>)> = Vec::new();
+    let mut terminal_handles: Vec<(Handle, &cadaddy_walk3d::MepTerminal)> = Vec::new();
     for (i, s) in shown.iter().enumerate() {
         let (r, sy) = (s.run, s.sy);
         let layer = layer_of(r, sy, &s.level);
@@ -2910,11 +3166,25 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let mut seg_mesh = super::wallgen::empty_mesh();
             add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
             if !seg_mesh.faces.is_empty() {
-                let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
-                if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
-                    .is_ok()
+                // A riser's piece (Q6493): the riser's name on every piece, which piece it is and
+                // the floor it passes; the lowest keeps the id the whole riser had.
+                let id = match s.cut {
+                    Some(c) if c.index > 0 => format!("{}/segment:{}", c.riser, s.level),
+                    Some(c) => format!("{}/segment", c.riser),
+                    None => format!("{base}/segment"),
+                };
+                let mut x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], id));
+                if let Some(c) = s.cut {
+                    x.extend(riser_tags(c));
+                }
+                let x = with_elevation(super::provenance::with_run_corrections(x, r), &seg_mesh, s.base_z, upf, true, Some(r));
+                if let Ok(h) =
+                    d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
                 {
                     total_runs += 1;
+                    if let Some(x) = seg_of.get_mut(i) {
+                        *x = Some(h);
+                    }
                 }
             }
             continue;
@@ -2930,9 +3200,14 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
                 mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"))),
                 r,
             );
-            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
+            let x = with_elevation(x, &seg_mesh, s.base_z, upf, false, Some(r));
+            if let Ok(h) =
+                d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
             {
                 total_runs += 1;
+                if let Some(x) = seg_of.get_mut(i) {
+                    *x = Some(h);
+                }
             }
         }
         // Each fitting its own object, tagged with its kind.
@@ -2947,8 +3222,12 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let n = nth.entry(ks).or_default();
             *n += 1;
             let x = mark(r, sy, tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}")));
-            if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            let x = with_elevation(x, &m, s.base_z, upf, false, Some(r));
+            if let Ok(h) = d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
                 total_fittings += 1;
+                if let Some(f) = fittings_of.get_mut(i) {
+                    f.push(h);
+                }
             }
         }
         total_elbows += counts.elbows;
@@ -2979,8 +3258,10 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             s.sy,
             tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y)),
         );
-        if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+        let x = with_elevation(x, &m, s.base_z, upf, false, Some(s.run));
+        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
             total_fittings += 1;
+            joint_handles.push((h, j.ends.iter().map(|e| e.run).collect()));
             match j.kind {
                 FittingKind::Tee => total_tees += 1,
                 FittingKind::Cross => total_crosses += 1,
@@ -3018,14 +3299,46 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             if !term.source_sheet.is_empty() {
                 x.push(t(1000, format!("prop:SOURCE sheet={}", term.source_sheet.chars().take(64).collect::<String>())));
             }
+            // What its plan tag says it is (Q6318): its type mark and airflow.
+            if !term.tag.trim().is_empty() {
+                x.push(t(1000, format!("prop:{TERMINAL_MARK}={}", sanitise(term.tag.trim(), 24))));
+            }
+            if let Some(c) = term.cfm.filter(|c| c.is_finite() && *c > 0.0) {
+                x.push(t(1000, format!("prop:{TERMINAL_CFM}={c}")));
+            }
             x.extend(super::provenance::tags(term.made, &term.basis));
-            if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            // What an edit changed on it, the documents' value beside it (Q6502).
+            let x = super::provenance::with_corrections(x, &term.corrections);
+            if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)) {
                 total_terminals += 1;
+                terminal_handles.push((h, term));
             }
         }
     }
 
-    let total_equipment = build_equipment(d, sp, None).len();
+    let equipment_built = build_equipment_indexed(d, sp, None);
+    let total_equipment = equipment_built.len();
+    // The ducts and pipes joined: runs that meet, their fittings, terminals and units (Q6502).
+    let net = super::mepedit::Net {
+        runs: shown
+            .iter()
+            .enumerate()
+            .map(|(i, s)| super::mepedit::NetRun {
+                run: s.run,
+                kind: s.sy.kind,
+                service: cadaddy_walk3d::mepties::service_key(s.sy),
+                level: s.level.clone(),
+                floor_ft: s.base_z / upf,
+                seg: seg_of.get(i).copied().flatten(),
+                fittings: fittings_of.get(i).cloned().unwrap_or_default(),
+            })
+            .collect(),
+        joints: joint_handles,
+        meets: all_meets,
+        terminals: terminal_handles,
+        equipment: equipment_built.iter().filter_map(|(k, h)| sp.mep.equipment.get(*k).map(|e| (*h, e))).collect(),
+    };
+    let total_joined = super::mepedit::join(d, &net, upf);
 
     // -- Feeders: their raceways where they come in through each gear's entry plates (rows
     // across the gear from one corner; what doesn't fit runs past its edge, so a crowded plate
@@ -3049,6 +3362,8 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             t(1000, "kind:conduit".into()),
             t(1000, "part:segment".into()),
         ];
+        let floor = sp.level(&st.level).map_or(0.0, |l| l.elevation_ft * upf);
+        let xdata = with_elevation(xdata, &m, floor, upf, true, None);
         if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             total_stubs += 1;
         }
@@ -3141,14 +3456,28 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
     json!({
         "mepRuns": total_runs, "elbows": total_elbows, "drops": total_drops, "tees": total_tees, "crosses": total_crosses,
         "transitions": total_transitions, "reducers": total_reducers, "fittings": total_fittings, "terminals": total_terminals, "mepEquipment": total_equipment, "feederRaceways": total_stubs,
-        "grounding": total_ground,
+        "grounding": total_ground, "mepConnections": total_joined,
     })
 }
 
 // ---------------- clashes ----------------
 
+/// How far (feet) a point may be from a room's built ceiling and still be under it: the gap a
+/// wall leaves between two rooms' ceilings.
+const WALL_GAP_FT: f64 = 1.0;
+
+/// How far (inches) past a wall's face a piece of wiring or pipe may run and still be at the
+/// wall: a raceway along the face out of its box (under a wall unit, to the next stud bay).
+const WALL_FACE_IN: f64 = 2.0;
+
+/// Heights (feet) a riser's foot or top may miss its floor by and still stand on it or reach it.
+const PASS_EPS_FT: f64 = 1.0 / 96.0;
+
 pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
-    let (sp, _) = current(s, "model.clashes")?;
+    // The runs as the builds lay them: the spec's MEP edits applied (a moved run, an approved
+    // clash fix: Q6381).
+    let (mut sp, _) = current(s, "model.clashes")?;
+    let _ = super::mepedit::apply(&mut sp);
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let tol = p.get("tolerance_in").and_then(Value::as_f64).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(0.0) / 12.0 * upf;
     let d = s.doc()?;
@@ -3159,8 +3488,12 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         run: &'a MepRun,
         piece: Piece,
         w: f64,
-        /// A conduit or cable dropping down a wall to its device: below the ceiling by design.
+        /// A conduit or cable dropping down a wall to its device, or a riser's piece through
+        /// its storey (Q6493): below the ceiling by design.
         drop: bool,
+        /// A riser's piece that runs on through the floor over it into the next storey's piece
+        /// (Q6493): in the floor structure by design (its penetration).
+        through_up: bool,
     }
     let wiring = |sys: &str| {
         sp.mep
@@ -3170,7 +3503,11 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             .is_some_and(|x| matches!(x.kind, cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable))
     };
     let mut items: Vec<Item> = Vec::new();
-    for r in sp.mep.runs.iter().take(MAX_RUNS) {
+    // A riser through several storeys is a piece per storey, each in its own level's scope (Q6493).
+    let given = sp.mep.runs.get(..sp.mep.runs.len().min(MAX_RUNS)).unwrap_or_default();
+    let storeys = super::risercut::all_storey_runs(&sp, given, MAX_RUNS);
+    for (_, st) in &storeys {
+        let r: &MepRun = &st.run;
         let Some(level) = sp.level(&r.level) else { continue };
         let w = r.size_in[0] / 12.0 * upf;
         // Vertical runs (risers): a single-point piece spanning bottom to top.
@@ -3181,51 +3518,122 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
                 // Ending at a device's height above its floor (an outlet, a switch), not on it.
-                let drop = wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft;
-                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop });
+                // A riser drawn a storey at a time (Q6505): standing on its floor (or coming up
+                // through it) and reaching the floor over it (with no floor over it, past its
+                // ceiling: up through the roof) passes through the storey, below the ceiling and
+                // through the floor structure by design.
+                let above = sp
+                    .levels
+                    .iter()
+                    .map(|l| l.elevation_ft)
+                    .filter(|e| e.is_finite() && *e > level.elevation_ft + 1e-6)
+                    .fold(f64::INFINITY, f64::min);
+                // Reaching the floor over it: the next level's floor, or the storey's own floor to
+                // floor where the levels give one (a stack drawn up to the storey's height).
+                let next = if above.is_finite() { above - level.elevation_ft } else { level.ceiling_ft };
+                let own = Some(level.height_ft).filter(|h| h.is_finite() && *h > 0.0);
+                let reach = own.map_or(next, |h| if next.is_finite() { next.min(h) } else { h });
+                let passes = bot <= PASS_EPS_FT && top.is_finite() && reach.is_finite() && top >= reach - PASS_EPS_FT;
+                // Wiring standing below the ceiling goes to or from a device or gear down or up
+                // its wall (or out of the floor into the gear, a stub-up out of the ground):
+                // where it belongs (Q6386).
+                let drop = st.cut.is_some() || passes || (wiring(&r.system) && bot < level.ceiling_ft);
+                let through_up = passes || st.cut.as_ref().is_some_and(|c| c.index + 1 < c.count);
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop, through_up });
             }
             continue;
         }
         let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
-        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false }));
+        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false, through_up: false }));
     }
-    let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
-    // Below the ceiling of the room it passes through (else the level's), into the slab above.
-    let rooms: Vec<(String, f64, Vec<Vec2>)> = d
-        .model
-        .iter()
-        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("ceiling"))
-        .filter_map(|e| {
-            let EntityKind::Mesh(m) = &e.kind else { return None };
-            let z = m.vertices.first()?.z;
-            let poly: Vec<Vec2> = m.vertices.iter().map(|v| v.xy()).collect();
-            Some((super::bspec::made_level(e).unwrap_or_default(), z, hull(&poly)))
-        })
-        .collect();
+    // The built model the pieces are measured against: ceilings, walls and the runs' own built
+    // objects, each on its own level's plan (Q6386).
+    let scope = clashscope::Scope::of(d);
+    // The objects a clash names (Q6386): the run's built pieces beside it (what the model shows
+    // and selects), then the plan objects it was read from.
+    let plan_handles = |r: &MepRun| r.objects.iter().filter(|o| u64::from_str_radix(o, 16).is_ok()).take(5).cloned().collect::<Vec<String>>();
+    let handles = |it: &Item, near: Vec2| {
+        let mut hs: Vec<String> = scope
+            .named(&it.run.system, &it.run.level, it.piece.a, it.piece.b, it.piece.z0, it.piece.z1, it.w, near, upf)
+            .into_iter()
+            .map(|h| h.hex())
+            .collect();
+        for o in plan_handles(it.run) {
+            if !hs.contains(&o) {
+                hs.push(o);
+            }
+        }
+        hs
+    };
+    // A whole run's (a hoistway's, an attached model's clash): its built pieces nearest `near`.
+    let run_handles = |r: &MepRun, near: Vec2| {
+        // At whatever height it runs (under the slab, up a riser): its level and system scope it.
+        let (z0, z1) = (f64::NEG_INFINITY, f64::INFINITY);
+        let pts: Vec<Vec2> = r.points.iter().take(MAX_SEGS).map(|p| Vec2::new(p[0], p[1])).collect();
+        let w = r.size_in[0] / 12.0 * upf;
+        let seg = pts
+            .windows(2)
+            .filter_map(|s| Some((*s.first()?, *s.get(1)?)))
+            .min_by(|x, y| clashscope::point_seg(near, x.0, x.1).total_cmp(&clashscope::point_seg(near, y.0, y.1)));
+        let (a, b) = seg.or_else(|| pts.first().map(|p| (*p, *p))).unwrap_or((near, near));
+        let mut hs: Vec<String> = scope.named(&r.system, &r.level, a, b, z0, z1, w, near, upf).into_iter().map(|h| h.hex()).collect();
+        for o in plan_handles(r) {
+            if !hs.contains(&o) {
+                hs.push(o);
+            }
+        }
+        hs
+    };
+    // The ceiling over a plan point of a level: the smallest built one round it, else the level's.
+    let ceiling_of = |level: &cadaddy_walk3d::Level, p: Vec2| {
+        scope.ceiling_at(&level.name, p, WALL_GAP_FT * upf).unwrap_or((level.elevation_ft + level.ceiling_ft) * upf)
+    };
     for it in &items {
         let Some(level) = sp.level(&it.run.level) else { continue };
         let mid = (it.piece.a + it.piece.b) * 0.5;
-        let ceiling = rooms
-            .iter()
-            .filter(|(l, _, poly)| l.eq_ignore_ascii_case(&level.name) && cadaddy_geom::point_in_polygon(poly, mid))
-            .map(|(_, z, _)| *z)
-            .fold(f64::NAN, f64::min);
-        let ceiling = if ceiling.is_finite() { ceiling } else { (level.elevation_ft + level.ceiling_ft) * upf };
-        if it.piece.z0 < ceiling - tol && !it.drop {
+        // Below the ceiling of the room it passes through (else the level's). A piece under its
+        // own floor (a drain under the slab, a duct in the floor/ceiling space under it) is
+        // measured against the storey under it, if there is one (underground otherwise); a piece
+        // of wiring or pipe inside built walls (or along a wall's face to its box) runs concealed
+        // in them; a roof has no ceiling (Q6386).
+        let floor = level.elevation_ft * upf;
+        let roof = super::wallgen::roof_level(&sp.levels, &level.name);
+        let hung = if it.drop || (roof && it.piece.z0 >= floor - tol) {
+            None
+        } else if it.piece.z0 < floor - tol {
+            storey_under(&sp, level).and_then(|under| {
+                let p = super::risercut::carry(&sp, [mid.x, mid.y], &level.name, &under.name);
+                let ceiling = ceiling_of(under, Vec2::new(p[0], p[1]));
+                (it.piece.z0 < ceiling - tol).then_some((ceiling, Some(under.name.as_str())))
+            })
+        } else {
+            let ceiling = ceiling_of(level, mid);
+            let concealed = it.run.source_sheet == super::conduitroute::IN_WALL
+                || (in_wall_kind(&sp, &it.run.system) && scope.in_walls(&level.name, it.piece.a, it.piece.b, it.w / 2.0 + WALL_FACE_IN / 12.0 * upf));
+            (it.piece.z0 < ceiling - tol && !concealed).then_some((ceiling, None))
+        };
+        if let Some((ceiling, under)) = hung {
+            let by = (ceiling - it.piece.z0) / upf * 12.0;
+            let message = match under {
+                Some(u) => {
+                    format!("{} hangs {} below the ceiling of {u} (under the floor of {})", it.run.system, cadaddy_walk3d::inches(by), it.run.level)
+                }
+                None => format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches(by)),
+            };
             out.push(json!({
-                "kind": "below_ceiling", "systems": [it.run.system], "level": it.run.level,
-                "message": format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches((ceiling - it.piece.z0) / upf * 12.0)),
-                "at": [r6(mid.x), r6(mid.y)], "by_in": r6((ceiling - it.piece.z0) / upf * 12.0), "handles": handles(it.run),
+                "kind": "below_ceiling", "systems": [it.run.system], "level": under.unwrap_or(&it.run.level),
+                "message": message,
+                "at": [r6(mid.x), r6(mid.y)], "by_in": r6(by), "handles": handles(it, mid),
             }));
         }
         let above = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| *e > level.elevation_ft + 1e-6).fold(f64::INFINITY, f64::min);
-        if above.is_finite() {
+        if above.is_finite() && !it.through_up {
             let structure = (above - SLAB_FT) * upf;
             if it.piece.z1 > structure + tol {
                 out.push(json!({
                     "kind": "into_structure", "systems": [it.run.system], "level": it.run.level,
                     "message": format!("{} reaches {} into the floor structure above", it.run.system, cadaddy_walk3d::inches((it.piece.z1 - structure) / upf * 12.0)),
-                    "at": [r6(mid.x), r6(mid.y)], "by_in": r6((it.piece.z1 - structure) / upf * 12.0), "handles": handles(it.run),
+                    "at": [r6(mid.x), r6(mid.y)], "by_in": r6((it.piece.z1 - structure) / upf * 12.0), "handles": handles(it, mid),
                 }));
             }
         }
@@ -3250,24 +3658,30 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     "kind": "crossing", "systems": [a.run.system, b.run.system], "level": a.run.level,
                     "message": format!("{} crosses {} ({} overlap in height)", a.run.system, b.run.system, cadaddy_walk3d::inches(zo / upf * 12.0)),
                     "at": [r6(at.x), r6(at.y)], "by_in": r6(zo / upf * 12.0),
-                    "handles": handles(a.run).into_iter().chain(handles(b.run)).collect::<Vec<_>>(),
+                    "handles": handles(a, at).into_iter().chain(handles(b, at)).collect::<Vec<_>>(),
                 }));
             }
         }
     }
-    // Through a column.
-    let columns: Vec<(Handle, cadaddy_geom::Bounds2, f64, f64)> = d
+    // Through a column (its outline taken back onto its own level's plan, as the runs are).
+    let columns: Vec<(Handle, String, cadaddy_geom::Bounds2, f64, f64)> = d
         .model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("column"))
         .filter_map(|e| {
             let EntityKind::Mesh(m) = &e.kind else { return None };
             let (z0, z1) = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)));
-            Some((e.handle, cadaddy_doc::entity_bounds(d, e, 0), z0, z1))
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            let off = super::bspec::stacked_by(e);
+            let b = cadaddy_geom::Bounds2 { min: b.min - off, max: b.max - off };
+            Some((e.handle, super::bspec::made_level(e).unwrap_or_default(), b, z0, z1))
         })
         .collect();
     for it in &items {
-        for (h, b, z0, z1) in &columns {
+        for (h, clevel, b, z0, z1) in &columns {
+            if !clevel.is_empty() && !clevel.eq_ignore_ascii_case(&it.run.level) {
+                continue;
+            }
             let inside = b.expand(it.w / 2.0 - tol);
             let hits = (0..=20).any(|k| inside.contains(it.piece.a + (it.piece.b - it.piece.a) * (f64::from(k) / 20.0)));
             if hits && it.piece.z0 < *z1 && it.piece.z1 > *z0 {
@@ -3275,7 +3689,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     "kind": "column", "systems": [it.run.system], "level": it.run.level,
                     "message": format!("{} runs through a column", it.run.system),
                     "at": [r6(b.center().x), r6(b.center().y)], "by_in": 0.0,
-                    "handles": handles(it.run).into_iter().chain([h.hex()]).collect::<Vec<_>>(),
+                    "handles": handles(it, b.center()).into_iter().chain([h.hex()]).collect::<Vec<_>>(),
                 }));
             }
         }
@@ -3288,7 +3702,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         out.push(json!({
             "kind": "hoistway", "systems": [r.system], "level": r.level,
             "message": format!("{} runs through the elevator hoistway ({})", r.system, shaft.name),
-            "at": [r6(mid[0]), r6(mid[1])], "by_in": 0.0, "handles": handles(r),
+            "at": [r6(mid[0]), r6(mid[1])], "by_in": 0.0, "handles": run_handles(r, Vec2::new(mid[0], mid[1])),
         }));
     }
     // Into the objects of attached IFC models (architecture, structure from other programs), in
@@ -3316,7 +3730,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                     z0: pc.z0,
                     z1: pc.z1,
                     w,
-                    handles: handles(r),
+                    handles: run_handles(r, (pc.a + pc.b) * 0.5),
                     base,
                 });
             }
@@ -3345,6 +3759,20 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "total": total, "truncated": truncated, "clashes": out, "gone": gone }));
     }
     Ok(json!({ "total": total, "truncated": truncated, "clashes": out }))
+}
+
+/// The storey under `level`: the highest level below its floor (none: it stands on the ground).
+fn storey_under<'a>(sp: &'a BuildingSpec, level: &cadaddy_walk3d::Level) -> Option<&'a cadaddy_walk3d::Level> {
+    sp.levels
+        .iter()
+        .filter(|l| l.sheet.is_none() && l.elevation_ft.is_finite() && l.elevation_ft < level.elevation_ft - 1e-6)
+        .max_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+}
+
+/// A system whose runs may run concealed inside a wall (Q6386): conduit, cable and pipe (a
+/// raceway along the studs, a pipe in a chase wall), not duct.
+fn in_wall_kind(sp: &BuildingSpec, system: &str) -> bool {
+    sp.mep.systems.iter().find(|x| x.name == system).is_some_and(|x| matches!(x.kind, MepKind::Conduit | MepKind::Cable | MepKind::Pipe))
 }
 
 /// The most earlier clashes a re-run matches against (the detector's own cap).
@@ -3518,6 +3946,38 @@ mod outline_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6410: a round pipe or duct segment draws its two rims and its sides, not the fan of
+    /// triangles its flat end caps are made of.
+    #[test]
+    fn a_round_segment_draws_its_rims_not_its_cap_fans() {
+        let mut m = super::super::wallgen::empty_mesh();
+        add_round_segment(&mut m, Vec2::new(10.0, 5.0), Vec2::new(70.0, 25.0), 3.0, 100.0, 106.0);
+        let n = ROUND_SIDES as usize;
+        // Before: every triangle's edges, each cap's n - 3 diagonals with them.
+        let mut before = m.clone();
+        before.faces.iter_mut().for_each(|f| f.hidden = 0);
+        assert_eq!(before.edges().len(), 3 * n + 2 * (n - 3));
+        // Now: the two rims and a line along the side at each corner.
+        assert_eq!(m.edges().len(), 3 * n, "{:?}", m.edges());
+        let mut again = m.clone();
+        again.hide_flat_seams();
+        assert_eq!(again.edges(), m.edges(), "no seam left inside a flat cap");
+        // A round elbow and a round-to-round reducer cap their ends the same way.
+        let mut m = super::super::wallgen::empty_mesh();
+        add_elbow(&mut m, Vec2::new(0.0, 0.0), 6.0, 100.0, 106.0, Vec2::X, Vec2::Y, true);
+        let mut l = super::super::wallgen::empty_mesh();
+        add_loft(&mut l, Vec2::new(0.0, 0.0), Vec2::new(12.0, 0.0), ([8.0, 0.0], 100.0), ([6.0, 0.0], 101.0), 12.0);
+        for (what, m) in [("elbow", m), ("reducer", l)] {
+            assert!(!m.faces.is_empty(), "{what}");
+            let mut before = m.clone();
+            before.faces.iter_mut().for_each(|f| f.hidden = 0);
+            assert_eq!(before.edges().len() - m.edges().len(), 2 * (n - 3), "{what}: each cap's n - 3 diagonals hidden");
+            let mut again = m.clone();
+            again.hide_flat_seams();
+            assert_eq!(again.edges(), m.edges(), "{what}: no seam left inside a flat cap");
+        }
+    }
 
     #[test]
     fn a_label_lettered_on_a_pipe_names_that_pipe_not_the_one_beside_it() {

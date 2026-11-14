@@ -84,10 +84,18 @@ pub enum RfiKind {
     /// Two documents (or a document and the code) disagree: each side is cited in the item's
     /// `sides`, and none is picked silently. Its `topic` says which check found it.
     Conflict,
+    /// A room built with its name and no number where rooms of its name are numbered (its number
+    /// lost on the plan): which number is it?
+    RoomUnnumbered,
+    /// An object the build could not complete from the documents: a requirement of its kind (a
+    /// luminaire's circuit, type and control, a receptacle's circuit, a panel's feeder) that no
+    /// document meets. Its `topic` names the requirement; what the build proposed meanwhile is
+    /// its `assumed`.
+    Requirement,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 25] = [
+    pub const ALL: [RfiKind; 27] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -113,6 +121,8 @@ impl RfiKind {
         RfiKind::Lighting,
         RfiKind::MethodChoice,
         RfiKind::Conflict,
+        RfiKind::RoomUnnumbered,
+        RfiKind::Requirement,
     ];
 
     /// The snake_case name (as in JSON).
@@ -143,6 +153,8 @@ impl RfiKind {
             RfiKind::Lighting => "lighting",
             RfiKind::MethodChoice => "method_choice",
             RfiKind::Conflict => "conflict",
+            RfiKind::RoomUnnumbered => "room_unnumbered",
+            RfiKind::Requirement => "requirement",
         }
     }
 
@@ -178,6 +190,8 @@ impl RfiKind {
             RfiKind::Lighting => "Lighting documents disagree (plans, fixture schedule, submittal)",
             RfiKind::MethodChoice => "A wiring method the code allows and the spec doesn't list (value engineering)",
             RfiKind::Conflict => "Documents disagree (each side cited)",
+            RfiKind::RoomUnnumbered => "Room with a name and no number",
+            RfiKind::Requirement => "Object the documents leave incomplete (a requirement of its kind unmet)",
         }
     }
 
@@ -315,6 +329,10 @@ pub struct Rfi {
     /// A sketch sent with it (a file beside the drawing: a marked-up plan crop).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sketch: Option<String>,
+    /// The build step it must be answered before (`underground`, `rough_in`, `trim`), when the
+    /// check that raised it says (empty: the list reads it from its kind and topic).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub before: String,
 }
 
 /// Elements an item lists at most.

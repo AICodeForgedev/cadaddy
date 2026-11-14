@@ -341,8 +341,17 @@ pub(crate) fn draft_rfis(
             .collect();
         let sv = &v["saves"];
         let savings = if sv.is_object() {
+            let partial = if sv["complete"].as_bool() == Some(false) {
+                format!(
+                    "; {}: {}",
+                    sv["basis"].as_str().unwrap_or_default(),
+                    v["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).take(8).collect::<Vec<_>>().join(", ")).unwrap_or_default()
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "saves ${:.0} (material ${:.0}, labor ${:.0}) and {:.0} man-hours ({:.1} crew-days at a crew of {} × {} h); {}{}",
+                "saves ${:.0} (material ${:.0}, labor ${:.0}) and {:.0} man-hours ({:.1} crew-days at a crew of {} × {} h); {}{}{partial}",
                 sv["cost"].as_f64().unwrap_or(0.0),
                 sv["material"].as_f64().unwrap_or(0.0),
                 sv["labor_dollars"].as_f64().unwrap_or(0.0),
@@ -430,6 +439,7 @@ pub(crate) fn draft_rfis(
             sides: Vec::new(),
             elements: Vec::new(),
             sketch: sketch_path.clone(),
+            before: String::new(),
         };
         sp.rfis.retain(|x| x.id != id);
         if sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {

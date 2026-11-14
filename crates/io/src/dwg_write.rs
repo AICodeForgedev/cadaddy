@@ -150,6 +150,8 @@ pub struct WriteReport {
 pub fn write(d: &Drawing, version_code: &str) -> Result<(Vec<u8>, WriteReport)> {
     let (v, dv) = version(version_code).ok_or_else(|| IoError::Format(format!("DWG: writing {version_code} files is not supported")))?;
     let mut tags = crate::dxf_write::dwg_tags(d, dv);
+    // Text as a DWG holds it: characters, not DXF's caret codes.
+    crate::dxf_read::mtext_dxf::dwg_text(&mut tags, true);
     // Records not encoded are kept in XRECORDs of a CADADDY_KEEP dictionary (`dwg_keep`, as the
     // DWG bridge keeps what it can't write), which reading puts back.
     let (_, written) = assemble(v, &sections(&tags), false)?;

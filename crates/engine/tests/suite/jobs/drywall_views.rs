@@ -25,7 +25,7 @@ fn text(s: &mut Session, at: [f64; 2], value: &str, height: f64) {
 /// A made-up building with wall types and a build.
 /// P1 partition: centreline at x=240, mesh spans the full building depth (24 ft = 288").
 /// Height = 12.75 ft = 153". Face area per side: 24 × 12.75 = 306.0 sq ft.
-fn building() -> Session {
+pub(crate) fn building() -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
     let t = 7.25;

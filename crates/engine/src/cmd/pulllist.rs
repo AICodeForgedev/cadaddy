@@ -1846,7 +1846,8 @@ fn run_cutlist(s: &mut Session, p: &Value) -> Result<Value> {
         *theirs.entry(key).or_insert(0.0) += l["qty"].as_f64().unwrap_or(0.0);
     }
     let mut index: BTreeMap<(String, String, String, String), f64> = BTreeMap::new();
-    let stored = super::mepatoms::stored(s.doc()?);
+    // The model's index, else its elements recounted (a file that came without the index, Q6376).
+    let stored = super::mepatoms::kept_or_recount(s.doc()?);
     if let Some(ix) = &stored {
         for (k, t) in ix.rows.iter().filter(|(k, _)| CUT_KINDS.contains(&k.kind.as_str()) && k.trade.is_empty()) {
             if level_ok(p, &k.level) && circuit_ok(p, &k.circuit) {
@@ -1857,7 +1858,7 @@ fn run_cutlist(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let r_conduit = compare(&mine, &theirs, &lines_of);
     let r_index =
-        if stored.is_some() { compare(&mine, &index, &BTreeMap::new()) } else { json!({"matches": false, "why": "the model keeps no count index"}) };
+        if stored.is_some() { compare(&mine, &index, &BTreeMap::new()) } else { json!({"matches": false, "why": "the model counts no pieces"}) };
     let by_size: Vec<Value> = mine
         .iter()
         .map(|((level, kind, item, size), q)| {

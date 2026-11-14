@@ -20,9 +20,11 @@ mod ground;
 pub mod levels;
 mod math;
 mod measure;
+pub mod mepties;
 mod openings;
 pub mod package;
 mod pick;
+pub mod pipeservice;
 pub mod rfi;
 mod rules;
 mod sbox;
@@ -35,6 +37,7 @@ pub mod validate;
 pub mod validate_kinds;
 pub mod video;
 mod walker;
+pub mod walledits;
 
 pub use derive::{DeviceInfo, LevelInfo, Owner, Part, Room, Scene, Seg, Vertex, derive, derive_set, level_bases, rooms};
 pub use doors::DoorLeaf;
@@ -48,15 +51,17 @@ pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules
 // A room of the building spec (`derive::Room` is a room found in the plan).
 pub use concrete::{Concrete, ConcreteElement, Depression, Embed, MAX_CONCRETE, PadDecision, Pour, Rebar, Signoff};
 pub use spec::{
-    ArcFlash, Assembly, AssemblyLayer, Band, BandKind, Bond, BuildingSpec, Buildings, Busbar, CeilingArea, CeilingGrid, CeilingItem, CeilingKind,
-    CeilingType, Circulation, CirculationKind, Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment, EquipmentElectrical,
-    Exterior, ExtraCircuit, Facade, Family, FamilyKind, Feeder, FixtureType, GridColumn, GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack,
-    HeightRule, Hoistway, Issue, ItemKind, LayerRole, LayerSide, LevelParapet, LoadSummary, LoadSummaryLine, MAX_ASSEMBLY_LAYERS, Made, MarkStatus,
-    Mep, MepEquipment, MepInvert, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, MountNote, OpeningTag, PanelCircuit, PanelSchedule, PartPath,
-    Pick, PointOfEntry, Rcp, Role, Roof, RoofDrain, RoofFraming, RoofSlope, Room as SpecRoom, RunCorrection, SPEC_VERSION, Schedule, ScheduleRow,
-    Service, Side, Site, SiteBuilding, Soffit, SoffitType, Stair, Surfaces, Termination, UferNote, ValueStatus, WallFrom, WallMark, WallType, feet,
-    inches, level_at, merge, pipe_system_default_color, pitch_text,
+    AirDeviceType, ArcFlash, Assembly, AssemblyLayer, Band, BandKind, Bond, BuildingSpec, Buildings, Busbar, CeilingArea, CeilingGrid, CeilingItem,
+    CeilingKind, CeilingType, Circulation, CirculationKind, Cricket, Described, DuctType, ElecDevice, Electrode, ElevatorData, Enclosure, Equipment,
+    EquipmentElectrical, Exterior, ExtraCircuit, Facade, Family, FamilyKind, Feeder, FixtureType, FloorNote, GridColumn, GroundRequirement,
+    Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Hoistway, Issue, ItemKind, LayerRole, LayerSide, LevelParapet, LoadSummary,
+    LoadSummaryLine, MAX_ASSEMBLY_LAYERS, Made, MarkStatus, Mep, MepEdit, MepEquipment, MepInvert, MepKind, MepRevision, MepRun, MepSystem,
+    MepTerminal, MountNote, OpeningTag, PanelCircuit, PanelSchedule, PartPath, Pick, PointOfEntry, Rcp, Role, Roof, RoofDrain, RoofFraming,
+    RoofSlope, Room as SpecRoom, RunCorrection, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site, SiteBuilding, Soffit, SoffitType, Stair,
+    Surfaces, Termination, UferNote, ValueStatus, WallFrom, WallMark, WallType, WireLengthBand, WireLengthTable, feet, inches, level_at, merge,
+    pipe_system_default_color, pitch_text,
 };
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
 pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};
 pub use walker::Walker;
+pub use walledits::WallEdit;

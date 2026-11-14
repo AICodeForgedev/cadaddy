@@ -10,6 +10,8 @@
 mod helper;
 
 mod automation_takeoff;
+mod bom_device_edits;
+mod bom_user_types;
 mod count_table_scale;
 mod data_extraction;
 mod estimate_hotel;
@@ -22,5 +24,6 @@ mod pubcost;
 mod pulllist;
 mod schedules3d;
 mod takeoff_device_lines;
+mod takeoff_mep_handles;
 mod valueeng;
 mod xlsx_link;

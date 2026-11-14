@@ -361,8 +361,16 @@ fn elements_by_type(d: &Drawing, built: &HashMap<u64, Vec<Made>>) -> HashMap<Str
 
 /// A kind named by a legend or schedule row that no known kind fits: `legend:` and the row's
 /// description, lower case, its words only (`legend:night light 120v`). `None`: a row that says
-/// nothing in words.
+/// nothing in words: no word of two letters or more that is more letters than digits (room or
+/// detail numbers read off a legend's title, `101 D 101 3`, are no meaning, Q6361).
 pub(crate) fn legend_kind(description: &str) -> Option<String> {
+    let says = description.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        let letters = w.chars().filter(|c| c.is_alphabetic()).count();
+        letters >= 2 && letters > w.chars().filter(char::is_ascii_digit).count()
+    });
+    if !says {
+        return None;
+    }
     let clean: String = description.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '/' { c.to_ascii_lowercase() } else { ' ' }).collect();
     let mut out = String::new();
     for w in clean.split_whitespace().map(|w| w.trim_matches(|c| c == '-' || c == '/')).filter(|w| !w.is_empty()) {
@@ -394,6 +402,9 @@ struct Sheet<'a> {
     all_rooms: &'a BTreeSet<String>,
     /// The cells of its tables (a page read at the end: its schedules), by their left side.
     cells: Cells,
+    /// A civil, landscape or site sheet whose own legends list no device (Q6596): its marks are
+    /// its lines' labels and its plants' keys.
+    site_marks: bool,
 }
 
 /// Table cells `[x0, y0, x1, y1]` sorted by their left side, and the widest one's width.
@@ -499,7 +510,8 @@ fn lettering(
     let p = Vec2::new(at[0], at[1]);
     // The import's guesses at stroked lettering that read like no word (a tick, a corner or a
     // hatch's strokes misread as letters).
-    let ocr = style.eq_ignore_ascii_case(OCR_TEXT_STYLE);
+    // (an unsure reading's style starts with the OCR's: `PDF-SHX-OCR-UNSURE`)
+    let ocr = style.to_ascii_uppercase().starts_with(OCR_TEXT_STYLE);
     if layer.eq_ignore_ascii_case(OCR_REVIEW_LAYER) || (ocr && !legible(value)) {
         return ("text", Some("an OCR reading of strokes that reads as no word".into()));
     }
@@ -611,6 +623,9 @@ fn lettering(
         return ("text", Some("lettering of no size".into()));
     }
     if sheet_facts::is_type_tag(t) {
+        if sheet.site_marks {
+            return ("text", Some(super::guided::SITE_MARK_WHY.into()));
+        }
         return ("tag", None);
     }
     if t.len() >= 5 && t.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -720,6 +735,7 @@ pub(crate) fn take(
         .enumerate()
         .map(|(g, sp)| {
             let base = sp.sheet.split('/').next().unwrap_or(&sp.sheet).trim().to_string();
+            let legend = texts.get(g).map(|t| device_types::read_legend(t)).unwrap_or_default();
             let regions: Vec<&SheetRegion> =
                 job.sheet_regions.iter().filter(|r| r.number.eq_ignore_ascii_case(&base) || r.number.eq_ignore_ascii_case(&sp.sheet)).collect();
             let levels: BTreeSet<String> = regions.iter().flat_map(|r| r.all_levels()).collect();
@@ -735,7 +751,8 @@ pub(crate) fn take(
                 trade: trade.to_ascii_uppercase(),
                 regions,
                 page: pages.get(&sp.sheet),
-                legend: texts.get(g).map(|t| device_types::read_legend(t)).unwrap_or_default(),
+                site_marks: super::guided::site_sheet(job, &sp.sheet) && !super::guided::device_legend(&legend),
+                legend,
                 rooms,
                 all_rooms: &all_rooms,
                 cells: Cells::default(),
@@ -803,7 +820,8 @@ pub(crate) fn take(
             Some(Ok(page)) => {
                 let discipline = text("discipline");
                 let trade = if discipline.is_empty() { sheet_facts::discipline_of(&number) } else { discipline };
-                entry.marks = page_marks(&mut inv, &end, &page, &number, &trade.to_ascii_uppercase(), &all_rooms);
+                let site = super::guided::site_trade(&trade, &text("title"));
+                entry.marks = page_marks(&mut inv, &end, &page, (&number, &trade.to_ascii_uppercase(), site), &all_rooms);
                 entry.read = true;
             }
             Some(Err(why)) => entry.why = cut(&why, MAX_WHY),
@@ -823,19 +841,23 @@ const MAX_SOURCE: usize = 160;
 const MAX_PAGE_TEXTS: usize = 200_000;
 
 /// The marks of a page read at the end (a sheet the job didn't load): its marks, by the same
-/// rules, in its page's own coordinates. How many.
-fn page_marks(inv: &mut Inventory, cx: &Ctx, page: &Drawing, number: &str, trade: &str, all_rooms: &BTreeSet<String>) -> usize {
+/// rules, in its page's own coordinates. How many. `sheet` is its number, its trade and whether
+/// it is a civil, landscape or site sheet.
+fn page_marks(inv: &mut Inventory, cx: &Ctx, page: &Drawing, sheet: (&str, &str, bool), all_rooms: &BTreeSet<String>) -> usize {
+    let (number, trade, site) = sheet;
     let mut texts = sheet_facts::texts(page);
     texts.truncate(MAX_PAGE_TEXTS);
     // Its border and title block, from its own frame lines.
     let region = super::guided::page_region(page, number, trade);
+    let legend = device_types::read_legend(&texts);
     let sheet = Sheet {
         name: number.to_string(),
         base: number.to_string(),
         trade: trade.to_string(),
         regions: region.iter().collect(),
         page: None,
-        legend: device_types::read_legend(&texts),
+        site_marks: site && !super::guided::device_legend(&legend),
+        legend,
         rooms: Vec::new(),
         all_rooms,
         cells: Cells::new(cadaddy_mepfix::equip_reader::table_cells(page)),
@@ -1024,6 +1046,10 @@ fn sheet_marks(inv: &mut Inventory, cx: &Ctx, d: &Drawing, sheet: &Sheet, member
                     if m.what == "legend_row" {
                         legend_row(&mut m, cx, sheet);
                     }
+                }
+                "symbol" if sheet.site_marks => {
+                    m.status = NOT_OBJECT.into();
+                    m.reason = super::guided::SITE_MARK_WHY.into();
                 }
                 "symbol" => {
                     m.status = UNEXPLAINED.into();
@@ -1274,6 +1300,10 @@ mod tests {
         assert_eq!(legend_kind("NIGHT LIGHT - 120V").as_deref(), Some("legend:night light 120v"));
         assert_eq!(legend_kind("  Recessed  'Glow' marker, (typ.)").as_deref(), Some("legend:recessed glow marker typ"));
         assert_eq!(legend_kind("-- 12 / 4 --"), None);
+        // Q6361: room and detail numbers off a legend's title are no meaning.
+        assert_eq!(legend_kind("101 d 101 3"), None);
+        assert_eq!(legend_kind("2A 14 B"), None);
+        assert_eq!(legend_kind("EF-1 EXHAUST FAN").as_deref(), Some("legend:ef-1 exhaust fan"));
         assert_eq!(legend_kind(""), None);
         let long = legend_kind(&"WORD ".repeat(40)).unwrap_or_default();
         assert!(long.len() <= "legend:".len() + MAX_LEGEND_KIND && long.ends_with("word"), "{long}");

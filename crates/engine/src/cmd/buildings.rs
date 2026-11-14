@@ -607,6 +607,7 @@ pub fn per_building(sp: &BuildingSpec) -> Option<BuildingSpec> {
             }
             let mut c = r.clone();
             c.points = c.points.iter().map(|p| [p[0] + d[0] * upf, p[1] + d[1] * upf]).collect();
+            c.storey_points.values_mut().for_each(|p| *p = [p[0] + d[0] * upf, p[1] + d[1] * upf]);
             c.id = format!("{}@{b}", c.id);
             out.mep.runs.push(c);
         }

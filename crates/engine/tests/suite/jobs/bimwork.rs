@@ -25,7 +25,8 @@ fn run(system: &str, level: &str, a: [f64; 2], b: [f64; 2], size: [f64; 2], bott
 ///   10'-0" to 10'-8") at its height: plumbing × mechanical = 2;
 /// - the conduit at x = 200" crosses D1: electrical × mechanical = 1 (the conduit at x = 400"
 ///   is past D1's end: no clash);
-/// - supply duct D2 runs out through the west wall: mechanical × architecture = 1.
+/// - supply duct D2 runs out through the west wall: a penetration (Q6621: listed with its sleeve
+///   and seal, a clash only with `hosted: true`).
 fn runs() -> Vec<Value> {
     vec![
         run("M-SUPPLY", "Level 1", [24.0, 60.0], [264.0, 60.0], [12.0, 8.0], 10.0),
@@ -92,16 +93,25 @@ fn planted_clashes_are_found_grouped_with_viewpoints_and_statuses() {
     assert_eq!(em["total"], 1, "{em}");
     assert_eq!(em["clashes"][0]["a"]["category"], "conduit");
     let ma = clash(&mut s, "mechanical", "architecture");
-    assert_eq!(ma["total"], 1, "only D2 runs through a wall: {ma}");
-    assert_eq!((ma["clashes"][0]["b"]["category"].as_str(), ma["clashes"][0]["kind"].as_str()), (Some("wall"), Some("hard")));
+    assert_eq!(ma["total"], 0, "a duct through a wall is a penetration, not a clash: {ma}");
+    let pens = ma["penetrations"].as_array().cloned().unwrap_or_default();
+    assert_eq!(pens.len(), 1, "only D2 runs through a wall: {ma}");
+    assert_eq!((pens[0]["b"]["category"].as_str(), pens[0]["kind"].as_str()), (Some("wall"), Some("through")), "{ma}");
+    assert_eq!(pens[0]["firestop"], json!(false), "the wall has no rated type: {ma}");
+    assert!(pens[0]["sleeve"].as_str().unwrap_or_default().contains("framed opening"), "{ma}");
+    let hosted = s.execute("bim.clash", &json!({"a": "mechanical", "b": "architecture", "hosted": true})).unwrap();
+    assert_eq!(hosted["total"], 1, "{hosted}");
+    assert_eq!((hosted["clashes"][0]["b"]["category"].as_str(), hosted["clashes"][0]["kind"].as_str()), (Some("wall"), Some("hard")));
     assert_eq!(clash(&mut s, "electrical", "architecture")["total"], 0, "the conduits stay inside the room");
     // A category and a system pick the same as the trade; `b` left out means everything else.
     assert_eq!(s.execute("bim.clash", &json!({"a": "conduit", "b": ["duct"]})).unwrap()["total"], 1);
     assert_eq!(s.execute("bim.clash", &json!({"a": "E-COND", "b": "M-*"})).unwrap()["total"], 1);
     assert_eq!(s.execute("bim.clash", &json!({"a": "plumbing"})).unwrap()["total"], 2);
-    // Nothing named: every trade against the others (2 + 1 + 1, never two parts of one trade).
+    // Nothing named: every trade against the others (2 + 1, never two parts of one trade; D2
+    // through the wall is a penetration).
     let all = s.execute("bim.clash", &json!({})).unwrap();
-    assert_eq!(all["total"], 4, "{}", all["groups"]);
+    assert_eq!(all["total"], 3, "{}", all["groups"]);
+    assert_eq!(all["normal"]["penetrations"], 1, "{}", all["normal"]);
     assert!(s.execute("bim.clash", &json!({"a": 7})).unwrap_err().to_string().contains("`a` is a trade"));
     // Every clash has a spot, a depth and a viewpoint looking at it.
     for c in pm["clashes"].as_array().unwrap() {
@@ -175,7 +185,7 @@ fn a_fix_moves_the_lower_priority_trade_on_approval_and_checks_again() {
     assert!(e.contains("no offset within 24\"") && e.contains("rerouting by hand") && !e.contains("sleeve"), "{e}");
     // A duct through a wall: no move of 2' or less clears a full-height wall it crosses at
     // right angles; the error says what it needs.
-    let ma = clash(&mut s, "mechanical", "architecture");
+    let ma = s.execute("bim.clash", &json!({"a": "mechanical", "b": "architecture", "hosted": true})).unwrap();
     let wall = ids(&ma)[0].clone();
     let e = s.execute("bim.clash.fix", &json!({"id": wall, "strategy": "raise"})).unwrap_err().to_string();
     assert!(e.contains("rerouting by hand") || e.contains("sleeve"), "{e}");
@@ -320,7 +330,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     // priced lines (duct, pipe, conduit) must match the hand calculation; the total
     // includes additional items priced from the starter book.
     let user_lines = e["lines"].as_array().unwrap();
-    let is_starter = |l: &Value| l["via"].as_str().is_some_and(|v| v.contains("starter cost book"));
+    // Q6526: a line the table doesn't price still carries the labor book's hours (unpriced).
+    let is_starter = |l: &Value| l["via"].as_str().is_some_and(|v| v.contains("starter cost book")) || l["matched_by"] == json!("unpriced");
     let user_mat: f64 = user_lines.iter().filter(|l| !is_starter(l)).map(|l| l["material"].as_f64().unwrap_or(0.0)).sum();
     let user_hrs: f64 = user_lines.iter().filter(|l| !is_starter(l)).map(|l| l["labor_hrs"].as_f64().unwrap_or(0.0)).sum();
     assert!((user_mat - material).abs() < 0.01, "user-table material: {user_mat} vs {material}");
@@ -330,7 +341,8 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert_eq!((d["waste_pct"].as_f64(), d["matched_by"].as_str()), (Some(10.0), Some("family")));
     // Q6012: items previously unmatched may now be priced from the starter book.
     // Items with no cost-table row AND no starter-book match are still unmatched.
-    let starter_priced: Vec<&str> = user_lines.iter().filter(|l| is_starter(l)).filter_map(|l| l["item"].as_str()).collect();
+    let starter_priced: Vec<&str> =
+        user_lines.iter().filter(|l| l["via"].as_str().is_some_and(|v| v.contains("starter cost book"))).filter_map(|l| l["item"].as_str()).collect();
     let has_starter_pricing = !starter_priced.is_empty();
     assert!(has_starter_pricing, "starter cost book should price some items");
     assert_eq!(e["unused_rows"], json!(["Fire damper"]));
@@ -363,7 +375,7 @@ fn estimate_prices_the_takeoff_and_gives_a_change_order() {
     assert!(s.execute("bim.estimate", &json!({"rows": [{"item": "X"}], "compare_to": "nope"})).is_err());
     // Q5294 MUST 2: warnings for missing inputs (the default rate is reported).
     assert!(inline["warnings"].as_array().unwrap().iter().any(|w| w["kind"] == "default_labor_rate"), "{}", inline["warnings"]);
-    // bim.estimate stores its cost table in the estimate state: estimate.status sees it.
+    // estimate.status prices the model's BOM lines after bim.estimate runs.
     let st = s.execute("estimate.status", &json!({})).unwrap();
     assert!(st["summary"]["lines"].as_u64().unwrap() > 0, "estimate.status sees BOM lines after bim.estimate: {st}");
 }
@@ -380,10 +392,13 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     let table = tmp("same-costs.csv");
     std::fs::write(&table, "item,unit,material,labor_hrs\nEMT conduit,ft,1.10,0.05\nRectangular duct,ft,12.50,0.20\nCopper pipe,ft,8.00,0.15\n")
         .unwrap();
-    // Route 1: bim.estimate (stores in estimate state).
-    let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90})).unwrap();
-    // Route 2: estimate.status (prices were stored by bim.estimate; scope all as in_contract).
-    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
+    // Route 1: bim.estimate, keeping its cost table and rate as the estimate's (Q6530: only
+    // with keep: true; a call's own inputs otherwise price that call only).
+    let bim = s.execute("bim.estimate", &json!({"cost_table": table.display().to_string(), "labor_rate": 90, "keep": true})).unwrap();
+    assert_eq!(bim["kept"]["crew_rate"], json!({"before": null, "after": 90.0}), "{}", bim["kept"]);
+    // Route 2: estimate.status (prices kept by bim.estimate; scope all as in_contract).
+    // The trades' pieces are lines of their own trades (Q6527): every trade the model has.
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job", "framing", "insulation", "finishes", "concrete", "openings"] {
         let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
     }
     let est = s.execute("estimate.status", &json!({})).unwrap();
@@ -404,6 +419,17 @@ fn bim_estimate_and_estimate_status_give_the_same_totals() {
     let est_user_labor: f64 =
         est_lines.iter().filter(|l| l["via"].as_str().is_none_or(|v| !is_starter(v))).map(|l| l["labor_cost"].as_f64().unwrap_or(0.0)).sum();
     let close = |a: f64, b: f64| (a - b).abs() < 0.02;
+    // Q6379: one price per line: every line both routes price has the same unit price, the
+    // starter book's lines too.
+    let mut both = 0;
+    for l in bim_lines {
+        let same = |x: &&Value| x["item"] == l["item"] && x["size"] == l["size"] && x["unit"] == l["unit"];
+        if let Some(e) = est_lines.iter().find(same) {
+            both += 1;
+            assert_eq!(e["material_unit"].as_f64(), l["material_unit"].as_f64(), "{}: estimate.query {e} vs bim.estimate {l}", l["item"]);
+        }
+    }
+    assert!(both > 3, "lines on both routes: {both}");
     assert!(close(bim_user_mat, est_user_mat), "user-table material: bim {bim_user_mat} vs est {est_user_mat}");
     assert!(close(bim_user_labor, est_user_labor), "user-table labor: bim {bim_user_labor} vs est {est_user_labor}");
     // Both routes must also price additional lines from the starter cost book.
@@ -619,4 +645,75 @@ fn hostile_params_never_panic() {
     let mut empty = Session::new();
     let e = empty.execute("bim.clash", &json!({"a": "electrical"})).unwrap_err().to_string();
     assert!(e.contains("build"), "{e}");
+}
+
+/// Q6530: a call's own labor rate prices that call only. The project's crew rate
+/// (estimate.settings) changes only through estimate.settings, or through `keep: true`,
+/// which says in its result what it changed, before and after.
+#[test]
+fn a_calls_labor_rate_never_replaces_the_projects_crew_rate() {
+    let mut s = building();
+    for trade in ["electrical", "mechanical", "plumbing", "general", "drywall", "job"] {
+        let _ = s.execute("estimate.set_scope", &json!({"trade": trade, "scope": "in_contract", "reason": "all ours"}));
+    }
+    s.execute("estimate.settings", &json!({"crew_rate": 50})).unwrap();
+    let crew = |s: &mut Session| s.execute("estimate.settings", &json!({})).unwrap()["settings"]["crew_rate"].as_f64();
+    let status = |s: &mut Session| s.execute("estimate.status", &json!({})).unwrap()["totals"].clone();
+    s.execute("wholejob.settings", &json!({"electrical_from_estimate": true})).unwrap();
+    let whole = |s: &mut Session| s.execute("wholejob.estimate", &json!({})).unwrap()["total"].as_f64();
+    let (before, whole_before) = (status(&mut s), whole(&mut s));
+    assert!(before["labor_hours"].as_f64().unwrap() > 0.0 && before["labor"].as_f64().unwrap() > 0.0, "{before}");
+    let prices_before = s.execute("estimate.status", &json!({})).unwrap()["summary"].clone();
+
+    // Hours only, labor at $0 for this call: the project's rate stays 50.
+    let e = s.execute("bim.estimate", &json!({"labor_rate": 0})).unwrap();
+    assert_eq!(crew(&mut s), Some(50.0), "bim.estimate's labor_rate replaced the project's crew rate");
+    assert_eq!(status(&mut s), before, "estimate.status changed after bim.estimate");
+    assert_eq!(whole(&mut s), whole_before, "wholejob.estimate changed after bim.estimate");
+    assert_eq!(e["labor_rate"], 0.0);
+    assert_eq!(e["labor_rate_from"], "entered");
+    assert!(e["labor_hours"].as_f64().unwrap() > 0.0 && e["labor_total"] == 0.0, "{e}");
+    assert!(e.get("kept").is_none(), "nothing kept without keep: {e}");
+    // A cost table priced in one call is not left behind as the estimate's prices.
+    let rows = json!([{"item": "EMT conduit", "unit": "ft", "material": 99.0, "labor_hrs": 3.0}]);
+    s.execute("bim.estimate", &json!({"rows": rows, "labor_rate": 120})).unwrap();
+    assert_eq!(crew(&mut s), Some(50.0));
+    assert_eq!(status(&mut s), before, "a call's cost table changed estimate.status");
+    assert_eq!(s.execute("estimate.status", &json!({})).unwrap()["summary"], prices_before);
+
+    // With no rate given, the call prices labor at the project's crew rate, not a default.
+    let d = s.execute("bim.estimate", &json!({})).unwrap();
+    assert_eq!(d["labor_rate"], 50.0, "{d}");
+    assert!(d["labor_rate_from"].as_str().unwrap().contains("estimate.settings"), "{d}");
+    assert!(!d["warnings"].as_array().unwrap().iter().any(|w| w["kind"] == "default_labor_rate"), "{}", d["warnings"]);
+
+    // keep: true changes the project's rate and prices, and says so, before and after.
+    let k = s.execute("bim.estimate", &json!({"rows": rows, "labor_rate": 60, "keep": true})).unwrap();
+    assert_eq!(k["kept"]["crew_rate"], json!({"before": 50.0, "after": 60.0}), "{}", k["kept"]);
+    assert_eq!(k["kept"]["prices"]["after"], 1, "{}", k["kept"]);
+    assert_eq!(crew(&mut s), Some(60.0));
+    assert_ne!(status(&mut s), before, "keep: the estimate uses the kept rate and prices");
+    // keep with nothing new to keep (no rate, no table) changes nothing and keeps the prices.
+    let n = s.execute("bim.estimate", &json!({"keep": true})).unwrap();
+    assert_eq!(n["kept"], json!({}), "{n}");
+    assert_eq!(crew(&mut s), Some(60.0));
+    let st = s.execute("estimate.status", &json!({})).unwrap();
+    assert!(st["summary"]["lines"].as_u64().unwrap() > 0, "{st}");
+
+    // bim.bid's kept inputs are its own and its result names what it kept; the crew rate stays.
+    s.execute("estimate.settings", &json!({"crew_rate": 50})).unwrap();
+    {
+        let b = s.execute("bim.bid", &json!({"labor_rate": 0})).unwrap();
+        assert_eq!(b["kept"]["labor_rate"], json!({"before": null, "after": 0}), "{}", b["kept"]);
+        assert_eq!(crew(&mut s), Some(50.0));
+        let b = s.execute("bim.bid", &json!({"labor_rate": 65})).unwrap();
+        assert_eq!(b["kept"]["labor_rate"], json!({"before": 0, "after": 65}), "{}", b["kept"]);
+        let again = s.execute("bim.bid", &json!({})).unwrap();
+        assert_eq!(again["base_bid"]["labor_rate"], 65.0, "the bid's kept rate, named as such");
+        assert_eq!(again["kept"], json!({}), "nothing new kept: {}", again["kept"]);
+        let said = again["assumptions"].to_string();
+        assert!(said.contains("kept from an earlier bim.bid"), "a kept rate says where it came from: {said}");
+        s.execute("bim.bid", &json!({"labor_rate": 0, "keep": false})).unwrap();
+        assert_eq!(crew(&mut s), Some(50.0));
+    }
 }

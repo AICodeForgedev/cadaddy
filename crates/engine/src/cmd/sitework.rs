@@ -73,6 +73,10 @@ pub(crate) struct Register {
     pub area_ratio_max: f64,
     pub scale_tolerance: f64,
     pub on_wall_ft: f64,
+    /// The share of the outline's corners that must land on the model's walls (within
+    /// `on_wall_ft`) for the sheet to count as laid on the building by it: the measured
+    /// agreement, never the size the scale was solved to match.
+    pub on_wall_min: f64,
     pub source: String,
 }
 
@@ -300,47 +304,54 @@ pub(crate) struct SiteRead {
     pub equipment: Vec<Equip>,
     pub notes: Vec<Note>,
     pub segs: Vec<Seg>,
+    /// The closed shapes' edges (a building drawn as closed pieces is linework too), layer
+    /// unknown.
+    pub edges: Vec<Seg>,
     pub layers: Vec<String>,
     /// Labels naming equipment with no symbol by them.
     pub unplaced_labels: Vec<String>,
     /// The view area read (`[x0, y0, x1, y1]`).
     pub area: [f64; 4],
+    /// The sheet's drawing units per foot its real-world limits were measured in, and how they
+    /// were found (Q6443).
+    pub upf: f64,
+    pub feet: String,
 }
 
-fn bbox_of(pts: &[[f64; 2]]) -> [f64; 4] {
+pub(crate) fn bbox_of(pts: &[[f64; 2]]) -> [f64; 4] {
     pts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
         [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
     })
 }
 
-fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
 }
 
-fn centre(b: &[f64; 4]) -> [f64; 2] {
+pub(crate) fn centre(b: &[f64; 4]) -> [f64; 2] {
     [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]
 }
 
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
 /// How far `p` is from the box (0 inside).
-fn gap(b: &[f64; 4], p: [f64; 2]) -> f64 {
+pub(crate) fn gap(b: &[f64; 4], p: [f64; 2]) -> f64 {
     let dx = (b[0] - p[0]).max(p[0] - b[2]).max(0.0);
     let dy = (b[1] - p[1]).max(p[1] - b[3]).max(0.0);
     dx.hypot(dy)
 }
 
 /// How far apart two boxes are (0 when they touch).
-fn box_gap(a: &[f64; 4], b: &[f64; 4]) -> f64 {
+pub(crate) fn box_gap(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     let dx = (a[0] - b[2]).max(b[0] - a[2]).max(0.0);
     let dy = (a[1] - b[3]).max(b[1] - a[3]).max(0.0);
     dx.hypot(dy)
 }
 
 /// A text's box, turned with it (its length by its characters).
-fn text_box(t: &TextItem) -> [f64; 4] {
+pub(crate) fn text_box(t: &TextItem) -> [f64; 4] {
     let n = t.value.trim().chars().count().max(1) as f64;
     let (h, len) = (t.height.max(0.0), n * 0.8 * t.height.max(0.0));
     let (c, s) = (t.rotation.cos(), t.rotation.sin());
@@ -348,7 +359,7 @@ fn text_box(t: &TextItem) -> [f64; 4] {
     bbox_of(&[p, [p[0] + c * len, p[1] + s * len], [p[0] - s * h, p[1] + c * h], [p[0] + c * len - s * h, p[1] + s * len + c * h]])
 }
 
-fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
     if l2 <= 1e-18 {
@@ -359,7 +370,7 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// The point on a closed polygon's edge nearest `p`.
-fn nearest_on(poly: &[[f64; 2]], p: [f64; 2]) -> Option<[f64; 2]> {
+pub(crate) fn nearest_on(poly: &[[f64; 2]], p: [f64; 2]) -> Option<[f64; 2]> {
     let n = poly.len();
     let mut best: Option<(f64, [f64; 2])> = None;
     for i in 0..n {
@@ -376,7 +387,7 @@ fn nearest_on(poly: &[[f64; 2]], p: [f64; 2]) -> Option<[f64; 2]> {
     best.map(|(_, q)| q)
 }
 
-fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
+pub(crate) fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
     let n = poly.len();
     let mut c = false;
     for i in 0..n {
@@ -388,7 +399,7 @@ fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
     c
 }
 
-fn poly_area(poly: &[[f64; 2]]) -> f64 {
+pub(crate) fn poly_area(poly: &[[f64; 2]]) -> f64 {
     let n = poly.len();
     let mut s = 0.0;
     for i in 0..n {
@@ -400,7 +411,7 @@ fn poly_area(poly: &[[f64; 2]]) -> f64 {
 }
 
 /// The usual height of a sheet's texts (their median).
-fn usual_height(texts: &[TextItem]) -> f64 {
+pub(crate) fn usual_height(texts: &[TextItem]) -> f64 {
     let mut hs: Vec<f64> = texts.iter().map(|t| t.height).filter(|h| h.is_finite() && *h > 0.0).collect();
     hs.sort_by(f64::total_cmp);
     hs.get(hs.len() / 2).copied().unwrap_or(0.0)
@@ -509,7 +520,7 @@ fn label_lines(texts: &[&TextItem], i: usize, action: &[String]) -> Vec<usize> {
 
 /// Where a label's leader ends: the line that starts at the label (within `reach` of its box),
 /// followed piece by piece where its pieces meet (within `touch`), to its far end.
-fn leader_end(segs: &[Seg], bbox: &[f64; 4], reach: f64, touch: f64) -> Option<[f64; 2]> {
+pub(crate) fn leader_end(segs: &[Seg], bbox: &[f64; 4], reach: f64, touch: f64) -> Option<[f64; 2]> {
     let (mut cur, mut far) = segs.iter().enumerate().find_map(|(i, sg)| {
         let (ga, gb) = (gap(bbox, sg.a), gap(bbox, sg.b));
         if ga <= reach && gb > reach {
@@ -549,11 +560,14 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
         return out;
     }
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    out.upf = upf;
     let touch = r.line_touch_h * h;
     // The sheet's shapes and line pieces.
     let mut shapes: Vec<Shape> = Vec::new();
     let mut outline_pool: Vec<(Vec<[f64; 2]>, f64, bool)> = Vec::new();
     let mut layer_ix: HashMap<String, usize> = HashMap::new();
+    // The layers named for the building that draw a closed outline of it.
+    let mut outlined: BTreeSet<String> = BTreeSet::new();
     let text_layer = |l: &str| r.text_layers.iter().any(|x| x.eq_ignore_ascii_case(l));
     for e in page.model.iter().take(MAX_SHAPES * 4) {
         if shapes.len() >= MAX_SHAPES || out.segs.len() >= MAX_SEGS {
@@ -595,7 +609,13 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
                     if n >= 4 && a >= (15.0 * h).powi(2) && outline_pool.len() < MAX_OUTLINES * 20 {
                         let up = layer.to_ascii_uppercase();
                         let named = words_of(&up).iter().any(|w| r.building_layer_words.iter().any(|x| x == w));
+                        if named {
+                            outlined.insert(layer.to_string());
+                        }
                         outline_pool.push((pts.clone(), a, named));
+                    }
+                    if out.edges.len() < MAX_SEGS {
+                        out.edges.extend(pts.iter().zip(pts.iter().cycle().skip(1)).take(n).map(|(a, b)| Seg { a: *a, b: *b, layer: usize::MAX }));
                     }
                     shape(pts);
                 } else if !glyph {
@@ -618,6 +638,39 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     let mut layers: Vec<(String, usize)> = layer_ix.into_iter().collect();
     layers.sort_by_key(|(_, i)| *i);
     out.layers = layers.into_iter().map(|(l, _)| l).collect();
+    // A building drawn in pieces on a layer named for it (each wall, door and light its own line;
+    // no closed outline of its own, Q6597): the extent of that layer's linework, square to its
+    // lines' main direction, is an outline it may be.
+    for (li, name) in out.layers.iter().enumerate() {
+        let up = name.to_ascii_uppercase();
+        if outlined.contains(name) || !words_of(&up).iter().any(|w| r.building_layer_words.iter().any(|x| x == w)) {
+            continue;
+        }
+        let mine: Vec<&Seg> = out.segs.iter().filter(|g| g.layer == li).collect();
+        let shape_pts: Vec<[f64; 2]> = shapes.iter().filter(|sh| sh.layer == *name).flat_map(|sh| sh.pts.iter().copied()).collect();
+        if mine.len() < 4 {
+            continue;
+        }
+        let (mut c, mut sn) = (0.0, 0.0);
+        for g in &mine {
+            let (dx, dy) = (g.b[0] - g.a[0], g.b[1] - g.a[1]);
+            let l = dx.hypot(dy);
+            if l > 0.0 {
+                let t = dy.atan2(dx) * 4.0;
+                c += l * t.cos();
+                sn += l * t.sin();
+            }
+        }
+        let theta = sn.atan2(c) / 4.0;
+        let turn = |p: [f64; 2], a: f64| [a.cos() * p[0] - a.sin() * p[1], a.sin() * p[0] + a.cos() * p[1]];
+        let all: Vec<[f64; 2]> = mine.iter().flat_map(|g| [g.a, g.b]).chain(shape_pts).map(|p| turn(p, -theta)).collect();
+        let b = bbox_of(&all);
+        let rect: Vec<[f64; 2]> = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].iter().map(|p| turn(*p, theta)).collect();
+        let a = poly_area(&rect);
+        if a.is_finite() && a >= (15.0 * h).powi(2) && outline_pool.len() < MAX_OUTLINES * 20 {
+            outline_pool.push((rect, a, true));
+        }
+    }
     // The building outlines: those on a layer named for the building first, then the largest.
     outline_pool.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.total_cmp(&a.1)));
     out.outlines = outline_pool.into_iter().take(MAX_OUTLINES).map(|(p, _, named)| (p, named)).collect();
@@ -819,6 +872,79 @@ pub(crate) fn read(sheet: &str, page: &Drawing, area: [f64; 4], lum_types: &BTre
     out
 }
 
+/// One site sheet read and laid on the slab level's plan, its real-world limits (a luminaire
+/// symbol's largest size, a piece of equipment's least and largest) measured in the sheet's own
+/// feet, never the model's (Q6443: a sheet still at paper size read in model inches found no
+/// equipment and took anything for a luminaire). `imported` is how the sheet came in: at its
+/// printed scale (more than 1x) or a drawing file (drawn full size) its feet are the model's;
+/// still at paper size, they are the scale its plans print (the import's, else its own scale
+/// note), else what laying its building outline on the footprint makes them. Not known (a
+/// checkpoint keeps no sheet scales): the laid outline's, else the model's. With none of these,
+/// the model's, and said so.
+pub(crate) fn read_laid(
+    sheet: &str,
+    page: &Drawing,
+    area: [f64; 4],
+    lum_types: &BTreeSet<String>,
+    sp: &BuildingSpec,
+    slab: &str,
+    imported: Option<&super::guided::SheetScale>,
+) -> (SiteRead, Fit) {
+    let model_upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let positive = |v: &f64| v.is_finite() && *v > 0.0;
+    let scale = imported.map(|x| x.scale).filter(positive);
+    let sheet_real = scale.is_some_and(|k| k > 1.0);
+    let full_size = sheet_real || imported.is_some_and(|x| x.how() == "drawing");
+    // Known to be at paper size: drawing units per sheet inch, times the sheet inches a foot
+    // prints. A note alone never says a sheet of unknown import is at paper size.
+    let printed = match imported {
+        Some(x) if !full_size => {
+            let per_inch = scale.unwrap_or(1.0) * super::perceive::units_per_inch(page);
+            x.plan_scale
+                .filter(positive)
+                .map(|k| (k, "the scale its plans print".to_string()))
+                .or_else(|| cadaddy_mepfix::sheet_facts::sheet_plan_print_scale(page).map(|(k, _)| (k, "its plan view's scale note".to_string())))
+                .or_else(|| cadaddy_mepfix::sheet_reader::scale_note(page).map(|(t, k)| (k, format!("its scale note {t}"))))
+                .map(|(k, how)| (k * per_inch, how))
+                .filter(|(u, _)| positive(u))
+        }
+        _ => None,
+    };
+    let first = printed.as_ref().map_or(model_upf, |(u, _)| *u);
+    let mut out = read(sheet, page, area, lum_types, first);
+    // Laying the sheet takes only its outlines and view, which no limit touches.
+    let fit = register(&out, sp, slab, sheet_real);
+    let laid = Some(fit.reg.scale()).filter(|s| fit.fitted() && positive(s)).map(|s| model_upf / s);
+    let tolerance = rules().register.scale_tolerance;
+    out.feet = if full_size {
+        let how = if sheet_real {
+            format!("imported at its printed scale ({}x)", scale.unwrap_or(1.0))
+        } else {
+            "a drawing file, drawn full size".to_string()
+        };
+        format!("{how}: the model's feet")
+    } else if let Some((u, how)) = &printed {
+        let mut feet = format!("at paper size, measured by {how}: {u:.4} units a foot");
+        if let Some(l) = laid.filter(|l| (l / u - 1.0).abs() > tolerance) {
+            feet.push_str(&format!(" (its building outline laid on {slab} makes it {l:.4}: verify its scale)"));
+        }
+        feet
+    } else if let Some(l) = laid {
+        if (l / first - 1.0).abs() > 1e-9 {
+            out = read(sheet, page, area, lum_types, l);
+        }
+        let how = if imported.is_some() { "at paper size with no scale note" } else { "its import scale not known" };
+        format!("{how}, measured by its building outline laid on {slab}: {l:.4} units a foot")
+    } else if imported.is_some() {
+        format!(
+            "at paper size with no scale note and no building outline laid: measured in the model's feet ({model_upf} units a foot; verify its sizes)"
+        )
+    } else {
+        format!("its import scale not known and no building outline laid: measured in the model's feet ({model_upf} units a foot)")
+    };
+    (out, fit)
+}
+
 // ---------------- laying the sheet onto the model ----------------
 
 /// How a site sheet was laid onto the slab level's plan.
@@ -831,6 +957,8 @@ pub(crate) struct Fit {
     pub why: String,
     /// The building outline on the model (empty: none read).
     pub outline: Vec<[f64; 2]>,
+    /// The same outline as the sheet draws it (sheet units; empty: none read).
+    pub sheet_outline: Vec<[f64; 2]>,
 }
 
 impl Fit {
@@ -878,6 +1006,7 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
         method: "none",
         why,
         outline: Vec::new(),
+        sheet_outline: Vec::new(),
     };
     let Some(fp) = super::ugplan::slab_box(sp, slab) else { return none(format!("{slab} has no outline or region to lay the site plan on")) };
     let shells: Vec<[f64; 4]> = sp
@@ -890,7 +1019,14 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
     let fp_area = ((fp[2] - fp[0]) * (fp[3] - fp[1])).abs();
     // The outline: one on a layer named for the building (the largest), else the one nearest the
     // footprint's size.
-    let named = read.outlines.iter().find(|(_, n)| *n).map(|(p, _)| p);
+    // Several buildings on a layer named for them (a site of several lots): at its printed scale,
+    // the one nearest the footprint's size; else the largest.
+    let ratio_off = |p: &Vec<[f64; 2]>| if fp_area > 0.0 { (poly_area(p) / fp_area).ln().abs() } else { 0.0 };
+    let named = if sheet_real && fp_area > 0.0 {
+        read.outlines.iter().filter(|(_, n)| *n).map(|(p, _)| p).filter(|p| poly_area(p) > 0.0).min_by(|a, b| ratio_off(a).total_cmp(&ratio_off(b)))
+    } else {
+        read.outlines.iter().find(|(_, n)| *n).map(|(p, _)| p)
+    };
     let sized = || {
         read.outlines
             .iter()
@@ -920,12 +1056,13 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
             method: "view centre",
             why: "no building outline read on the site plan: its view's centre put on the building's (verify where the site work stands)".into(),
             outline: Vec::new(),
+            sheet_outline: Vec::new(),
         };
     };
     let theta = wall_angle(poly);
     let rot = |p: [f64; 2], phi: f64, s: f64| [s * (phi.cos() * p[0] - phi.sin() * p[1]), s * (phi.sin() * p[0] + phi.cos() * p[1])];
     let tol = r.on_wall_ft.max(0.5) * upf;
-    let mut best: Option<(f64, f64, f64, f64, [f64; 2])> = None; // (score, |phi|, phi, s, t)
+    let mut best: Option<(f64, f64, f64, f64, [f64; 2], f64)> = None; // (score, |phi|, phi, s, t, rms off)
     for k in 0..4 {
         let mut phi = -theta + f64::from(k) * std::f64::consts::FRAC_PI_2;
         while phi > std::f64::consts::PI {
@@ -941,39 +1078,59 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
         let placed: Vec<[f64; 2]> = turned.iter().map(|p| [p[0] * s, p[1] * s]).collect();
         let pc = centre(&bbox_of(&placed));
         let t = [fc[0] - pc[0], fc[1] - pc[1]];
-        let on = placed
+        // Each corner's distance to the model's walls (the footprint's edge where no walls are
+        // known).
+        let off: Vec<f64> = placed
             .iter()
             .map(|p| [p[0] + t[0], p[1] + t[1]])
-            .filter(|p| {
+            .map(|p| {
                 if shells.is_empty() {
-                    let inner = [fp[0] + tol, fp[1] + tol, fp[2] - tol, fp[3] - tol];
-                    gap(&fp, *p) <= tol && !(inner[0] < inner[2] && inner[1] < inner[3] && gap(&inner, *p) <= 0.0)
+                    let to_edge = (p[0] - fp[0]).abs().min((p[0] - fp[2]).abs()).min((p[1] - fp[1]).abs()).min((p[1] - fp[3]).abs());
+                    if gap(&fp, p) > 0.0 { gap(&fp, p) } else { to_edge }
                 } else {
-                    shells.iter().any(|b| gap(b, *p) <= tol)
+                    shells.iter().map(|b| gap(b, p)).fold(f64::INFINITY, f64::min)
                 }
             })
-            .count();
+            .collect();
+        let on = off.iter().filter(|d| **d <= tol).count();
         let score = on as f64 / placed.len().max(1) as f64;
+        let rms = (off.iter().map(|d| d.min(1e12).powi(2)).sum::<f64>() / off.len().max(1) as f64).sqrt();
         let better = best.is_none_or(|(bs, bphi, ..)| score > bs + 1e-9 || ((score - bs).abs() <= 1e-9 && phi.abs() < bphi));
         if better {
-            best = Some((score, phi.abs(), phi, s, t));
+            best = Some((score, phi.abs(), phi, s, t, rms));
         }
     }
-    let Some((score, _, phi, s, t)) = best else { return none("the building outline gave no fit".into()) };
+    let Some((score, _, phi, s, t, rms)) = best else { return none("the building outline gave no fit".into()) };
     let (a, b) = (s * phi.cos(), s * phi.sin());
-    let reg = SheetRegistration { reference, method: String::new(), a, b, tx: t[0], ty: t[1], matched: poly.len(), residual: None };
+    let residual = rms.is_finite().then_some(rms);
+    let reg = SheetRegistration { reference, method: String::new(), a, b, tx: t[0], ty: t[1], matched: poly.len(), residual };
     let outline: Vec<[f64; 2]> = poly.iter().map(|p| reg.to_project(*p)).collect();
     let ob = bbox_of(&outline);
     let ratio = if fp_area > 0.0 { ((ob[2] - ob[0]) * (ob[3] - ob[1])).abs() / fp_area } else { 0.0 };
-    let fits = ratio >= r.area_ratio_min && ratio <= r.area_ratio_max && (!sheet_real || (s - 1.0).abs() <= r.scale_tolerance);
+    // The size agrees (at its printed scale, the scale too; on a paper-size sheet the scale was
+    // solved to make the sizes equal, so that says nothing), and the walls agree: enough of its
+    // corners on the model's walls. That is the measured test; the size alone never is.
+    let sized_ok = ratio >= r.area_ratio_min && ratio <= r.area_ratio_max && (!sheet_real || (s - 1.0).abs() <= r.scale_tolerance);
+    let walls_ok = score + 1e-9 >= r.on_wall_min;
     let turn = phi.to_degrees();
-    let (method, why) = if fits {
+    let (method, why) = if sized_ok && walls_ok {
         (
             "building outline",
             format!(
-                "laid on {slab} by the building outline it draws: turned {turn:.1} deg, its walls on the model's ({:.0}% of its corners), {:.0}% of the footprint's size",
+                "laid on {slab} by the building outline it draws: turned {turn:.1} deg, its walls on the model's ({:.0}% of its corners, {:.1} ft off on average), {:.0}% of the footprint's size",
                 score * 100.0,
+                rms / upf,
                 ratio * 100.0
+            ),
+        )
+    } else if sized_ok {
+        (
+            "outline centre",
+            format!(
+                "the building outline it draws does not lie on {slab}'s walls ({:.0}% of its corners on them, {:.0}% needed; {:.1} ft off on average): placed by its centre, turned {turn:.1} deg (it may not be the building's footprint; verify where the site work stands)",
+                score * 100.0,
+                r.on_wall_min * 100.0,
+                rms / upf
             ),
         )
     } else {
@@ -989,18 +1146,18 @@ pub(crate) fn register(read: &SiteRead, sp: &BuildingSpec, slab: &str, sheet_rea
             ),
         )
     };
-    Fit { reg: SheetRegistration { method: method.into(), ..reg }, method, why, outline }
+    Fit { reg: SheetRegistration { method: method.into(), ..reg }, method, why, outline, sheet_outline: poly.clone() }
 }
 
 // ---------------- the drawn lines ----------------
 
 /// The drawn lines of a sheet: its pieces joined where they meet or a dashed line runs on.
-struct Net {
+pub(crate) struct Net {
     /// Each piece's line (a group of joined pieces).
-    comp: Vec<usize>,
+    pub comp: Vec<usize>,
     /// The joins: piece end to piece end (`2i` = piece `i`'s start, `2i + 1` its end), and their
     /// lengths.
-    joins: Vec<(usize, usize, f64)>,
+    pub joins: Vec<(usize, usize, f64)>,
 }
 
 fn find(parent: &mut [usize], mut i: usize) -> usize {
@@ -1017,7 +1174,7 @@ fn find(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
-fn net(segs: &[Seg], h: f64) -> Net {
+pub(crate) fn net(segs: &[Seg], h: f64) -> Net {
     let r = rules();
     let gap_max = r.line_gap_h * h;
     let break_max = r.line_break_h.max(r.line_gap_h) * h;
@@ -1089,7 +1246,7 @@ fn net(segs: &[Seg], h: f64) -> Net {
 }
 
 /// A drawn line's longest path, as points: its pieces and joins walked end to end.
-fn line_path(segs: &[Seg], members: &[usize], joins: &[(usize, usize, f64)]) -> Vec<[f64; 2]> {
+pub(crate) fn line_path(segs: &[Seg], members: &[usize], joins: &[(usize, usize, f64)]) -> Vec<[f64; 2]> {
     let set: BTreeSet<usize> = members.iter().copied().collect();
     let mut adj: BTreeMap<usize, Vec<(usize, f64)>> = BTreeMap::new();
     let point = |node: usize| segs.get(node / 2).map(|s| if node.is_multiple_of(2) { s.a } else { s.b });
@@ -1205,7 +1362,7 @@ fn same_trench(a: &[[f64; 2]], b: &[[f64; 2]], tol: f64) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(p, q)| dist(*p, *q) <= tol)
 }
 
-fn path_len(pts: &[[f64; 2]]) -> f64 {
+pub(crate) fn path_len(pts: &[[f64; 2]]) -> f64 {
     pts.windows(2)
         .map(|w| match w {
             [a, b] => dist(*a, *b),
@@ -1223,6 +1380,15 @@ enum Obj {
     Equip(usize),
     Tag(usize),
     Building,
+}
+
+/// A run's points and the objects at its two ends, from one ordered list of (point, what
+/// stands there): the first end is the first point's, the last end the last point's, so a
+/// stub-up comes up where its object is (Q6447).
+fn path_and_ends(path: &[([f64; 2], Option<Obj>)]) -> (Vec<[f64; 2]>, [Option<Obj>; 2]) {
+    let pts = path.iter().map(|(p, _)| *p).collect();
+    let ends = [path.first().and_then(|(_, o)| *o), path.last().and_then(|(_, o)| *o)];
+    (pts, ends)
 }
 
 /// Counters across a job's site sheets: ids stay unique.
@@ -1257,7 +1423,7 @@ pub(crate) struct Built {
     pub called_runs: usize,
 }
 
-fn ft(v: f64) -> String {
+pub(crate) fn ft(v: f64) -> String {
     let r = (v * 10.0).round() / 10.0;
     if (r - r.round()).abs() < 1e-9 { format!("{r:.0}") } else { format!("{r:.1}") }
 }
@@ -1657,7 +1823,8 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         for (i, t) in read.tags.iter().enumerate() {
             consider(gap(&t.bbox, p) + 0.5 * reach, Obj::Tag(i));
         }
-        let sheet_outline = read.outlines.iter().find(|(o, _)| fit.outline.len() == o.len()).map(|(o, _)| o.as_slice());
+        // The outline the fit chose, as it carries it (another may have as many corners).
+        let sheet_outline = Some(fit.sheet_outline.as_slice()).filter(|o| o.len() >= 3);
         if let Some(q) = sheet_outline.filter(|_| fit.method != "view centre").and_then(|o| nearest_on(o, p)) {
             consider(dist(q, p) + 0.25 * reach, Obj::Building);
         }
@@ -2004,7 +2171,28 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         }
         _ => None,
     };
+    // The circuits a run carries (Q6348): its luminaires' and its equipment's, so its conductors
+    // are pulled and its raceway sized by them.
+    let carried = |o: Option<Obj>| -> Vec<String> {
+        match o {
+            Some(Obj::Light(i)) => light_circuit.get(i).cloned().flatten().into_iter().collect(),
+            Some(Obj::Equip(i)) => equip_circuits.iter().find(|(q, _)| *q == i).map(|(_, f)| f.clone()).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    };
+    let label_of = |ends: [Option<Obj>; 2]| -> Option<String> {
+        let mut all: Vec<String> = Vec::new();
+        for c in ends.into_iter().flat_map(carried) {
+            if !all.contains(&c) && all.len() < 12 {
+                all.push(c);
+            }
+        }
+        (!all.is_empty()).then(|| all.join(","))
+    };
+    // Each run of a circuit carries it in its id (its sheet and number).
+    let circuit_id = |out: &Built, label: Option<&str>| label.map(|l| super::ugcircuit::run_id(slab, l, format!("{sheet}.{}", out.runs.len())));
     let add_run = |out: &mut Built, pts: Vec<[f64; 2]>, ends: [Option<Obj>; 2], made: Made, note: Option<&Note>, why: &str, branch: bool| {
+        let label = if note.is_none() { label_of(ends) } else { None };
         let (count, size, size_from) = match note {
             Some(n) => (
                 n.callout.count.clamp(1, MAX_CONDUITS),
@@ -2051,13 +2239,17 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         for k in 0..count {
             let pts = offset_path(&pts, (f64::from(k) - f64::from(count - 1) / 2.0) * pitch);
             if pts.len() >= 2 {
-                out.runs.push(mark(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from)));
+                let mut run = mark(buried(slab, sheet, pts.clone(), size, made, basis.clone(), &size_from));
+                run.id = circuit_id(out, label.as_deref()).unwrap_or_default();
+                out.runs.push(run);
             }
             for (o, p) in ends.iter().zip([pts.first(), pts.last()]) {
                 if let (Some(o), Some(p)) = (o, p)
                     && !matches!(o, Obj::Tag(_))
                 {
-                    out.runs.push(mark(stub(slab, sheet, *p, size, top_at(*o), made, &basis)));
+                    let mut run = mark(stub(slab, sheet, *p, size, top_at(*o), made, &basis));
+                    run.id = circuit_id(out, label.as_deref()).unwrap_or_default();
+                    out.runs.push(run);
                 }
             }
         }
@@ -2112,7 +2304,8 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         let (Some(la), Some(lb)) = (read.lights.get(*a), read.lights.get(*b)) else { continue };
         let why =
             format!("inferred: {sheet} shows no line between these luminaires of one circuit; trenched straight from the nearest (trade practice)");
-        add_run(&mut out, vec![to_model(la.at), to_model(lb.at)], [Some(Obj::Light(*a)), Some(Obj::Light(*b))], Made::Inferred, None, &why, true);
+        let (pts, ends) = path_and_ends(&[(to_model(la.at), Some(Obj::Light(*a))), (to_model(lb.at), Some(Obj::Light(*b)))]);
+        add_run(&mut out, pts, ends, Made::Inferred, None, &why, true);
     }
     // Each circuit's home run: from the circuit's object nearest the building to the building,
     // then under the slab to its panel when the model has it (inferred).
@@ -2174,10 +2367,15 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         if bottoms.len() == run.points.len().saturating_sub(1) {
             run.bottoms_ft = bottoms;
         }
+        run.id = circuit_id(&out, Some(label)).unwrap_or_default();
         out.runs.push(run);
-        out.runs.push(stub(slab, sheet, from, size, top_at(obj), Made::Inferred, &why));
+        let mut up = stub(slab, sheet, from, size, top_at(obj), Made::Inferred, &why);
+        up.id = circuit_id(&out, Some(label)).unwrap_or_default();
+        out.runs.push(up);
         if let Some(last) = pts.last() {
-            out.runs.push(stub(slab, sheet, *last, size, r.stub_top_ft, Made::Inferred, &why));
+            let mut up = stub(slab, sheet, *last, size, r.stub_top_ft, Made::Inferred, &why);
+            up.id = circuit_id(&out, Some(label)).unwrap_or_default();
+            out.runs.push(up);
         }
         out.inferred_runs += 1;
     }
@@ -2205,19 +2403,23 @@ pub(crate) fn plan(sp: &BuildingSpec, read: &SiteRead, fit: &Fit, slab: &str, se
         };
         let Some((qc, ..)) = equip_at.get(qi).cloned().flatten() else { continue };
         let bc = if building.len() >= 3 { centre(&bbox_of(&building)) } else { qc };
-        let pts = if n.callout.what == "service_primary" {
+        // The run's points with what stands at each, in one order (Q6447): its stub-up comes up
+        // at the equipment whichever end the equipment is.
+        let at_equipment = (qc, Some(Obj::Equip(qi)));
+        let path = if n.callout.what == "service_primary" {
             let (dx, dy) = (qc[0] - bc[0], qc[1] - bc[1]);
             let l = dx.hypot(dy).max(1e-9);
-            vec![[qc[0] + dx / l * r.primary_out_ft * upf, qc[1] + dy / l * r.primary_out_ft * upf], qc]
+            [([qc[0] + dx / l * r.primary_out_ft * upf, qc[1] + dy / l * r.primary_out_ft * upf], None), at_equipment]
         } else {
-            vec![qc, nearest_on(&building, qc).unwrap_or(bc)]
+            [at_equipment, (nearest_on(&building, qc).unwrap_or(bc), None)]
         };
+        let (pts, ends) = path_and_ends(&path);
         let why = if n.callout.what == "service_primary" {
             format!("inferred: {}", r.primary_source)
         } else {
             "inferred: the note names it and draws no line: trenched straight to the nearest building wall".to_string()
         };
-        add_run(&mut out, pts, [None, Some(Obj::Equip(qi))], Made::Inferred, Some(n), &why, false);
+        add_run(&mut out, pts, ends, Made::Inferred, Some(n), &why, false);
     }
     out
 }
@@ -2230,7 +2432,8 @@ pub(crate) fn trench_ft(sp: &BuildingSpec) -> BTreeMap<String, (f64, Vec<String>
     let mut seen: Vec<(&str, &[[f64; 2]])> = Vec::new();
     let mut out: BTreeMap<String, (f64, Vec<String>)> = BTreeMap::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(20_000) {
-        if !r.source_sheet.starts_with(SOURCE_PREFIX) || r.points.len() < 2 || r.top_ft.is_some() {
+        // The civil plan's pipe services have their own trench by their trade (Q6597).
+        if !r.source_sheet.starts_with(SOURCE_PREFIX) || r.points.len() < 2 || r.top_ft.is_some() || super::civilsvc::is_service_system(&r.system) {
             continue;
         }
         if seen.iter().any(|(l, p)| *l == r.level.as_str() && same_trench(p, &r.points, tol)) {
@@ -2312,6 +2515,70 @@ pub(crate) fn site_loads(sp: &BuildingSpec, built: &BTreeSet<String>) -> Vec<Sit
         }
     }
     out
+}
+
+/// The runs for site loads no site plan draws (Q6348): each out of its panel (on the slab level)
+/// under the slab to the slab edge nearest it and on into the earth past it, stubbed up at both
+/// ends, proposed (generated; where the load stands is still asked). Its circuit in its runs' ids,
+/// so its conductors are pulled and its raceway sized by them. A load whose panel isn't on the
+/// slab level in the model gets none (asked only). The runs and a line for each load.
+pub(crate) fn proposed_site_loads(sp: &BuildingSpec, slab: &str, loads: &[SiteLoad]) -> (Vec<MepRun>, Vec<String>) {
+    let r = rules();
+    let ug = super::ugplan::rules();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut runs = Vec::new();
+    let mut lines = Vec::new();
+    let Some(b) = super::ugplan::slab_box(sp, slab) else { return (runs, lines) };
+    for l in loads.iter().take(MAX_ITEMS) {
+        let Some(pn) = sp.mep.equipment.iter().find(|e| e.tag.trim().eq_ignore_ascii_case(l.panel.trim()) && e.level.eq_ignore_ascii_case(slab))
+        else {
+            continue;
+        };
+        let pc = [(pn.min[0] + pn.max[0]) / 2.0, (pn.min[1] + pn.max[1]) / 2.0];
+        if !pc.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let (edge, n) = super::ugplan::nearest_edge(b, pc);
+        let out = [edge[0] + n[0] * ug.site.stub_ft.max(1.0) * upf, edge[1] + n[1] * ug.site.stub_ft.max(1.0) * upf];
+        let corner = if n[0].abs() > 0.5 { [edge[0], pc[1]] } else { [pc[0], edge[1]] };
+        let mut pts = vec![pc, corner, edge, out];
+        pts.dedup_by(|a, c| dist(*a, *c) < 1e-6);
+        if pts.len() < 2 {
+            continue;
+        }
+        let size = r.branch_conduit_in;
+        let label = format!("{}-{}", l.panel.trim(), l.number.trim());
+        let why = format!(
+            "proposed: panel {} circuit {} ({}) feeds a load on the site that no site plan draws: run underground out of its panel past the slab edge nearest it ({}; {}); where the load stands is asked",
+            l.panel.trim(),
+            l.number.trim(),
+            l.description.trim(),
+            r.site_load_source,
+            ug.site.source
+        );
+        let sheet = if l.source.trim().is_empty() { "panel schedule" } else { l.source.trim() };
+        let mut run = buried(slab, sheet, pts.clone(), size, Made::Inferred, why.clone(), &format!("rule: {}", r.branch_conduit_source));
+        // Under the slab inside the building, at its cover outside it.
+        let under = -(ug.depths.conduit_under_slab_ft + size / 12.0);
+        let segs = run.points.len().saturating_sub(1);
+        run.bottoms_ft = (0..segs).map(|i| if i + 1 == segs { -(r.cover_in + size) / 12.0 } else { under }).collect();
+        let mut made = vec![run];
+        let mut up = stub(slab, sheet, pc, size, ug.stubup.conduit_top_ft.max(pn.bottom_ft), Made::Inferred, &why);
+        up.bottoms_ft = vec![under];
+        made.push(up);
+        made.push(stub(slab, sheet, out, size, r.stub_top_ft, Made::Inferred, &why));
+        for (k, m) in made.iter_mut().enumerate() {
+            m.id = super::ugcircuit::run_id(slab, &label, format!("{sheet}.{}.{k}", runs.len()));
+        }
+        runs.extend(made);
+        lines.push(format!(
+            "{label} {}: proposed {:.0} ft out of panel {} to the site (locate the load)",
+            l.description.trim(),
+            path_len(&pts) / upf,
+            pn.tag
+        ));
+    }
+    (runs, lines)
 }
 
 #[cfg(test)]
@@ -2575,6 +2842,282 @@ mod tests {
         assert!(fit.why.contains("printed scale"));
     }
 
+    /// A layerless site plan at its printed scale drawing two closed 4-point outlines: the
+    /// property line (300 x 200 ft) and the building (100 x 60 ft) inside it. One pole light's
+    /// dashed circuit runs to the building's north wall; another's stops at the property line.
+    #[test]
+    fn line_ends_snap_to_the_outline_the_fit_chose_not_another_with_as_many_corners() {
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "0", &[[9_000.0, 1_000.0], [12_600.0, 1_000.0], [12_600.0, 3_400.0], [9_000.0, 3_400.0]], true);
+        pline(&mut d, "0", &[[10_000.0, 2_000.0], [11_200.0, 2_000.0], [11_200.0, 2_720.0], [10_000.0, 2_720.0]], true);
+        let (l1, l2) = ([10_600.0, 3_100.0], [12_200.0, 2_400.0]);
+        for p in [l1, l2] {
+            pline(&mut d, "0", &square(p, 25.0), true);
+            text(&mut d, "SL1", p[0] + 40.0, p[1] + 40.0, h);
+        }
+        dashed(&mut d, "0", [l1[0], l1[1] - 25.0], [l1[0], 2_720.0], 30.0, 15.0);
+        dashed(&mut d, "0", [l2[0] + 25.0, l2[1]], [12_600.0, l2[1]], 30.0, 15.0);
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let read = read("E-001", &d, [8_000.0, 0.0, 14_000.0, 5_000.0], &types, 12.0);
+        assert_eq!(read.lights.len(), 2, "{:?}", read.lights);
+        assert!(read.outlines.len() >= 2 && read.outlines.iter().all(|(o, named)| o.len() == 4 && !named), "{:?}", read.outlines);
+        // The model's building: 100 x 60 ft, square to the model.
+        let mut sp = spec_with_slab();
+        sp.shells.insert(
+            "Level 1".into(),
+            vec![[100.0, 100.0, 1_300.0, 106.0], [100.0, 814.0, 1_300.0, 820.0], [100.0, 100.0, 106.0, 820.0], [1_294.0, 100.0, 1_300.0, 820.0]],
+        );
+        let fit = register(&read, &sp, "Level 1", true);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        let mut seq = Seq::default();
+        let built = plan(&sp, &read, &fit, "Level 1", &mut seq);
+        let drawn: Vec<&MepRun> = built.runs.iter().filter(|r| r.made == Made::Drawn && r.top_ft.is_none() && r.points.len() >= 2).collect();
+        // The run from the first pole ends on the building's north wall (model y 820).
+        let wall = [700.0, 820.0];
+        let to_wall = drawn.iter().filter(|r| r.points.iter().any(|p| dist(*p, wall) < 12.0)).count();
+        assert_eq!(to_wall, 1, "{drawn:?}");
+        // The line stopping at the property line enters no building: no run.
+        let to_property = drawn.iter().filter(|r| r.points.iter().any(|p| p[0] > 1_300.0 + 12.0 * 20.0)).count();
+        assert_eq!(to_property, 0, "{drawn:?}");
+    }
+
+    /// Q6446: a paper-size site sheet (no printed scale) drawing one closed line on a layer named
+    /// for the building, two pole lights beside it (drawing units: the sheet's own).
+    fn paper_site_sheet(outline: &[[f64; 2]], layer: &str) -> (Drawing, [f64; 4]) {
+        let mut d = Drawing::default();
+        let h = 9.0;
+        pline(&mut d, layer, outline, true);
+        for p in [[1_400.0, 200.0], [1_400.0, 700.0]] {
+            pline(&mut d, "E-LGHT", &square(p, 12.0), true);
+            text(&mut d, "SL1", p[0] + 20.0, p[1] - 5.0, h);
+        }
+        (d, [-200.0, -200.0, 1_800.0, 1_200.0])
+    }
+
+    /// The slab level's walls: a 100 x 60 ft rectangle, square to the model.
+    fn spec_100_by_60() -> BuildingSpec {
+        let mut sp = spec_with_slab();
+        sp.shells.insert(
+            "Level 1".into(),
+            vec![[100.0, 100.0, 1_300.0, 106.0], [100.0, 814.0, 1_300.0, 820.0], [100.0, 100.0, 106.0, 820.0], [1_294.0, 100.0, 1_300.0, 820.0]],
+        );
+        sp
+    }
+
+    /// The L-shaped setback line of [`paper_site_sheet`]: no corner of it is the building's.
+    const SETBACK_L: [[f64; 2]; 6] = [[0.0, 0.0], [900.0, 0.0], [900.0, 300.0], [300.0, 300.0], [300.0, 900.0], [0.0, 900.0]];
+
+    #[test]
+    fn a_paper_size_outline_off_the_walls_is_not_laid_on_the_building() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_100_by_60();
+        // The setback: its scale solved to the footprint's size, but none of its corners on the
+        // walls. Not laid on the building, and said why.
+        let (d, area) = paper_site_sheet(&SETBACK_L, "BUILDING SETBACK");
+        let read = read("E-001", &d, area, &types, 12.0);
+        assert!(read.outlines.first().is_some_and(|(p, named)| *named && p.len() == 6), "{:?}", read.outlines);
+        let fit = register(&read, &sp, "Level 1", false);
+        assert!(!fit.fitted(), "{}: {}", fit.method, fit.why);
+        assert_eq!(fit.method, "outline centre", "{}", fit.why);
+        assert!(fit.why.contains("does not lie on Level 1's walls") && fit.why.contains("0% of its corners"), "{}", fit.why);
+        assert_eq!(fit.reg.method, "outline centre");
+        assert!(fit.reg.residual.is_some_and(|r| r > 3.0 * 12.0), "{:?}", fit.reg.residual);
+        // The building drawn at half size on the same paper: its corners on the walls, laid on it.
+        let (d, area) = paper_site_sheet(&[[0.0, 0.0], [600.0, 0.0], [600.0, 360.0], [0.0, 360.0]], "A-BLDG");
+        let drawn = super::read("E-001", &d, area, &types, 12.0);
+        let fit = register(&drawn, &sp, "Level 1", false);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert!((fit.reg.a.hypot(fit.reg.b) - 2.0).abs() < 1e-6, "{:?}", fit.reg);
+        assert!(fit.reg.residual.is_some_and(|r| r <= 3.0 * 12.0), "{:?}", fit.reg.residual);
+        let corner = fit.to_model([0.0, 0.0]);
+        assert!(dist(corner, [100.0, 100.0]) < 1e-6, "{corner:?}");
+    }
+
+    #[test]
+    fn the_job_says_a_paper_size_site_plan_off_the_walls_is_not_laid_on_the_building() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = paper_site_sheet(&SETBACK_L, "BUILDING SETBACK");
+        let sp = spec_100_by_60();
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        // No printed scale for the sheet: a paper-size sheet.
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let said = job.findings.iter().find(|f| f.description.contains("not laid on the building by its outline"));
+        assert!(said.is_some_and(|f| f.why.contains("E-001") && f.why.contains("does not lie on")), "{:#?} {:#}", job.findings, result["site_work"]);
+    }
+
+    /// Q6443: a trade's site plan still at paper size (drawing units sheet inches), printed at
+    /// 1" = 30': the building outline (80 x 50 ft), a pad-mount transformer's 8 ft pad by its
+    /// label, a pole light's 2 ft head by its type mark, and a second type mark by a 24 ft planter
+    /// with no head drawn. `note`: the sheet prints its scale; `named`: the outline's layer names
+    /// the building.
+    fn paper_site_sheet_at_30(note: bool, named: bool) -> (Drawing, [f64; 4]) {
+        let mut d = Drawing::default();
+        let h = 0.1;
+        let ft = 1.0 / 30.0;
+        let o = [10.0, 5.0];
+        let outline = [[o[0], o[1]], [o[0] + 80.0 * ft, o[1]], [o[0] + 80.0 * ft, o[1] + 50.0 * ft], [o[0], o[1] + 50.0 * ft]];
+        pline(&mut d, if named { "-BASEC-BUILD" } else { "-BASEC-HATCH" }, &outline, true);
+        let x = [14.0, 4.0];
+        pline(&mut d, "E-POWR", &square(x, 4.0 * ft), true);
+        text(&mut d, "PAD MOUNTED TRANSFORMER", x[0] + 4.0 * ft + 0.1, x[1] - 0.03, h);
+        let l1 = [16.0, 8.0];
+        pline(&mut d, "E-LGHT", &square(l1, 1.0 * ft), true);
+        text(&mut d, "SL1", l1[0] + 0.1, l1[1] - 0.03, h);
+        let planter = [16.5, 5.5];
+        pline(&mut d, "L-PLNT", &square(planter, 12.0 * ft), true);
+        text(&mut d, "SL1", planter[0] + 12.0 * ft + 0.1, planter[1] - 0.03, h);
+        if note {
+            text(&mut d, "SCALE: 1\" = 30'-0\"", 9.0, 3.2, h);
+        }
+        (d, [8.0, 3.0, 18.0, 10.0])
+    }
+
+    fn paper_size() -> super::super::guided::SheetScale {
+        super::super::guided::SheetScale {
+            sheet: "E-001".into(),
+            kind: "plan".into(),
+            scale: 1.0,
+            source: "none".into(),
+            plan_scale: None,
+            paper: Some([36.0, 24.0]),
+        }
+    }
+
+    #[test]
+    fn a_paper_size_site_sheet_measures_its_limits_in_its_own_feet() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let (d, area) = paper_site_sheet_at_30(true, true);
+        // The model's feet on the sheet's inches: no pad is ever big enough, and the planter is
+        // taken for a luminaire head (the fault).
+        let model = read("E-001", &d, area, &types, 12.0);
+        assert!(model.equipment.is_empty(), "{:?}", model.equipment);
+        assert_eq!(model.unplaced_labels.len(), 1, "{:?}", model.unplaced_labels);
+        assert!(model.lights.iter().all(|l| l.symbol.is_some()), "{:?}", model.lights);
+        // The sheet's own feet: its scale note.
+        let paper = paper_size();
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert!((sheet.upf - 1.0 / 30.0).abs() < 1e-9, "{} {}", sheet.upf, sheet.feet);
+        assert!(sheet.feet.contains("scale note") && !sheet.feet.contains("verify"), "{}", sheet.feet);
+        assert_eq!(sheet.equipment.len(), 1, "{:?} {:?}", sheet.equipment, sheet.unplaced_labels);
+        assert!(sheet.equipment.first().is_some_and(|q| q.kind == "transformer"), "{:?}", sheet.equipment);
+        assert!(sheet.unplaced_labels.is_empty(), "{:?}", sheet.unplaced_labels);
+        assert_eq!(sheet.lights.len(), 2, "{:?}", sheet.lights);
+        assert_eq!(sheet.lights.iter().filter(|l| l.symbol.is_some()).count(), 1, "the planter is no luminaire head: {:?}", sheet.lights);
+        // Laid on the building at its size, and the transformer's pad 8 ft on the model.
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        let pad = sheet.equipment.first().map_or(0.0, |q| (q.bbox[2] - q.bbox[0]) * fit.reg.scale() / 12.0);
+        assert!((pad - 8.0).abs() < 0.1, "{pad}");
+        let mut seq = Seq::default();
+        let built = plan(&sp, &sheet, &fit, "Level 1", &mut seq);
+        assert!(built.equipment.iter().any(|e| e.kind == "transformer"), "{:?}", built.equipment);
+    }
+
+    #[test]
+    fn a_paper_size_site_sheet_with_no_scale_note_is_measured_by_its_laid_outline() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let paper = paper_size();
+        let (d, area) = paper_site_sheet_at_30(false, true);
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert!((sheet.upf - 1.0 / 30.0).abs() < 1e-3, "{} {}", sheet.upf, sheet.feet);
+        assert!(sheet.feet.contains("building outline"), "{}", sheet.feet);
+        assert_eq!(sheet.equipment.len(), 1, "{:?} {:?}", sheet.equipment, sheet.unplaced_labels);
+        assert_eq!(sheet.lights.iter().filter(|l| l.symbol.is_some()).count(), 1, "{:?}", sheet.lights);
+        // Nothing to measure it by: the model's feet, and said so.
+        let (d, area) = paper_site_sheet_at_30(false, false);
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&paper));
+        assert!(!fit.fitted(), "{}", fit.why);
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("verify"), "{} {}", sheet.upf, sheet.feet);
+        // A scale note alone never says a sheet of unknown import is at paper size.
+        let (d, area) = paper_site_sheet_at_30(true, false);
+        let (sheet, _) = read_laid("E-001", &d, area, &types, &sp, "Level 1", None);
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("not known"), "{} {}", sheet.upf, sheet.feet);
+    }
+
+    #[test]
+    fn a_site_sheet_at_its_printed_scale_keeps_the_models_feet() {
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let sp = spec_with_slab();
+        let (d, area) = site_sheet();
+        let real = super::super::guided::SheetScale { scale: 240.0, source: "scale note 1\" = 20'-0\"".into(), ..paper_size() };
+        let (sheet, fit) = read_laid("E-001", &d, area, &types, &sp, "Level 1", Some(&real));
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("printed scale"), "{}", sheet.feet);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+        // A drawing file is drawn full size whatever its plot scale (here none read: 1x).
+        let drawing = super::super::guided::SheetScale {
+            scale: 1.0,
+            source: format!("{}, drawn full size: no plot scale read", cadaddy_mepfix::printset::DRAWING_SHEET_SOURCE),
+            ..paper_size()
+        };
+        let mut noted = d.clone();
+        text(&mut noted, "SCALE: 1\" = 20'-0\"", 9_100.0, 1_100.0, 18.0);
+        let (sheet, _) = read_laid("E-001", &noted, area, &types, &sp, "Level 1", Some(&drawing));
+        assert!((sheet.upf - 12.0).abs() < 1e-9 && sheet.feet.contains("full size"), "{}", sheet.feet);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+        // Unknown to the import (a checkpoint's), the laid outline gives the same feet.
+        let (sheet, _) = read_laid("E-001", &d, area, &types, &sp, "Level 1", None);
+        assert!((sheet.upf - 12.0).abs() < 0.2 && sheet.feet.contains("building outline"), "{} {}", sheet.upf, sheet.feet);
+        assert_eq!((sheet.lights.len(), sheet.equipment.len()), (2, 1), "{:?} {:?}", sheet.lights, sheet.equipment);
+    }
+
+    #[test]
+    fn the_job_reads_a_paper_size_site_plan_in_its_own_feet() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = paper_site_sheet_at_30(true, true);
+        let sp = spec_with_slab();
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_scales = vec![paper_size()];
+        let mut result = serde_json::json!({});
+        site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+        let w = &result["site_work"];
+        assert_eq!(w["equipment"], serde_json::json!(1), "{w:#}");
+        assert_eq!(w["luminaires"], serde_json::json!(2), "{w:#}");
+        assert!(w["sheets"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("scale note")))), "{w:#}");
+    }
+
     #[test]
     fn the_job_builds_the_trade_site_plan_and_skips_the_civil_one() {
         use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
@@ -2664,6 +3207,186 @@ mod tests {
         assert!(counts.first().is_some_and(|c| c.0 == 2 && c.1 == 3 && c.2 == 2 && c.3 > 4 && c.4 == 0), "{counts:?}");
     }
 
+    /// Q6348: a site circuit's buried runs carry it: its conductors pulled by its breaker, load and
+    /// buried length, its PVC sized by their fill (the specification's minimum, else NEC 352.20),
+    /// not one size for every run; a site load the schedule names that no site plan draws is
+    /// built proposed out of its panel to the site (and still asked where it stands).
+    #[test]
+    fn buried_site_circuits_pull_their_conductors_and_an_undrawn_site_load_is_proposed() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = site_sheet();
+        let mut sp = spec_with_slab();
+        let row = |n: &str, brk: &str, va: f64, what: &str| cadaddy_walk3d::PanelCircuit {
+            number: n.into(),
+            breaker: brk.into(),
+            poles: 1,
+            load_va: Some(va),
+            description: what.into(),
+            source: "E-601".into(),
+            ..Default::default()
+        };
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
+            panel: "LP".into(),
+            source: "E-601".into(),
+            header: [("volts/phase".to_string(), "208Y/120V 3PH 4W".to_string())].into_iter().collect(),
+            circuits: vec![row("7", "20/1", 300.0, "SITE LIGHTING"), row("11", "20/1", 600.0, "GATE OPERATOR")],
+            ..Default::default()
+        });
+        // The panel, inside the building's east wall.
+        sp.mep.equipment.push(MepEquipment {
+            tag: "LP".into(),
+            kind: "panelboard".into(),
+            level: "Level 1".into(),
+            min: [1_030.0, 380.0],
+            max: [1_050.0, 386.0],
+            bottom_ft: 3.0,
+            height_ft: 3.5,
+            ..MepEquipment::default()
+        });
+        if let Ok(d) = s.doc_mut() {
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            d.building_spec = Some(sp.to_json()).into();
+        }
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        for pass in 0..2 {
+            let mut result = serde_json::json!({});
+            site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+            let w = &result["site_work"];
+            let (sp, _) = super::super::bspec::current(&s, "test").unwrap_or_else(|e| panic!("{e}"));
+            let of = |label: &str| -> Vec<&MepRun> {
+                let id = super::super::ugcircuit::tag_id("Level 1", label);
+                sp.mep.runs.iter().filter(|r| r.id.split('#').next() == Some(id.as_str())).collect()
+            };
+            // The pole lights' circuit: its links, home run and stub-ups carry it, sized by its
+            // conductors (3 #12 fill 1/2" PVC), not the one rule size.
+            let lights = of("LP-7");
+            assert!(lights.len() >= 4, "pass {pass}: {:#?}", sp.mep.runs.iter().map(|r| (&r.id, &r.source_sheet)).collect::<Vec<_>>());
+            assert!(lights.iter().all(|r| r.size_in[0] == 0.5 && r.size_source.starts_with("fill: 2#12 + 1#12G")), "{lights:#?}");
+            let tag = sp.tags.iter().find(|t| t.id == super::super::ugcircuit::tag_id("Level 1", "LP-7")).expect("the circuit's tag");
+            assert_eq!(tag.fields.get("conductors").map(|f| f.value.as_str()), Some("2#12 + 1#12G"), "{tag:?}");
+            assert_eq!(tag.fields.get("load").map(|f| f.value.as_str()), Some("SITE LIGHTING"));
+            // The gate operator no site plan draws: out of its panel to the site, proposed.
+            let gate = of("LP-11");
+            assert_eq!(gate.len(), 3, "a run and two stub-ups: {gate:#?}");
+            assert!(gate.iter().all(|r| r.source_sheet.starts_with(SOURCE_PREFIX) && r.made == Made::Inferred), "{gate:#?}");
+            assert!(gate.iter().any(|r| r.points.len() >= 2 && r.points.first() == Some(&[1_040.0, 383.0])), "{gate:#?}");
+            assert!(
+                w["site_loads_proposed"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 1 && a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))),
+                "{w:#}"
+            );
+            assert!(w["site_loads_asked"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("LP-11")))), "{w:#}");
+            // One tag per buried circuit, on every rerun.
+            assert_eq!(sp.tags.iter().filter(|t| super::super::ugcircuit::is_buried(&t.id)).count(), 2, "pass {pass}");
+            // The atoms pull the circuit's conductors in its buried PVC.
+            let mut d = Drawing::default();
+            let _ = super::super::mepatoms::build::build(&mut d, &sp);
+            let atoms: Vec<cadaddy_doc::props::Props> = d.model.iter().map(|e| cadaddy_doc::props::read(&e.common.xdata)).collect();
+            let kind =
+                |p: &cadaddy_doc::props::Props| p.get(super::super::mepatoms::ATOM_KEY).map(cadaddy_doc::props::Prop::text).unwrap_or_default();
+            let on = |p: &cadaddy_doc::props::Props, c: &str| p.get("circuit").map(cadaddy_doc::props::Prop::text).as_deref() == Some(c);
+            assert!(atoms.iter().any(|p| kind(p) == "wire" && on(p, "LP-7")), "wires of LP-7");
+            assert!(atoms.iter().any(|p| kind(p) == "wire" && on(p, "LP-11")), "wires of LP-11");
+        }
+    }
+
+    /// Q6439: the site step builds its own luminaires only. A building's device corrected on the
+    /// model just before it (moved to its reflected ceiling plan spot, raised, a keynote's
+    /// property: the RCP, ceiling and keynote steps) stays as corrected, on every rerun.
+    #[test]
+    fn the_site_step_keeps_the_building_devices_corrected_before_it() {
+        use super::super::guided::{GuidedJob, JobGoal, SheetRegion, site_work_step};
+        let mut s = crate::Session::new();
+        let (site, area) = site_sheet();
+        let mut sp = spec_with_slab();
+        let symbol = {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            for e in site.model.iter() {
+                let _ = d.add(&Space::Model, e.common.clone(), e.kind.clone());
+            }
+            // A downlight on the building's electrical plan, inside its walls.
+            pline(d, "E-LGHT", &square([500.0, 400.0], 6.0), true)
+        };
+        let mut t = ElementTag {
+            id: "device:Level 1:41.7,33.3".into(),
+            kind: "device".into(),
+            level: "Level 1".into(),
+            at_ft: [500.0 / 12.0, 400.0 / 12.0],
+            ..Default::default()
+        };
+        t.set("symbol", symbol.hex(), "plan");
+        t.set("type", "A", "plan");
+        t.set("device_kind", "luminaire", "schedule");
+        t.set("mount", "ceiling", "plan");
+        sp.tags.push(t);
+        s.doc_mut().unwrap_or_else(|e| panic!("{e}")).building_spec = Some(sp.to_json()).into();
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let devices = |s: &crate::Session| -> Vec<(cadaddy_doc::Handle, bool)> {
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            d.model
+                .iter()
+                .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("device"))
+                .map(|e| (e.handle, cadaddy_doc::props::read(&e.common.xdata).get(MARK).is_some()))
+                .collect()
+        };
+        let built = devices(&s);
+        assert_eq!(built.len(), 1, "{built:?}");
+        let Some(&(light, _)) = built.first() else { panic!("no device built") };
+        // Corrected on the model only: 2 ft over to where the RCP dimensions it, a keynote's word.
+        let snapshot = {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            d.modify_entity(light, |e| {
+                e.kind.transform(&cadaddy_geom::Mat3::translate(Vec2::new(24.0, 0.0)));
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                store.set("keynote", cadaddy_doc::props::Prop::new("CEILING-MOUNTED JUNCTION BOX", cadaddy_doc::props::Source::computed()));
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            })
+            .unwrap_or_else(|e| panic!("{e}"));
+            d.model.get(light).map(|e| format!("{:?} {:?}", e.kind, e.common.xdata))
+        };
+        assert!(snapshot.is_some());
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-001".into(),
+            level: SITE_LEVEL.into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: area,
+            area: Some(area),
+            title_block: None,
+            not_built: "site/civil".into(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        for pass in 0..2 {
+            let mut result = serde_json::json!({});
+            site_work_step(&mut s, &mut job, &mut result).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(result["site_work"]["luminaires"], serde_json::json!(2), "{:#}", result["site_work"]);
+            let now = devices(&s);
+            // The two pole lights built, once; the corrected downlight the same element as before.
+            assert_eq!(now.iter().filter(|(_, site)| *site).count(), 2, "pass {pass}: {now:?}");
+            assert_eq!(now.iter().filter(|(_, site)| !*site).map(|(h, _)| *h).collect::<Vec<_>>(), vec![light], "pass {pass}: {now:?}");
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(d.model.get(light).map(|e| format!("{:?} {:?}", e.kind, e.common.xdata)), snapshot, "pass {pass}: the correction kept");
+        }
+    }
+
     /// A site plan tagging its pole lights by their circuit only (no type mark), a monument sign
     /// its label names, a box in grade its mark names; a transformer label a note runs on from.
     #[test]
@@ -2746,6 +3469,52 @@ mod tests {
         }
         let carried: BTreeSet<String> = built.circuits.keys().cloned().collect();
         assert!(site_loads(&sp, &carried).is_empty(), "{carried:?}");
+    }
+
+    /// A note calling conduits from site equipment with no line drawn: each conduit runs from the
+    /// equipment to the building's nearest wall and comes up out of the ground at the equipment,
+    /// not at the wall (the run's ends follow its points).
+    #[test]
+    fn a_note_only_run_stubs_up_at_its_equipment_not_at_the_wall() {
+        let mut d = Drawing::default();
+        let h = 18.0;
+        pline(&mut d, "-BASEC-BUILD", &[[10_000.0, 2_000.0], [10_960.0, 2_000.0], [10_960.0, 2_600.0], [10_000.0, 2_600.0]], true);
+        // A generator on its pad 40 ft east of the building, its label beside it.
+        let g = [11_440.0, 2_300.0];
+        pline(&mut d, "E-POWR", &square(g, 40.0), true);
+        text(&mut d, "EMERGENCY GENERATOR", g[0] + 60.0, g[1] + 10.0, h);
+        // The note, far off, calling two conduits from it; no line drawn for them.
+        text(&mut d, "PROVIDE (2) 2\" UNDERGROUND CONDUITS FROM", 12_600.0, 4_600.0, h);
+        text(&mut d, "GENERATOR TO TRANSFER SWITCH IN BUILDING.", 12_600.0, 4_570.0, h);
+        let read = read("E-001", &d, [9_000.0, 1_000.0, 14_000.0, 5_000.0], &BTreeSet::new(), 12.0);
+        assert!(read.equipment.iter().any(|q| q.kind == "generator"), "{:?} {:?}", read.equipment, read.unplaced_labels);
+        assert_eq!(read.notes.len(), 1, "{:?}", read.notes);
+
+        let sp = spec_with_slab();
+        let fit = register(&read, &sp, "Level 1", true);
+        let built = plan(&sp, &read, &fit, "Level 1", &mut Seq::default());
+        let gen_at = built
+            .equipment
+            .iter()
+            .find(|e| e.kind == "generator")
+            .map(|e| [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0])
+            .unwrap_or_else(|| panic!("no generator: {:?}", built.equipment));
+        let size = |r: &&MepRun| (r.size_in[0] - 2.0).abs() < 1e-9;
+        let runs: Vec<&MepRun> = built.runs.iter().filter(|r| r.top_ft.is_none() && r.points.len() >= 2).filter(size).collect();
+        assert_eq!(runs.len(), 2, "{:?}", built.runs);
+        // Each run from the generator to the wall: about 40 ft long.
+        for r in &runs {
+            let (Some(a), Some(z)) = (r.points.first(), r.points.last()) else { panic!("{r:?}") };
+            assert!(dist(*a, gen_at) < 12.0, "starts at the generator: {a:?} {gen_at:?}");
+            assert!(dist(*z, gen_at) > 30.0 * 12.0, "ends at the wall: {z:?}");
+        }
+        // Two stub-ups, both at the generator; none at the wall.
+        let stubs: Vec<&MepRun> = built.runs.iter().filter(|r| r.top_ft.is_some()).filter(size).collect();
+        assert_eq!(stubs.len(), 2, "{stubs:?}");
+        for s in &stubs {
+            let p = s.points.first().copied().unwrap_or([f64::NAN; 2]);
+            assert!(dist(p, gen_at) < 12.0, "stub-up at the generator, not the wall: {p:?} {gen_at:?}");
+        }
     }
 
     /// One line drawn through three poles, a second circuit's poles no line joins, a column of

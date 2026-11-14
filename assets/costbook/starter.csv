@@ -14,6 +14,34 @@ Board gypsum board,5/8" fire,sq ft,0.55,0.02,general,starter — replace with yo
 Studs wood,,lf,1.20,0.04,general,starter — replace with your own
 Studs steel,,lf,0.90,0.03,general,starter — replace with your own
 Track,,lf,0.65,0.02,general,starter — replace with your own
+Wood plate,,lf,0.95,0.03,framing,starter — replace with your own
+Header,,each,18.00,0.50,framing,starter — replace with your own
+Fire blocking,,lf,0.95,0.04,framing,starter — replace with your own
+Structural panel sheathing,,sq ft,1.10,0.02,framing,starter — replace with your own
+Joist,,lf,3.20,0.05,framing,starter — replace with your own
+Rim board,,lf,3.00,0.05,framing,starter — replace with your own
+Roof truss,,each,165.00,1.25,framing,starter — replace with your own
+Batt insulation,,sq ft,0.65,0.01,insulation,starter — replace with your own
+Rigid insulation,,sq ft,1.25,0.02,insulation,starter — replace with your own
+Firestop system,,each,28.00,0.35,firestopping,starter — replace with your own
+"Firestop system, rated wall, pipe",,each,32.00,0.40,firestopping,starter — replace with your own
+"Firestop system, rated wall, conduit",,each,30.00,0.40,firestopping,starter — replace with your own
+Joint tape,,ft,0.02,0.002,drywall,starter — replace with your own
+Joint compound,,lb,0.45,0.004,drywall,starter — replace with your own
+Drywall screws,,each,0.02,0.0005,drywall,starter — replace with your own
+Corner bead,,ft,0.35,0.02,drywall,starter — replace with your own
+Paint,,sq ft,0.18,0.006,finishes,starter — replace with your own
+Flooring,,sq ft,3.50,0.03,finishes,starter — replace with your own
+Wall base,,lf,1.40,0.03,finishes,starter — replace with your own
+Acoustical ceiling tile,,sq ft,1.60,0.02,finishes,starter — replace with your own
+Hollow metal frame,,each,210.00,1.25,openings,starter — replace with your own
+Wood door frame,,each,120.00,1.00,openings,starter — replace with your own
+Concrete slab,,cu yd,165.00,0.60,concrete,starter — replace with your own
+Vapor barrier,,sq ft,0.12,0.003,concrete,starter — replace with your own
+Rebar,,ft,0.70,0.01,concrete,starter — replace with your own
+Rebar chair,,each,0.35,0.005,concrete,starter — replace with your own
+Welded wire,,sq ft,0.30,0.004,concrete,starter — replace with your own
+Concrete masonry unit,,sq ft,4.20,0.10,masonry,starter — replace with your own
 Duplex receptacle,,each,2.50,0.40,electrical,starter — replace with your own
 Receptacle,,each,2.50,0.40,electrical,starter — replace with your own
 GFCI receptacle,,each,19.00,0.50,electrical,starter — replace with your own
@@ -99,3 +127,1133 @@ Cleanout,,each,28.00,0.75,plumbing,starter — replace with your own
 Water heater,,each,850.00,4.00,plumbing,starter — replace with your own
 Hose bibb,,each,25.00,0.75,plumbing,starter — replace with your own
 Backflow preventer,,each,280.00,2.00,plumbing,starter — replace with your own
+EMT offset,"1/2""",each,1.44,,electrical,starter — replace with your own
+EMT 90° elbow,"1/2""",each,1.80,,electrical,starter — replace with your own
+EMT 45° elbow,"1/2""",each,1.53,,electrical,starter — replace with your own
+EMT 30° elbow,"1/2""",each,1.44,,electrical,starter — replace with your own
+EMT 22.5° elbow,"1/2""",each,1.35,,electrical,starter — replace with your own
+EMT 11.25° elbow,"1/2""",each,1.35,,electrical,starter — replace with your own
+EMT field bend 90°,"1/2""",each,0.00,0.1,electrical,starter — replace with your own
+EMT field bend 45°,"1/2""",each,0.00,0.1,electrical,starter — replace with your own
+EMT field bend 30°,"1/2""",each,0.00,0.1,electrical,starter — replace with your own
+EMT field bend 22.5°,"1/2""",each,0.00,0.1,electrical,starter — replace with your own
+EMT field bend 11.25°,"1/2""",each,0.00,0.1,electrical,starter — replace with your own
+EMT field offset,"1/2""",each,0.00,0.15,electrical,starter — replace with your own
+EMT offset,"3/4""",each,1.92,,electrical,starter — replace with your own
+EMT 90° elbow,"3/4""",each,2.40,,electrical,starter — replace with your own
+EMT 45° elbow,"3/4""",each,2.04,,electrical,starter — replace with your own
+EMT 30° elbow,"3/4""",each,1.92,,electrical,starter — replace with your own
+EMT 22.5° elbow,"3/4""",each,1.80,,electrical,starter — replace with your own
+EMT 11.25° elbow,"3/4""",each,1.80,,electrical,starter — replace with your own
+EMT field bend 90°,"3/4""",each,0.00,0.12,electrical,starter — replace with your own
+EMT field bend 45°,"3/4""",each,0.00,0.12,electrical,starter — replace with your own
+EMT field bend 30°,"3/4""",each,0.00,0.12,electrical,starter — replace with your own
+EMT field bend 22.5°,"3/4""",each,0.00,0.12,electrical,starter — replace with your own
+EMT field bend 11.25°,"3/4""",each,0.00,0.12,electrical,starter — replace with your own
+EMT field offset,"3/4""",each,0.00,0.18,electrical,starter — replace with your own
+EMT offset,"1""",each,3.60,,electrical,starter — replace with your own
+EMT 90° elbow,"1""",each,4.50,,electrical,starter — replace with your own
+EMT 45° elbow,"1""",each,3.82,,electrical,starter — replace with your own
+EMT 30° elbow,"1""",each,3.60,,electrical,starter — replace with your own
+EMT 22.5° elbow,"1""",each,3.38,,electrical,starter — replace with your own
+EMT 11.25° elbow,"1""",each,3.38,,electrical,starter — replace with your own
+EMT field bend 90°,"1""",each,0.00,0.15,electrical,starter — replace with your own
+EMT field bend 45°,"1""",each,0.00,0.15,electrical,starter — replace with your own
+EMT field bend 30°,"1""",each,0.00,0.15,electrical,starter — replace with your own
+EMT field bend 22.5°,"1""",each,0.00,0.15,electrical,starter — replace with your own
+EMT field bend 11.25°,"1""",each,0.00,0.15,electrical,starter — replace with your own
+EMT field offset,"1""",each,0.00,0.225,electrical,starter — replace with your own
+EMT coupling,"1-1/4""",each,0.95,,electrical,starter — replace with your own
+EMT connector,"1-1/4""",each,1.20,,electrical,starter — replace with your own
+EMT offset,"1-1/4""",each,5.60,,electrical,starter — replace with your own
+Conduit strap,"1-1/4""",each,0.45,,electrical,starter — replace with your own
+EMT 90° elbow,"1-1/4""",each,7.00,,electrical,starter — replace with your own
+EMT 45° elbow,"1-1/4""",each,5.95,,electrical,starter — replace with your own
+EMT 30° elbow,"1-1/4""",each,5.60,,electrical,starter — replace with your own
+EMT 22.5° elbow,"1-1/4""",each,5.25,,electrical,starter — replace with your own
+EMT 11.25° elbow,"1-1/4""",each,5.25,,electrical,starter — replace with your own
+EMT coupling,"1-1/2""",each,1.25,,electrical,starter — replace with your own
+EMT connector,"1-1/2""",each,1.60,,electrical,starter — replace with your own
+EMT offset,"1-1/2""",each,7.20,,electrical,starter — replace with your own
+Conduit strap,"1-1/2""",each,0.55,,electrical,starter — replace with your own
+EMT 90° elbow,"1-1/2""",each,9.00,,electrical,starter — replace with your own
+EMT 45° elbow,"1-1/2""",each,7.65,,electrical,starter — replace with your own
+EMT 30° elbow,"1-1/2""",each,7.20,,electrical,starter — replace with your own
+EMT 22.5° elbow,"1-1/2""",each,6.75,,electrical,starter — replace with your own
+EMT 11.25° elbow,"1-1/2""",each,6.75,,electrical,starter — replace with your own
+EMT coupling,"2""",each,1.85,,electrical,starter — replace with your own
+EMT connector,"2""",each,2.40,,electrical,starter — replace with your own
+EMT offset,"2""",each,11.20,,electrical,starter — replace with your own
+Conduit strap,"2""",each,0.75,,electrical,starter — replace with your own
+EMT 90° elbow,"2""",each,14.00,,electrical,starter — replace with your own
+EMT 45° elbow,"2""",each,11.90,,electrical,starter — replace with your own
+EMT 30° elbow,"2""",each,11.20,,electrical,starter — replace with your own
+EMT 22.5° elbow,"2""",each,10.50,,electrical,starter — replace with your own
+EMT 11.25° elbow,"2""",each,10.50,,electrical,starter — replace with your own
+EMT conduit,"2-1/2""",ft,3.90,,electrical,starter — replace with your own
+EMT coupling,"2-1/2""",each,4.50,,electrical,starter — replace with your own
+EMT connector,"2-1/2""",each,6.00,,electrical,starter — replace with your own
+EMT offset,"2-1/2""",each,25.60,,electrical,starter — replace with your own
+Conduit strap,"2-1/2""",each,1.40,,electrical,starter — replace with your own
+EMT 90° elbow,"2-1/2""",each,32.00,,electrical,starter — replace with your own
+EMT 45° elbow,"2-1/2""",each,27.20,,electrical,starter — replace with your own
+EMT 30° elbow,"2-1/2""",each,25.60,,electrical,starter — replace with your own
+EMT 22.5° elbow,"2-1/2""",each,24.00,,electrical,starter — replace with your own
+EMT 11.25° elbow,"2-1/2""",each,24.00,,electrical,starter — replace with your own
+EMT conduit,"3""",ft,4.70,,electrical,starter — replace with your own
+EMT coupling,"3""",each,5.50,,electrical,starter — replace with your own
+EMT connector,"3""",each,7.50,,electrical,starter — replace with your own
+EMT offset,"3""",each,36.00,,electrical,starter — replace with your own
+Conduit strap,"3""",each,1.80,,electrical,starter — replace with your own
+EMT 90° elbow,"3""",each,45.00,,electrical,starter — replace with your own
+EMT 45° elbow,"3""",each,38.25,,electrical,starter — replace with your own
+EMT 30° elbow,"3""",each,36.00,,electrical,starter — replace with your own
+EMT 22.5° elbow,"3""",each,33.75,,electrical,starter — replace with your own
+EMT 11.25° elbow,"3""",each,33.75,,electrical,starter — replace with your own
+EMT conduit,"3-1/2""",ft,6.10,,electrical,starter — replace with your own
+EMT coupling,"3-1/2""",each,7.50,,electrical,starter — replace with your own
+EMT connector,"3-1/2""",each,10.00,,electrical,starter — replace with your own
+EMT offset,"3-1/2""",each,49.60,,electrical,starter — replace with your own
+Conduit strap,"3-1/2""",each,2.20,,electrical,starter — replace with your own
+EMT 90° elbow,"3-1/2""",each,62.00,,electrical,starter — replace with your own
+EMT 45° elbow,"3-1/2""",each,52.70,,electrical,starter — replace with your own
+EMT 30° elbow,"3-1/2""",each,49.60,,electrical,starter — replace with your own
+EMT 22.5° elbow,"3-1/2""",each,46.50,,electrical,starter — replace with your own
+EMT 11.25° elbow,"3-1/2""",each,46.50,,electrical,starter — replace with your own
+EMT conduit,"4""",ft,6.80,,electrical,starter — replace with your own
+EMT coupling,"4""",each,8.50,,electrical,starter — replace with your own
+EMT connector,"4""",each,11.50,,electrical,starter — replace with your own
+EMT offset,"4""",each,62.40,,electrical,starter — replace with your own
+Conduit strap,"4""",each,2.60,,electrical,starter — replace with your own
+EMT 90° elbow,"4""",each,78.00,,electrical,starter — replace with your own
+EMT 45° elbow,"4""",each,66.30,,electrical,starter — replace with your own
+EMT 30° elbow,"4""",each,62.40,,electrical,starter — replace with your own
+EMT 22.5° elbow,"4""",each,58.50,,electrical,starter — replace with your own
+EMT 11.25° elbow,"4""",each,58.50,,electrical,starter — replace with your own
+RMC conduit,"1/2""",ft,1.05,,electrical,starter — replace with your own
+RMC coupling,"1/2""",each,0.90,,electrical,starter — replace with your own
+RMC locknut and bushing,"1/2""",each,1.05,,electrical,starter — replace with your own
+RMC offset nipple,"1/2""",each,4.32,,electrical,starter — replace with your own
+RMC 90° elbow,"1/2""",each,5.40,,electrical,starter — replace with your own
+RMC 45° elbow,"1/2""",each,4.59,,electrical,starter — replace with your own
+RMC 30° elbow,"1/2""",each,4.32,,electrical,starter — replace with your own
+RMC 22.5° elbow,"1/2""",each,4.05,,electrical,starter — replace with your own
+RMC 11.25° elbow,"1/2""",each,4.05,,electrical,starter — replace with your own
+RMC field bend 90°,"1/2""",each,0.00,0.16,electrical,starter — replace with your own
+RMC field bend 45°,"1/2""",each,0.00,0.16,electrical,starter — replace with your own
+RMC field bend 30°,"1/2""",each,0.00,0.16,electrical,starter — replace with your own
+RMC field bend 22.5°,"1/2""",each,0.00,0.16,electrical,starter — replace with your own
+RMC field bend 11.25°,"1/2""",each,0.00,0.16,electrical,starter — replace with your own
+RMC field offset,"1/2""",each,0.00,0.24,electrical,starter — replace with your own
+RMC conduit,"3/4""",ft,1.56,,electrical,starter — replace with your own
+RMC coupling,"3/4""",each,1.05,,electrical,starter — replace with your own
+RMC locknut and bushing,"3/4""",each,1.35,,electrical,starter — replace with your own
+RMC offset nipple,"3/4""",each,5.76,,electrical,starter — replace with your own
+RMC 90° elbow,"3/4""",each,7.20,,electrical,starter — replace with your own
+RMC 45° elbow,"3/4""",each,6.12,,electrical,starter — replace with your own
+RMC 30° elbow,"3/4""",each,5.76,,electrical,starter — replace with your own
+RMC 22.5° elbow,"3/4""",each,5.40,,electrical,starter — replace with your own
+RMC 11.25° elbow,"3/4""",each,5.40,,electrical,starter — replace with your own
+RMC field bend 90°,"3/4""",each,0.00,0.192,electrical,starter — replace with your own
+RMC field bend 45°,"3/4""",each,0.00,0.192,electrical,starter — replace with your own
+RMC field bend 30°,"3/4""",each,0.00,0.192,electrical,starter — replace with your own
+RMC field bend 22.5°,"3/4""",each,0.00,0.192,electrical,starter — replace with your own
+RMC field bend 11.25°,"3/4""",each,0.00,0.192,electrical,starter — replace with your own
+RMC field offset,"3/4""",each,0.00,0.288,electrical,starter — replace with your own
+RMC conduit,"1""",ft,2.52,,electrical,starter — replace with your own
+RMC coupling,"1""",each,1.65,,electrical,starter — replace with your own
+RMC locknut and bushing,"1""",each,1.95,,electrical,starter — replace with your own
+RMC offset nipple,"1""",each,10.80,,electrical,starter — replace with your own
+RMC 90° elbow,"1""",each,13.50,,electrical,starter — replace with your own
+RMC 45° elbow,"1""",each,11.47,,electrical,starter — replace with your own
+RMC 30° elbow,"1""",each,10.80,,electrical,starter — replace with your own
+RMC 22.5° elbow,"1""",each,10.12,,electrical,starter — replace with your own
+RMC 11.25° elbow,"1""",each,10.12,,electrical,starter — replace with your own
+RMC field bend 90°,"1""",each,0.00,0.24,electrical,starter — replace with your own
+RMC field bend 45°,"1""",each,0.00,0.24,electrical,starter — replace with your own
+RMC field bend 30°,"1""",each,0.00,0.24,electrical,starter — replace with your own
+RMC field bend 22.5°,"1""",each,0.00,0.24,electrical,starter — replace with your own
+RMC field bend 11.25°,"1""",each,0.00,0.24,electrical,starter — replace with your own
+RMC field offset,"1""",each,0.00,0.36,electrical,starter — replace with your own
+RMC conduit,"1-1/4""",ft,3.84,,electrical,starter — replace with your own
+RMC coupling,"1-1/4""",each,2.85,,electrical,starter — replace with your own
+RMC locknut and bushing,"1-1/4""",each,3.60,,electrical,starter — replace with your own
+RMC offset nipple,"1-1/4""",each,16.80,,electrical,starter — replace with your own
+RMC 90° elbow,"1-1/4""",each,21.00,,electrical,starter — replace with your own
+RMC 45° elbow,"1-1/4""",each,17.85,,electrical,starter — replace with your own
+RMC 30° elbow,"1-1/4""",each,16.80,,electrical,starter — replace with your own
+RMC 22.5° elbow,"1-1/4""",each,15.75,,electrical,starter — replace with your own
+RMC 11.25° elbow,"1-1/4""",each,15.75,,electrical,starter — replace with your own
+RMC conduit,"1-1/2""",ft,4.68,,electrical,starter — replace with your own
+RMC coupling,"1-1/2""",each,3.75,,electrical,starter — replace with your own
+RMC locknut and bushing,"1-1/2""",each,4.80,,electrical,starter — replace with your own
+RMC offset nipple,"1-1/2""",each,21.60,,electrical,starter — replace with your own
+RMC 90° elbow,"1-1/2""",each,27.00,,electrical,starter — replace with your own
+RMC 45° elbow,"1-1/2""",each,22.95,,electrical,starter — replace with your own
+RMC 30° elbow,"1-1/2""",each,21.60,,electrical,starter — replace with your own
+RMC 22.5° elbow,"1-1/2""",each,20.25,,electrical,starter — replace with your own
+RMC 11.25° elbow,"1-1/2""",each,20.25,,electrical,starter — replace with your own
+RMC conduit,"2""",ft,6.03,,electrical,starter — replace with your own
+RMC coupling,"2""",each,5.55,,electrical,starter — replace with your own
+RMC locknut and bushing,"2""",each,7.20,,electrical,starter — replace with your own
+RMC offset nipple,"2""",each,33.60,,electrical,starter — replace with your own
+RMC 90° elbow,"2""",each,42.00,,electrical,starter — replace with your own
+RMC 45° elbow,"2""",each,35.70,,electrical,starter — replace with your own
+RMC 30° elbow,"2""",each,33.60,,electrical,starter — replace with your own
+RMC 22.5° elbow,"2""",each,31.50,,electrical,starter — replace with your own
+RMC 11.25° elbow,"2""",each,31.50,,electrical,starter — replace with your own
+RMC conduit,"2-1/2""",ft,11.70,,electrical,starter — replace with your own
+RMC coupling,"2-1/2""",each,13.50,,electrical,starter — replace with your own
+RMC locknut and bushing,"2-1/2""",each,18.00,,electrical,starter — replace with your own
+RMC offset nipple,"2-1/2""",each,76.80,,electrical,starter — replace with your own
+RMC 90° elbow,"2-1/2""",each,96.00,,electrical,starter — replace with your own
+RMC 45° elbow,"2-1/2""",each,81.60,,electrical,starter — replace with your own
+RMC 30° elbow,"2-1/2""",each,76.80,,electrical,starter — replace with your own
+RMC 22.5° elbow,"2-1/2""",each,72.00,,electrical,starter — replace with your own
+RMC 11.25° elbow,"2-1/2""",each,72.00,,electrical,starter — replace with your own
+RMC conduit,"3""",ft,14.10,,electrical,starter — replace with your own
+RMC coupling,"3""",each,16.50,,electrical,starter — replace with your own
+RMC locknut and bushing,"3""",each,22.50,,electrical,starter — replace with your own
+RMC offset nipple,"3""",each,108.00,,electrical,starter — replace with your own
+RMC 90° elbow,"3""",each,135.00,,electrical,starter — replace with your own
+RMC 45° elbow,"3""",each,114.75,,electrical,starter — replace with your own
+RMC 30° elbow,"3""",each,108.00,,electrical,starter — replace with your own
+RMC 22.5° elbow,"3""",each,101.25,,electrical,starter — replace with your own
+RMC 11.25° elbow,"3""",each,101.25,,electrical,starter — replace with your own
+RMC conduit,"3-1/2""",ft,18.30,,electrical,starter — replace with your own
+RMC coupling,"3-1/2""",each,22.50,,electrical,starter — replace with your own
+RMC locknut and bushing,"3-1/2""",each,30.00,,electrical,starter — replace with your own
+RMC offset nipple,"3-1/2""",each,148.80,,electrical,starter — replace with your own
+RMC 90° elbow,"3-1/2""",each,186.00,,electrical,starter — replace with your own
+RMC 45° elbow,"3-1/2""",each,158.10,,electrical,starter — replace with your own
+RMC 30° elbow,"3-1/2""",each,148.80,,electrical,starter — replace with your own
+RMC 22.5° elbow,"3-1/2""",each,139.50,,electrical,starter — replace with your own
+RMC 11.25° elbow,"3-1/2""",each,139.50,,electrical,starter — replace with your own
+RMC conduit,"4""",ft,20.40,,electrical,starter — replace with your own
+RMC coupling,"4""",each,25.50,,electrical,starter — replace with your own
+RMC locknut and bushing,"4""",each,34.50,,electrical,starter — replace with your own
+RMC offset nipple,"4""",each,187.20,,electrical,starter — replace with your own
+RMC 90° elbow,"4""",each,234.00,,electrical,starter — replace with your own
+RMC 45° elbow,"4""",each,198.90,,electrical,starter — replace with your own
+RMC 30° elbow,"4""",each,187.20,,electrical,starter — replace with your own
+RMC 22.5° elbow,"4""",each,175.50,,electrical,starter — replace with your own
+RMC 11.25° elbow,"4""",each,175.50,,electrical,starter — replace with your own
+IMC conduit,"1/2""",ft,0.84,,electrical,starter — replace with your own
+IMC coupling,"1/2""",each,0.72,,electrical,starter — replace with your own
+IMC locknut and bushing,"1/2""",each,0.84,,electrical,starter — replace with your own
+IMC offset nipple,"1/2""",each,3.46,,electrical,starter — replace with your own
+IMC 90° elbow,"1/2""",each,4.32,,electrical,starter — replace with your own
+IMC 45° elbow,"1/2""",each,3.67,,electrical,starter — replace with your own
+IMC 30° elbow,"1/2""",each,3.46,,electrical,starter — replace with your own
+IMC 22.5° elbow,"1/2""",each,3.24,,electrical,starter — replace with your own
+IMC 11.25° elbow,"1/2""",each,3.24,,electrical,starter — replace with your own
+IMC field bend 90°,"1/2""",each,0.00,0.14,electrical,starter — replace with your own
+IMC field bend 45°,"1/2""",each,0.00,0.14,electrical,starter — replace with your own
+IMC field bend 30°,"1/2""",each,0.00,0.14,electrical,starter — replace with your own
+IMC field bend 22.5°,"1/2""",each,0.00,0.14,electrical,starter — replace with your own
+IMC field bend 11.25°,"1/2""",each,0.00,0.14,electrical,starter — replace with your own
+IMC field offset,"1/2""",each,0.00,0.21,electrical,starter — replace with your own
+IMC conduit,"3/4""",ft,1.25,,electrical,starter — replace with your own
+IMC coupling,"3/4""",each,0.84,,electrical,starter — replace with your own
+IMC locknut and bushing,"3/4""",each,1.08,,electrical,starter — replace with your own
+IMC offset nipple,"3/4""",each,4.61,,electrical,starter — replace with your own
+IMC 90° elbow,"3/4""",each,5.76,,electrical,starter — replace with your own
+IMC 45° elbow,"3/4""",each,4.90,,electrical,starter — replace with your own
+IMC 30° elbow,"3/4""",each,4.61,,electrical,starter — replace with your own
+IMC 22.5° elbow,"3/4""",each,4.32,,electrical,starter — replace with your own
+IMC 11.25° elbow,"3/4""",each,4.32,,electrical,starter — replace with your own
+IMC field bend 90°,"3/4""",each,0.00,0.168,electrical,starter — replace with your own
+IMC field bend 45°,"3/4""",each,0.00,0.168,electrical,starter — replace with your own
+IMC field bend 30°,"3/4""",each,0.00,0.168,electrical,starter — replace with your own
+IMC field bend 22.5°,"3/4""",each,0.00,0.168,electrical,starter — replace with your own
+IMC field bend 11.25°,"3/4""",each,0.00,0.168,electrical,starter — replace with your own
+IMC field offset,"3/4""",each,0.00,0.252,electrical,starter — replace with your own
+IMC conduit,"1""",ft,2.02,,electrical,starter — replace with your own
+IMC coupling,"1""",each,1.32,,electrical,starter — replace with your own
+IMC locknut and bushing,"1""",each,1.56,,electrical,starter — replace with your own
+IMC offset nipple,"1""",each,8.64,,electrical,starter — replace with your own
+IMC 90° elbow,"1""",each,10.80,,electrical,starter — replace with your own
+IMC 45° elbow,"1""",each,9.18,,electrical,starter — replace with your own
+IMC 30° elbow,"1""",each,8.64,,electrical,starter — replace with your own
+IMC 22.5° elbow,"1""",each,8.10,,electrical,starter — replace with your own
+IMC 11.25° elbow,"1""",each,8.10,,electrical,starter — replace with your own
+IMC field bend 90°,"1""",each,0.00,0.21,electrical,starter — replace with your own
+IMC field bend 45°,"1""",each,0.00,0.21,electrical,starter — replace with your own
+IMC field bend 30°,"1""",each,0.00,0.21,electrical,starter — replace with your own
+IMC field bend 22.5°,"1""",each,0.00,0.21,electrical,starter — replace with your own
+IMC field bend 11.25°,"1""",each,0.00,0.21,electrical,starter — replace with your own
+IMC field offset,"1""",each,0.00,0.315,electrical,starter — replace with your own
+IMC conduit,"1-1/4""",ft,3.07,,electrical,starter — replace with your own
+IMC coupling,"1-1/4""",each,2.28,,electrical,starter — replace with your own
+IMC locknut and bushing,"1-1/4""",each,2.88,,electrical,starter — replace with your own
+IMC offset nipple,"1-1/4""",each,13.44,,electrical,starter — replace with your own
+IMC 90° elbow,"1-1/4""",each,16.80,,electrical,starter — replace with your own
+IMC 45° elbow,"1-1/4""",each,14.28,,electrical,starter — replace with your own
+IMC 30° elbow,"1-1/4""",each,13.44,,electrical,starter — replace with your own
+IMC 22.5° elbow,"1-1/4""",each,12.60,,electrical,starter — replace with your own
+IMC 11.25° elbow,"1-1/4""",each,12.60,,electrical,starter — replace with your own
+IMC conduit,"1-1/2""",ft,3.74,,electrical,starter — replace with your own
+IMC coupling,"1-1/2""",each,3.00,,electrical,starter — replace with your own
+IMC locknut and bushing,"1-1/2""",each,3.84,,electrical,starter — replace with your own
+IMC offset nipple,"1-1/2""",each,17.28,,electrical,starter — replace with your own
+IMC 90° elbow,"1-1/2""",each,21.60,,electrical,starter — replace with your own
+IMC 45° elbow,"1-1/2""",each,18.36,,electrical,starter — replace with your own
+IMC 30° elbow,"1-1/2""",each,17.28,,electrical,starter — replace with your own
+IMC 22.5° elbow,"1-1/2""",each,16.20,,electrical,starter — replace with your own
+IMC 11.25° elbow,"1-1/2""",each,16.20,,electrical,starter — replace with your own
+IMC conduit,"2""",ft,4.82,,electrical,starter — replace with your own
+IMC coupling,"2""",each,4.44,,electrical,starter — replace with your own
+IMC locknut and bushing,"2""",each,5.76,,electrical,starter — replace with your own
+IMC offset nipple,"2""",each,26.88,,electrical,starter — replace with your own
+IMC 90° elbow,"2""",each,33.60,,electrical,starter — replace with your own
+IMC 45° elbow,"2""",each,28.56,,electrical,starter — replace with your own
+IMC 30° elbow,"2""",each,26.88,,electrical,starter — replace with your own
+IMC 22.5° elbow,"2""",each,25.20,,electrical,starter — replace with your own
+IMC 11.25° elbow,"2""",each,25.20,,electrical,starter — replace with your own
+IMC conduit,"2-1/2""",ft,9.36,,electrical,starter — replace with your own
+IMC coupling,"2-1/2""",each,10.80,,electrical,starter — replace with your own
+IMC locknut and bushing,"2-1/2""",each,14.40,,electrical,starter — replace with your own
+IMC offset nipple,"2-1/2""",each,61.44,,electrical,starter — replace with your own
+IMC 90° elbow,"2-1/2""",each,76.80,,electrical,starter — replace with your own
+IMC 45° elbow,"2-1/2""",each,65.28,,electrical,starter — replace with your own
+IMC 30° elbow,"2-1/2""",each,61.44,,electrical,starter — replace with your own
+IMC 22.5° elbow,"2-1/2""",each,57.60,,electrical,starter — replace with your own
+IMC 11.25° elbow,"2-1/2""",each,57.60,,electrical,starter — replace with your own
+IMC conduit,"3""",ft,11.28,,electrical,starter — replace with your own
+IMC coupling,"3""",each,13.20,,electrical,starter — replace with your own
+IMC locknut and bushing,"3""",each,18.00,,electrical,starter — replace with your own
+IMC offset nipple,"3""",each,86.40,,electrical,starter — replace with your own
+IMC 90° elbow,"3""",each,108.00,,electrical,starter — replace with your own
+IMC 45° elbow,"3""",each,91.80,,electrical,starter — replace with your own
+IMC 30° elbow,"3""",each,86.40,,electrical,starter — replace with your own
+IMC 22.5° elbow,"3""",each,81.00,,electrical,starter — replace with your own
+IMC 11.25° elbow,"3""",each,81.00,,electrical,starter — replace with your own
+IMC conduit,"3-1/2""",ft,14.64,,electrical,starter — replace with your own
+IMC coupling,"3-1/2""",each,18.00,,electrical,starter — replace with your own
+IMC locknut and bushing,"3-1/2""",each,24.00,,electrical,starter — replace with your own
+IMC offset nipple,"3-1/2""",each,119.04,,electrical,starter — replace with your own
+IMC 90° elbow,"3-1/2""",each,148.80,,electrical,starter — replace with your own
+IMC 45° elbow,"3-1/2""",each,126.48,,electrical,starter — replace with your own
+IMC 30° elbow,"3-1/2""",each,119.04,,electrical,starter — replace with your own
+IMC 22.5° elbow,"3-1/2""",each,111.60,,electrical,starter — replace with your own
+IMC 11.25° elbow,"3-1/2""",each,111.60,,electrical,starter — replace with your own
+IMC conduit,"4""",ft,16.32,,electrical,starter — replace with your own
+IMC coupling,"4""",each,20.40,,electrical,starter — replace with your own
+IMC locknut and bushing,"4""",each,27.60,,electrical,starter — replace with your own
+IMC offset nipple,"4""",each,149.76,,electrical,starter — replace with your own
+IMC 90° elbow,"4""",each,187.20,,electrical,starter — replace with your own
+IMC 45° elbow,"4""",each,159.12,,electrical,starter — replace with your own
+IMC 30° elbow,"4""",each,149.76,,electrical,starter — replace with your own
+IMC 22.5° elbow,"4""",each,140.40,,electrical,starter — replace with your own
+IMC 11.25° elbow,"4""",each,140.40,,electrical,starter — replace with your own
+ENT,"1/2""",ft,0.17,,electrical,starter — replace with your own
+ENT coupling,"1/2""",each,0.15,,electrical,starter — replace with your own
+ENT connector,"1/2""",each,0.17,,electrical,starter — replace with your own
+ENT offset,"1/2""",each,0.72,,electrical,starter — replace with your own
+ENT strap,"1/2""",each,0.20,,electrical,starter — replace with your own
+ENT 90° elbow,"1/2""",each,0.90,,electrical,starter — replace with your own
+ENT 45° elbow,"1/2""",each,0.77,,electrical,starter — replace with your own
+ENT 30° elbow,"1/2""",each,0.72,,electrical,starter — replace with your own
+ENT 22.5° elbow,"1/2""",each,0.68,,electrical,starter — replace with your own
+ENT 11.25° elbow,"1/2""",each,0.68,,electrical,starter — replace with your own
+ENT bend 90°,"1/2""",each,0.00,0.07,electrical,starter — replace with your own
+ENT bend 45°,"1/2""",each,0.00,0.07,electrical,starter — replace with your own
+ENT bend 30°,"1/2""",each,0.00,0.07,electrical,starter — replace with your own
+ENT bend 22.5°,"1/2""",each,0.00,0.07,electrical,starter — replace with your own
+ENT bend 11.25°,"1/2""",each,0.00,0.07,electrical,starter — replace with your own
+ENT offset (by hand),"1/2""",each,0.00,0.105,electrical,starter — replace with your own
+ENT,"3/4""",ft,0.26,,electrical,starter — replace with your own
+ENT coupling,"3/4""",each,0.17,,electrical,starter — replace with your own
+ENT connector,"3/4""",each,0.23,,electrical,starter — replace with your own
+ENT offset,"3/4""",each,0.96,,electrical,starter — replace with your own
+ENT strap,"3/4""",each,0.25,,electrical,starter — replace with your own
+ENT 90° elbow,"3/4""",each,1.20,,electrical,starter — replace with your own
+ENT 45° elbow,"3/4""",each,1.02,,electrical,starter — replace with your own
+ENT 30° elbow,"3/4""",each,0.96,,electrical,starter — replace with your own
+ENT 22.5° elbow,"3/4""",each,0.90,,electrical,starter — replace with your own
+ENT 11.25° elbow,"3/4""",each,0.90,,electrical,starter — replace with your own
+ENT bend 90°,"3/4""",each,0.00,0.084,electrical,starter — replace with your own
+ENT bend 45°,"3/4""",each,0.00,0.084,electrical,starter — replace with your own
+ENT bend 30°,"3/4""",each,0.00,0.084,electrical,starter — replace with your own
+ENT bend 22.5°,"3/4""",each,0.00,0.084,electrical,starter — replace with your own
+ENT bend 11.25°,"3/4""",each,0.00,0.084,electrical,starter — replace with your own
+ENT offset (by hand),"3/4""",each,0.00,0.126,electrical,starter — replace with your own
+ENT,"1""",ft,0.42,,electrical,starter — replace with your own
+ENT coupling,"1""",each,0.28,,electrical,starter — replace with your own
+ENT connector,"1""",each,0.33,,electrical,starter — replace with your own
+ENT offset,"1""",each,1.80,,electrical,starter — replace with your own
+ENT strap,"1""",each,0.35,,electrical,starter — replace with your own
+ENT 90° elbow,"1""",each,2.25,,electrical,starter — replace with your own
+ENT 45° elbow,"1""",each,1.91,,electrical,starter — replace with your own
+ENT 30° elbow,"1""",each,1.80,,electrical,starter — replace with your own
+ENT 22.5° elbow,"1""",each,1.69,,electrical,starter — replace with your own
+ENT 11.25° elbow,"1""",each,1.69,,electrical,starter — replace with your own
+ENT bend 90°,"1""",each,0.00,0.105,electrical,starter — replace with your own
+ENT bend 45°,"1""",each,0.00,0.105,electrical,starter — replace with your own
+ENT bend 30°,"1""",each,0.00,0.105,electrical,starter — replace with your own
+ENT bend 22.5°,"1""",each,0.00,0.105,electrical,starter — replace with your own
+ENT bend 11.25°,"1""",each,0.00,0.105,electrical,starter — replace with your own
+ENT offset (by hand),"1""",each,0.00,0.158,electrical,starter — replace with your own
+ENT,"1-1/4""",ft,0.64,,electrical,starter — replace with your own
+ENT coupling,"1-1/4""",each,0.47,,electrical,starter — replace with your own
+ENT connector,"1-1/4""",each,0.60,,electrical,starter — replace with your own
+ENT offset,"1-1/4""",each,2.80,,electrical,starter — replace with your own
+ENT strap,"1-1/4""",each,0.45,,electrical,starter — replace with your own
+ENT 90° elbow,"1-1/4""",each,3.50,,electrical,starter — replace with your own
+ENT 45° elbow,"1-1/4""",each,2.98,,electrical,starter — replace with your own
+ENT 30° elbow,"1-1/4""",each,2.80,,electrical,starter — replace with your own
+ENT 22.5° elbow,"1-1/4""",each,2.62,,electrical,starter — replace with your own
+ENT 11.25° elbow,"1-1/4""",each,2.62,,electrical,starter — replace with your own
+ENT bend 90°,"1-1/4""",each,0.00,0.14,electrical,starter — replace with your own
+ENT bend 45°,"1-1/4""",each,0.00,0.14,electrical,starter — replace with your own
+ENT bend 30°,"1-1/4""",each,0.00,0.14,electrical,starter — replace with your own
+ENT bend 22.5°,"1-1/4""",each,0.00,0.14,electrical,starter — replace with your own
+ENT bend 11.25°,"1-1/4""",each,0.00,0.14,electrical,starter — replace with your own
+ENT offset (by hand),"1-1/4""",each,0.00,0.21,electrical,starter — replace with your own
+ENT,"1-1/2""",ft,0.78,,electrical,starter — replace with your own
+ENT coupling,"1-1/2""",each,0.62,,electrical,starter — replace with your own
+ENT connector,"1-1/2""",each,0.80,,electrical,starter — replace with your own
+ENT offset,"1-1/2""",each,3.60,,electrical,starter — replace with your own
+ENT strap,"1-1/2""",each,0.55,,electrical,starter — replace with your own
+ENT 90° elbow,"1-1/2""",each,4.50,,electrical,starter — replace with your own
+ENT 45° elbow,"1-1/2""",each,3.82,,electrical,starter — replace with your own
+ENT 30° elbow,"1-1/2""",each,3.60,,electrical,starter — replace with your own
+ENT 22.5° elbow,"1-1/2""",each,3.38,,electrical,starter — replace with your own
+ENT 11.25° elbow,"1-1/2""",each,3.38,,electrical,starter — replace with your own
+ENT bend 90°,"1-1/2""",each,0.00,0.175,electrical,starter — replace with your own
+ENT bend 45°,"1-1/2""",each,0.00,0.175,electrical,starter — replace with your own
+ENT bend 30°,"1-1/2""",each,0.00,0.175,electrical,starter — replace with your own
+ENT bend 22.5°,"1-1/2""",each,0.00,0.175,electrical,starter — replace with your own
+ENT bend 11.25°,"1-1/2""",each,0.00,0.175,electrical,starter — replace with your own
+ENT offset (by hand),"1-1/2""",each,0.00,0.262,electrical,starter — replace with your own
+ENT,"2""",ft,1.00,,electrical,starter — replace with your own
+ENT coupling,"2""",each,0.93,,electrical,starter — replace with your own
+ENT connector,"2""",each,1.20,,electrical,starter — replace with your own
+ENT offset,"2""",each,5.60,,electrical,starter — replace with your own
+ENT strap,"2""",each,0.75,,electrical,starter — replace with your own
+ENT 90° elbow,"2""",each,7.00,,electrical,starter — replace with your own
+ENT 45° elbow,"2""",each,5.95,,electrical,starter — replace with your own
+ENT 30° elbow,"2""",each,5.60,,electrical,starter — replace with your own
+ENT 22.5° elbow,"2""",each,5.25,,electrical,starter — replace with your own
+ENT 11.25° elbow,"2""",each,5.25,,electrical,starter — replace with your own
+ENT bend 90°,"2""",each,0.00,0.245,electrical,starter — replace with your own
+ENT bend 45°,"2""",each,0.00,0.245,electrical,starter — replace with your own
+ENT bend 30°,"2""",each,0.00,0.245,electrical,starter — replace with your own
+ENT bend 22.5°,"2""",each,0.00,0.245,electrical,starter — replace with your own
+ENT bend 11.25°,"2""",each,0.00,0.245,electrical,starter — replace with your own
+ENT offset (by hand),"2""",each,0.00,0.367,electrical,starter — replace with your own
+ENT,"2-1/2""",ft,1.95,,electrical,starter — replace with your own
+ENT coupling,"2-1/2""",each,2.25,,electrical,starter — replace with your own
+ENT connector,"2-1/2""",each,3.00,,electrical,starter — replace with your own
+ENT offset,"2-1/2""",each,12.80,,electrical,starter — replace with your own
+ENT strap,"2-1/2""",each,1.40,,electrical,starter — replace with your own
+ENT 90° elbow,"2-1/2""",each,16.00,,electrical,starter — replace with your own
+ENT 45° elbow,"2-1/2""",each,13.60,,electrical,starter — replace with your own
+ENT 30° elbow,"2-1/2""",each,12.80,,electrical,starter — replace with your own
+ENT 22.5° elbow,"2-1/2""",each,12.00,,electrical,starter — replace with your own
+ENT 11.25° elbow,"2-1/2""",each,12.00,,electrical,starter — replace with your own
+ENT,"3""",ft,2.35,,electrical,starter — replace with your own
+ENT coupling,"3""",each,2.75,,electrical,starter — replace with your own
+ENT connector,"3""",each,3.75,,electrical,starter — replace with your own
+ENT offset,"3""",each,18.00,,electrical,starter — replace with your own
+ENT strap,"3""",each,1.80,,electrical,starter — replace with your own
+ENT 90° elbow,"3""",each,22.50,,electrical,starter — replace with your own
+ENT 45° elbow,"3""",each,19.12,,electrical,starter — replace with your own
+ENT 30° elbow,"3""",each,18.00,,electrical,starter — replace with your own
+ENT 22.5° elbow,"3""",each,16.88,,electrical,starter — replace with your own
+ENT 11.25° elbow,"3""",each,16.88,,electrical,starter — replace with your own
+ENT,"3-1/2""",ft,3.05,,electrical,starter — replace with your own
+ENT coupling,"3-1/2""",each,3.75,,electrical,starter — replace with your own
+ENT connector,"3-1/2""",each,5.00,,electrical,starter — replace with your own
+ENT offset,"3-1/2""",each,24.80,,electrical,starter — replace with your own
+ENT strap,"3-1/2""",each,2.20,,electrical,starter — replace with your own
+ENT 90° elbow,"3-1/2""",each,31.00,,electrical,starter — replace with your own
+ENT 45° elbow,"3-1/2""",each,26.35,,electrical,starter — replace with your own
+ENT 30° elbow,"3-1/2""",each,24.80,,electrical,starter — replace with your own
+ENT 22.5° elbow,"3-1/2""",each,23.25,,electrical,starter — replace with your own
+ENT 11.25° elbow,"3-1/2""",each,23.25,,electrical,starter — replace with your own
+ENT,"4""",ft,3.40,,electrical,starter — replace with your own
+ENT coupling,"4""",each,4.25,,electrical,starter — replace with your own
+ENT connector,"4""",each,5.75,,electrical,starter — replace with your own
+ENT offset,"4""",each,31.20,,electrical,starter — replace with your own
+ENT strap,"4""",each,2.60,,electrical,starter — replace with your own
+ENT 90° elbow,"4""",each,39.00,,electrical,starter — replace with your own
+ENT 45° elbow,"4""",each,33.15,,electrical,starter — replace with your own
+ENT 30° elbow,"4""",each,31.20,,electrical,starter — replace with your own
+ENT 22.5° elbow,"4""",each,29.25,,electrical,starter — replace with your own
+ENT 11.25° elbow,"4""",each,29.25,,electrical,starter — replace with your own
+FMC,"1/2""",ft,0.42,,electrical,starter — replace with your own
+FMC coupling,"1/2""",each,0.36,,electrical,starter — replace with your own
+FMC connector,"1/2""",each,0.42,,electrical,starter — replace with your own
+FMC offset,"1/2""",each,1.73,,electrical,starter — replace with your own
+FMC 90° elbow,"1/2""",each,2.16,,electrical,starter — replace with your own
+FMC 45° elbow,"1/2""",each,1.84,,electrical,starter — replace with your own
+FMC 30° elbow,"1/2""",each,1.73,,electrical,starter — replace with your own
+FMC 22.5° elbow,"1/2""",each,1.62,,electrical,starter — replace with your own
+FMC 11.25° elbow,"1/2""",each,1.62,,electrical,starter — replace with your own
+FMC bend 90°,"1/2""",each,0.00,0.09,electrical,starter — replace with your own
+FMC bend 45°,"1/2""",each,0.00,0.09,electrical,starter — replace with your own
+FMC bend 30°,"1/2""",each,0.00,0.09,electrical,starter — replace with your own
+FMC bend 22.5°,"1/2""",each,0.00,0.09,electrical,starter — replace with your own
+FMC bend 11.25°,"1/2""",each,0.00,0.09,electrical,starter — replace with your own
+FMC offset (by hand),"1/2""",each,0.00,0.135,electrical,starter — replace with your own
+FMC,"3/4""",ft,0.62,,electrical,starter — replace with your own
+FMC coupling,"3/4""",each,0.42,,electrical,starter — replace with your own
+FMC connector,"3/4""",each,0.54,,electrical,starter — replace with your own
+FMC offset,"3/4""",each,2.30,,electrical,starter — replace with your own
+FMC 90° elbow,"3/4""",each,2.88,,electrical,starter — replace with your own
+FMC 45° elbow,"3/4""",each,2.45,,electrical,starter — replace with your own
+FMC 30° elbow,"3/4""",each,2.30,,electrical,starter — replace with your own
+FMC 22.5° elbow,"3/4""",each,2.16,,electrical,starter — replace with your own
+FMC 11.25° elbow,"3/4""",each,2.16,,electrical,starter — replace with your own
+FMC bend 90°,"3/4""",each,0.00,0.108,electrical,starter — replace with your own
+FMC bend 45°,"3/4""",each,0.00,0.108,electrical,starter — replace with your own
+FMC bend 30°,"3/4""",each,0.00,0.108,electrical,starter — replace with your own
+FMC bend 22.5°,"3/4""",each,0.00,0.108,electrical,starter — replace with your own
+FMC bend 11.25°,"3/4""",each,0.00,0.108,electrical,starter — replace with your own
+FMC offset (by hand),"3/4""",each,0.00,0.162,electrical,starter — replace with your own
+FMC,"1""",ft,1.01,,electrical,starter — replace with your own
+FMC coupling,"1""",each,0.66,,electrical,starter — replace with your own
+FMC connector,"1""",each,0.78,,electrical,starter — replace with your own
+FMC offset,"1""",each,4.32,,electrical,starter — replace with your own
+FMC 90° elbow,"1""",each,5.40,,electrical,starter — replace with your own
+FMC 45° elbow,"1""",each,4.59,,electrical,starter — replace with your own
+FMC 30° elbow,"1""",each,4.32,,electrical,starter — replace with your own
+FMC 22.5° elbow,"1""",each,4.05,,electrical,starter — replace with your own
+FMC 11.25° elbow,"1""",each,4.05,,electrical,starter — replace with your own
+FMC bend 90°,"1""",each,0.00,0.135,electrical,starter — replace with your own
+FMC bend 45°,"1""",each,0.00,0.135,electrical,starter — replace with your own
+FMC bend 30°,"1""",each,0.00,0.135,electrical,starter — replace with your own
+FMC bend 22.5°,"1""",each,0.00,0.135,electrical,starter — replace with your own
+FMC bend 11.25°,"1""",each,0.00,0.135,electrical,starter — replace with your own
+FMC offset (by hand),"1""",each,0.00,0.203,electrical,starter — replace with your own
+FMC,"1-1/4""",ft,1.54,,electrical,starter — replace with your own
+FMC coupling,"1-1/4""",each,1.14,,electrical,starter — replace with your own
+FMC connector,"1-1/4""",each,1.44,,electrical,starter — replace with your own
+FMC offset,"1-1/4""",each,6.72,,electrical,starter — replace with your own
+FMC 90° elbow,"1-1/4""",each,8.40,,electrical,starter — replace with your own
+FMC 45° elbow,"1-1/4""",each,7.14,,electrical,starter — replace with your own
+FMC 30° elbow,"1-1/4""",each,6.72,,electrical,starter — replace with your own
+FMC 22.5° elbow,"1-1/4""",each,6.30,,electrical,starter — replace with your own
+FMC 11.25° elbow,"1-1/4""",each,6.30,,electrical,starter — replace with your own
+FMC bend 90°,"1-1/4""",each,0.00,0.18,electrical,starter — replace with your own
+FMC bend 45°,"1-1/4""",each,0.00,0.18,electrical,starter — replace with your own
+FMC bend 30°,"1-1/4""",each,0.00,0.18,electrical,starter — replace with your own
+FMC bend 22.5°,"1-1/4""",each,0.00,0.18,electrical,starter — replace with your own
+FMC bend 11.25°,"1-1/4""",each,0.00,0.18,electrical,starter — replace with your own
+FMC offset (by hand),"1-1/4""",each,0.00,0.27,electrical,starter — replace with your own
+FMC,"1-1/2""",ft,1.87,,electrical,starter — replace with your own
+FMC coupling,"1-1/2""",each,1.50,,electrical,starter — replace with your own
+FMC connector,"1-1/2""",each,1.92,,electrical,starter — replace with your own
+FMC offset,"1-1/2""",each,8.64,,electrical,starter — replace with your own
+FMC 90° elbow,"1-1/2""",each,10.80,,electrical,starter — replace with your own
+FMC 45° elbow,"1-1/2""",each,9.18,,electrical,starter — replace with your own
+FMC 30° elbow,"1-1/2""",each,8.64,,electrical,starter — replace with your own
+FMC 22.5° elbow,"1-1/2""",each,8.10,,electrical,starter — replace with your own
+FMC 11.25° elbow,"1-1/2""",each,8.10,,electrical,starter — replace with your own
+FMC bend 90°,"1-1/2""",each,0.00,0.225,electrical,starter — replace with your own
+FMC bend 45°,"1-1/2""",each,0.00,0.225,electrical,starter — replace with your own
+FMC bend 30°,"1-1/2""",each,0.00,0.225,electrical,starter — replace with your own
+FMC bend 22.5°,"1-1/2""",each,0.00,0.225,electrical,starter — replace with your own
+FMC bend 11.25°,"1-1/2""",each,0.00,0.225,electrical,starter — replace with your own
+FMC offset (by hand),"1-1/2""",each,0.00,0.338,electrical,starter — replace with your own
+FMC,"2""",ft,2.41,,electrical,starter — replace with your own
+FMC coupling,"2""",each,2.22,,electrical,starter — replace with your own
+FMC connector,"2""",each,2.88,,electrical,starter — replace with your own
+FMC offset,"2""",each,13.44,,electrical,starter — replace with your own
+FMC 90° elbow,"2""",each,16.80,,electrical,starter — replace with your own
+FMC 45° elbow,"2""",each,14.28,,electrical,starter — replace with your own
+FMC 30° elbow,"2""",each,13.44,,electrical,starter — replace with your own
+FMC 22.5° elbow,"2""",each,12.60,,electrical,starter — replace with your own
+FMC 11.25° elbow,"2""",each,12.60,,electrical,starter — replace with your own
+FMC bend 90°,"2""",each,0.00,0.315,electrical,starter — replace with your own
+FMC bend 45°,"2""",each,0.00,0.315,electrical,starter — replace with your own
+FMC bend 30°,"2""",each,0.00,0.315,electrical,starter — replace with your own
+FMC bend 22.5°,"2""",each,0.00,0.315,electrical,starter — replace with your own
+FMC bend 11.25°,"2""",each,0.00,0.315,electrical,starter — replace with your own
+FMC offset (by hand),"2""",each,0.00,0.473,electrical,starter — replace with your own
+FMC,"2-1/2""",ft,4.68,,electrical,starter — replace with your own
+FMC coupling,"2-1/2""",each,5.40,,electrical,starter — replace with your own
+FMC connector,"2-1/2""",each,7.20,,electrical,starter — replace with your own
+FMC offset,"2-1/2""",each,30.72,,electrical,starter — replace with your own
+FMC 90° elbow,"2-1/2""",each,38.40,,electrical,starter — replace with your own
+FMC 45° elbow,"2-1/2""",each,32.64,,electrical,starter — replace with your own
+FMC 30° elbow,"2-1/2""",each,30.72,,electrical,starter — replace with your own
+FMC 22.5° elbow,"2-1/2""",each,28.80,,electrical,starter — replace with your own
+FMC 11.25° elbow,"2-1/2""",each,28.80,,electrical,starter — replace with your own
+FMC,"3""",ft,5.64,,electrical,starter — replace with your own
+FMC coupling,"3""",each,6.60,,electrical,starter — replace with your own
+FMC connector,"3""",each,9.00,,electrical,starter — replace with your own
+FMC offset,"3""",each,43.20,,electrical,starter — replace with your own
+FMC 90° elbow,"3""",each,54.00,,electrical,starter — replace with your own
+FMC 45° elbow,"3""",each,45.90,,electrical,starter — replace with your own
+FMC 30° elbow,"3""",each,43.20,,electrical,starter — replace with your own
+FMC 22.5° elbow,"3""",each,40.50,,electrical,starter — replace with your own
+FMC 11.25° elbow,"3""",each,40.50,,electrical,starter — replace with your own
+FMC,"3-1/2""",ft,7.32,,electrical,starter — replace with your own
+FMC coupling,"3-1/2""",each,9.00,,electrical,starter — replace with your own
+FMC connector,"3-1/2""",each,12.00,,electrical,starter — replace with your own
+FMC offset,"3-1/2""",each,59.52,,electrical,starter — replace with your own
+FMC 90° elbow,"3-1/2""",each,74.40,,electrical,starter — replace with your own
+FMC 45° elbow,"3-1/2""",each,63.24,,electrical,starter — replace with your own
+FMC 30° elbow,"3-1/2""",each,59.52,,electrical,starter — replace with your own
+FMC 22.5° elbow,"3-1/2""",each,55.80,,electrical,starter — replace with your own
+FMC 11.25° elbow,"3-1/2""",each,55.80,,electrical,starter — replace with your own
+FMC,"4""",ft,8.16,,electrical,starter — replace with your own
+FMC coupling,"4""",each,10.20,,electrical,starter — replace with your own
+FMC connector,"4""",each,13.80,,electrical,starter — replace with your own
+FMC offset,"4""",each,74.88,,electrical,starter — replace with your own
+FMC 90° elbow,"4""",each,93.60,,electrical,starter — replace with your own
+FMC 45° elbow,"4""",each,79.56,,electrical,starter — replace with your own
+FMC 30° elbow,"4""",each,74.88,,electrical,starter — replace with your own
+FMC 22.5° elbow,"4""",each,70.20,,electrical,starter — replace with your own
+FMC 11.25° elbow,"4""",each,70.20,,electrical,starter — replace with your own
+PVC conduit,"1/2""",ft,0.28,,electrical,starter — replace with your own
+PVC coupling,"1/2""",each,0.24,,electrical,starter — replace with your own
+PVC terminal adapter,"1/2""",each,0.28,,electrical,starter — replace with your own
+PVC offset,"1/2""",each,1.15,,electrical,starter — replace with your own
+PVC 90° elbow,"1/2""",each,1.44,,electrical,starter — replace with your own
+PVC 45° elbow,"1/2""",each,1.22,,electrical,starter — replace with your own
+PVC 30° elbow,"1/2""",each,1.15,,electrical,starter — replace with your own
+PVC 22.5° elbow,"1/2""",each,1.08,,electrical,starter — replace with your own
+PVC 11.25° elbow,"1/2""",each,1.08,,electrical,starter — replace with your own
+PVC conduit,"3/4""",ft,0.42,,electrical,starter — replace with your own
+PVC coupling,"3/4""",each,0.28,,electrical,starter — replace with your own
+PVC terminal adapter,"3/4""",each,0.36,,electrical,starter — replace with your own
+PVC offset,"3/4""",each,1.54,,electrical,starter — replace with your own
+PVC 90° elbow,"3/4""",each,1.92,,electrical,starter — replace with your own
+PVC 45° elbow,"3/4""",each,1.63,,electrical,starter — replace with your own
+PVC 30° elbow,"3/4""",each,1.54,,electrical,starter — replace with your own
+PVC 22.5° elbow,"3/4""",each,1.44,,electrical,starter — replace with your own
+PVC 11.25° elbow,"3/4""",each,1.44,,electrical,starter — replace with your own
+PVC conduit,"1""",ft,0.67,,electrical,starter — replace with your own
+PVC coupling,"1""",each,0.44,,electrical,starter — replace with your own
+PVC terminal adapter,"1""",each,0.52,,electrical,starter — replace with your own
+PVC offset,"1""",each,2.88,,electrical,starter — replace with your own
+PVC 90° elbow,"1""",each,3.60,,electrical,starter — replace with your own
+PVC 45° elbow,"1""",each,3.06,,electrical,starter — replace with your own
+PVC 30° elbow,"1""",each,2.88,,electrical,starter — replace with your own
+PVC 22.5° elbow,"1""",each,2.70,,electrical,starter — replace with your own
+PVC 11.25° elbow,"1""",each,2.70,,electrical,starter — replace with your own
+PVC conduit,"1-1/4""",ft,1.02,,electrical,starter — replace with your own
+PVC coupling,"1-1/4""",each,0.76,,electrical,starter — replace with your own
+PVC terminal adapter,"1-1/4""",each,0.96,,electrical,starter — replace with your own
+PVC offset,"1-1/4""",each,4.48,,electrical,starter — replace with your own
+PVC 90° elbow,"1-1/4""",each,5.60,,electrical,starter — replace with your own
+PVC 45° elbow,"1-1/4""",each,4.76,,electrical,starter — replace with your own
+PVC 30° elbow,"1-1/4""",each,4.48,,electrical,starter — replace with your own
+PVC 22.5° elbow,"1-1/4""",each,4.20,,electrical,starter — replace with your own
+PVC 11.25° elbow,"1-1/4""",each,4.20,,electrical,starter — replace with your own
+PVC conduit,"1-1/2""",ft,1.25,,electrical,starter — replace with your own
+PVC coupling,"1-1/2""",each,1.00,,electrical,starter — replace with your own
+PVC terminal adapter,"1-1/2""",each,1.28,,electrical,starter — replace with your own
+PVC offset,"1-1/2""",each,5.76,,electrical,starter — replace with your own
+PVC 90° elbow,"1-1/2""",each,7.20,,electrical,starter — replace with your own
+PVC 45° elbow,"1-1/2""",each,6.12,,electrical,starter — replace with your own
+PVC 30° elbow,"1-1/2""",each,5.76,,electrical,starter — replace with your own
+PVC 22.5° elbow,"1-1/2""",each,5.40,,electrical,starter — replace with your own
+PVC 11.25° elbow,"1-1/2""",each,5.40,,electrical,starter — replace with your own
+PVC conduit,"2""",ft,1.61,,electrical,starter — replace with your own
+PVC coupling,"2""",each,1.48,,electrical,starter — replace with your own
+PVC terminal adapter,"2""",each,1.92,,electrical,starter — replace with your own
+PVC offset,"2""",each,8.96,,electrical,starter — replace with your own
+PVC 90° elbow,"2""",each,11.20,,electrical,starter — replace with your own
+PVC 45° elbow,"2""",each,9.52,,electrical,starter — replace with your own
+PVC 30° elbow,"2""",each,8.96,,electrical,starter — replace with your own
+PVC 22.5° elbow,"2""",each,8.40,,electrical,starter — replace with your own
+PVC 11.25° elbow,"2""",each,8.40,,electrical,starter — replace with your own
+PVC conduit,"2-1/2""",ft,3.12,,electrical,starter — replace with your own
+PVC coupling,"2-1/2""",each,3.60,,electrical,starter — replace with your own
+PVC terminal adapter,"2-1/2""",each,4.80,,electrical,starter — replace with your own
+PVC offset,"2-1/2""",each,20.48,,electrical,starter — replace with your own
+PVC 90° elbow,"2-1/2""",each,25.60,,electrical,starter — replace with your own
+PVC 45° elbow,"2-1/2""",each,21.76,,electrical,starter — replace with your own
+PVC 30° elbow,"2-1/2""",each,20.48,,electrical,starter — replace with your own
+PVC 22.5° elbow,"2-1/2""",each,19.20,,electrical,starter — replace with your own
+PVC 11.25° elbow,"2-1/2""",each,19.20,,electrical,starter — replace with your own
+PVC conduit,"3""",ft,3.76,,electrical,starter — replace with your own
+PVC coupling,"3""",each,4.40,,electrical,starter — replace with your own
+PVC terminal adapter,"3""",each,6.00,,electrical,starter — replace with your own
+PVC offset,"3""",each,28.80,,electrical,starter — replace with your own
+PVC 90° elbow,"3""",each,36.00,,electrical,starter — replace with your own
+PVC 45° elbow,"3""",each,30.60,,electrical,starter — replace with your own
+PVC 30° elbow,"3""",each,28.80,,electrical,starter — replace with your own
+PVC 22.5° elbow,"3""",each,27.00,,electrical,starter — replace with your own
+PVC 11.25° elbow,"3""",each,27.00,,electrical,starter — replace with your own
+PVC conduit,"3-1/2""",ft,4.88,,electrical,starter — replace with your own
+PVC coupling,"3-1/2""",each,6.00,,electrical,starter — replace with your own
+PVC terminal adapter,"3-1/2""",each,8.00,,electrical,starter — replace with your own
+PVC offset,"3-1/2""",each,39.68,,electrical,starter — replace with your own
+PVC 90° elbow,"3-1/2""",each,49.60,,electrical,starter — replace with your own
+PVC 45° elbow,"3-1/2""",each,42.16,,electrical,starter — replace with your own
+PVC 30° elbow,"3-1/2""",each,39.68,,electrical,starter — replace with your own
+PVC 22.5° elbow,"3-1/2""",each,37.20,,electrical,starter — replace with your own
+PVC 11.25° elbow,"3-1/2""",each,37.20,,electrical,starter — replace with your own
+PVC conduit,"4""",ft,5.44,,electrical,starter — replace with your own
+PVC coupling,"4""",each,6.80,,electrical,starter — replace with your own
+PVC terminal adapter,"4""",each,9.20,,electrical,starter — replace with your own
+PVC offset,"4""",each,49.92,,electrical,starter — replace with your own
+PVC 90° elbow,"4""",each,62.40,,electrical,starter — replace with your own
+PVC 45° elbow,"4""",each,53.04,,electrical,starter — replace with your own
+PVC 30° elbow,"4""",each,49.92,,electrical,starter — replace with your own
+PVC 22.5° elbow,"4""",each,46.80,,electrical,starter — replace with your own
+PVC 11.25° elbow,"4""",each,46.80,,electrical,starter — replace with your own
+Locknut,"1/2""",each,0.08,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"1/2""",each,0.45,,electrical,starter — replace with your own
+Insulated bushing,"1/2""",each,0.36,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"1/2""",each,0.70,0.06,electrical,starter — replace with your own
+EMT to PVC transition adapter,"1/2""",each,0.70,0.06,electrical,starter — replace with your own
+PVC to RMC transition adapter,"1/2""",each,0.70,0.06,electrical,starter — replace with your own
+RMC to PVC transition adapter,"1/2""",each,0.70,0.06,electrical,starter — replace with your own
+PVC to IMC transition adapter,"1/2""",each,0.70,0.06,electrical,starter — replace with your own
+IMC to PVC transition adapter,"1/2""",each,0.70,0.06,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","1/2""",each,18.00,0.3,electrical,starter — replace with your own
+Locknut,"3/4""",each,0.10,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"3/4""",each,0.55,,electrical,starter — replace with your own
+Insulated bushing,"3/4""",each,0.44,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"3/4""",each,0.90,0.06,electrical,starter — replace with your own
+EMT to PVC transition adapter,"3/4""",each,0.90,0.06,electrical,starter — replace with your own
+PVC to RMC transition adapter,"3/4""",each,0.90,0.06,electrical,starter — replace with your own
+RMC to PVC transition adapter,"3/4""",each,0.90,0.06,electrical,starter — replace with your own
+PVC to IMC transition adapter,"3/4""",each,0.90,0.06,electrical,starter — replace with your own
+IMC to PVC transition adapter,"3/4""",each,0.90,0.06,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","3/4""",each,24.00,0.35,electrical,starter — replace with your own
+Locknut,"1""",each,0.15,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"1""",each,0.75,,electrical,starter — replace with your own
+Insulated bushing,"1""",each,0.60,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"1""",each,1.30,0.08,electrical,starter — replace with your own
+EMT to PVC transition adapter,"1""",each,1.30,0.08,electrical,starter — replace with your own
+PVC to RMC transition adapter,"1""",each,1.30,0.08,electrical,starter — replace with your own
+RMC to PVC transition adapter,"1""",each,1.30,0.08,electrical,starter — replace with your own
+PVC to IMC transition adapter,"1""",each,1.30,0.08,electrical,starter — replace with your own
+IMC to PVC transition adapter,"1""",each,1.30,0.08,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","1""",each,30.00,0.4,electrical,starter — replace with your own
+Locknut,"1-1/4""",each,0.25,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"1-1/4""",each,1.10,,electrical,starter — replace with your own
+Insulated bushing,"1-1/4""",each,0.88,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"1-1/4""",each,2.40,0.1,electrical,starter — replace with your own
+EMT to PVC transition adapter,"1-1/4""",each,2.40,0.1,electrical,starter — replace with your own
+PVC to RMC transition adapter,"1-1/4""",each,2.40,0.1,electrical,starter — replace with your own
+RMC to PVC transition adapter,"1-1/4""",each,2.40,0.1,electrical,starter — replace with your own
+PVC to IMC transition adapter,"1-1/4""",each,2.40,0.1,electrical,starter — replace with your own
+IMC to PVC transition adapter,"1-1/4""",each,2.40,0.1,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","1-1/4""",each,36.00,0.45,electrical,starter — replace with your own
+Locknut,"1-1/2""",each,0.35,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"1-1/2""",each,1.40,,electrical,starter — replace with your own
+Insulated bushing,"1-1/2""",each,1.12,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"1-1/2""",each,3.20,0.1,electrical,starter — replace with your own
+EMT to PVC transition adapter,"1-1/2""",each,3.20,0.1,electrical,starter — replace with your own
+PVC to RMC transition adapter,"1-1/2""",each,3.20,0.1,electrical,starter — replace with your own
+RMC to PVC transition adapter,"1-1/2""",each,3.20,0.1,electrical,starter — replace with your own
+PVC to IMC transition adapter,"1-1/2""",each,3.20,0.1,electrical,starter — replace with your own
+IMC to PVC transition adapter,"1-1/2""",each,3.20,0.1,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","1-1/2""",each,42.00,0.5,electrical,starter — replace with your own
+Locknut,"2""",each,0.45,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"2""",each,2.10,,electrical,starter — replace with your own
+Insulated bushing,"2""",each,1.68,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"2""",each,4.80,0.12,electrical,starter — replace with your own
+EMT to PVC transition adapter,"2""",each,4.80,0.12,electrical,starter — replace with your own
+PVC to RMC transition adapter,"2""",each,4.80,0.12,electrical,starter — replace with your own
+RMC to PVC transition adapter,"2""",each,4.80,0.12,electrical,starter — replace with your own
+PVC to IMC transition adapter,"2""",each,4.80,0.12,electrical,starter — replace with your own
+IMC to PVC transition adapter,"2""",each,4.80,0.12,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","2""",each,48.00,0.55,electrical,starter — replace with your own
+Locknut,"2-1/2""",each,1.20,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"2-1/2""",each,4.20,,electrical,starter — replace with your own
+Insulated bushing,"2-1/2""",each,3.36,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"2-1/2""",each,12.00,0.16,electrical,starter — replace with your own
+EMT to PVC transition adapter,"2-1/2""",each,12.00,0.16,electrical,starter — replace with your own
+PVC to RMC transition adapter,"2-1/2""",each,12.00,0.16,electrical,starter — replace with your own
+RMC to PVC transition adapter,"2-1/2""",each,12.00,0.16,electrical,starter — replace with your own
+PVC to IMC transition adapter,"2-1/2""",each,12.00,0.16,electrical,starter — replace with your own
+IMC to PVC transition adapter,"2-1/2""",each,12.00,0.16,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","2-1/2""",each,54.00,0.6,electrical,starter — replace with your own
+Locknut,"3""",each,1.60,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"3""",each,5.40,,electrical,starter — replace with your own
+Insulated bushing,"3""",each,4.32,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"3""",each,15.00,0.18,electrical,starter — replace with your own
+EMT to PVC transition adapter,"3""",each,15.00,0.18,electrical,starter — replace with your own
+PVC to RMC transition adapter,"3""",each,15.00,0.18,electrical,starter — replace with your own
+RMC to PVC transition adapter,"3""",each,15.00,0.18,electrical,starter — replace with your own
+PVC to IMC transition adapter,"3""",each,15.00,0.18,electrical,starter — replace with your own
+IMC to PVC transition adapter,"3""",each,15.00,0.18,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","3""",each,60.00,0.65,electrical,starter — replace with your own
+Locknut,"3-1/2""",each,2.20,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"3-1/2""",each,7.80,,electrical,starter — replace with your own
+Insulated bushing,"3-1/2""",each,6.24,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"3-1/2""",each,20.00,0.2,electrical,starter — replace with your own
+EMT to PVC transition adapter,"3-1/2""",each,20.00,0.2,electrical,starter — replace with your own
+PVC to RMC transition adapter,"3-1/2""",each,20.00,0.2,electrical,starter — replace with your own
+RMC to PVC transition adapter,"3-1/2""",each,20.00,0.2,electrical,starter — replace with your own
+PVC to IMC transition adapter,"3-1/2""",each,20.00,0.2,electrical,starter — replace with your own
+IMC to PVC transition adapter,"3-1/2""",each,20.00,0.2,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","3-1/2""",each,66.00,0.7,electrical,starter — replace with your own
+Locknut,"4""",each,2.80,,electrical,starter — replace with your own
+Insulating bushing (bang-on),"4""",each,9.50,,electrical,starter — replace with your own
+Insulated bushing,"4""",each,7.60,,electrical,starter — replace with your own
+PVC to EMT transition adapter,"4""",each,23.00,0.22,electrical,starter — replace with your own
+EMT to PVC transition adapter,"4""",each,23.00,0.22,electrical,starter — replace with your own
+PVC to RMC transition adapter,"4""",each,23.00,0.22,electrical,starter — replace with your own
+RMC to PVC transition adapter,"4""",each,23.00,0.22,electrical,starter — replace with your own
+PVC to IMC transition adapter,"4""",each,23.00,0.22,electrical,starter — replace with your own
+IMC to PVC transition adapter,"4""",each,23.00,0.22,electrical,starter — replace with your own
+"Firestop system, through-penetration (UL listed)","4""",each,72.00,0.75,electrical,starter — replace with your own
+"Firestop system, cable through-penetration (UL listed)",,each,16.00,0.3,electrical,starter — replace with your own
+"Box, 4"" square","4"" square",each,3.00,,electrical,starter — replace with your own
+"Box, 4-11/16"" square","4-11/16"" square",each,4.50,,electrical,starter — replace with your own
+"Device box, 3 gang",3 gang,each,7.50,,electrical,starter — replace with your own
+"Device box, 3 gang","3 gang, 3-1/2"" deep",each,7.50,,electrical,starter — replace with your own
+"Device box, 4 gang","4 gang, 3-1/2"" deep",each,10.00,,electrical,starter — replace with your own
+"Device box, 4 gang",4 gang,each,10.00,,electrical,starter — replace with your own
+"Box, 4"" octagon","4"" octagon",each,2.50,,electrical,starter — replace with your own
+"Device box, 1 gang",3 x 2 x 3-1/2,each,7.50,,electrical,starter — replace with your own
+"Device box, 1 gang, nonmetallic",1 gang,each,0.60,,electrical,starter — replace with your own
+"Device box, 2 gang, nonmetallic",2 gang,each,1.30,,electrical,starter — replace with your own
+"Device box, 3 gang, nonmetallic",3 gang,each,2.00,,electrical,starter — replace with your own
+"Device box, 4 gang, nonmetallic",4 gang,each,2.70,,electrical,starter — replace with your own
+"Box, ceiling fan rated","4"" octagon",each,2.50,,electrical,starter — replace with your own
+Floor box,1 gang,each,45.00,,electrical,starter — replace with your own
+Plaster ring,3 gang,each,1.50,,electrical,starter — replace with your own
+Plaster ring,4 gang,each,1.90,,electrical,starter — replace with your own
+"Copper ground, green",#14,ft,0.08,,electrical,starter — replace with your own
+THHN copper,#14,ft,0.08,,electrical,starter — replace with your own
+"Copper ground, green",#12,ft,0.12,,electrical,starter — replace with your own
+THHN copper,#12,ft,0.12,,electrical,starter — replace with your own
+"Copper ground, green",#10,ft,0.18,,electrical,starter — replace with your own
+THHN copper,#10,ft,0.18,,electrical,starter — replace with your own
+"Copper ground, green",#8,ft,0.35,,electrical,starter — replace with your own
+THHN copper,#8,ft,0.35,,electrical,starter — replace with your own
+XHHW aluminum,#8,ft,0.12,,electrical,starter — replace with your own
+"Copper ground, green",#6,ft,0.55,,electrical,starter — replace with your own
+THHN copper,#6,ft,0.55,,electrical,starter — replace with your own
+XHHW aluminum,#6,ft,0.18,,electrical,starter — replace with your own
+"Copper ground, green",#4,ft,0.90,,electrical,starter — replace with your own
+THHN copper,#4,ft,0.90,,electrical,starter — replace with your own
+"Copper ground, green",#3,ft,1.15,,electrical,starter — replace with your own
+THHN copper,#3,ft,1.15,,electrical,starter — replace with your own
+XHHW aluminum,#3,ft,0.38,,electrical,starter — replace with your own
+"Copper ground, green",#2,ft,1.45,,electrical,starter — replace with your own
+THHN copper,#2,ft,1.45,,electrical,starter — replace with your own
+XHHW aluminum,#2,ft,0.48,,electrical,starter — replace with your own
+"Copper ground, green",#1,ft,1.85,,electrical,starter — replace with your own
+THHN copper,#1,ft,1.85,,electrical,starter — replace with your own
+XHHW aluminum,#1,ft,0.61,,electrical,starter — replace with your own
+"Copper ground, green",#1/0,ft,2.30,,electrical,starter — replace with your own
+THHN copper,#1/0,ft,2.30,,electrical,starter — replace with your own
+XHHW aluminum,#1/0,ft,0.76,,electrical,starter — replace with your own
+"Copper ground, green",#2/0,ft,2.85,,electrical,starter — replace with your own
+THHN copper,#2/0,ft,2.85,,electrical,starter — replace with your own
+"Copper ground, green",#3/0,ft,3.55,,electrical,starter — replace with your own
+THHN copper,#3/0,ft,3.55,,electrical,starter — replace with your own
+XHHW aluminum,#3/0,ft,1.17,,electrical,starter — replace with your own
+"Copper ground, green",#4/0,ft,4.45,,electrical,starter — replace with your own
+THHN copper,#4/0,ft,4.45,,electrical,starter — replace with your own
+XHHW aluminum,#4/0,ft,1.47,,electrical,starter — replace with your own
+"Copper ground, green",#250,ft,5.40,,electrical,starter — replace with your own
+THHN copper,#250,ft,5.40,,electrical,starter — replace with your own
+XHHW aluminum,#250,ft,1.78,,electrical,starter — replace with your own
+"Copper ground, green",250 kcmil,ft,5.40,,electrical,starter — replace with your own
+THHN copper,250 kcmil,ft,5.40,,electrical,starter — replace with your own
+XHHW aluminum,250 kcmil,ft,1.78,,electrical,starter — replace with your own
+"Copper ground, green",#300,ft,6.40,,electrical,starter — replace with your own
+THHN copper,#300,ft,6.40,,electrical,starter — replace with your own
+XHHW aluminum,#300,ft,2.11,,electrical,starter — replace with your own
+"Copper ground, green",300 kcmil,ft,6.40,,electrical,starter — replace with your own
+THHN copper,300 kcmil,ft,6.40,,electrical,starter — replace with your own
+XHHW aluminum,300 kcmil,ft,2.11,,electrical,starter — replace with your own
+"Copper ground, green",#350,ft,7.40,,electrical,starter — replace with your own
+THHN copper,#350,ft,7.40,,electrical,starter — replace with your own
+XHHW aluminum,#350,ft,2.44,,electrical,starter — replace with your own
+"Copper ground, green",350 kcmil,ft,7.40,,electrical,starter — replace with your own
+THHN copper,350 kcmil,ft,7.40,,electrical,starter — replace with your own
+XHHW aluminum,350 kcmil,ft,2.44,,electrical,starter — replace with your own
+"Copper ground, green",#400,ft,8.40,,electrical,starter — replace with your own
+THHN copper,#400,ft,8.40,,electrical,starter — replace with your own
+XHHW aluminum,#400,ft,2.77,,electrical,starter — replace with your own
+"Copper ground, green",400 kcmil,ft,8.40,,electrical,starter — replace with your own
+THHN copper,400 kcmil,ft,8.40,,electrical,starter — replace with your own
+XHHW aluminum,400 kcmil,ft,2.77,,electrical,starter — replace with your own
+"Copper ground, green",#500,ft,10.50,,electrical,starter — replace with your own
+THHN copper,#500,ft,10.50,,electrical,starter — replace with your own
+XHHW aluminum,#500,ft,3.47,,electrical,starter — replace with your own
+"Copper ground, green",500 kcmil,ft,10.50,,electrical,starter — replace with your own
+THHN copper,500 kcmil,ft,10.50,,electrical,starter — replace with your own
+XHHW aluminum,500 kcmil,ft,3.47,,electrical,starter — replace with your own
+"Copper ground, green",#600,ft,12.60,,electrical,starter — replace with your own
+THHN copper,#600,ft,12.60,,electrical,starter — replace with your own
+XHHW aluminum,#600,ft,4.16,,electrical,starter — replace with your own
+"Copper ground, green",600 kcmil,ft,12.60,,electrical,starter — replace with your own
+THHN copper,600 kcmil,ft,12.60,,electrical,starter — replace with your own
+XHHW aluminum,600 kcmil,ft,4.16,,electrical,starter — replace with your own
+"Copper ground, green",#750,ft,15.80,,electrical,starter — replace with your own
+THHN copper,#750,ft,15.80,,electrical,starter — replace with your own
+XHHW aluminum,#750,ft,5.21,,electrical,starter — replace with your own
+"Copper ground, green",750 kcmil,ft,15.80,,electrical,starter — replace with your own
+THHN copper,750 kcmil,ft,15.80,,electrical,starter — replace with your own
+XHHW aluminum,750 kcmil,ft,5.21,,electrical,starter — replace with your own
+NM-B cable,14/2 w/G,ft,0.45,,electrical,starter — replace with your own
+NM-B cable,14/2,ft,0.45,,electrical,starter — replace with your own
+NM-B cable,14/3 w/G,ft,0.63,,electrical,starter — replace with your own
+NM-B cable,14/3,ft,0.63,,electrical,starter — replace with your own
+NM-B cable,14/4 w/G,ft,0.81,,electrical,starter — replace with your own
+NM-B cable,14/4,ft,0.81,,electrical,starter — replace with your own
+NM-B cable,12/2,ft,0.58,,electrical,starter — replace with your own
+NM-B cable,12/3 w/G,ft,0.81,,electrical,starter — replace with your own
+NM-B cable,12/3,ft,0.81,,electrical,starter — replace with your own
+NM-B cable,12/4 w/G,ft,1.04,,electrical,starter — replace with your own
+NM-B cable,12/4,ft,1.04,,electrical,starter — replace with your own
+NM-B cable,10/2,ft,0.95,,electrical,starter — replace with your own
+NM-B cable,10/3 w/G,ft,1.33,,electrical,starter — replace with your own
+NM-B cable,10/3,ft,1.33,,electrical,starter — replace with your own
+NM-B cable,10/4 w/G,ft,1.71,,electrical,starter — replace with your own
+NM-B cable,10/4,ft,1.71,,electrical,starter — replace with your own
+NM-B cable,8/2 w/G,ft,1.60,,electrical,starter — replace with your own
+NM-B cable,8/2,ft,1.60,,electrical,starter — replace with your own
+NM-B cable,8/3 w/G,ft,2.24,,electrical,starter — replace with your own
+NM-B cable,8/3,ft,2.24,,electrical,starter — replace with your own
+NM-B cable,8/4 w/G,ft,2.88,,electrical,starter — replace with your own
+NM-B cable,8/4,ft,2.88,,electrical,starter — replace with your own
+NM-B cable,6/2 w/G,ft,2.40,,electrical,starter — replace with your own
+NM-B cable,6/2,ft,2.40,,electrical,starter — replace with your own
+NM-B cable,6/3 w/G,ft,3.36,,electrical,starter — replace with your own
+NM-B cable,6/3,ft,3.36,,electrical,starter — replace with your own
+NM-B cable,6/4 w/G,ft,4.32,,electrical,starter — replace with your own
+NM-B cable,6/4,ft,4.32,,electrical,starter — replace with your own
+Cable staple,#14,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#12,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#10,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#8,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#6,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#4,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#3,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#2,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#1,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#1/0,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#2/0,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#3/0,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#4/0,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#250,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#300,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#350,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#400,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#500,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#600,each,0.10,0.02,electrical,starter — replace with your own
+Cable staple,#750,each,0.10,0.02,electrical,starter — replace with your own
+MC cable,14/2 w/G,ft,0.72,,electrical,starter — replace with your own
+MC cable,14/2,ft,0.72,,electrical,starter — replace with your own
+MC cable,14/3 w/G,ft,1.01,,electrical,starter — replace with your own
+MC cable,14/3,ft,1.01,,electrical,starter — replace with your own
+MC cable,14/4 w/G,ft,1.30,,electrical,starter — replace with your own
+MC cable,14/4,ft,1.30,,electrical,starter — replace with your own
+MC cable,12/2 w/G,ft,0.93,,electrical,starter — replace with your own
+MC cable,12/2,ft,0.93,,electrical,starter — replace with your own
+MC cable,12/3 w/G,ft,1.30,,electrical,starter — replace with your own
+MC cable,12/3,ft,1.30,,electrical,starter — replace with your own
+MC cable,12/4 w/G,ft,1.67,,electrical,starter — replace with your own
+MC cable,12/4,ft,1.67,,electrical,starter — replace with your own
+MC cable,10/2 w/G,ft,1.52,,electrical,starter — replace with your own
+MC cable,10/2,ft,1.52,,electrical,starter — replace with your own
+MC cable,10/3 w/G,ft,2.13,,electrical,starter — replace with your own
+MC cable,10/3,ft,2.13,,electrical,starter — replace with your own
+MC cable,10/4 w/G,ft,2.74,,electrical,starter — replace with your own
+MC cable,10/4,ft,2.74,,electrical,starter — replace with your own
+MC cable,8/2 w/G,ft,2.56,,electrical,starter — replace with your own
+MC cable,8/2,ft,2.56,,electrical,starter — replace with your own
+MC cable,8/3 w/G,ft,3.58,,electrical,starter — replace with your own
+MC cable,8/3,ft,3.58,,electrical,starter — replace with your own
+MC cable,8/4 w/G,ft,4.61,,electrical,starter — replace with your own
+MC cable,8/4,ft,4.61,,electrical,starter — replace with your own
+MC cable,6/2 w/G,ft,3.84,,electrical,starter — replace with your own
+MC cable,6/2,ft,3.84,,electrical,starter — replace with your own
+MC cable,6/3 w/G,ft,5.38,,electrical,starter — replace with your own
+MC cable,6/3,ft,5.38,,electrical,starter — replace with your own
+MC cable,6/4 w/G,ft,6.91,,electrical,starter — replace with your own
+MC cable,6/4,ft,6.91,,electrical,starter — replace with your own
+Cable strap,#14,each,0.35,0.04,electrical,starter — replace with your own
+MC connector,#14,each,0.60,0.05,electrical,starter — replace with your own
+Cable strap,#12,each,0.35,0.04,electrical,starter — replace with your own
+MC connector,#12,each,0.60,0.05,electrical,starter — replace with your own
+Cable strap,#10,each,0.35,0.04,electrical,starter — replace with your own
+MC connector,#10,each,0.60,0.05,electrical,starter — replace with your own
+Cable strap,#8,each,0.35,0.04,electrical,starter — replace with your own
+MC connector,#8,each,0.90,0.06,electrical,starter — replace with your own
+Cable strap,#6,each,0.35,0.04,electrical,starter — replace with your own
+MC connector,#6,each,1.20,0.07,electrical,starter — replace with your own
+Cable strap,#4,each,0.40,0.04,electrical,starter — replace with your own
+MC connector,#4,each,1.50,0.08,electrical,starter — replace with your own
+Cable strap,#3,each,0.45,0.04,electrical,starter — replace with your own
+MC connector,#3,each,1.80,0.09,electrical,starter — replace with your own
+Cable strap,#2,each,0.50,0.04,electrical,starter — replace with your own
+MC connector,#2,each,2.10,0.1,electrical,starter — replace with your own
+Cable strap,#1,each,0.55,0.04,electrical,starter — replace with your own
+MC connector,#1,each,2.40,0.11,electrical,starter — replace with your own
+Cable strap,#1/0,each,0.60,0.04,electrical,starter — replace with your own
+MC connector,#1/0,each,2.70,0.12,electrical,starter — replace with your own
+Cable strap,#2/0,each,0.65,0.04,electrical,starter — replace with your own
+MC connector,#2/0,each,3.00,0.13,electrical,starter — replace with your own
+Cable strap,#3/0,each,0.70,0.04,electrical,starter — replace with your own
+MC connector,#3/0,each,3.30,0.14,electrical,starter — replace with your own
+Cable strap,#4/0,each,0.75,0.04,electrical,starter — replace with your own
+MC connector,#4/0,each,3.60,0.15,electrical,starter — replace with your own
+Cable strap,#250,each,0.80,0.04,electrical,starter — replace with your own
+MC connector,#250,each,3.90,0.16,electrical,starter — replace with your own
+Cable strap,#300,each,0.85,0.04,electrical,starter — replace with your own
+MC connector,#300,each,4.20,0.17,electrical,starter — replace with your own
+Cable strap,#350,each,0.90,0.04,electrical,starter — replace with your own
+MC connector,#350,each,4.50,0.18,electrical,starter — replace with your own
+Cable strap,#400,each,0.95,0.04,electrical,starter — replace with your own
+MC connector,#400,each,4.80,0.19,electrical,starter — replace with your own
+Cable strap,#500,each,1.00,0.04,electrical,starter — replace with your own
+MC connector,#500,each,5.10,0.2,electrical,starter — replace with your own
+Cable strap,#600,each,1.05,0.04,electrical,starter — replace with your own
+MC connector,#600,each,5.40,0.21,electrical,starter — replace with your own
+Cable strap,#750,each,1.10,0.04,electrical,starter — replace with your own
+MC connector,#750,each,5.70,0.22,electrical,starter — replace with your own
+AC cable,14/2 w/G,ft,0.77,0.019,electrical,starter — replace with your own
+AC cable,14/2,ft,0.77,0.019,electrical,starter — replace with your own
+AC cable,14/3 w/G,ft,1.07,0.019,electrical,starter — replace with your own
+AC cable,14/3,ft,1.07,0.019,electrical,starter — replace with your own
+AC cable,14/4 w/G,ft,1.38,0.019,electrical,starter — replace with your own
+AC cable,14/4,ft,1.38,0.019,electrical,starter — replace with your own
+AC cable,12/2 w/G,ft,0.99,0.019,electrical,starter — replace with your own
+AC cable,12/2,ft,0.99,0.019,electrical,starter — replace with your own
+AC cable,12/3 w/G,ft,1.38,0.019,electrical,starter — replace with your own
+AC cable,12/3,ft,1.38,0.019,electrical,starter — replace with your own
+AC cable,12/4 w/G,ft,1.77,0.019,electrical,starter — replace with your own
+AC cable,12/4,ft,1.77,0.019,electrical,starter — replace with your own
+AC cable,10/2 w/G,ft,1.61,0.023,electrical,starter — replace with your own
+AC cable,10/2,ft,1.61,0.023,electrical,starter — replace with your own
+AC cable,10/3 w/G,ft,2.26,0.023,electrical,starter — replace with your own
+AC cable,10/3,ft,2.26,0.023,electrical,starter — replace with your own
+AC cable,10/4 w/G,ft,2.91,0.023,electrical,starter — replace with your own
+AC cable,10/4,ft,2.91,0.023,electrical,starter — replace with your own
+AC cable,8/2 w/G,ft,2.72,0.029,electrical,starter — replace with your own
+AC cable,8/2,ft,2.72,0.029,electrical,starter — replace with your own
+AC cable,8/3 w/G,ft,3.81,0.029,electrical,starter — replace with your own
+AC cable,8/3,ft,3.81,0.029,electrical,starter — replace with your own
+AC cable,8/4 w/G,ft,4.90,0.029,electrical,starter — replace with your own
+AC cable,8/4,ft,4.90,0.029,electrical,starter — replace with your own
+AC cable,6/2 w/G,ft,4.08,0.034,electrical,starter — replace with your own
+AC cable,6/2,ft,4.08,0.034,electrical,starter — replace with your own
+AC cable,6/3 w/G,ft,5.71,0.034,electrical,starter — replace with your own
+AC cable,6/3,ft,5.71,0.034,electrical,starter — replace with your own
+AC cable,6/4 w/G,ft,7.34,0.034,electrical,starter — replace with your own
+AC cable,6/4,ft,7.34,0.034,electrical,starter — replace with your own
+AC connector,#14,each,0.60,0.05,electrical,starter — replace with your own
+AC connector,#12,each,0.60,0.05,electrical,starter — replace with your own
+AC connector,#10,each,0.60,0.05,electrical,starter — replace with your own
+AC connector,#8,each,0.90,0.06,electrical,starter — replace with your own
+AC connector,#6,each,1.20,0.07,electrical,starter — replace with your own
+AC connector,#4,each,1.50,0.08,electrical,starter — replace with your own
+AC connector,#3,each,1.80,0.09,electrical,starter — replace with your own
+AC connector,#2,each,2.10,0.1,electrical,starter — replace with your own
+AC connector,#1,each,2.40,0.11,electrical,starter — replace with your own
+AC connector,#1/0,each,2.70,0.12,electrical,starter — replace with your own
+AC connector,#2/0,each,3.00,0.13,electrical,starter — replace with your own
+AC connector,#3/0,each,3.30,0.14,electrical,starter — replace with your own
+AC connector,#4/0,each,3.60,0.15,electrical,starter — replace with your own
+AC connector,#250,each,3.90,0.16,electrical,starter — replace with your own
+AC connector,#300,each,4.20,0.17,electrical,starter — replace with your own
+AC connector,#350,each,4.50,0.18,electrical,starter — replace with your own
+AC connector,#400,each,4.80,0.19,electrical,starter — replace with your own
+AC connector,#500,each,5.10,0.2,electrical,starter — replace with your own
+AC connector,#600,each,5.40,0.21,electrical,starter — replace with your own
+AC connector,#750,each,5.70,0.22,electrical,starter — replace with your own
+SER cable,14/2 w/G,ft,0.90,0.019,electrical,starter — replace with your own
+SER cable,14/2,ft,0.90,0.019,electrical,starter — replace with your own
+SER cable,14/3 w/G,ft,1.26,0.019,electrical,starter — replace with your own
+SER cable,14/3,ft,1.26,0.019,electrical,starter — replace with your own
+SER cable,14/4 w/G,ft,1.62,0.019,electrical,starter — replace with your own
+SER cable,14/4,ft,1.62,0.019,electrical,starter — replace with your own
+SER cable,12/2 w/G,ft,1.16,0.019,electrical,starter — replace with your own
+SER cable,12/2,ft,1.16,0.019,electrical,starter — replace with your own
+SER cable,12/3 w/G,ft,1.62,0.019,electrical,starter — replace with your own
+SER cable,12/3,ft,1.62,0.019,electrical,starter — replace with your own
+SER cable,12/4 w/G,ft,2.09,0.019,electrical,starter — replace with your own
+SER cable,12/4,ft,2.09,0.019,electrical,starter — replace with your own
+SER cable,10/2 w/G,ft,1.90,0.023,electrical,starter — replace with your own
+SER cable,10/2,ft,1.90,0.023,electrical,starter — replace with your own
+SER cable,10/3 w/G,ft,2.66,0.023,electrical,starter — replace with your own
+SER cable,10/3,ft,2.66,0.023,electrical,starter — replace with your own
+SER cable,10/4 w/G,ft,3.42,0.023,electrical,starter — replace with your own
+SER cable,10/4,ft,3.42,0.023,electrical,starter — replace with your own
+SER cable,8/2 w/G,ft,3.20,0.029,electrical,starter — replace with your own
+SER cable,8/2,ft,3.20,0.029,electrical,starter — replace with your own
+SER cable,8/3 w/G,ft,4.48,0.029,electrical,starter — replace with your own
+SER cable,8/3,ft,4.48,0.029,electrical,starter — replace with your own
+SER cable,8/4 w/G,ft,5.76,0.029,electrical,starter — replace with your own
+SER cable,8/4,ft,5.76,0.029,electrical,starter — replace with your own
+SER cable,6/2 w/G,ft,4.80,0.034,electrical,starter — replace with your own
+SER cable,6/2,ft,4.80,0.034,electrical,starter — replace with your own
+SER cable,6/3 w/G,ft,6.72,0.034,electrical,starter — replace with your own
+SER cable,6/3,ft,6.72,0.034,electrical,starter — replace with your own
+SER cable,6/4 w/G,ft,8.64,0.034,electrical,starter — replace with your own
+SER cable,6/4,ft,8.64,0.034,electrical,starter — replace with your own
+SE cable connector,#14,each,0.60,0.05,electrical,starter — replace with your own
+SE cable connector,#12,each,0.60,0.05,electrical,starter — replace with your own
+SE cable connector,#10,each,0.60,0.05,electrical,starter — replace with your own
+SE cable connector,#8,each,0.90,0.06,electrical,starter — replace with your own
+SE cable connector,#6,each,1.20,0.07,electrical,starter — replace with your own
+SE cable connector,#4,each,1.50,0.08,electrical,starter — replace with your own
+SE cable connector,#3,each,1.80,0.09,electrical,starter — replace with your own
+SE cable connector,#2,each,2.10,0.1,electrical,starter — replace with your own
+SE cable connector,#1,each,2.40,0.11,electrical,starter — replace with your own
+SE cable connector,#1/0,each,2.70,0.12,electrical,starter — replace with your own
+SE cable connector,#2/0,each,3.00,0.13,electrical,starter — replace with your own
+SE cable connector,#3/0,each,3.30,0.14,electrical,starter — replace with your own
+SE cable connector,#4/0,each,3.60,0.15,electrical,starter — replace with your own
+SE cable connector,#250,each,3.90,0.16,electrical,starter — replace with your own
+SE cable connector,#300,each,4.20,0.17,electrical,starter — replace with your own
+SE cable connector,#350,each,4.50,0.18,electrical,starter — replace with your own
+SE cable connector,#400,each,4.80,0.19,electrical,starter — replace with your own
+SE cable connector,#500,each,5.10,0.2,electrical,starter — replace with your own
+SE cable connector,#600,each,5.40,0.21,electrical,starter — replace with your own
+SE cable connector,#750,each,5.70,0.22,electrical,starter — replace with your own
+NM cable connector,"3/8""",each,0.35,0.04,electrical,starter — replace with your own
+"Nail plate (stud guard), 1/16 in steel",1-1/2 x 3,each,0.45,0.04,electrical,starter — replace with your own
+Low-voltage mounting bracket,1 gang,each,1.20,0.1,electrical,starter — replace with your own
+SE cable connector,"3/4""",each,1.12,0.06,electrical,starter — replace with your own
+SE cable connector,"1""",each,1.62,0.08,electrical,starter — replace with your own
+SE cable connector,"1-1/4""",each,3.00,0.1,electrical,starter — replace with your own
+SE cable connector,"1-1/2""",each,4.00,0.1,electrical,starter — replace with your own
+SE cable connector,"2""",each,6.00,0.12,electrical,starter — replace with your own
+SE cable connector,"2-1/2""",each,15.00,0.16,electrical,starter — replace with your own
+SER cable aluminum,6-6-6-8,ft,0.62,0.026,electrical,starter — replace with your own
+SER cable aluminum,6-6-6-6-8,ft,0.80,0.026,electrical,starter — replace with your own
+SER cable copper,6-6-6-8,ft,1.87,0.026,electrical,starter — replace with your own
+SER cable copper,6-6-6-6-8,ft,2.42,0.026,electrical,starter — replace with your own
+SER cable aluminum,4-4-4-6,ft,1.01,0.033,electrical,starter — replace with your own
+SER cable aluminum,4-4-4-4-6,ft,1.31,0.033,electrical,starter — replace with your own
+SER cable copper,4-4-4-6,ft,3.06,0.033,electrical,starter — replace with your own
+SER cable copper,4-4-4-4-6,ft,3.96,0.033,electrical,starter — replace with your own
+SER cable aluminum,2-2-2-4,ft,1.63,0.042,electrical,starter — replace with your own
+SER cable aluminum,2-2-2-2-4,ft,2.11,0.042,electrical,starter — replace with your own
+SER cable copper,2-2-2-4,ft,4.93,0.042,electrical,starter — replace with your own
+SER cable copper,2-2-2-2-4,ft,6.38,0.042,electrical,starter — replace with your own
+SER cable aluminum,1-1-1-3,ft,2.08,0.048,electrical,starter — replace with your own
+SER cable aluminum,1-1-1-1-3,ft,2.69,0.048,electrical,starter — replace with your own
+SER cable copper,1-1-1-3,ft,6.29,0.048,electrical,starter — replace with your own
+SER cable copper,1-1-1-1-3,ft,8.14,0.048,electrical,starter — replace with your own
+SER cable aluminum,1/0-1/0-1/0-2,ft,2.58,0.055,electrical,starter — replace with your own
+SER cable aluminum,1/0-1/0-1/0-1/0-2,ft,3.34,0.055,electrical,starter — replace with your own
+SER cable copper,1/0-1/0-1/0-2,ft,7.82,0.055,electrical,starter — replace with your own
+SER cable copper,1/0-1/0-1/0-1/0-2,ft,10.12,0.055,electrical,starter — replace with your own
+SER cable aluminum,2/0-2/0-2/0-1,ft,3.20,0.062,electrical,starter — replace with your own
+SER cable aluminum,2/0-2/0-2/0-2/0-1,ft,4.14,0.062,electrical,starter — replace with your own
+SER cable copper,2/0-2/0-2/0-1,ft,9.69,0.062,electrical,starter — replace with your own
+SER cable copper,2/0-2/0-2/0-2/0-1,ft,12.54,0.062,electrical,starter — replace with your own
+SER cable aluminum,2/0-2/0-2/0-2/0-4,ft,4.14,0.062,electrical,starter — replace with your own
+SER cable copper,2/0-2/0-2/0-4,ft,9.69,0.062,electrical,starter — replace with your own
+SER cable copper,2/0-2/0-2/0-2/0-4,ft,12.54,0.062,electrical,starter — replace with your own
+SER cable aluminum,3/0-3/0-3/0-1/0,ft,3.98,0.068,electrical,starter — replace with your own
+SER cable aluminum,3/0-3/0-3/0-3/0-1/0,ft,5.15,0.068,electrical,starter — replace with your own
+SER cable copper,3/0-3/0-3/0-1/0,ft,12.07,0.068,electrical,starter — replace with your own
+SER cable copper,3/0-3/0-3/0-3/0-1/0,ft,15.62,0.068,electrical,starter — replace with your own
+SER cable aluminum,4/0-4/0-4/0-2/0,ft,4.99,0.077,electrical,starter — replace with your own
+SER cable aluminum,4/0-4/0-4/0-4/0-2/0,ft,6.46,0.077,electrical,starter — replace with your own
+SER cable copper,4/0-4/0-4/0-2/0,ft,15.13,0.077,electrical,starter — replace with your own
+SER cable copper,4/0-4/0-4/0-4/0-2/0,ft,19.58,0.077,electrical,starter — replace with your own
+SER cable aluminum,250-250-250-3/0,ft,6.06,0.088,electrical,starter — replace with your own
+SER cable aluminum,250-250-250-250-3/0,ft,7.84,0.088,electrical,starter — replace with your own
+SER cable copper,250-250-250-3/0,ft,18.36,0.088,electrical,starter — replace with your own
+SER cable copper,250-250-250-250-3/0,ft,23.76,0.088,electrical,starter — replace with your own

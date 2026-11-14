@@ -19,13 +19,17 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod doortags;
+mod heads;
 mod outline;
+
+pub(crate) use heads::RoomCeiling;
 pub(crate) use outline::Floors;
 
 /// The extended data application that marks what WALLGEN made (part, level, source object).
 pub const APP: &str = "CADADDY_WALLGEN";
 /// Floor slab thickness when none is given, feet.
-const SLAB_FT: f64 = 0.5;
+pub(crate) const SLAB_FT: f64 = 0.5;
 /// A door leaf's thickness, inches.
 const LEAF_IN: f64 = 1.75;
 /// A door or window frame: jamb and head width along the opening, and how far its casing
@@ -142,11 +146,16 @@ struct WallGrid {
 
 impl WallGrid {
     fn build(walls: &[PlanWall], cell: f64) -> Self {
+        Self::of(walls.iter().map(|w| (w.a, w.b)), cell)
+    }
+
+    /// The grid of any lines (centreline ends), indexed in the order given.
+    fn of(lines: impl Iterator<Item = (Vec2, Vec2)>, cell: f64) -> Self {
         let cell = cell.max(1.0);
         let mut map: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-        for (i, w) in walls.iter().enumerate() {
-            let (x0, x1) = (Self::k(w.a.x.min(w.b.x) - cell, cell), Self::k(w.a.x.max(w.b.x) + cell, cell));
-            let (y0, y1) = (Self::k(w.a.y.min(w.b.y) - cell, cell), Self::k(w.a.y.max(w.b.y) + cell, cell));
+        for (i, (a, b)) in lines.enumerate() {
+            let (x0, x1) = (Self::k(a.x.min(b.x) - cell, cell), Self::k(a.x.max(b.x) + cell, cell));
+            let (y0, y1) = (Self::k(a.y.min(b.y) - cell, cell), Self::k(a.y.max(b.y) + cell, cell));
             if (x1 - x0 + 1).unsigned_abs().saturating_mul((y1 - y0 + 1).unsigned_abs()) > 10_000 {
                 continue;
             }
@@ -182,6 +191,15 @@ const MARK_TAG: &str = "mark:";
 const FOUND_TAG: &str = "found:";
 const SILL_TAG: &str = "sill:";
 const HEAD_TAG: &str = "head:";
+/// A door built at its schedule tag (Q6609, [`doortags`]): how it opens (`rolling`, `sliding`,
+/// `folding`, `pair`, `swing`), and that it closes onto a counter (`counter:yes`). Its `mark:`,
+/// `found:`, `sill:` and `head:` are as a window's.
+const OPERATION_TAG: &str = "operation:";
+/// The trade practice rule doors built at their schedule tags carry ([`doortags::RULE_ID`]).
+pub(crate) const DOOR_AT_TAG_RULE: &str = doortags::RULE_ID;
+/// A door placed again by its mark this close to its old tag (feet) is moved, not a second door.
+pub(crate) const DOOR_TAG_MOVE_FT: f64 = 6.0;
+const COUNTER_TAG: &str = "counter:";
 
 /// A built door's opening: its frame's two jambs on its level's plan. A door shut closes it, so
 /// a room traced on the built walls runs across it.
@@ -326,38 +344,80 @@ fn mesh(tris: &[[[f32; 3]; 3]], to_sheet: &dyn Fn([f32; 3]) -> Vec3) -> Option<M
         v.dedup();
         v.len() >= 3
     });
-    (!faces.is_empty()).then_some(Mesh { vertices, faces, kind: MeshKind::Polyface })
+    (!faces.is_empty()).then(|| super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface }))
 }
 
-/// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides.
+/// A floor slab: the floor quad (its top) and its underside `t` lower, closed round the sides:
+/// round its outline only (an edge two of its faces share is inside it, no side), its flat
+/// surfaces' seams hidden.
 fn slab(top: &Mesh, t: f64) -> Mesh {
     let n = top.vertices.len() as u32;
     let mut vertices = top.vertices.clone();
     vertices.extend(top.vertices.iter().map(|v| Vec3::new(v.x, v.y, v.z - t)));
-    let mut faces = top.faces.clone();
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    for f in &top.faces {
+        for (k, a) in f.v.iter().enumerate() {
+            let b = f.v.get((k + 1) % f.v.len()).copied().unwrap_or(*a);
+            *uses.entry((*a.min(&b), *a.max(&b))).or_default() += 1;
+        }
+    }
+    let mut faces: Vec<MeshFace> = top.faces.iter().map(|f| MeshFace { v: f.v.clone(), hidden: 0 }).collect();
     for f in &top.faces {
         let mut under: Vec<u32> = f.v.iter().map(|i| i + n).collect();
         under.reverse();
         faces.push(MeshFace { v: under, hidden: 0 });
         for (k, a) in f.v.iter().enumerate() {
             let b = f.v.get((k + 1) % f.v.len()).copied().unwrap_or(*a);
-            faces.push(MeshFace { v: vec![b, *a, a + n, b + n], hidden: 0 });
+            if uses.get(&(*a.min(&b), *a.max(&b))).copied().unwrap_or(0) == 1 {
+                faces.push(MeshFace { v: vec![b, *a, a + n, b + n], hidden: 0 });
+            }
         }
     }
-    Mesh { vertices, faces, kind: MeshKind::Polyface }
+    super::bspec::seamless(Mesh { vertices, faces, kind: MeshKind::Polyface })
 }
 
 /// A floor plate's faces at `z`: its rectangles, facing up (`down` facing down: a ceiling).
+/// Only the plate's outline draws: a rectangle's edge that touches no stretch of the boundary is
+/// a seam inside the one flat plate (hidden), even where it meets two other rectangles' edges.
 fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
+    // The boundary's straight runs by line: (runs along x, its y) or (along y, its x).
+    let key = |c: f64| c.is_finite().then(|| (c * 1e3).round() as i64);
+    let mut runs: HashMap<(bool, i64), Vec<(f64, f64)>> = HashMap::new();
+    for (p, q) in &o.edges {
+        let (along_x, at, s0, s1) = if (p.y - q.y).abs() < 1e-9 {
+            (true, p.y, p.x, q.x)
+        } else if (p.x - q.x).abs() < 1e-9 {
+            (false, p.x, p.y, q.y)
+        } else {
+            continue;
+        };
+        if let Some(k) = key(at) {
+            runs.entry((along_x, k)).or_default().push((s0.min(s1), s0.max(s1)));
+        }
+    }
+    let on_boundary = |along_x: bool, at: f64, s0: f64, s1: f64| {
+        let (lo, hi) = (s0.min(s1), s0.max(s1));
+        key(at).and_then(|k| runs.get(&(along_x, k))).is_some_and(|rs| rs.iter().any(|(a, b)| a.max(lo) < b.min(hi) - 1e-6))
+    };
     let mut m = empty_mesh();
     for [a, b] in &o.rects {
         let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
         m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, b.y, z)]);
+        // Its sides in corner order: bottom, right, top, left.
+        let outline = [
+            on_boundary(true, a.y, a.x, b.x),
+            on_boundary(false, b.x, a.y, b.y),
+            on_boundary(true, b.y, a.x, b.x),
+            on_boundary(false, a.x, a.y, b.y),
+        ];
         let mut v = vec![base, base + 1, base + 2, base + 3];
+        // Reversed (facing down), its edge k is side (6 - k) % 4.
+        let side = |k: usize| if down { (6 - k) % 4 } else { k };
         if down {
             v.reverse();
         }
-        m.faces.push(MeshFace { v, hidden: 0 });
+        let hidden = (0..4).filter(|k| !outline.get(side(*k)).copied().unwrap_or(true)).fold(0u64, |h, k| h | 1 << k);
+        m.faces.push(MeshFace { v, hidden });
     }
     m
 }
@@ -367,23 +427,31 @@ fn plate_faces(o: &outline::Outline, z: f64, down: bool) -> Mesh {
 fn plate_slab(o: &outline::Outline, z: f64, t: f64) -> Mesh {
     let mut m = plate_faces(o, z, false);
     if t <= 0.0 {
-        return m;
+        return super::bspec::seamless(m);
     }
     let under = plate_faces(o, z - t, true);
     let n = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
     m.vertices.extend(under.vertices);
     m.faces.extend(under.faces.into_iter().map(|f| MeshFace { v: f.v.iter().map(|i| i.saturating_add(n)).collect(), hidden: 0 }));
+    // The rectangles' edges are seams of one flat top and underside (meeting each other even
+    // where one rectangle's side runs past two others'): the sides round the boundary draw the
+    // outline, so none of the rectangles' own edges draw.
+    for f in &mut m.faces {
+        f.hidden = (1u64 << f.v.len().min(63)) - 1;
+    }
     for (a, b) in &o.edges {
         let base = u32::try_from(m.vertices.len()).unwrap_or(u32::MAX);
         m.vertices.extend([Vec3::new(a.x, a.y, z), Vec3::new(b.x, b.y, z), Vec3::new(a.x, a.y, z - t), Vec3::new(b.x, b.y, z - t)]);
         m.faces.push(MeshFace { v: vec![base + 1, base, base + 2, base + 3], hidden: 0 });
     }
-    m
+    // A straight run of the boundary in pieces: the sides' joints along it are seams too.
+    super::bspec::seamless(m)
 }
 
-/// Remove what WALLGEN made from model space; how many objects.
+/// Remove what WALLGEN made from model space; how many objects. The copies a person made of its
+/// objects stay (Q6620: they are theirs, recorded as added items).
 pub(crate) fn remove_made(d: &mut Drawing) -> usize {
-    let hs: Vec<Handle> = d.model.iter().filter(|e| made_as(e).is_some()).map(|e| e.handle).collect();
+    let hs: Vec<Handle> = d.model.iter().filter(|e| super::revise3d::built_object(e)).map(|e| e.handle).collect();
     for h in &hs {
         d.model.remove(*h);
     }
@@ -400,11 +468,12 @@ pub fn builds_so_far() -> usize {
 
 /// Build the drawing's 3D building from `g`; the counts.
 pub(crate) fn build(s: &mut Session, g: &WallGen) -> Result<Value> {
-    build_with_progress(s, g, &(web_time::Instant::now() + std::time::Duration::from_secs(3600)))
+    build_with_progress(s, g, &(web_time::Instant::now() + std::time::Duration::from_secs(3600)), &[])
 }
 
-/// [`build`] with per-level progress events and a deadline (Q6029 MUST 2/3).
-pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_time::Instant) -> Result<Value> {
+/// [`build`] with per-level progress events and a deadline (Q6029 MUST 2/3), and the traced
+/// rooms' ceilings the walls built to the ceiling stop at.
+pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_time::Instant, ceilings: &[RoomCeiling]) -> Result<Value> {
     BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scene = cadaddy_walk3d::derive(s.doc()?, &g.rules);
     let upf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { 12.0 };
@@ -419,7 +488,7 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     let mut budget_exceeded = false;
     // The spaces open to the storey under them, on each level above the lowest (Q6322).
     let lowest = g.rules.levels.iter().filter(|l| l.sheet.is_none()).map(|l| l.elevation_ft).fold(f64::INFINITY, f64::min);
-    let mut open_below: HashMap<usize, Vec<Vec2>> = HashMap::new();
+    let mut open_below: HashMap<usize, (Vec<Vec2>, Vec<(Vec2, Vec2)>)> = HashMap::new();
     for (i, level) in g.rules.levels.iter().enumerate() {
         if level.sheet.is_some() {
             continue;
@@ -466,7 +535,7 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             build_start.elapsed().as_secs_f64()
         ));
         let level_start = web_time::Instant::now();
-        let pl = plan_level(s.doc()?, g, level, upf, &mut notes);
+        let pl = plan_level_with(s.doc()?, g, level, upf, &mut notes, ceilings);
         let level_ms = level_start.elapsed().as_millis();
         if !pl.walls.is_empty() {
             let walls = pl.walls.len();
@@ -475,7 +544,8 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             if level.elevation_ft > lowest + 1e-6 {
                 let open = open_below_labels(s.doc()?, level);
                 if !open.is_empty() {
-                    open_below.insert(si, open);
+                    let edges = open_below_edges(s.doc()?, level, &pl, upf);
+                    open_below.insert(si, (open, edges));
                 }
             }
             if level_ms > 100 {
@@ -499,14 +569,27 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     for (si, pl) in &planned {
         let Some((lo, hi)) = pl.footprint() else { continue };
         let walls: Vec<(Vec2, Vec2, f64)> = pl.walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
-        let open = open_below.get(si).map_or(&[][..], Vec::as_slice);
-        let (plate, carved) = outline::building_open(&walls, lo, hi, upf, open);
+        let open = open_below.get(si).map_or_else(outline::OpenBelow::default, |(at, edges)| outline::OpenBelow { at, edges });
+        let (plate, tally) = outline::building_open(&walls, lo, hi, upf, &open);
+        if tally.missed > 0
+            && let Some(level) = scene.levels.get(*si)
+        {
+            notes.push(format!(
+                "{}: {} space(s) labelled open to below could not be traced to an edge (no wall, guardrail or slab edge drawn round the label closes a room-sized space); the slab is kept there.",
+                level.name, tally.missed
+            ));
+        }
         match plate {
             Some(o) => {
-                if carved > 0
-                    && let Some(level) = scene.levels.get(*si)
-                {
-                    notes.push(format!("{}: the floor slab leaves out {carved} space(s) labelled open to below.", level.name));
+                if let Some(level) = scene.levels.get(*si) {
+                    if tally.on_extents {
+                        notes.push(format!(
+                            "{}: the walls do not close round the building; its floor slab is their extents less {} space(s) labelled open to below.",
+                            level.name, tally.carved
+                        ));
+                    } else if tally.carved > 0 {
+                        notes.push(format!("{}: the floor slab leaves out {} space(s) labelled open to below.", level.name, tally.carved));
+                    }
                 }
                 plates.insert(*si, o);
             }
@@ -517,9 +600,25 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
             }
         }
     }
+    // Each level's floor as its documents build it (Q6408): a slab its notes' thickness, a framed
+    // floor its topping and deck (the joists under it are their own pieces); the build's slab
+    // only where nothing gives the floor, marked a default.
+    let assemblies: HashMap<String, super::floorasm::Assembly> = {
+        let d = s.doc()?;
+        let trade_rules = g.spec.as_ref().map_or_else(super::tradeatoms::Rules::default, |sp| super::tradeatoms::Rules::of(d, sp));
+        let cx = super::floorasm::Context { spec: g.spec.as_ref(), rules: &trade_rules, default_in: g.slab_ft.max(0.0) * 12.0 };
+        super::floorasm::by_level(d, &g.rules.levels, &cx).into_iter().map(|a| (a.level.clone(), a)).collect()
+    };
+    let slab_of = |level: &str| assemblies.get(level).map_or(g.slab_ft.max(0.0) * upf, |a| a.thickness_in() / 12.0 * upf);
+    for l in g.rules.levels.iter().filter(|l| l.sheet.is_none()) {
+        if let Some(a) = assemblies.get(&l.name) {
+            notes.push(format!("{}: its floor is {} ({}, {}).", a.level, a.describe(), cadaddy_walk3d::inches(a.thickness_in()), a.status().word()));
+            notes.extend(a.notes.iter().map(|n| format!("{}: {n}.", a.level)));
+        }
+    }
     // A mezzanine in a storey (Q6322): built once, the storey's walls under its slab stop there.
     let bases = cadaddy_walk3d::level_bases(s.doc()?, &g.rules);
-    fit_mezzanines(&mut planned, &plates, &scene, &bases, g.slab_ft.max(0.0) * upf, upf, &mut notes);
+    fit_mezzanines(&mut planned, &plates, &scene, &bases, &slab_of, upf, &mut notes);
     let d = s.doc_mut()?;
     let removed = remove_made(d);
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -571,15 +670,28 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         }
         let plate = plates.get(&grp.level).filter(|_| matches!(grp.part, Part::Floor | Part::Ceiling));
         let z = m.vertices.first().map_or(0.0, |v| v.z);
+        let mut xdata = tag(grp.part, &level.name, grp.source);
         if grp.part == Part::Floor {
+            let t = slab_of(&level.name);
             m = match plate {
-                Some(o) => plate_slab(o, z, g.slab_ft.max(0.0) * upf),
-                None => slab(&m, g.slab_ft.max(0.0) * upf),
+                Some(o) => plate_slab(o, z, t),
+                None => slab(&m, t),
             };
+            if let Some(a) = assemblies.get(&level.name) {
+                xdata.extend(a.tags().into_iter().map(|value| RawTag { code: 1000, value }));
+            }
         } else if let Some(o) = plate {
-            m = plate_faces(o, z, true);
+            m = super::bspec::seamless(plate_faces(o, z, true));
         }
-        let common = Common { layer: layer_of(grp.part).into(), xdata: tag(grp.part, &level.name, grp.source).into(), ..Common::default() };
+        if grp.part == Part::Ceiling {
+            // A level's own ceiling: at the level's ceiling height, a default (Q6595).
+            xdata.extend(super::ceilings::height_tags(
+                level.ceiling_ft,
+                cadaddy_doc::props::SourceKind::Default,
+                "the level's ceiling height (no room or reflected ceiling plan height)",
+            ));
+        }
+        let common = Common { layer: layer_of(grp.part).into(), xdata: xdata.into(), ..Common::default() };
         if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
             *counts.entry(part_name(grp.part)).or_insert(0) += 1;
         }
@@ -601,6 +713,17 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
         "walls": c("wall"), "doors": c("door"), "windows": c("window"), "floors": c("floor"), "ceilings": c("ceiling"),
         "levels": scene.levels.len(), "removed": removed, "notes": notes, "window_tags": window_tags, "openings_by_level": by_level,
     });
+    // Each level's doors built at door schedule tags with no opening drawn (Q6609).
+    let schedule_doors: Vec<Value> = planned
+        .iter()
+        .filter_map(|(si, pl)| scene.levels.get(*si).filter(|_| !pl.door_tags.is_empty()).map(|l| pl.door_tags.to_json(&l.name)))
+        .collect();
+    if !schedule_doors.is_empty() {
+        r["schedule_doors"] = Value::Array(schedule_doors);
+    }
+    let mut floor_assemblies: Vec<&super::floorasm::Assembly> = assemblies.values().collect();
+    floor_assemblies.sort_by(|a, b| a.level.cmp(&b.level));
+    r["floor_assemblies"] = Value::Array(floor_assemblies.iter().map(|a| a.to_json()).collect());
     if budget_exceeded {
         r["budget_exceeded"] = json!(true);
         r["levels_built"] = json!(levels_done);
@@ -679,10 +802,15 @@ pub(crate) fn shells(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> Vec<Stor
 
 /// A storey's floor to trace its rooms on ([`Floors`]): its walls planned as `model.build` plans
 /// them, inside its shell, its circulation (`sp.circulation`) taken. None for the roof, a storey
-/// whose walls don't close round the building, or one whose circulation wasn't traced (its shell
-/// wasn't trusted).
+/// whose walls don't close round the building, or one whose shell wasn't trusted: neither its
+/// circulation traced nor its shell kept in the spec (`sp.shells`). A small building with no
+/// corridor, stair or hoistway has a trusted shell and no circulation: its rooms are traced on
+/// its floor too (Q6413), not round their tags on the plan's linework (dimension strings, leaders
+/// and notes across it).
 pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str) -> Option<Floors> {
-    if !sp.circulation.iter().any(|c| c.level.eq_ignore_ascii_case(level)) {
+    let traced = sp.circulation.iter().any(|c| c.level.eq_ignore_ascii_case(level));
+    let trusted = sp.shells.iter().any(|(l, rects)| l.eq_ignore_ascii_case(level) && !rects.is_empty());
+    if !traced && !trusted {
         return None;
     }
     let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
@@ -698,7 +826,17 @@ pub(crate) fn room_floors(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level:
         .filter(|c| c.level.eq_ignore_ascii_case(level))
         .flat_map(|c| c.rects.iter().map(|[a, b]| [Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1])]))
         .collect();
-    Floors::new(&walls, &shell.rects, upf, &taken)
+    // Each door and window shut across its opening (its frame's ends; else a door's leaf turned
+    // shut, a pane where it is): the outside comes in through none of them.
+    let shut: Vec<(Vec2, Vec2, f64)> = pl
+        .leaves
+        .iter()
+        .map(|l| {
+            let (a, b) = l.frame.or_else(|| l.along.map(|u| (l.a, l.a + u * l.a.dist(l.b)))).unwrap_or((l.a, l.b));
+            (a, b, l.thickness)
+        })
+        .collect();
+    Floors::with_openings(&walls, &shell.rects, upf, &taken, &shut)
 }
 
 /// A level's walls as its plan reads them: centreline ends and thickness (sheet units). What a
@@ -711,6 +849,16 @@ pub(crate) fn planned_walls(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, leve
         return Vec::new();
     };
     plan_level(d, &g, lv, upf, &mut Vec::new()).walls.iter().map(|w| (w.a, w.b, w.thickness)).collect()
+}
+
+/// Whether a wall of the level's plan (or one an earlier wall edit placed) is built on the line
+/// `from` (plan units): what a wall edit taking a wall from there finds (Q6613).
+pub(crate) fn wall_on_line(d: &Drawing, sp: &cadaddy_walk3d::BuildingSpec, level: &str, from: [[f64; 2]; 2]) -> bool {
+    let g = WallGen { rules: sp.to_rules(), auto: false, slab_ft: 0.0, layers: None, spec: Some(sp.clone()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let Some(lv) = g.rules.levels.iter().find(|l| l.sheet.is_none() && l.name.eq_ignore_ascii_case(level)) else { return false };
+    let (a, b) = (Vec2::new(from[0][0], from[0][1]), Vec2::new(from[1][0], from[1][1]));
+    plan_level(d, &g, lv, upf, &mut Vec::new()).walls.iter().any(|w| on_edit_line(w, a, b, upf))
 }
 
 /// What `model.build` makes of one storey's openings: the extents of its planned walls (none
@@ -850,7 +998,7 @@ fn fit_mezzanines(
     plates: &HashMap<usize, outline::Outline>,
     scene: &Scene,
     bases: &[(String, Vec2)],
-    slab: f64,
+    slab: &dyn Fn(&str) -> f64,
     upf: f64,
     notes: &mut Vec<String>,
 ) {
@@ -875,34 +1023,60 @@ fn fit_mezzanines(
         };
         let Some((st_name, _, st_base)) = info.get(st).cloned() else { continue };
         let Some(z0) = planned.get(m).map(|(_, pl)| pl.z0) else { continue };
-        // The storey's walls in building coordinates, those reaching past the mezzanine's floor.
-        let tall: Vec<(Vec2, Vec2, f64)> = planned
+        // The storey's walls standing under the mezzanine's slab stop at its underside: wholly
+        // under it (the wall's middle with its faces and a little more round it).
+        let top = z0 - slab(&m_name);
+        let plate = planned.get(m).and_then(|(si, _)| plates.get(si));
+        // On a side two of its rectangles share is under it too (a plate of several).
+        let under = |p: Vec2| plate.is_some_and(|o| o.rects.iter().any(|[a, b]| p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y));
+        let caps: Vec<bool> = planned
             .get(st)
-            .map(|(_, pl)| pl.walls.iter().filter(|w| w.top > z0 + 1e-6).map(|w| (w.a - st_base, w.b - st_base, w.thickness)).collect())
+            .map(|(_, pl)| {
+                pl.walls
+                    .iter()
+                    .map(|w| {
+                        let mid = (w.a + w.b) * 0.5 - st_base + m_base;
+                        let r = w.thickness / 2.0 + REPEAT_REACH_FT * upf;
+                        let inside = [Vec2::new(r, 0.0), Vec2::new(-r, 0.0), Vec2::new(0.0, r), Vec2::new(0.0, -r)].iter().all(|d| under(mid + *d));
+                        inside && w.top > top + 1e-6 && top > pl.z0
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
-        let mut left = 0;
+        // The storey's walls in building coordinates (with their index among its walls) that run
+        // up past the mezzanine's floor: not those stopping under its slab, which the
+        // mezzanine's walls on them stand on (Q6451).
+        let (tall_at, tall): (Vec<usize>, Vec<(Vec2, Vec2, f64)>) = planned
+            .get(st)
+            .map(|(_, pl)| {
+                pl.walls
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, w)| w.top > z0 + 1e-6 && !caps.get(*i).copied().unwrap_or(false))
+                    .map(|(i, w)| (i, (w.a - st_base, w.b - st_base, w.thickness)))
+                    .unzip()
+            })
+            .unwrap_or_default();
+        let mut gone: Vec<PlanWall> = Vec::new();
         if let Some((_, pl)) = planned.get_mut(m) {
-            let before = pl.walls.len();
-            pl.walls.retain(|w| !repeats(w.a - m_base, w.b - m_base, w.thickness, &tall, upf));
-            left = before - pl.walls.len();
+            let (repeated, kept): (Vec<PlanWall>, Vec<PlanWall>) =
+                std::mem::take(&mut pl.walls).into_iter().partition(|w| repeats(w.a - m_base, w.b - m_base, w.thickness, &tall, upf));
+            pl.walls = kept;
+            gone = repeated;
         }
-        if left > 0 {
+        if !gone.is_empty() {
             notes.push(format!(
-                "{m_name}: {left} wall(s) the storey under it builds full height (the mezzanine plan draws them again) are built once, by {st_name}."
+                "{m_name}: {} wall(s) the storey under it builds full height (the mezzanine plan draws them again) are built once, by {st_name}.",
+                gone.len()
             ));
         }
-        // The storey's walls under the mezzanine's slab stop at its underside.
-        let Some(plate) = planned.get(m).and_then(|(si, _)| plates.get(si)) else { continue };
-        let under = |p: Vec2| plate.rects.iter().any(|[a, b]| p.x > a.x && p.x < b.x && p.y > a.y && p.y < b.y);
+        // What those walls carried, and any opening of the mezzanine standing in one of the
+        // storey's full-height walls, goes to that wall (Q6451).
+        rehost_mezzanine_openings(planned, (m, m_base, &m_name), (st, st_base, &st_name), (&tall_at, &tall), &gone, upf, notes);
         let mut capped = 0;
         if let Some((_, pl)) = planned.get_mut(st) {
-            for w in &mut pl.walls {
-                // Wholly under it: the wall's middle with its faces and a little more round it.
-                let mid = (w.a + w.b) * 0.5 - st_base + m_base;
-                let r = w.thickness / 2.0 + REPEAT_REACH_FT * upf;
-                let inside = [Vec2::new(r, 0.0), Vec2::new(-r, 0.0), Vec2::new(0.0, r), Vec2::new(0.0, -r)].iter().all(|d| under(mid + *d));
-                let top = z0 - slab;
-                if inside && w.top > top + 1e-6 && top > pl.z0 {
+            for (w, cap) in pl.walls.iter_mut().zip(&caps) {
+                if *cap {
                     w.top = top;
                     capped += 1;
                 }
@@ -912,6 +1086,121 @@ fn fit_mezzanines(
             notes.push(format!("{st_name}: {capped} wall(s) under the {m_name} slab stop at its underside."));
         }
     }
+}
+
+/// A mezzanine's openings (its doors' leaves, its windows' panes) standing in walls of the
+/// storey it is in that run up past its floor (`tall`: building coordinates, with each one's
+/// index among the storey's walls), or left in walls of its own built once by the storey
+/// (`gone`): each re-hosted in the storey's wall it stands in (cut there at the mezzanine's floor
+/// and heights, on that wall's centreline), or left out with a note when no wall stands there to
+/// hold it. Never an opening without a wall, or a pane buried in a solid wall (Q6451).
+fn rehost_mezzanine_openings(
+    planned: &mut [(usize, PlanLevel)],
+    (m, m_base, m_name): (usize, Vec2, &str),
+    (st, st_base, st_name): (usize, Vec2, &str),
+    (tall_at, tall): (&[usize], &[(Vec2, Vec2, f64)]),
+    gone: &[PlanWall],
+    upf: f64,
+    notes: &mut Vec<String>,
+) {
+    let Some((m_z0, m_sill, m_head, m_door_head)) = planned.get(m).map(|(_, pl)| (pl.z0, pl.sill, pl.head, pl.door_head)) else { return };
+    let Some(st_z0) = planned.get(st).map(|(_, pl)| pl.z0) else { return };
+    let in_building = |ws: &[PlanWall]| ws.iter().map(|w| (w.a - m_base, w.b - m_base, w.thickness)).collect::<Vec<_>>();
+    let kept = planned.get(m).map(|(_, pl)| in_building(&pl.walls)).unwrap_or_default();
+    let removed = in_building(gone);
+    let Some(leaves) = planned.get_mut(m).map(|(_, pl)| std::mem::take(&mut pl.leaves)) else { return };
+    let (mut stay, mut moved, mut dropped) = (Vec::new(), Vec::new(), 0usize);
+    for l in leaves {
+        // Where it stands in the wall (building coordinates): its frame's jambs, else a pane's
+        // ends, a door leaf's hinge.
+        let (p0, p1) = l.frame.unwrap_or(if l.window { (l.a, l.b) } else { (l.a, l.a) });
+        let (p0, p1) = (p0 - m_base, p1 - m_base);
+        // Beside a wall's end counts for its own walls (a gap between two of its pieces).
+        let beside = p0.dist(p1) / 2.0 + REPEAT_REACH_FT * upf;
+        if let Some((j, s0, s1, onto)) = wall_holding(p0, p1, tall, 0.0, upf) {
+            let Some(&wi) = tall_at.get(j) else {
+                stay.push(l);
+                continue;
+            };
+            // Into the storey's plan, onto its wall's centreline.
+            let shift = st_base - m_base + onto;
+            let sill = if l.window { Some(l.sill.unwrap_or(m_sill)) } else { l.sill };
+            let head = Some(l.head.unwrap_or(if l.window { m_head } else { m_door_head }));
+            let lift = l.lift + m_z0 - st_z0;
+            let cut = l.frame.map(|_| Cut { s0, s1, window: l.window, head, sill, lift });
+            let thickness = tall.get(j).map_or(l.thickness, |t| t.2);
+            let leaf = Leaf {
+                a: l.a + shift,
+                b: l.b + shift,
+                pair: l.pair.map(|(a, b)| (a + shift, b + shift)),
+                frame: l.frame.map(|(a, b)| (a + shift, b + shift)),
+                thickness,
+                sill,
+                head,
+                lift,
+                ..l
+            };
+            moved.push((wi, cut, leaf));
+        } else if wall_holding(p0, p1, &removed, beside, upf).is_some() && wall_holding(p0, p1, &kept, beside, upf).is_none() {
+            dropped += 1;
+        } else {
+            stay.push(l);
+        }
+    }
+    if let Some((_, pl)) = planned.get_mut(m) {
+        pl.leaves = stay;
+    }
+    let n = moved.len();
+    if let Some((_, pl)) = planned.get_mut(st) {
+        for (wi, cut, leaf) in moved {
+            if let (Some(c), Some(w)) = (cut, pl.walls.get_mut(wi)) {
+                w.cuts.push(c);
+            }
+            pl.leaves.push(leaf);
+        }
+    }
+    if n > 0 {
+        notes.push(format!(
+            "{m_name}: {n} opening(s) standing in walls {st_name} builds full height are re-hosted in those walls: cut there at the mezzanine's floor and heights."
+        ));
+    }
+    if dropped > 0 {
+        notes.push(format!(
+            "{m_name}: {dropped} opening(s) in walls built once by {st_name} stand where {st_name} builds no wall: left out, no wall to hold them."
+        ));
+    }
+}
+
+/// The wall of `walls` (centreline ends, thickness) the opening `p0`–`p1` stands in: along its
+/// line (within half its thickness and [`REPEAT_REACH_FT`]), its middle on the wall or within
+/// `beside` of its ends. Its index, the opening's ends along it (clamped to it), and the move
+/// that puts the opening on its centreline; the nearest when several hold it.
+fn wall_holding(p0: Vec2, p1: Vec2, walls: &[(Vec2, Vec2, f64)], beside: f64, upf: f64) -> Option<(usize, f64, f64, Vec2)> {
+    let span = p0.dist(p1);
+    let mut best: Option<(f64, (usize, f64, f64, Vec2))> = None;
+    for (i, (sa, sb, t)) in walls.iter().enumerate().take(MAX_OBJECTS) {
+        let sl = sa.dist(*sb);
+        if !(sl > 1e-9 && sl.is_finite() && p0.is_finite() && p1.is_finite()) {
+            continue;
+        }
+        let su = (*sb - *sa) * (1.0 / sl);
+        let n = su.perp();
+        let off = |p: Vec2| (p - *sa).dot(n);
+        let reach = t / 2.0 + REPEAT_REACH_FT * upf;
+        if off(p0).abs() > reach || off(p1).abs() > reach || (span > 1e-9 && ((p1 - p0) * (1.0 / span)).cross(su).abs() > 0.05) {
+            continue;
+        }
+        let (ta, tb) = ((p0 - *sa).dot(su), (p1 - *sa).dot(su));
+        let mid = (ta + tb) / 2.0;
+        if mid < -beside || mid > sl + beside {
+            continue;
+        }
+        let d = off((p0 + p1) * 0.5);
+        if best.as_ref().is_none_or(|(bd, _)| d.abs() < *bd) {
+            best = Some((d.abs(), (i, ta.min(tb).max(0.0), ta.max(tb).min(sl), n * -d)));
+        }
+    }
+    best.map(|(_, b)| b)
 }
 
 /// Whether a wall (centreline ends, thickness; building coordinates) repeats walls of `tall`: on
@@ -962,6 +1251,113 @@ fn open_below_labels(d: &Drawing, level: &cadaddy_walk3d::Level) -> Vec<Vec2> {
         }
     }
     out
+}
+
+/// Most lines read off a level's plan as the edges of its spaces open to below.
+const MAX_OPEN_BELOW_EDGES: usize = 200_000;
+/// The shortest line taken for the edge of a space open to below, feet (a tick, an arrowhead, a
+/// symbol's side is no slab edge; a gap this wide or a door's is closed tracing the space).
+const OPEN_EDGE_MIN_FT: f64 = 2.0;
+/// How near a wall's direction an edge line of a space open to below runs, radians' sine: a
+/// guardrail or a slab edge runs along the building's walls; the cross a plan marks an opening
+/// with runs corner to corner, across them.
+const OPEN_EDGE_PARALLEL: f64 = 0.035;
+/// How far from a line a dimension's figure is lettered over it, inches.
+const DIMENSION_FIGURE_OFF_IN: f64 = 18.0;
+
+/// The lines of a level's plan (inside its region, in its walls' extents) that may edge a space
+/// labelled open to below (Q6397): a guardrail, a slab edge, a wall drawn as a single line, on
+/// any layer, running along a wall's direction and [`OPEN_EDGE_MIN_FT`] or longer. A dimension
+/// string (a line with a dimension's figure lettered along it) and its extension lines (crossing
+/// it) are no edge.
+fn open_below_edges(d: &Drawing, level: &cadaddy_walk3d::Level, pl: &PlanLevel, upf: f64) -> Vec<(Vec2, Vec2)> {
+    let Some((lo, hi)) = pl.footprint() else { return Vec::new() };
+    let k = upf / 12.0;
+    // The walls' directions (half a degree apart at most).
+    let mut dirs: Vec<Vec2> = Vec::new();
+    for w in &pl.walls {
+        let len = w.a.dist(w.b);
+        if !(len.is_finite() && len > 1e-9) {
+            continue;
+        }
+        let u = (w.b - w.a) * (1.0 / len);
+        if !dirs.iter().any(|v| v.cross(u).abs() < 0.008) && dirs.len() < 64 {
+            dirs.push(u);
+        }
+    }
+    let ents: Vec<&Arc<Entity>> = d
+        .model
+        .iter()
+        .filter(|e| made_as(e).is_none())
+        .filter(|e| match level.region {
+            None => true,
+            Some([x0, y0, x1, y1]) => {
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                let c = b.center();
+                !b.is_empty() && c.x >= x0.min(x1) && c.x <= x0.max(x1) && c.y >= y0.min(y1) && c.y <= y0.max(y1)
+            }
+        })
+        .take(MAX_OBJECTS)
+        .collect();
+    let figures: Vec<Vec2> = ents
+        .iter()
+        .filter(|e| is_dimension_figure(e))
+        .map(|e| cadaddy_doc::entity_bounds(d, e, 0))
+        .filter(|b| !b.is_empty())
+        .map(|b| b.center())
+        .take(MAX_OPEN_BELOW_EDGES)
+        .collect();
+    let pad = OPEN_EDGE_MIN_FT * upf;
+    let lines: Vec<(Vec2, Vec2)> = super::perceive::geometry::segments(&ents)
+        .into_iter()
+        .map(|sg| (sg.a, sg.b))
+        .filter(|(a, b)| {
+            let len = a.dist(*b);
+            let u = (*b - *a) * (1.0 / len);
+            len >= OPEN_EDGE_MIN_FT * upf
+                && a.x.max(b.x) >= lo.x - pad
+                && a.x.min(b.x) <= hi.x + pad
+                && a.y.max(b.y) >= lo.y - pad
+                && a.y.min(b.y) <= hi.y + pad
+                && dirs.iter().any(|v| v.cross(u).abs() <= OPEN_EDGE_PARALLEL)
+        })
+        .take(MAX_OPEN_BELOW_EDGES)
+        .collect();
+    // A dimension string: a figure lettered over the line, within its span.
+    let off = DIMENSION_FIGURE_OFF_IN * k;
+    let lettered = |(a, b): &(Vec2, Vec2)| {
+        let len = a.dist(*b);
+        let u = (*b - *a) * (1.0 / len);
+        figures.iter().any(|f| {
+            let along = (*f - *a).dot(u);
+            along >= 0.0 && along <= len && u.cross(*f - *a).abs() <= off
+        })
+    };
+    let (dims, rest): (Vec<(Vec2, Vec2)>, Vec<(Vec2, Vec2)>) = lines.into_iter().partition(|l| lettered(l));
+    if dims.is_empty() {
+        return rest;
+    }
+    // Its extension lines: across a dimension string near one of its ends, ending just past it.
+    let reach = OPEN_EDGE_MIN_FT * upf;
+    let crosses = |(a, b): &(Vec2, Vec2)| {
+        dims.iter().any(|(c, e)| {
+            let (u, v) = (*b - *a, *e - *c);
+            let den = u.cross(v);
+            if den.abs() <= 1e-9 * u.len() * v.len() {
+                return false;
+            }
+            let t = (*c - *a).cross(v) / den;
+            let s = (*c - *a).cross(u) / den;
+            let at = *c + v * s;
+            // An extension line runs a little past the string; a rail or a wall the string
+            // measures to runs on.
+            (0.0..=1.0).contains(&t)
+                && (0.0..=1.0).contains(&s)
+                && (at.dist(*c) <= reach || at.dist(*e) <= reach)
+                && (at.dist(*a) <= reach || at.dist(*b) <= reach)
+        })
+    };
+    rest.into_iter().filter(|l| !crosses(l)).collect()
 }
 
 /// Whether `name` is the roof of a building with storeys under it (`Roof`, `MAIN ROOF`, `LOW
@@ -1023,6 +1419,32 @@ fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
         .chain(erased)
         .filter(|h| a.model.get(*h).is_some_and(|e| plan_obj(e)) || b.model.get(*h).is_some_and(|e| plan_obj(e)))
         .collect()
+}
+
+/// Whether object `h`, different between `before` (where a command started) and `now`, differs
+/// only because a sheet change during the command (`moves`: each as the drawing before and after
+/// it) loaded it into memory or put it out (Q6570): put out as it was when the command started,
+/// or loaded and unchanged since, or both. That is no edit of the plan.
+fn sheet_moved(moves: &[(Arc<Drawing>, Arc<Drawing>)], before: &Drawing, now: &Drawing, h: Handle) -> bool {
+    let put_out =
+        |b: &Arc<Entity>| moves.iter().any(|(pre, post)| post.model.get(h).is_none() && pre.model.get(h).is_some_and(|p| Arc::ptr_eq(p, b)));
+    let loaded = |n: &Arc<Entity>| moves.iter().any(|(pre, post)| pre.model.get(h).is_none() && post.model.get(h).is_some_and(|p| Arc::ptr_eq(p, n)));
+    match (before.model.get(h), now.model.get(h)) {
+        (Some(b), None) => put_out(b),
+        (None, Some(n)) => loaded(n),
+        (Some(b), Some(n)) => put_out(b) && loaded(n),
+        (None, None) => true,
+    }
+}
+
+/// [`plan_touched`] between `a` and `b`, less what the active drawing's sheet changes during the
+/// command only moved in or out of memory ([`sheet_moved`]).
+fn plan_edited(st: &crate::DocState, a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
+    let mut touched = plan_touched(a, b, g);
+    if !st.sheet_moves.is_empty() {
+        touched.retain(|h| !sheet_moved(&st.sheet_moves, a, b, *h));
+    }
+    touched
 }
 
 /// Whether object `h` is the very same in `a` and `b` (or in neither).
@@ -1105,6 +1527,20 @@ impl Behind {
     }
 }
 
+/// `to` is drawing state `from` with a change that is no edit of the model or its plan (its
+/// associative state written into it on saving): behind as `from` is, and from the same build.
+pub(crate) fn carry_state(st: &mut crate::DocState, from: &Arc<Drawing>, to: &Arc<Drawing>) {
+    st.model_behind.carry(from, to);
+    super::revise3d::carry(st, from, to);
+}
+
+/// Drawing state `d` is behind its associative model's plan, with no build of this session it is
+/// behind (a model opened with a plan changed since it was built).
+pub(crate) fn mark_behind(st: &mut crate::DocState, d: &Arc<Drawing>) {
+    st.model_behind.add(d, None);
+    st.model_behind.last_edit = Some(web_time::Instant::now());
+}
+
 /// Whether the active drawing's associative model is behind its plan (built again before the
 /// next command that reads it, [`update_model`]).
 pub fn model_behind(s: &Session) -> bool {
@@ -1113,15 +1549,32 @@ pub fn model_behind(s: &Session) -> bool {
 
 /// After a command: when the drawing has an associative model and an object on its rules'
 /// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
-pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
-    behind_after_command(s, before);
+/// `uid` (when known) is the drawing the command started in: one that left another drawing
+/// current (`open`, a new drawing, a switch) edited no model, so nothing compares the drawing
+/// before with this one (it took a whole opened model for added: a step "open" in its build
+/// record and a second on a large model, Q6567); a build the command made is still recorded.
+pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>, uid: Option<u64>) {
+    let switched = uid.is_some_and(|u| s.state().is_ok_and(|st| st.uid != u));
+    if !switched {
+        // First the copies a person made of generated elements, recorded as theirs (Q6620): what
+        // follows takes them for no build's.
+        super::overrides::after_command(s, before);
+        behind_after_command(s, before);
+    }
+    // The outermost command is over: the sheet changes it made are forgotten (they hold
+    // drawing states, the sheets put out among them).
+    if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
+        for st in &mut s.docs {
+            st.sheet_moves.clear();
+        }
+    }
     // Then the drawing state now follows the build it comes from (and a build this command
     // made takes the model as the command left it).
-    super::revise3d::after_command(s, before);
+    super::revise3d::after_command(s, before, switched);
     // Last, the saved model's record (Q6403): the spec it is written into is no edit of the
     // model or its plan, so the state it makes is the one the command left, behind or built.
     let left = s.state().ok().map(|st| Arc::clone(&st.doc));
-    super::buildrec::after_command(s, before);
+    super::buildrec::after_command(s, before, switched);
     if let Some(left) = left
         && let Ok(st) = s.state_mut()
         && !Arc::ptr_eq(&left, &st.doc)
@@ -1150,13 +1603,13 @@ fn behind_after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         // A drawing behind, and a build newer than the one it was behind (this command's:
         // `model.update`, `model.revise`, `model.build`; or one on another branch of the undo
         // history): current when that build's plan objects are the plan's now.
-        if built.is_some_and(|b| plan_touched(&b.0, &st.doc, g).is_empty()) {
+        if built.is_some_and(|b| plan_edited(st, &b.0, &st.doc, g).is_empty()) {
             return;
         }
     } else if !st.model_behind.holds(before) {
         // Model space untouched (a command that drew on a sheet's paper space), or no plan
         // object changed: the model is as current as it was.
-        let touched = plan_touched(before, &st.doc, g);
+        let touched = plan_edited(st, before, &st.doc, g);
         if touched.is_empty() {
             return;
         }
@@ -1313,6 +1766,22 @@ pub fn update_model(s: &mut Session) -> bool {
     if !st.model_behind.holds(&st.doc) {
         return false;
     }
+    // The plan is the whole print set, whatever part of it is in memory (Q6570): a build from
+    // the sheets in memory alone would drop the rest of the building. The set goes out of
+    // memory again when the interface is idle; the state loaded is behind as the one before.
+    if st.wallgen.as_ref().is_some_and(|g| g.auto) && s.has_parked_sheets() {
+        match s.load_all_sheets() {
+            Ok(_) => s.note_whole_set_load("model.update"),
+            Err(e) => {
+                s.echo(e.to_string());
+                return false;
+            }
+        }
+    }
+    let Ok(st) = s.state() else { return false };
+    if !st.model_behind.holds(&st.doc) {
+        return false;
+    }
     let behind = Arc::clone(&st.doc);
     let Some(g) = st.wallgen.clone().filter(|g| g.auto) else {
         if let Ok(st) = s.state_mut() {
@@ -1321,8 +1790,7 @@ pub fn update_model(s: &mut Session) -> bool {
         return false;
     };
     // The plan of the build this state comes from: after an undo, not the last build's.
-    let (old, rooms) =
-        st.model_records.for_state(&behind).map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
+    let (old, rooms) = st.model_records.for_state(&behind).map_or_else(|| (Vec::new(), Some(Vec::new())), |r| r.plan_and_rooms());
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
     s.model_updating = true;
     let r = super::revise3d::revise(s, &g, old, rooms, &how);
@@ -1358,6 +1826,9 @@ struct Cut {
     /// A family's head and sill above the floor (sheet units); none = the level's.
     head: Option<f64>,
     sill: Option<f64>,
+    /// How far above the wall's level the floor the opening serves stands (sheet units): 0 but
+    /// for a mezzanine's opening cut into the storey's full-height wall (Q6451).
+    lift: f64,
 }
 
 /// A wall from a face pair: centreline (sheet units), thickness, the openings cut in it.
@@ -1374,7 +1845,33 @@ struct PlanWall {
     extra: Vec<(Vec2, Vec2, f64, f64)>,
     /// Its wall type's name: from the spec's wall marks (the tags on the plans), else its layer's.
     wall_type: Option<String>,
+    /// Its top is a number the spec gives (its mark's height, else its type's): no head rule
+    /// moves it.
+    fixed_top: bool,
+    /// How its type's head rule set its top, and from what ceiling (the build tag `head:`).
+    head: Option<String>,
+    /// Why it stands where the plan draws no wall (an inferred wall's basis, its provenance);
+    /// None for a wall the plan draws.
+    basis: Option<&'static str>,
+    /// The wall edit that put it here (Q6613): built to its ends as the edit gives them.
+    edit: Option<Box<EditedWall>>,
 }
+
+/// What a wall edit's wall carries: the edit's id, its basis (its provenance), and where the
+/// plan built the wall it moved (the design's place, kept beside the corrected one).
+#[derive(Clone, Debug, PartialEq)]
+struct EditedWall {
+    id: String,
+    basis: String,
+    design: Option<(Vec2, Vec2)>,
+}
+
+/// A built wall's tag: the wall edit that put it there (`edit:WE-1`).
+pub(crate) const EDIT_TAG: &str = "edit:";
+/// A moved wall's tag: where the plan built it (`edited_from:x0,y0,x1,y1`, plan units).
+pub(crate) const EDITED_FROM_TAG: &str = "edited_from:";
+/// A wall edit's line finds the wall built on it this close (inches across it).
+const EDIT_MATCH_IN: f64 = 1.0;
 
 /// A door leaf (hinge to its open end) or a window pane, with what it came from.
 struct Leaf {
@@ -1398,6 +1895,12 @@ struct Leaf {
     /// window there ([`WindowBasis`]).
     mark: Option<String>,
     basis: Option<WindowBasis>,
+    /// A door the door schedule tags where the plan draws no opening, built at its tag (Q6609):
+    /// how it was placed, how it opens, its basis. Its `mark` is the schedule's.
+    at_tag: Option<doortags::AtTag>,
+    /// How far above its level's floor the floor it serves stands (sheet units): 0 but for a
+    /// mezzanine's opening re-hosted in the storey's full-height wall (Q6451).
+    lift: f64,
 }
 
 /// How a window was found where it is (`found:` tag on the built element).
@@ -1416,11 +1919,15 @@ enum WindowBasis {
     /// window cut there at its type's width (inferred position).
     TagOnWall,
     /// As [`Self::TagOnWall`], for a mark with no width of its own (no schedule row, no opening
-    /// tagged): the width between the jambs the plan draws across the wall there (Q6369).
+    /// tagged): the width between the jambs the plan draws across the wall there (Q6369), the
+    /// window standing between them (Q6450).
     TagJambs,
     /// As [`Self::TagJambs`] with no jambs drawn: the level's typical window width (inferred
     /// position and width, Q6369).
     TagTypicalWidth,
+    /// A window tag at an open end of the plan (two walls ending at the outside, no wall drawn
+    /// across them): the end wall built with the tag's window in it (inferred, Q6510).
+    TagOpenEnd,
 }
 
 impl WindowBasis {
@@ -1433,6 +1940,7 @@ impl WindowBasis {
             Self::TagOnWall => "tag_on_wall",
             Self::TagJambs => "tag_jambs",
             Self::TagTypicalWidth => "tag_typical_width",
+            Self::TagOpenEnd => "tag_open_end",
         }
     }
 
@@ -1448,13 +1956,16 @@ impl WindowBasis {
                 "a typical window: the level's plan tags or glazes a window of this opening's width, this opening has no tag or glazing of its own"
             }
             Self::TagOnWall => {
-                "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag"
+                "a window tag printed by an outside wall the plan draws through: the tag's window cut there at its type's width, centred at the tag (or slid along the wall to stand between its ends)"
             }
             Self::TagJambs => {
                 "a window tag printed by an outside wall the plan draws through, its type with no width given (no schedule row, no opening of its own): the window cut there between the jambs the plan draws across the wall"
             }
             Self::TagTypicalWidth => {
                 "a window tag printed by an outside wall the plan draws through, its type with no width given (no schedule row, no opening of its own, no jambs drawn): the window cut there at the level's typical window width; a window schedule or the elevations would give its own"
+            }
+            Self::TagOpenEnd => {
+                "a window tag printed at an open end of the plan (a corridor's or a space's two walls ending at the outside, no wall drawn across them): the end wall built across where the first of them ends, the tag's window centred in it at its type's width (the opening's when that is narrower)"
             }
             Self::Tag | Self::Glazing | Self::Symbol => "",
         }
@@ -1499,6 +2010,8 @@ struct PlanLevel {
     k: f64,
     /// The level's window tags against the windows built (Q6311).
     window_tally: WindowTally,
+    /// The doors built at door schedule tags where the plan draws no opening (Q6609).
+    door_tags: doortags::DoorTagReport,
 }
 
 /// A box on the centreline `a`–`b`, `t` thick, from `z0` up to `z1`, added to `m`.
@@ -1518,6 +2031,59 @@ pub(crate) fn add_box(m: &mut Mesh, a: Vec2, b: Vec2, t: f64, z0: f64, z1: f64) 
     }
     let f = |v: [u32; 4]| MeshFace { v: v.iter().map(|i| base + i).collect(), hidden: 0 };
     m.faces.extend([f([3, 2, 1, 0]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])]);
+}
+
+/// What a build makes (part name, mesh) of one wall `a`–`b`, `t` thick and `top` high off a floor
+/// at 0, with one window cut in it: `cut` = (from, to) along it, then its sill and head.
+#[cfg(test)]
+pub(crate) fn wall_with_window(a: Vec2, b: Vec2, t: f64, top: f64, cut: (f64, f64, f64, f64)) -> Vec<(&'static str, Mesh)> {
+    let (s0, s1, sill, head) = cut;
+    let len = a.dist(b).max(1e-12);
+    let at = |s: f64| a + (b - a) * (s / len);
+    let wall = PlanWall {
+        a,
+        b,
+        thickness: t,
+        top,
+        source: Handle(1),
+        cuts: vec![Cut { s0, s1, window: true, head: Some(head), sill: Some(sill), lift: 0.0 }],
+        extra: Vec::new(),
+        wall_type: None,
+        fixed_top: false,
+        head: None,
+        basis: None,
+        edit: None,
+    };
+    let leaf = Leaf {
+        a: at(s0),
+        b: at(s1),
+        window: true,
+        thickness: t,
+        source: Handle(2),
+        head: Some(head),
+        sill: Some(sill),
+        along: None,
+        pair: None,
+        frame: Some((at(s0), at(s1))),
+        mark: None,
+        basis: None,
+        at_tag: None,
+        lift: 0.0,
+    };
+    let pl = PlanLevel {
+        walls: vec![wall],
+        leaves: vec![leaf],
+        skipped: Vec::new(),
+        z0: 0.0,
+        top,
+        door_head: 80.0,
+        sill: 36.0,
+        head: 84.0,
+        k: 1.0,
+        window_tally: WindowTally::default(),
+        door_tags: doortags::DoorTagReport::default(),
+    };
+    pl.meshes().into_iter().map(|(p, m, ..)| (part_name(p), m)).collect()
 }
 
 pub(crate) fn empty_mesh() -> Mesh {
@@ -1555,41 +2121,60 @@ impl PlanLevel {
             let u = (w.b - w.a) * (1.0 / len);
             let at = |s: f64| w.a + u * s;
             let mut m = empty_mesh();
-            let mut cuts: Vec<Cut> =
-                w.cuts.iter().map(|c| Cut { s0: c.s0.max(0.0), s1: c.s1.min(len), ..c.clone() }).filter(|c| c.s1 > c.s0).collect();
-            cuts.sort_by(|x, y| x.s0.total_cmp(&y.s0));
-            let mut s = 0.0;
-            for c in &cuts {
-                if c.s0 > s {
-                    add_box(&mut m, at(s), at(c.s0), w.thickness, self.z0, w.top);
+            let cuts: Vec<Cut> =
+                w.cuts.iter().take(MAX_OBJECTS).map(|c| Cut { s0: c.s0.max(0.0), s1: c.s1.min(len), ..c.clone() }).filter(|c| c.s1 > c.s0).collect();
+            // Along the wall from end to end, between every opening's ends: solid from the floor
+            // to its top less the openings over that stretch (one, or openings stacked: a
+            // storey's window under a mezzanine's in the same wall, Q6451); stretches with the
+            // same openings over them are one.
+            let mut stops: Vec<f64> = std::iter::once(0.0).chain(std::iter::once(len)).chain(cuts.iter().flat_map(|c| [c.s0, c.s1])).collect();
+            stops.sort_by(f64::total_cmp);
+            stops.dedup_by(|x, y| (*x - *y).abs() <= 1e-9);
+            let holes_at = |mid: f64| {
+                let mut h: Vec<(f64, f64)> =
+                    cuts.iter().filter(|c| c.s0 < mid && c.s1 > mid).map(|c| self.opening(c.window, c.sill, c.head, c.lift)).collect();
+                h.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+                h.dedup_by(|x, y| (x.0 - y.0).abs() <= 1e-9 && (x.1 - y.1).abs() <= 1e-9);
+                h
+            };
+            let mut run: Option<(f64, f64, Vec<(f64, f64)>)> = None;
+            for pair in stops.windows(2) {
+                let &[p, q] = pair else { continue };
+                if q - p <= 1e-9 {
+                    continue;
                 }
-                let (lo, hi) = if c.window {
-                    (self.z0 + c.sill.unwrap_or(self.sill), self.z0 + c.head.unwrap_or(self.head))
-                } else {
-                    (self.z0, self.z0 + c.head.unwrap_or(self.door_head))
-                };
-                add_box(&mut m, at(c.s0), at(c.s1), w.thickness, self.z0, lo);
-                add_box(&mut m, at(c.s0), at(c.s1), w.thickness, hi.min(w.top), w.top);
-                s = s.max(c.s1);
+                let holes = holes_at((p + q) / 2.0);
+                match &mut run {
+                    Some((_, end, h)) if *h == holes => *end = q,
+                    _ => {
+                        if let Some((s0, s1, h)) = run.take() {
+                            self.add_stretch(&mut m, at(s0), at(s1), w, &h);
+                        }
+                        run = Some((p, q, holes));
+                    }
+                }
             }
-            if s < len {
-                add_box(&mut m, at(s), at(len), w.thickness, self.z0, w.top);
+            if let Some((s0, s1, h)) = run {
+                self.add_stretch(&mut m, at(s0), at(s1), w, &h);
             }
             for (a, b, lo, hi) in &w.extra {
                 add_box(&mut m, *a, *b, w.thickness, *lo, *hi);
             }
             if !m.faces.is_empty() {
-                let extra = w.wall_type.iter().map(|n| format!("type:{}", n.chars().take(250).collect::<String>())).collect();
+                let extra = w
+                    .wall_type
+                    .iter()
+                    .map(|n| format!("type:{}", n.chars().take(250).collect::<String>()))
+                    .chain(w.head.iter().map(|h| format!("{}{}", heads::HEAD_TAG, h.chars().take(240).collect::<String>())))
+                    .chain(w.basis.into_iter().flat_map(|b| super::provenance::tags(cadaddy_walk3d::Made::Inferred, b)).map(|t| t.value))
+                    .chain(w.edit.iter().flat_map(|x| edited_tags(x)))
+                    .collect();
                 out.push((Part::Wall, m, w.source, extra));
             }
         }
         for l in &self.leaves {
             let mut m = empty_mesh();
-            let (lo, hi) = if l.window {
-                (self.z0 + l.sill.unwrap_or(self.sill), self.z0 + l.head.unwrap_or(self.head))
-            } else {
-                (self.z0, self.z0 + l.head.unwrap_or(self.door_head))
-            };
+            let (lo, hi) = self.opening(l.window, l.sill, l.head, l.lift);
             if l.window {
                 add_box(&mut m, l.a, l.b, (0.5 * self.k).min(l.thickness), lo, hi);
             } else {
@@ -1598,7 +2183,8 @@ impl PlanLevel {
                 }
             }
             if let Some((a, b)) = l.frame {
-                self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window);
+                // A door over a sill is framed round like a window (its sill member too).
+                self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window || lo > self.z0);
             }
             // A single door's swing as drawn, for what must keep clear of it.
             let swing = l.along.filter(|_| !l.window && l.pair.is_none()).map(|along| {
@@ -1619,12 +2205,49 @@ impl PlanLevel {
                     let made = if b.drawn() { cadaddy_walk3d::Made::Drawn } else { cadaddy_walk3d::Made::Inferred };
                     extra.extend(super::provenance::tags(made, b.why()).into_iter().map(|t| t.value));
                 }
-                extra.push(format!("{SILL_TAG}{}", lo - self.z0));
-                extra.push(format!("{HEAD_TAG}{}", hi - self.z0));
+                // Above the floor it serves (a mezzanine's, for one re-hosted in the storey's wall).
+                extra.push(format!("{SILL_TAG}{}", lo - self.z0 - l.lift));
+                extra.push(format!("{HEAD_TAG}{}", hi - self.z0 - l.lift));
+            } else if let Some(t) = &l.at_tag {
+                // A door built at its schedule tag (Q6609): its mark, how it was placed and opens,
+                // whether it closes onto a counter, its provenance, its sill and head.
+                extra.extend(l.mark.iter().map(|m| format!("{MARK_TAG}{m}")));
+                extra.push(format!("{FOUND_TAG}{}", t.placed.as_str()));
+                extra.push(format!("{OPERATION_TAG}{}", t.operation));
+                if t.counter {
+                    extra.push(format!("{COUNTER_TAG}yes"));
+                }
+                extra.extend(super::provenance::tags(cadaddy_walk3d::Made::Inferred, &t.basis).into_iter().map(|t| t.value));
+                extra.push(format!("{SILL_TAG}{}", lo - self.z0 - l.lift));
+                extra.push(format!("{HEAD_TAG}{}", hi - self.z0 - l.lift));
             }
             out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, extra));
         }
         out
+    }
+
+    /// An opening's bottom and top (sheet units): a window from its sill to its head, a door from
+    /// the floor (or its sill) to its head (each its family's, else the level's), on the floor it
+    /// serves, `lift` above the level's.
+    fn opening(&self, window: bool, sill: Option<f64>, head: Option<f64>, lift: f64) -> (f64, f64) {
+        let floor = self.z0 + lift;
+        if window {
+            (floor + sill.unwrap_or(self.sill), floor + head.unwrap_or(self.head))
+        } else {
+            // A door from the floor, or from its sill (a counter shutter's counter top, Q6609).
+            (floor + sill.unwrap_or(0.0), floor + head.unwrap_or(self.door_head))
+        }
+    }
+
+    /// The wall `w` from `a` to `b` (on its centreline), solid from the floor to its top but for
+    /// the `holes` over that stretch (bottoms and tops, sorted): the pieces between them.
+    fn add_stretch(&self, m: &mut Mesh, a: Vec2, b: Vec2, w: &PlanWall, holes: &[(f64, f64)]) {
+        let mut z = self.z0;
+        for (lo, hi) in holes {
+            add_box(m, a, b, w.thickness, z, lo.min(w.top));
+            z = z.max(hi.min(w.top));
+        }
+        add_box(m, a, b, w.thickness, z, w.top);
     }
 
     /// The frame of the opening `a`–`b` (on the wall's centreline, wall `t` thick) from `lo` up
@@ -1648,9 +2271,16 @@ impl PlanLevel {
     }
 }
 
-/// Whether the wall `a` is the same wall as `b` (parallel, on the same line within their
-/// thickness, overlapping over half the shorter).
-fn same_wall(a: &PlanWall, b: &PlanWall) -> bool {
+/// Two walls side by side are one when their bodies overlap across by more than this, inches: two
+/// walls can't stand in each other (Q6583); touching, or a joint apart, they are two.
+const BODY_OVERLAP_IN: f64 = 0.5;
+
+/// Whether the wall `a` is the same wall as `b`: parallel, their bodies overlapping across (their
+/// centrelines nearer than their half-thicknesses together, by over [`BODY_OVERLAP_IN`]; on the
+/// same line within the thicker one's half at least), and along over half the shorter. Two
+/// readings of one wall (its faces and a finish line, a stripe of linework read as several
+/// walls) are one; two walls back to back, sharing a face, stay two. `k` drawing units an inch.
+fn same_wall(a: &PlanWall, b: &PlanWall, k: f64) -> bool {
     let (la, lb) = (a.a.dist(a.b), b.a.dist(b.b));
     if la <= 1e-9 || lb <= 1e-9 {
         return false;
@@ -1659,12 +2289,160 @@ fn same_wall(a: &PlanWall, b: &PlanWall) -> bool {
     if ua.cross(ub).abs() > 0.01 {
         return false;
     }
-    if ua.perp().dot(b.a - a.a).abs() > a.thickness.max(b.thickness) / 2.0 {
+    let across = ua.perp().dot(b.a - a.a).abs();
+    let overlap = (a.thickness + b.thickness) / 2.0 - BODY_OVERLAP_IN * k.max(0.0);
+    if across > overlap.max(a.thickness.max(b.thickness) / 2.0) {
         return false;
     }
     let (s0, s1) = (ua.dot(b.a - a.a), ua.dot(b.b - a.a));
     let (lo, hi) = (s0.min(s1).max(0.0), s0.max(s1).min(la));
     hi - lo > 0.5 * la.min(lb)
+}
+
+/// A jamb is at least this long, inches: a shorter pair of faces is a jog in a face or a line's
+/// end, no wall.
+const JAMB_MIN_IN: f64 = 1.0;
+/// The opening beside a jamb is at least and at most this wide, inches (a pass-through to a
+/// pair of doors or a storefront bay).
+const JAMB_OPENING_IN: (f64, f64) = (12.0, 192.0);
+/// Short face pairs looked at for jambs, at most (hostile drawings).
+const MAX_JAMB_PAIRS: usize = 20_000;
+
+/// The pairs of `squat` (face pairs too short for a wall, [`pairs_and_squat`]) that are jambs
+/// (Q6614): one end meets a crossing wall of `walls` (the end's corners on that wall's body or at its face,
+/// the wall ahead of it) and the other end is an opening's side: a wall of the same thickness on
+/// the pair's line beyond a gap [`JAMB_OPENING_IN`] wide that no wall crosses (another jamb
+/// counts), or a drawn door swing's hinge or leaf end (`swings`) on its end line; and that end is
+/// drawn closed by a line of `segs` across it from face to face. A pair inside a wall's
+/// body is a reading of that wall; one overlapping a pair `set_aside` (read as a window's frame,
+/// a symbol, casework) is part of that. Lone pairs, and pairs held at one end only, are left out: the
+/// minimum length is for them. `k` is drawing units per inch. Returns indices into `squat`.
+///
+/// [`pairs_and_squat`]: super::perceive::geometry::pairs_and_squat
+fn jamb_pairs(
+    squat: &[super::perceive::geometry::Pair],
+    segs: &[super::perceive::geometry::Seg],
+    set_aside: &[(Vec2, Vec2, f64)],
+    walls: &[PlanWall],
+    swings: &[Vec2],
+    k: f64,
+) -> Vec<usize> {
+    if !(k.is_finite() && k > 0.0) || squat.is_empty() || walls.is_empty() {
+        return Vec::new();
+    }
+    let tol = k;
+    let (open_min, open_max) = (JAMB_OPENING_IN.0 * k, JAMB_OPENING_IN.1 * k);
+    let max_thick = walls.iter().map(|w| w.thickness).filter(|t| t.is_finite()).fold(0.0f64, f64::max);
+    let near = WallGrid::build(walls, (2.0 * max_thick).max(2.0 * tol));
+    let aside = WallGrid::of(set_aside.iter().map(|l| (l.0, l.1)), (2.0 * max_thick).max(2.0 * tol));
+    // Each pair held by a crossing wall at one end: (pair, its other end, outward there).
+    let mut held: Vec<(usize, Vec2, Vec2)> = Vec::new();
+    for (i, p) in squat.iter().enumerate().take(MAX_JAMB_PAIRS) {
+        let len = p.c0.dist(p.c1);
+        if !(len > 1e-9 && p.thickness.is_finite() && p.c0.is_finite() && p.c1.is_finite()) {
+            continue;
+        }
+        let u = (p.c1 - p.c0) * (1.0 / len);
+        let mid = p.c0.mid(p.c1);
+        if near.at(mid).iter().filter_map(|&j| walls.get(j)).any(|w| seg_dist(mid, w.a, w.b) < w.thickness / 2.0) {
+            continue;
+        }
+        // Over a pair set aside as something else (a window's frame across its opening, a
+        // symbol, a counter): part of that, no wall.
+        let (s0, s1) = (u.dot(p.c0), u.dot(p.c1));
+        let over = |l: &(Vec2, Vec2, f64)| {
+            let ll = l.0.dist(l.1);
+            if ll <= 1e-9 || ((l.1 - l.0) * (1.0 / ll)).cross(u).abs() > 0.02 || u.perp().dot(l.0 - p.c0).abs() > tol {
+                return false;
+            }
+            let (l0, l1) = (u.dot(l.0).min(u.dot(l.1)), u.dot(l.0).max(u.dot(l.1)));
+            l1.min(s1) - l0.max(s0) > tol
+        };
+        if aside.at(mid).iter().filter_map(|&j| set_aside.get(j)).any(over) {
+            continue;
+        }
+        // A crossing wall at the end `e` (outward `out`): at least 30° across, the end's corners
+        // on its body or at its face (at a tee its faces stop where the pair meets them, so its
+        // pieces stop at the end's corners), the wall ahead.
+        let crossing = |e: Vec2, out: Vec2| {
+            near.at(e).iter().filter_map(|&j| walls.get(j)).any(|w| {
+                let lw = w.a.dist(w.b);
+                if lw <= 1e-9 {
+                    return false;
+                }
+                let n = (w.b - w.a).perp() * (1.0 / lw);
+                let s = n.dot(out);
+                s.abs() >= 0.5 && seg_dist(e, w.a, w.b) <= (w.thickness + p.thickness) / 2.0 + tol && -n.dot(e - w.a) / s > -tol
+            })
+        };
+        match (crossing(p.c0, u * -1.0), crossing(p.c1, u)) {
+            (true, false) => held.push((i, p.c1, u)),
+            (false, true) => held.push((i, p.c0, u * -1.0)),
+            _ => {}
+        }
+    }
+    // The lines an opening's other side may be: the walls, then the held pairs.
+    let mut lines: Vec<(Vec2, Vec2, f64)> = walls.iter().map(|w| (w.a, w.b, w.thickness)).collect();
+    lines.extend(held.iter().filter_map(|&(i, _, _)| squat.get(i)).map(|p| (p.c0, p.c1, p.thickness)));
+    let far = WallGrid::of(lines.iter().map(|l| (l.0, l.1)), open_max);
+    let lines_of_segs = WallGrid::of(segs.iter().map(|g| (g.a, g.b)), (2.0 * max_thick).max(2.0 * tol));
+    let mut out = Vec::new();
+    for &(i, e, o) in &held {
+        let Some(p) = squat.get(i) else { continue };
+        let half = p.thickness / 2.0;
+        // The end at the opening is drawn closed: a line across it from face to face (the jamb
+        // line, a frame's edge). Two stray parallel lines are no jamb.
+        let capped = lines_of_segs.at(e).iter().filter_map(|&j| segs.get(j)).any(|g| {
+            let (a, b) = (g.a - e, g.b - e);
+            let (sa, sb) = (o.perp().dot(a), o.perp().dot(b));
+            o.dot(a).abs() <= tol && o.dot(b).abs() <= tol && sa.min(sb) <= -half + tol && sa.max(sb) >= half - tol
+        });
+        if !capped {
+            continue;
+        }
+        // A door's hinge or leaf end on the jamb's end line, within its thickness.
+        let swing = swings.iter().any(|s| o.dot(*s - e).abs() <= 2.0 * k && o.perp().dot(*s - e).abs() <= half + tol);
+        let beyond = || {
+            let ids = far.at(e);
+            // The nearest side across the gap: a line of the pair's thickness on its line.
+            let side = ids
+                .iter()
+                .filter_map(|&j| lines.get(j))
+                .filter(|l| {
+                    let ll = l.0.dist(l.1);
+                    ll > 1e-9
+                        && ((l.1 - l.0) * (1.0 / ll)).cross(o).abs() < 0.02
+                        && o.perp().dot(l.0 - e).abs() <= tol
+                        && (l.2 - p.thickness).abs() <= tol
+                })
+                .map(|l| o.dot(l.0 - e).min(o.dot(l.1 - e)))
+                .filter(|&g| g >= open_min && g <= open_max)
+                .fold(f64::INFINITY, f64::min);
+            if !side.is_finite() {
+                return false;
+            }
+            // No wall crosses the gap before it (else the line beyond is another room's wall).
+            !ids.iter().filter(|&&j| j < walls.len()).filter_map(|&j| lines.get(j)).any(|l| {
+                let ll = l.0.dist(l.1);
+                if ll <= 1e-9 {
+                    return false;
+                }
+                let lu = (l.1 - l.0) * (1.0 / ll);
+                let n = lu.perp();
+                let s = n.dot(o);
+                if s.abs() < 0.5 {
+                    return false;
+                }
+                let t = -n.dot(e - l.0) / s;
+                let at = lu.dot(e + o * t - l.0);
+                t > tol && t < side - tol && at >= -l.2 / 2.0 && at <= ll + l.2 / 2.0
+            })
+        };
+        if swing || beyond() {
+            out.push(i);
+        }
+    }
+    out
 }
 
 /// Joins the walls that are pieces of one: on one centreline, of one thickness, type and height,
@@ -1774,6 +2552,128 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+/// Whether a tag at `at` is in the gap `g0`–`g1`: its foot on the gap's line between the gap's
+/// ends, at most `reach` off the line.
+fn tag_in_gap(at: Vec2, g0: Vec2, g1: Vec2, reach: f64) -> bool {
+    let len = g0.dist(g1);
+    if !(len.is_finite() && len > 1e-9 && at.is_finite()) {
+        return false;
+    }
+    let u = (g1 - g0) * (1.0 / len);
+    let s = u.dot(at - g0);
+    s >= 0.0 && s <= len && u.perp().dot(at - g0).abs() <= reach
+}
+
+/// The build tags of a wall an edit placed: its provenance (not drawn there), the edit, and the
+/// plan's place of a wall it moved.
+fn edited_tags(x: &EditedWall) -> Vec<String> {
+    let mut v: Vec<String> = super::provenance::tags(cadaddy_walk3d::Made::Inferred, &x.basis).into_iter().map(|t| t.value).collect();
+    v.push(format!("{EDIT_TAG}{}", x.id.chars().take(40).collect::<String>()));
+    if let Some((a, b)) = x.design {
+        v.push(format!("{EDITED_FROM_TAG}{},{},{},{}", a.x, a.y, b.x, b.y));
+    }
+    v
+}
+
+/// Whether the wall `w` is the one built on the line `a`–`b`: along it, its centreline within
+/// [`EDIT_MATCH_IN`] (or a tenth of its thickness) of it, overlapping most of the shorter.
+fn on_edit_line(w: &PlanWall, a: Vec2, b: Vec2, upf: f64) -> bool {
+    let (len, ml) = (w.a.dist(w.b), a.dist(b));
+    if !(len > 1e-9 && ml > 1e-9 && len.is_finite() && ml.is_finite()) {
+        return false;
+    }
+    let u = (w.b - w.a) * (1.0 / len);
+    if u.cross((b - a) * (1.0 / ml)).abs() > 0.02 {
+        return false;
+    }
+    let tol = (EDIT_MATCH_IN * upf / 12.0).max(0.1 * w.thickness);
+    if u.perp().dot(a - w.a).abs() > tol || u.perp().dot(b - w.a).abs() > tol {
+        return false;
+    }
+    let (s0, s1) = (u.dot(a - w.a), u.dot(b - w.a));
+    let overlap = s0.max(s1).min(len) - s0.min(s1).max(0.0);
+    overlap >= 0.5 * len.min(ml)
+}
+
+/// Apply the spec's wall edits of this level to its walls, in the order made (Q6613): each takes
+/// away the walls built on its `from` line (those the plan gives, and those an earlier edit
+/// placed), then builds its wall on its `to` line: of its type (else the wall's it moved), to
+/// the ends it gives, with its basis. An edit whose `from` finds no wall is said (the plan
+/// changed under it); its `to` wall is still built.
+fn edit_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, pl: &mut PlanLevel, upf: f64, notes: &mut Vec<String>) {
+    let edits: Vec<&cadaddy_walk3d::WallEdit> = sp
+        .wall_edits
+        .iter()
+        .filter(|e| e.level.trim().eq_ignore_ascii_case(level.trim()) && e.finite())
+        .take(cadaddy_walk3d::walledits::MAX_EDITS)
+        .collect();
+    if edits.is_empty() {
+        return;
+    }
+    let v = |p: [f64; 2]| Vec2::new(p[0], p[1]);
+    let k = upf / 12.0;
+    let (mut applied, mut lost) = (Vec::new(), Vec::new());
+    for e in edits {
+        let mut taken: Vec<PlanWall> = Vec::new();
+        if let Some([a, b]) = e.from {
+            pl.walls.retain(|w| {
+                let hit = on_edit_line(w, v(a), v(b), upf);
+                if hit {
+                    taken.push(w.clone());
+                }
+                !hit
+            });
+        }
+        let was = taken.first();
+        if let Some([a, b]) = e.to.filter(|[a, b]| v(*a).dist(v(*b)) > 1e-9)
+            && pl.walls.len() < MAX_OBJECTS
+        {
+            let ty = Some(e.wall_type.trim())
+                .filter(|t| !t.is_empty())
+                .map(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(t)).map_or_else(|| t.to_string(), |x| x.name.clone()))
+                .or_else(|| was.and_then(|w| w.wall_type.clone()));
+            let of_type = ty.as_deref().and_then(|t| sp.wall_types.iter().find(|x| x.name.eq_ignore_ascii_case(t)));
+            let thickness = of_type
+                .map(|t| t.thickness_in)
+                .or(e.thickness_in)
+                .filter(|t| t.is_finite() && *t > 0.0)
+                .map(|t| t * k)
+                .or_else(|| was.map(|w| w.thickness))
+                .unwrap_or(6.0 * k);
+            let height = e.height_ft.or(of_type.and_then(|t| t.height_ft)).filter(|h| h.is_finite() && *h > 0.0);
+            let design = e.from.filter(|_| e.op != "add").map(|[a, b]| (v(a), v(b)));
+            let design = was.and_then(|w| w.edit.as_ref()).and_then(|x| x.design).or(design);
+            pl.walls.push(PlanWall {
+                a: v(a),
+                b: v(b),
+                thickness,
+                top: height.map_or_else(|| was.map_or(pl.top, |w| w.top), |h| pl.z0 + h * upf),
+                source: was.map_or(Handle(0), |w| w.source),
+                cuts: Vec::new(),
+                extra: Vec::new(),
+                wall_type: ty,
+                fixed_top: height.is_some() || was.is_some_and(|w| w.fixed_top),
+                head: None,
+                basis: None,
+                edit: Some(Box::new(EditedWall { id: e.id.clone(), basis: e.basis(), design })),
+            });
+        }
+        if e.from.is_some() && taken.is_empty() {
+            lost.push(e.id.clone());
+        } else {
+            applied.push(e.id.clone());
+        }
+    }
+    let mut note = format!("{level}: wall edits applied: {}", if applied.is_empty() { "none".to_string() } else { applied.join(", ") });
+    if !lost.is_empty() {
+        note.push_str(&format!(
+            "; found no wall where these took one from (the plan changed under them; their walls are still built where they say): {}",
+            lost.join(", ")
+        ));
+    }
+    notes.push(format!("{note}."));
+}
+
 /// Give each wall the spec's wall mark on its centreline (on this level, along it and within its
 /// thickness, overlapping most of the shorter): the mark's wall type, and its height when it has
 /// one (else its type's).
@@ -1784,7 +2684,8 @@ fn mark_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, z0: f64, upf: f64,
     }
     for w in walls.iter_mut() {
         let len = w.a.dist(w.b);
-        if len <= 1e-9 {
+        // A wall an edit placed with its type keeps it: a mark beside it is the wall it moved.
+        if len <= 1e-9 || w.edit.is_some() && w.wall_type.is_some() {
             continue;
         }
         let u = (w.b - w.a) * (1.0 / len);
@@ -1812,6 +2713,7 @@ fn mark_walls(sp: &cadaddy_walk3d::BuildingSpec, level: &str, z0: f64, upf: f64,
         w.wall_type = Some(t.name.clone());
         if let Some(h) = m.height_ft.or(t.height_ft).filter(|h| h.is_finite() && *h > 0.0) {
             w.top = z0 + h * upf;
+            w.fixed_top = true;
         }
     }
 }
@@ -1980,7 +2882,19 @@ fn inside_shell<'a>(
 }
 
 fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64, notes: &mut Vec<String>) -> PlanLevel {
-    use super::perceive::geometry::{Limits, openings, pairs, segments};
+    plan_level_with(d, g, level, upf, notes, &[])
+}
+
+/// [`plan_level`] with the traced rooms' ceilings (a wall built to the ceiling stops at theirs).
+fn plan_level_with(
+    d: &Drawing,
+    g: &WallGen,
+    level: &cadaddy_walk3d::Level,
+    upf: f64,
+    notes: &mut Vec<String>,
+    ceilings: &[RoomCeiling],
+) -> PlanLevel {
+    use super::perceive::geometry::{Limits, openings, pairs, pairs_and_squat, segments};
     let k = upf / 12.0;
     let oz = &g.rules.openings;
     // A spec gives each wall layer its type's height (see `top_of`); the rules, one for all.
@@ -2007,6 +2921,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         head: oz.window_head_ft * upf,
         k,
         window_tally: WindowTally::default(),
+        door_tags: doortags::DoorTagReport::default(),
     };
     // The level's objects: those inside its region (all of model space without one).
     let ents: Vec<&Arc<Entity>> = d
@@ -2068,11 +2983,27 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 layers.join(", ")
             )
         });
+        // A wall edit adds walls where the plan has none (Q6613).
+        if let Some(sp) = &g.spec {
+            edit_walls(sp, &level.name, &mut pl, upf, notes);
+            mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
+        }
         return pl;
     }
     // Layers whose wall type draws the centreline aren't paired: each line is a wall.
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
+    // A rounded outline with no wall's other face beside it all along (a callout's boundary, a
+    // door swing) is no wall's face.
+    let alone = super::perceive::geometry::rounded_outlines_alone(&pair_ents, k, &lim);
+    if !alone.is_empty() {
+        notes.push(format!(
+            "{}: {} rounded outlines (callout boundaries, swings) with no wall's other face along them not taken for wall faces.",
+            level.name,
+            alone.len()
+        ));
+    }
+    let (alone_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) = pair_ents.into_iter().partition(|e| alone.contains(&e.handle));
     let mut segs = segments(&pair_ents);
     // A dashed line (an overhead or hidden line drawn in pieces) is no wall's face.
     let dashes = super::perceive::geometry::drop_dashes(&mut segs, k);
@@ -2084,7 +3015,19 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if joined > 0 {
         notes.push(format!("{}: {joined} block-long pieces of wall faces joined.", level.name));
     }
-    let mut found = pairs(d, &segs, &lim);
+    // The rounded outlines left out stay in sight until the symbols are read: a tub's or a basin's
+    // rounded inner outline is the symbol's, and its pairs with the symbol's outline show the
+    // outline is one (left out, the outline's edge paired with the wall face beside it as a wall).
+    // Their pairs go after that.
+    let own_segs = segs.len();
+    segs.extend(segments(&alone_ents));
+    // Pairs too short for a wall come too: a jamb between an opening and a crossing wall is a
+    // wall however short (Q6614), kept below once the walls it stands between are known.
+    let (mut found, mut squat) = pairs_and_squat(&segs, &lim, Some(JAMB_MIN_IN * k));
+    squat.retain(|p| p.faces.iter().all(|&f| f < own_segs));
+    // Every pair as first read: those the passes below take out (a window's frame, a symbol, a
+    // counter, stair treads) are no wall, and no squat pair over one is a jamb.
+    let read_as: Vec<([usize; 2], Vec2, Vec2, f64)> = found.iter().map(|p| (p.faces, p.c0, p.c1, p.thickness)).collect();
     // A thin outline's side paired with another wall's face is the air beside that wall.
     let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
     if slivers > 0 {
@@ -2102,12 +3045,93 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if strings > 0 {
         notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
     }
+    // Equipment and fixtures drawn on the plan (a through-wall unit, a tub, a counter, a tag's
+    // frame) pair up like walls: a pair in an outline holding lettering, a fill or an inner
+    // outline, joining no wall, is the symbol's (Q6423), left to the equipment and plumbing readers.
+    let symbols = super::perceive::geometry::drop_symbol_pairs(&segs, &mut found, &super::perceive::geometry::symbol_marks(d, &ents, k), k);
+    if symbols > 0 {
+        notes.push(format!(
+            "{}: {symbols} line pairs inside equipment and fixture symbols (outlines holding lettering, a fill or an inner outline, joining no wall) not taken for walls.",
+            level.name
+        ));
+    }
+    found.retain(|p| p.faces.iter().all(|&f| f < own_segs));
+    segs.truncate(own_segs);
+    // A stair drawn as linework (no stair block): its tread lines a tread apart pair up like a
+    // wall's faces. They are the stair's, read by the stair reader (Q6429).
+    let treads = drop_stair_treads(&segs, &mut found, k);
+    if treads > 0 {
+        notes.push(format!("{}: {treads} line pairs of stair treads (a flight's tread lines) not taken for walls.", level.name));
+    }
+    // Counters, cabinets, appliances and equipment drawn as closed outlines deeper than any wall
+    // and no deeper than casework: what pairs up inside one (its edge and its top's or its
+    // sink's line, its inner outline) is the thing drawn there, no wall (Q6583).
+    let casework = super::perceive::geometry::casework_outlines(&ents, &lim, super::wallcheck::rules().casework_depth_max_in * k);
+    let cased = super::perceive::geometry::drop_casework_pairs(&segs, &mut found, &casework, k);
+    if cased > 0 {
+        notes.push(format!("{}: {cased} line pairs inside casework and equipment outlines (counters, appliances) not taken for walls.", level.name));
+    }
+    // A pair with another wall against each of its faces is the air between them (a chase, a
+    // stripe between rows of parallel linework): one line is no wall's face on both its sides.
+    let air = super::perceive::geometry::drop_air_between(&segs, &mut found);
+    if air > 0 {
+        notes.push(format!(
+            "{}: {air} line pairs between two walls (the air between them: a chase, parallel linework) not taken for walls.",
+            level.name
+        ));
+    }
+    // A window drawn across a gap in a wall (its frame's outline the wall's depth, its sill and
+    // glazing lines, or two glazing lines from jamb to jamb): its lines are no wall bridging the
+    // gap, which stays the window's opening (Q6424).
+    let all_segs = segments(&ents);
+    let range = (oz.min_ft * upf, oz.max_ft * upf);
+    let frames = frames_in_gaps(&found, &segs, &found, true, &all_segs, range, k);
+    let mut it = frames.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    let mut frame_pairs = frames.iter().filter(|x| **x).count();
+    // A print the import sorted by what it draws (Q6487): where its leftover layers hold the
+    // building's casework they are no wall layers (`bspec.draft`), but a stretch of the outside
+    // wall drawn lighter (round a service window) is on them too. A pair of their lines along the
+    // building's outside, in line from a wall's end, is that wall run on; its windows' frames
+    // across its gaps are left out as below.
+    let sorted = found.iter().any(|p| p.layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()));
+    let leftover_ents: Vec<&Arc<Entity>> = if sorted {
+        ents.iter().copied().filter(|e| cadaddy_io::pdf_read::is_content_leftover_layer(&e.common.layer) && !on_walls(&e.common.layer)).collect()
+    } else {
+        Vec::new()
+    };
+    if !leftover_ents.is_empty() {
+        let leftover_segs = segments(&leftover_ents);
+        let mut runs = outside_runs(pairs(d, &leftover_segs, &lim), &found, k);
+        let frames = frames_in_gaps(&runs, &leftover_segs, &found, false, &all_segs, range, k);
+        let mut it = frames.iter();
+        runs.retain(|_| !it.next().copied().unwrap_or(false));
+        frame_pairs += frames.iter().filter(|x| **x).count();
+        if !runs.is_empty() {
+            notes.push(format!(
+                "{}: {} stretches of outside wall drawn lighter (on an imported print's leftover layers, in line from a wall's end) taken for walls.",
+                level.name,
+                runs.len()
+            ));
+        }
+        found.extend(runs);
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
-    // window's glazing drawn lighter): it is wall too.
+    // storefront's glazing drawn lighter): it is wall too, unless it is a window's across the gap.
     if !screened_ents.is_empty() && !found.is_empty() {
-        let fills: Vec<_> =
-            pairs(d, &segments(&screened_ents), &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
+        let screened_segs = segments(&screened_ents);
+        let mut fills: Vec<_> = pairs(d, &screened_segs, &lim).into_iter().filter(|p| fills_a_wall(p.c0, p.c1, p.thickness, &found, k)).collect();
+        let frames = frames_in_gaps(&fills, &screened_segs, &found, false, &all_segs, range, k);
+        let mut it = frames.iter();
+        fills.retain(|_| !it.next().copied().unwrap_or(false));
+        frame_pairs += frames.iter().filter(|x| **x).count();
         found.extend(fills);
+    }
+    if frame_pairs > 0 {
+        notes.push(format!(
+            "{}: {frame_pairs} line pairs of window frames and glazing drawn across wall gaps not taken for walls (the gaps are the windows' openings).",
+            level.name
+        ));
     }
     if found.is_empty() && centre_ents.is_empty() {
         notes.push(format!(
@@ -2117,10 +3141,14 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         ));
         return pl;
     }
+    let kept: std::collections::HashSet<[usize; 2]> = found.iter().map(|p| p.faces).collect();
+    let set_aside: Vec<(Vec2, Vec2, f64)> = read_as.iter().filter(|r| !kept.contains(&r.0)).map(|r| (r.1, r.2, r.3)).collect();
     // Each wall once: the most confident, longest pair of each.
     let source = wall_ents.first().map_or(Handle(0), |e| e.handle);
     let level_top = pl.top;
     let top_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).map_or(level_top, |h| z0 + h * upf);
+    let fixed_of = |layer: &str| wall_type(g, layer).and_then(|t| t.height_ft).is_some();
+    let mut overlapping = 0usize;
     for p in &found {
         let w = PlanWall {
             a: p.c0,
@@ -2131,13 +3159,22 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: wall_type(g, &p.layer).map(|t| t.name.clone()),
+            fixed_top: fixed_of(&p.layer),
+            head: None,
+            basis: None,
+            edit: None,
         };
-        if !pl.walls.iter().any(|x| same_wall(x, &w)) {
+        if pl.walls.iter().any(|x| same_wall(x, &w, k)) {
+            overlapping += 1;
+        } else {
             pl.walls.push(w);
         }
         if pl.walls.len() >= MAX_OBJECTS {
             break;
         }
+    }
+    if overlapping > 0 {
+        notes.push(format!("{}: {overlapping} more readings of walls already found (their bodies overlapping) left out.", level.name));
     }
     // Pieces of one wall in line (a wall drawn unit by unit, found piece by piece): one wall.
     let jambs: Vec<Vec2> = drawn_swings(&ents, k).iter().flat_map(|sw| [sw.c, sw.ends[0], sw.ends[1]]).collect();
@@ -2176,13 +3213,49 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     cuts: Vec::new(),
                     extra: Vec::new(),
                     wall_type: wall_type(g, &sg.layer).map(|t| t.name.clone()),
+                    fixed_top: fixed_of(&sg.layer),
+                    head: None,
+                    basis: None,
+                    edit: None,
                 });
             }
         }
     }
-    // Walls the plans tag: their type, and the height its rule gives there.
+    // A pair of faces too short for a wall standing between an opening and a crossing wall is a
+    // jamb: a wall however short (Q6614). The minimum length is for lone fragments.
+    let mut jamb_count = 0usize;
+    for i in jamb_pairs(&squat, &segs, &set_aside, &pl.walls, &jambs, k) {
+        let Some(p) = squat.get(i) else { continue };
+        let mid = p.c0.mid(p.c1);
+        let w = PlanWall {
+            a: p.c0,
+            b: p.c1,
+            thickness: p.thickness,
+            top: top_of(&p.layer),
+            source: centres.iter().min_by(|x, y| x.0.dist(mid).total_cmp(&y.0.dist(mid))).map_or(source, |c| c.1),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: wall_type(g, &p.layer).map(|t| t.name.clone()),
+            fixed_top: fixed_of(&p.layer),
+            head: None,
+            basis: None,
+            edit: None,
+        };
+        if pl.walls.len() < MAX_OBJECTS && !pl.walls.iter().any(|x| same_wall(x, &w, k)) {
+            pl.walls.push(w);
+            jamb_count += 1;
+        }
+    }
+    if jamb_count > 0 {
+        notes.push(format!("{}: {jamb_count} short wall pieces between an opening and a crossing wall (jambs) built.", level.name));
+    }
+    // Walls the plans tag: their type, and the height its rule gives there. First the walls
+    // the spec's wall edits move, delete or add (Q6613).
     if let Some(sp) = &g.spec {
+        edit_walls(sp, &level.name, &mut pl, upf, notes);
         mark_walls(sp, &level.name, z0, upf, &mut pl.walls);
+        // Then each typed wall's top by its type's head rule (to the ceiling beside it).
+        heads::head_walls(sp, level, ceilings, z0, level_top, upf, &mut pl.walls, notes);
     }
     // Ends that meet another wall run on into it by its thickness (closing corners and tees).
     // Uses a spatial grid (cell = max wall thickness) so each endpoint only checks nearby walls.
@@ -2191,25 +3264,35 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     let ext_grid = WallGrid::build(&snapshot, 1.5 * max_thick);
     for w in &mut pl.walls {
         let len = w.a.dist(w.b);
-        if len <= 1e-9 {
+        // A wall an edit placed stands to the ends it gives.
+        if len <= 1e-9 || w.edit.is_some() {
             continue;
         }
         let u = (w.b - w.a) * (1.0 / len);
-        let meets = |p: Vec2| {
+        // How far the end `p` runs on (along `out`) into a crossing wall it meets: to that wall's
+        // far face, at most its thickness; not at all when the wall is behind the end (a jamb's
+        // end at its opening, a few inches from the crossing wall its other end meets: Q6614).
+        let meets = |p: Vec2, out: Vec2| {
             let mut best = 0.0f64;
             for &i in ext_grid.at(p) {
-                let o = &snapshot[i];
-                if (o.b - o.a).cross(u).abs() <= 0.1 * o.a.dist(o.b) {
+                let Some(o) = snapshot.get(i) else { continue };
+                let lo = o.a.dist(o.b);
+                if (o.b - o.a).cross(u).abs() <= 0.1 * lo || lo <= 1e-9 {
                     continue;
                 }
-                let dd = seg_dist(p, o.a, o.b);
-                if dd <= 1.5 * o.thickness.max(w.thickness) {
-                    best = best.max(o.thickness);
+                if seg_dist(p, o.a, o.b) > 1.5 * o.thickness.max(w.thickness) {
+                    continue;
+                }
+                let n = (o.b - o.a).perp() * (1.0 / lo);
+                let s = n.dot(out);
+                let far = -n.dot(p - o.a) / s + 0.5 * o.thickness / s.abs();
+                if far.is_finite() && far > 0.0 {
+                    best = best.max(far.min(o.thickness));
                 }
             }
             best
         };
-        let (ta, tb) = (meets(w.a), meets(w.b));
+        let (ta, tb) = (meets(w.a, u * -1.0), meets(w.b, u));
         w.a -= u * ta.min(len);
         w.b += u * tb.min(len);
     }
@@ -2220,7 +3303,6 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         notes.push(format!("{}: {corners} corners where two walls stopped short (a corner post between them) closed.", level.name));
     }
     // Openings: each cuts the wall it lies in.
-    let all_segs = segments(&ents);
     let mut ops = openings(d, &ents, &all_segs, k);
 
     // A family's size and heights for the blocks it covers (sheet units above the floor).
@@ -2355,7 +3437,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 let (closed, open) = if along(ends[0]) >= along(ends[1]) { (ends[0], ends[1]) } else { (ends[1], ends[0]) };
                 let s_end = u.dot(closed - w.a);
                 let (head, _) = fitted.get(&o.handle).copied().unwrap_or((None, None));
-                w.cuts.push(Cut { s0: s_at.min(s_end), s1: s_at.max(s_end), window: false, head, sill: None });
+                w.cuts.push(Cut { s0: s_at.min(s_end), s1: s_at.max(s_end), window: false, head, sill: None, lift: 0.0 });
                 // The leaf stands open at the jamb, its face on the opening's edge (not in the wall).
                 let inset = u * (LEAF_IN * k / 2.0 * (s_end - s_at).signum());
                 let along = Some(u * (s_end - s_at).signum());
@@ -2373,6 +3455,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     frame,
                     mark: None,
                     basis: None,
+                    at_tag: None,
+                    lift: 0.0,
                 });
                 doors += 1;
             }
@@ -2380,7 +3464,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 let window = kind == "window";
                 let half = o.width / 2.0;
                 let (head, sill) = fitted.get(&o.handle).copied().unwrap_or((None, None));
-                w.cuts.push(Cut { s0: s_at - half, s1: s_at + half, window, head, sill });
+                w.cuts.push(Cut { s0: s_at - half, s1: s_at + half, window, head, sill, lift: 0.0 });
                 let on = w.a + u * s_at;
                 let leaf = if window {
                     windows += 1;
@@ -2403,6 +3487,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     frame: Some(leaf),
                     basis: window.then_some(if mark.is_some() { WindowBasis::Tag } else { WindowBasis::Symbol }),
                     mark: mark.filter(|_| window),
+                    at_tag: None,
+                    lift: 0.0,
                 });
             }
         }
@@ -2428,6 +3514,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Corridor && c.level.eq_ignore_ascii_case(&level.name))
         .collect();
     let mut corridor_gaps = 0usize;
+    // Stretches of a door's gap past a wall parting it, with no door of their own, left open (Q6616).
+    let mut parted_open = 0usize;
     let mut crossing_gaps: Vec<(Vec2, Vec2)> = Vec::new();
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
@@ -2564,8 +3652,21 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .take(MAX_WINDOW_TAGS)
         .map(|(at, mark)| WindowTag { at, width: row_width(&mark), mark: mark.to_ascii_uppercase() })
         .collect();
+    // Gaps between two walls crossing their line at both ends that face the outside: a window
+    // there when the plan draws one in them (Q6510), whatever crosses their ends.
+    let crossing_out: Vec<usize> = gaps
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, g0, g1, t, _, in_air))| {
+            *in_air
+                && crossing_gaps.iter().any(|c| same_gap(*c, (*g0, *g1), k))
+                && outside((*g0 + *g1) * 0.5, ((*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12))).perp(), *t, &pl.walls)
+        })
+        .map(|(n, _)| n)
+        .take(MAX_OBJECTS)
+        .collect();
     // The level's gaps in outside walls, and those a window tag marks.
-    let outside_gaps: Vec<(Vec2, Vec2, f64)> = gaps
+    let mut outside_gaps: Vec<(Vec2, Vec2, f64)> = gaps
         .iter()
         .filter(|(_, g0, g1, t, _, in_air)| {
             !*in_air && outside((*g0 + *g1) * 0.5, ((*g1 - *g0) * (1.0 / g0.dist(*g1).max(1e-12))).perp(), *t, &pl.walls)
@@ -2576,7 +3677,31 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // The lines glazing may be drawn with: the level's, and those inside the window-sized blocks
     // it inserts in its outside walls' gaps (a print's repeated window symbol arrives as a block,
     // Q6369).
-    let glaze_segs = glazing_segments(d, &ents, &all_segs, &outside_gaps, k);
+    let glaze_segs = {
+        let mut looked: Vec<(Vec2, Vec2, f64)> = outside_gaps.clone();
+        looked.extend(crossing_out.iter().filter_map(|n| gaps.get(*n)).map(|(_, g0, g1, t, ..)| (*g0, *g1, *t)));
+        glazing_segments(d, &ents, &all_segs, &looked, k)
+    };
+    // Glazing lines across one, or a window tag in it, win over the walls crossing its ends: an
+    // outside wall's window opening (a corridor's end window between its two walls, Q6510).
+    let mut crossing_windows = 0usize;
+    for n in &crossing_out {
+        let Some(gap) = gaps.get_mut(*n) else { continue };
+        let (_, g0, g1, t, _, in_air) = gap;
+        let tagged = window_tags.iter().any(|tag| tag_in_gap(tag.at, *g0, *g1, TAG_REACH_IN * k));
+        if tagged || glazed(&glaze_segs, *g0, *g1, *t, k) {
+            *in_air = false;
+            crossing_gaps.retain(|c| !same_gap(*c, (*g0, *g1), k));
+            outside_gaps.push((*g0, *g1, *t));
+            crossing_windows += 1;
+        }
+    }
+    if crossing_windows > 0 {
+        notes.push(format!(
+            "{}: {crossing_windows} gaps in outside walls between two walls that cross their line at both ends have glazing or a window tag drawn in them: window openings (the window drawn wins over the walls crossing its ends).",
+            level.name
+        ));
+    }
     // What each tag marks: the outside gap it is by (filling it, or its type's width centred in a
     // wider one), else nothing yet (the tags left over are placed after the gaps).
     let fits = window_tag_fits(&window_tags, &outside_gaps, k);
@@ -2709,7 +3834,33 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         };
         let mut extra = Vec::new();
         if !leaves.is_empty() || covered {
-            extra.push((g0, g1, z0 + pl.door_head, top));
+            // The door's header over the spans that hold a door, up to the wall parting the gap
+            // (Q6616). A span past that wall with no door of its own is a gap of its own: a
+            // cased opening's header when nothing crosses the gap and it is an opening's width,
+            // else open (the room beyond the crossing wall).
+            let door_in = |s0: f64, s1: f64| {
+                spans.len() == 1
+                    || leaves.iter().any(|(.., (j0, j1))| {
+                        let m = u.dot((*j0 + *j1) * 0.5 - g0);
+                        m > s0 && m < s1
+                    })
+                    || pl.leaves.iter().any(|l| {
+                        let (f0, f1) = l.frame.unwrap_or((l.a, l.b));
+                        let m = (f0 + f1) * 0.5;
+                        !l.window && seg_dist(m, g0, g1) <= t + l.a.dist(l.b) && {
+                            let s = u.dot(m - g0);
+                            s > s0 && s < s1
+                        }
+                    })
+            };
+            for &(s0, s1) in &spans {
+                let (a, b) = (g0 + u * s0, g0 + u * s1);
+                if door_in(s0, s1) || (!no_header && s1 - s0 <= 8.0 * upf) {
+                    extra.push((a, b, z0 + pl.door_head, top));
+                } else {
+                    parted_open += 1;
+                }
+            }
             if !leaves.is_empty() {
                 extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
             }
@@ -2727,6 +3878,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     frame: Some(frame),
                     mark: None,
                     basis: None,
+                    at_tag: None,
+                    lift: 0.0,
                 });
                 doors += 1;
             }
@@ -2788,6 +3941,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     frame: Some((a, b)),
                     mark,
                     basis: Some(basis),
+                    at_tag: None,
+                    lift: 0.0,
                 });
                 windows += 1;
             }
@@ -2808,6 +3963,12 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     if corridor_gaps > 0 {
         notes.push(format!(
             "{}: {corridor_gaps} gaps between lined-up walls (across a corridor, or another wall across them) left open (no header).",
+            level.name
+        ));
+    }
+    if parted_open > 0 {
+        notes.push(format!(
+            "{}: {parted_open} stretches of a door's gap past a wall crossing it (no door of their own) left open: the door's header stops at that wall.",
             level.name
         ));
     }
@@ -2850,6 +4011,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         most_common_width(&ws, MARK_WIDTH_TOL_IN * k)
     };
     let mut no_host: Vec<(String, Vec2, &'static str)> = Vec::new();
+    let mut open_ends = 0usize;
     for (tag, f) in window_tags.iter().zip(&fits.per_tag) {
         if f.is_some() {
             continue;
@@ -2879,15 +4041,17 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         // Its width: its type's (the schedule row, its tags' openings); else, for a mark with
         // neither (Q6369), the jambs the plan draws across the wall at the tag, else the level's
         // typical window. A tag with no width is still a window the plan draws.
-        let (width, basis) = match fits.width_of(&tag.mark) {
-            Some(w) => (w, WindowBasis::TagOnWall),
+        // A width measured between drawn jambs places the window too: between them, not at the
+        // tag (Q6450). Every other width is centred at the tag's foot.
+        let (width, basis, at) = match fits.width_of(&tag.mark) {
+            Some(w) => (w, WindowBasis::TagOnWall, tag.at),
             None => {
                 let probe = MIN_WINDOW_IN * k;
                 let jambs = host_wall(&pl.walls, tag.at, probe, reach, k, min_gap, &on_outside)
-                    .and_then(|h| pl.walls.get(h.wall).and_then(|w| jamb_width(&all_segs, w, h.at, k)));
+                    .and_then(|h| pl.walls.get(h.wall).and_then(|w| jamb_span(&all_segs, w, h.at, k)));
                 match (jambs, typical_width) {
-                    (Some(w), _) => (w, WindowBasis::TagJambs),
-                    (None, Some(w)) => (w, WindowBasis::TagTypicalWidth),
+                    (Some((s0, s1, mid)), _) => (s1 - s0, WindowBasis::TagJambs, mid),
+                    (None, Some(w)) => (w, WindowBasis::TagTypicalWidth, tag.at),
                     (None, None) => {
                         no_host.push((
                             tag.mark.clone(),
@@ -2899,14 +4063,60 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 }
             }
         };
-        let Some(host) = host_wall(&pl.walls, tag.at, width, reach, k, min_gap, &on_outside) else {
+        let Some(host) = host_wall(&pl.walls, at, width, reach, k, min_gap, &on_outside) else {
+            // No wall drawn to hold it: at an open end of the plan, the end wall the plan leaves
+            // out is built, the tag's window in it (Q6510).
+            if let Some(end) = open_end(&pl.walls, tag.at, width, reach, k, &on_outside)
+                && let Some(like) = pl.walls.get(end.like)
+                && pl.walls.len() < MAX_OBJECTS
+            {
+                let (head, sill) = mark_heights(&tag.mark);
+                let len = end.a.dist(end.b).max(1e-12);
+                let u = (end.b - end.a) * (1.0 / len);
+                let (a, b) = (end.a + u * end.w0, end.a + u * end.w1);
+                let wall = PlanWall {
+                    a: end.a,
+                    b: end.b,
+                    thickness: end.thickness,
+                    top: like.top,
+                    source: like.source,
+                    cuts: vec![Cut { s0: end.w0, s1: end.w1, window: true, head, sill, lift: 0.0 }],
+                    extra: Vec::new(),
+                    wall_type: like.wall_type.clone(),
+                    fixed_top: like.fixed_top,
+                    head: like.head.clone(),
+                    basis: Some(OPEN_END_WALL_WHY),
+                    edit: None,
+                };
+                let source = wall.source;
+                pl.walls.push(wall);
+                pl.leaves.push(Leaf {
+                    a,
+                    b,
+                    window: true,
+                    thickness: end.thickness,
+                    source,
+                    head,
+                    sill,
+                    along: None,
+                    pair: None,
+                    frame: Some((a, b)),
+                    mark: Some(tag.mark.clone()),
+                    basis: Some(WindowBasis::TagOpenEnd),
+                    at_tag: None,
+                    lift: 0.0,
+                });
+                windows += 1;
+                open_ends += 1;
+                continue;
+            }
             no_host.push((tag.mark.clone(), tag.at, "no outside wall within its reach to hold it"));
             continue;
         };
         let (head, sill) = mark_heights(&tag.mark);
         for (j, s0, s1) in &host.spans {
             if let Some(o) = pl.walls.get_mut(*j) {
-                o.cuts.push(Cut { s0: *s0, s1: *s1, window: true, head, sill });
+                o.cuts.push(Cut { s0: *s0, s1: *s1, window: true, head, sill, lift: 0.0 });
             }
         }
         // The slots it spans were built solid: the window stands there instead.
@@ -2938,8 +4148,56 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             frame: Some((a, b)),
             mark: Some(tag.mark.clone()),
             basis: Some(basis),
+            at_tag: None,
+            lift: 0.0,
         });
         windows += 1;
+    }
+    if open_ends > 0 {
+        notes.push(format!(
+            "{}: {open_ends} open ends of the plan (two walls ending at the outside, no wall drawn across them) with a window tag at them: the end wall built (inferred) with the tag's window in it.",
+            level.name
+        ));
+    }
+    // The doors the door schedule tags where the plan draws no opening (Q6609): built at their
+    // tags, in the wall there, else on the line drawn there.
+    if let (Some(sp), Some(rule)) = (g.spec.as_ref(), doortags::DoorRule::load()) {
+        let tags = doortags::level_tags(sp, level, rule.connect_ft * upf);
+        if !tags.is_empty() {
+            // The plan's lines and their extents, worked out once (only a tag no door answers
+            // asks).
+            let boxes: std::cell::OnceCell<Vec<(cadaddy_geom::Bounds2, &Arc<Entity>)>> = std::cell::OnceCell::new();
+            let lines = |at: Vec2, r: f64| -> Vec<(super::perceive::geometry::Seg, Handle)> {
+                let boxes = boxes.get_or_init(|| {
+                    ents.iter()
+                        .filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)))
+                        .map(|e| (cadaddy_doc::entity_bounds(d, e, 0), *e))
+                        .filter(|(b, _)| !b.is_empty())
+                        .collect()
+                });
+                boxes
+                    .iter()
+                    .filter(|(b, _)| at.x >= b.min.x - r && at.x <= b.max.x + r && at.y >= b.min.y - r && at.y <= b.max.y + r)
+                    .take(MAX_OBJECTS)
+                    .flat_map(|(_, e)| segments(&[*e]).into_iter().map(move |sg| (sg, e.handle)))
+                    .collect()
+            };
+            let report = doortags::build(&mut pl, &tags, sp, &lines, &rule, k, min_gap);
+            doors += report.built.len();
+            if !report.built.is_empty() {
+                let on = |p: doortags::Placed| report.built.iter().filter(|b| b.2 == p).count();
+                notes.push(format!(
+                    "{}: {} doors the door schedule tags where the plan draws no opening built at their tags ({} cut into the wall there, {} set on the line drawn there, {} at the tag alone): the schedule's size, inferred position ({}).",
+                    level.name,
+                    report.built.len(),
+                    on(doortags::Placed::OnWall),
+                    on(doortags::Placed::OnLine),
+                    on(doortags::Placed::AtTag),
+                    doortags::RULE_ID
+                ));
+            }
+            pl.door_tags = report;
+        }
     }
     let mut same = Vec::new();
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k, &mut same).unwrap_or((doors, windows));
@@ -3370,8 +4628,9 @@ const JOINT_GAP_IN: f64 = 1.0;
 /// the nearest wall piece within `reach` past its face whose foot point under the tag is on it
 /// (or in a slot at its end),
 /// its line (the piece and the pieces in line with it, end to end, overlapping or a slot narrower
-/// than `slot` apart) holding the window centred at the tag's foot, its ends on pieces, with no
-/// opening cut there yet, outside there (`outside(point, normal, the wall's thickness)`).
+/// than `slot` apart) holding the window centred at the tag's foot (else as near it as the run
+/// allows, clear of the walls meeting its ends), its ends on pieces, with no opening cut there
+/// yet, outside there (`outside(point, normal, the wall's thickness)`).
 #[allow(clippy::too_many_arguments)]
 fn host_wall(
     walls: &[PlanWall],
@@ -3403,19 +4662,49 @@ fn host_wall(
             if off > w.thickness / 2.0 + reach || s < -slot || s > len + slot {
                 return None;
             }
-            let mid = w.a + u * s;
             // The line's pieces: parallel, their centrelines within half the thinner wall of
-            // this one's, each with its stretch along this one and the window's span along it.
+            // this one's, each with its stretch along this one.
+            let line: Vec<(usize, &PlanWall, f64, f64)> = walls
+                .iter()
+                .enumerate()
+                .take(MAX_OBJECTS)
+                .filter_map(|(j, o)| {
+                    let (_, ou) = unit(o)?;
+                    let side = |p: Vec2| u.perp().dot(p - w.a).abs();
+                    if u.perp().dot(ou).abs() > 0.01 || side(o.a).max(side(o.b)) > w.thickness.min(o.thickness) / 2.0 {
+                        return None;
+                    }
+                    let (p0, p1) = (u.dot(o.a - w.a), u.dot(o.b - w.a));
+                    Some((j, o, p0.min(p1), p0.max(p1)))
+                })
+                .collect();
+            // A window centred at the tag that runs past an end of the wall's run (a corridor's end
+            // wall, its tag printed off-centre beside it, Q6510) slides along the run to stand
+            // in it, clear of the walls meeting its ends; a run narrower than the window holds none.
+            // The tag's foot stays over the window (it slides half its width at most), so a tag
+            // by a corner marks the wall it faces, not the one round the corner.
+            let at_tag = s;
+            let s = match wall_run(&line, s, slot) {
+                Some((r0, r1)) if s - half < r0 - joint || s + half > r1 + joint => {
+                    let (r0, r1) = (r0 + end_wall_in(walls, i, w.a, u, r0, 1.0), r1 - end_wall_in(walls, i, w.a, u, r1, -1.0));
+                    if r1 - r0 < width - joint {
+                        return None;
+                    }
+                    let s = s.clamp(r0 + half, (r1 - half).max(r0 + half));
+                    if (s - at_tag).abs() > half {
+                        return None;
+                    }
+                    s
+                }
+                _ => s,
+            };
+            let slid = (s - at_tag).abs();
+            let mid = w.a + u * s;
+            // Each piece's stretch along this one and the window's span along it.
             let mut along: Vec<(f64, f64)> = Vec::new();
             let mut spans: Vec<(usize, f64, f64)> = Vec::new();
-            for (j, o) in walls.iter().enumerate().take(MAX_OBJECTS) {
+            for &(j, o, p0, p1) in &line {
                 let Some((_, ou)) = unit(o) else { continue };
-                let side = |p: Vec2| u.perp().dot(p - w.a).abs();
-                if u.perp().dot(ou).abs() > 0.01 || side(o.a).max(side(o.b)) > w.thickness.min(o.thickness) / 2.0 {
-                    continue;
-                }
-                let (p0, p1) = (u.dot(o.a - w.a), u.dot(o.b - w.a));
-                let (p0, p1) = (p0.min(p1), p0.max(p1));
                 if p1 < s - half - slot || p0 > s + half + slot {
                     continue;
                 }
@@ -3440,18 +4729,233 @@ fn host_wall(
                 }
             }
             (reached >= s + half - joint && !spans.is_empty() && outside(mid, u.perp(), w.thickness))
-                .then_some((off, WindowHost { wall: i, at: s, spans, mid, u }))
+                .then_some(((slid, off), WindowHost { wall: i, at: s, spans, mid, u }))
         })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .min_by(|a, b| a.0.0.total_cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)))
         .map(|(_, h)| h)
 }
 
-/// The width (drawing units, `k` per inch) between the jambs a plan draws across a wall drawn
-/// through at a window (Q6369): short lines across the wall from face to face (as long as the
-/// wall is thick, give or take a quarter of it, their middles on its centreline), the nearest on
-/// each side of the point `at` along the wall (from its end `a`), a window's width apart
-/// ([`MIN_WINDOW_IN`] to [`MAX_JAMB_SPAN_IN`]). None when the plan draws no such pair.
-fn jamb_width(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k: f64) -> Option<f64> {
+/// The basis of an end wall built at an open end of the plan ([`open_end`]).
+const OPEN_END_WALL_WHY: &str = "an open end of the plan with a window tag at it (two walls ending at the outside, no wall drawn across them): the end wall built across where the first of them ends, in line with the outside wall there, to hold the tag's window";
+
+/// The window's width may be this much wider (inches) than the open end it is tagged in (the
+/// window then fills the opening), or the opening this much wider than the window.
+const OPEN_END_FIT_IN: f64 = 24.0;
+
+/// The wall a window tag's window needs at an open end of the plan ([`open_end`]): its centreline
+/// `a`–`b` (from the end of the wall that stops first across to the other's line), thickness,
+/// the wall it is like (its height, type and source), and the window's span along it.
+struct OpenEnd {
+    a: Vec2,
+    b: Vec2,
+    thickness: f64,
+    like: usize,
+    w0: f64,
+    w1: f64,
+}
+
+/// An open end of the plan by a window tag at `at` whose window (`width`, drawing units, `k` per
+/// inch) no wall holds: two parallel walls (a corridor's), one ending where the other runs on
+/// (or ends too), nothing drawn across from that end to the other wall's line, the outside
+/// beyond it (`outside(point, normal, thickness)`), the tag within `reach` of that line, the
+/// opening between the two walls' faces about the window's width ([`OPEN_END_FIT_IN`]). The end
+/// wall is in line with the wall turning off the first wall's end away from the other (the
+/// outside wall it meets), its thickness; else across the end itself, the first wall's. The
+/// nearest such end to the tag. None when there is none.
+fn open_end(walls: &[PlanWall], at: Vec2, width: f64, reach: f64, k: f64, outside: &dyn Fn(Vec2, Vec2, f64) -> bool) -> Option<OpenEnd> {
+    if !(width.is_finite() && width > 0.0 && at.is_finite() && reach.is_finite() && k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let unit = |w: &PlanWall| {
+        let len = w.a.dist(w.b);
+        (len.is_finite() && len > 1e-9 && w.thickness.is_finite()).then(|| (len, (w.b - w.a) * (1.0 / len)))
+    };
+    let fit = OPEN_END_FIT_IN * k;
+    let far = reach + width + fit;
+    let mut best: Option<((bool, f64), OpenEnd)> = None;
+    for (i, w) in walls.iter().enumerate().take(MAX_OBJECTS) {
+        let Some((len, u)) = unit(w) else { continue };
+        if len < MIN_WINDOW_IN * k {
+            continue;
+        }
+        for (p, d) in [(w.a, -u), (w.b, u)] {
+            if p.dist(at) > far {
+                continue;
+            }
+            for (j, o) in walls.iter().enumerate().take(MAX_OBJECTS) {
+                let Some((_, ou)) = unit(o) else { continue };
+                if j == i || u.cross(ou).abs() > 0.01 {
+                    continue;
+                }
+                // Across: the other wall's line, `gap` off this one's (signed along `n`).
+                let gap = d.perp().dot(o.a - p);
+                let n = if gap >= 0.0 { d.perp() } else { -d.perp() };
+                let gap = gap.abs();
+                let clear = gap - (w.thickness + o.thickness) / 2.0;
+                if clear < MIN_WINDOW_IN * k || clear > width + fit || width > clear + fit {
+                    continue;
+                }
+                // The end wall's line: the wall turning off this end away from the other wall.
+                let turn = walls
+                    .iter()
+                    .enumerate()
+                    .take(MAX_OBJECTS)
+                    .filter(|(c, _)| *c != i && *c != j)
+                    .filter_map(|(c, t)| {
+                        let (_, tu) = unit(t)?;
+                        if tu.dot(u).abs() > 0.1 {
+                            return None;
+                        }
+                        let (near, other) = if t.a.dist(p) <= t.b.dist(p) { (t.a, t.b) } else { (t.b, t.a) };
+                        let off = near.dist(p);
+                        (off <= w.thickness + t.thickness && n.dot(other - p) < 0.0).then_some((off, c, d.dot(near - p), t.thickness))
+                    })
+                    .min_by(|x, y| x.0.total_cmp(&y.0));
+                let (like, station, thickness) = match turn {
+                    Some((_, c, st, t)) => (c, st, t),
+                    None => (i, -w.thickness / 2.0, w.thickness),
+                };
+                let a = p + d * station;
+                let b = a + n * gap;
+                // The other wall's line runs on to the end wall (it, or a piece in line with it).
+                let reaches = walls.iter().take(MAX_OBJECTS).any(|x| {
+                    unit(x).is_some_and(|(_, xu)| u.cross(xu).abs() <= 0.01)
+                        && (n.dot(x.a - a) - gap).abs() <= o.thickness / 2.0
+                        && (n.dot(x.b - a) - gap).abs() <= o.thickness / 2.0
+                        && {
+                            let (s0, s1) = (d.dot(x.a - a), d.dot(x.b - a));
+                            s0.min(s1) <= thickness && s0.max(s1) >= -thickness
+                        }
+                });
+                if !reaches {
+                    continue;
+                }
+                // The tag by the end, between the two walls.
+                let across = n.dot(at - a);
+                if seg_dist(at, a, b) > reach + thickness / 2.0 || across < 0.0 || across > gap {
+                    continue;
+                }
+                // Nothing drawn across the opening (no wall in it but the pieces of the two walls'
+                // lines), the outside beyond it, and the walls' space behind it (a wall back along
+                // it, or the tag printed outside: a corridor open at both ends).
+                let (c0, c1) = (a + n * (w.thickness / 2.0), b - n * (o.thickness / 2.0));
+                let on_lines = |c: &PlanWall| {
+                    unit(c).is_some_and(|(_, cu)| u.cross(cu).abs() <= 0.01) && {
+                        let off = n.dot((c.a + c.b) * 0.5 - a);
+                        off.abs() <= w.thickness.max(c.thickness) / 2.0 || (off - gap).abs() <= o.thickness.max(c.thickness) / 2.0
+                    }
+                };
+                let blocked = walls.iter().enumerate().take(MAX_OBJECTS).any(|(x, c)| {
+                    x != i
+                        && x != j
+                        && x != like
+                        && !on_lines(c)
+                        && unit(c).is_some()
+                        && segs_apart(c.a, c.b, c0, c1) < (c.thickness + thickness) / 2.0
+                });
+                let m = (c0 + c1) * 0.5;
+                let behind = ray_meets_wall(walls, m, -d, thickness / 2.0) || d.dot(at - a) > thickness / 2.0;
+                if blocked || ray_meets_wall(walls, m, d, thickness / 2.0) || !behind || !outside(m, d, thickness) {
+                    continue;
+                }
+                let ww = width.min(clear);
+                let mid = (w.thickness / 2.0 + gap - o.thickness / 2.0) / 2.0;
+                // The nearest end to the tag, one in line with an outside wall before one without.
+                let rank = (turn.is_none(), seg_dist(at, a, b));
+                if best.as_ref().is_none_or(|(br, _)| rank.0.cmp(&br.0).then(rank.1.total_cmp(&br.1)).is_lt()) {
+                    best = Some((rank, OpenEnd { a, b, thickness, like, w0: mid - ww / 2.0, w1: mid + ww / 2.0 }));
+                }
+            }
+        }
+    }
+    best.map(|(_, e)| e)
+}
+
+/// Whether a ray from `p` along `dir` meets a wall's centreline farther than `face` from `p`.
+fn ray_meets_wall(walls: &[PlanWall], p: Vec2, dir: Vec2, face: f64) -> bool {
+    walls.iter().take(MAX_OBJECTS).any(|w| {
+        let r = w.b - w.a;
+        let den = dir.cross(r);
+        if den.abs() < 1e-12 {
+            return false;
+        }
+        let t = (w.a - p).cross(r) / den;
+        let v = (w.a - p).cross(dir) / den;
+        t > face && (0.0..=1.0).contains(&v)
+    })
+}
+
+/// The least distance between the segments `a`–`b` and `c`–`d` (0 where they cross).
+fn segs_apart(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> f64 {
+    let (r, s) = (b - a, d - c);
+    let den = r.cross(s);
+    if den.abs() > 1e-12 {
+        let t = (c - a).cross(s) / den;
+        let v = (c - a).cross(r) / den;
+        if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&v) {
+            return 0.0;
+        }
+    }
+    seg_dist(a, c, d).min(seg_dist(b, c, d)).min(seg_dist(c, a, b)).min(seg_dist(d, a, b))
+}
+
+/// The run of a wall line's pieces (`line`: each piece's stretch along the line) holding the
+/// point `s` along it: the pieces end to end, overlapping or at most `slot` apart.
+fn wall_run(line: &[(usize, &PlanWall, f64, f64)], s: f64, slot: f64) -> Option<(f64, f64)> {
+    let mut pieces: Vec<(f64, f64)> = line.iter().map(|(_, _, p0, p1)| (*p0, *p1)).filter(|(p0, p1)| p0.is_finite() && p1.is_finite()).collect();
+    pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    for (p0, p1) in pieces {
+        match runs.last_mut() {
+            Some(r) if p0 <= r.1 + slot => r.1 = r.1.max(p1),
+            _ => runs.push((p0, p1)),
+        }
+    }
+    runs.into_iter().find(|(r0, r1)| s >= r0 - slot && s <= r1 + slot)
+}
+
+/// How far into a wall line's run (its end `r` along the line from `origin` in direction `u`, the
+/// run going on `into` it: 1 from its start, -1 from its end) the walls across the line at that
+/// end reach: a wall crossing the line (or ending on it) within its own thickness and the line's
+/// of the end, to its far face. The stretch of the run inside them holds no window.
+fn end_wall_in(walls: &[PlanWall], own: usize, origin: Vec2, u: Vec2, r: f64, into: f64) -> f64 {
+    let t_own = walls.get(own).map_or(0.0, |w| w.thickness);
+    let line_off = walls.get(own).map_or(0.0, |w| u.perp().dot(w.a - origin));
+    walls
+        .iter()
+        .enumerate()
+        .take(MAX_OBJECTS)
+        .filter(|(j, _)| *j != own)
+        .filter_map(|(_, c)| {
+            let d = c.b - c.a;
+            let len = d.len();
+            if !(len > 1e-9 && c.thickness.is_finite()) || u.cross(d * (1.0 / len)).abs() <= 0.5 {
+                return None;
+            }
+            // Where its centreline meets the line (along it), and whether it reaches the line.
+            let den = d.cross(u);
+            let p = origin + u.perp() * line_off;
+            let v = (p - c.a).cross(u) / den;
+            let along = u.dot(c.a + d * v - origin);
+            let reach = (c.thickness + t_own) / 2.0 / len;
+            if !(-reach..=1.0 + reach).contains(&v) {
+                return None;
+            }
+            let into_run = (along - r) * into;
+            (into_run >= -(c.thickness / 2.0 + t_own) && into_run <= c.thickness / 2.0 + t_own).then_some(into_run + c.thickness / 2.0)
+        })
+        .filter(|x| x.is_finite())
+        .fold(0.0, f64::max)
+}
+
+/// The jambs a plan draws across a wall drawn through at a window (Q6369): short lines across
+/// the wall from face to face (as long as the wall is thick, give or take a quarter of it, their
+/// middles on its centreline), the nearest on each side of the point `at` along the wall (from
+/// its end `a`), a window's width apart ([`MIN_WINDOW_IN`] to [`MAX_JAMB_SPAN_IN`], drawing
+/// units, `k` per inch). Their stations along the wall (from `a`) and the point midway between
+/// them on its centreline: the window measured between them stands there (Q6450). None when the
+/// plan draws no such pair.
+fn jamb_span(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k: f64) -> Option<(f64, f64, Vec2)> {
     let len = w.a.dist(w.b);
     let t = w.thickness;
     if !(len.is_finite() && len > 1e-9 && t.is_finite() && t > 0.0 && at.is_finite() && k.is_finite() && k > 0.0) {
@@ -3482,8 +4986,9 @@ fn jamb_width(segs: &[super::perceive::geometry::Seg], w: &PlanWall, at: f64, k:
             right = Some(right.map_or(s, |x: f64| x.min(s)));
         }
     }
-    let width = right? - left?;
-    (width >= MIN_WINDOW_IN * k && width <= span).then_some(width)
+    let (s0, s1) = (at + left?, at + right?);
+    let width = s1 - s0;
+    (width >= MIN_WINDOW_IN * k && width <= span).then(|| (s0, s1, w.a + u * ((s0 + s1) / 2.0)))
 }
 
 /// The widest a window between two jambs drawn across a wall is taken to be (inches).
@@ -3776,8 +5281,8 @@ struct Swing {
 }
 
 /// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive,
-/// alone or joined to its leaf and the wall's lines) on one circle through 60–100°, a door's
-/// radius (16"–54" at `k` units per inch).
+/// alone or joined to its leaf and the wall's lines, or printed dash by dash) on one circle
+/// through 60–100°, a door's radius (16"–54" at `k` units per inch).
 fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     let mut out = Vec::new();
@@ -3808,6 +5313,14 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
             out.push(Swing { c, r, ends, handle: e.handle });
         }
     }
+    // A swing printed dashed, dash by dash (Q6487).
+    for (handle, _, pts) in super::perceive::geometry::dash_runs(ents, k) {
+        for (c, r, _, ends) in super::perceive::geometry::flat_swings(&pts) {
+            if c.is_finite() && (rmin..=rmax).contains(&r) && out.len() < MAX_OBJECTS {
+                out.push(Swing { c, r, ends, handle });
+            }
+        }
+    }
     out
 }
 
@@ -3818,6 +5331,63 @@ pub(crate) fn swing_hinges(ents: &[&Arc<Entity>], k: f64) -> Vec<Vec2> {
 
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
 const MAX_CLUSTERED: usize = 20_000;
+
+/// Most passes [`outside_runs`] makes taking in a run of pairs from a wall's end.
+const MAX_RUN_PASSES: usize = 64;
+/// How near the walls' extents' edge (inches, past the run's thickness) a run of the outside wall
+/// lies.
+const OUTSIDE_EDGE_IN: f64 = 12.0;
+
+/// Of the pairs `cands`, those that run on in line from the end of one of the `walls` (or of a
+/// pair so taken: [`fills_a_wall`]), about as thick, along the edge of the walls' extents it runs
+/// parallel to, where no wall is yet: the building's outside wall continued where it is drawn
+/// with a lighter pen (Q6487).
+fn outside_runs(
+    cands: Vec<super::perceive::geometry::Pair>,
+    walls: &[super::perceive::geometry::Pair],
+    k: f64,
+) -> Vec<super::perceive::geometry::Pair> {
+    let b = cadaddy_geom::Bounds2::from_points(walls.iter().flat_map(|p| [p.c0, p.c1]).filter(|q| q.is_finite()));
+    if b.is_empty() {
+        return Vec::new();
+    }
+    // Running along an edge of the extents (an edge it is parallel to), near it.
+    let on_edge = |p: &super::perceive::geometry::Pair| {
+        let m = (p.c0 + p.c1) * 0.5;
+        let d = p.c1 - p.c0;
+        let reach = p.thickness.abs() + OUTSIDE_EDGE_IN * k;
+        let edge = if d.x.abs() >= 20.0 * d.y.abs() {
+            (m.y - b.min.y).abs().min((b.max.y - m.y).abs())
+        } else if d.y.abs() >= 20.0 * d.x.abs() {
+            (m.x - b.min.x).abs().min((b.max.x - m.x).abs())
+        } else {
+            f64::INFINITY
+        };
+        b.contains(m) && edge <= reach
+    };
+    // In line from the end of one of `ws` and about as thick: the rest of that wall.
+    let continues = |p: &super::perceive::geometry::Pair, ws: &[super::perceive::geometry::Pair]| {
+        ws.iter().any(|w| {
+            (p.thickness - w.thickness).abs() <= 0.5 * w.thickness.abs() && fills_a_wall(p.c0, p.c1, p.thickness, std::slice::from_ref(w), k)
+        })
+    };
+    // Along a wall already there (its finish or insulation lines): nothing to take in.
+    let along = |p: &super::perceive::geometry::Pair, ws: &[super::perceive::geometry::Pair]| {
+        let m = (p.c0 + p.c1) * 0.5;
+        ws.iter().any(|w| seg_dist(m, w.c0, w.c1) <= 0.5 * (w.thickness + p.thickness))
+    };
+    let mut left: Vec<_> = cands.into_iter().filter(|p| on_edge(p) && !along(p, walls)).collect();
+    let mut taken: Vec<super::perceive::geometry::Pair> = Vec::new();
+    for _ in 0..MAX_RUN_PASSES {
+        let (fill, rest): (Vec<_>, Vec<_>) = left.into_iter().partition(|p| !along(p, &taken) && (continues(p, walls) || continues(p, &taken)));
+        left = rest;
+        if fill.is_empty() {
+            break;
+        }
+        taken.extend(fill);
+    }
+    taken
+}
 
 /// Whether a pair (centreline `a`–`b`, `t` thick) runs in line with one of the walls and meets
 /// its end (within its thickness and 3"): the rest of that wall across a gap, not a thing beside it.
@@ -3836,6 +5406,207 @@ fn fills_a_wall(a: Vec2, b: Vec2, t: f64, walls: &[super::perceive::geometry::Pa
         let reach = t.max(w.thickness) + 3.0 * k;
         off <= 0.5 * t.max(w.thickness) && [a, b].iter().any(|p| p.dist(w.c0).min(p.dist(w.c1)) <= reach)
     })
+}
+
+/// How far (inches) a window's frame line may run past the jamb of the gap it is drawn in (into
+/// the wall's end, or short of it), and still lie within the gap.
+const FRAME_REACH_IN: f64 = 2.0;
+
+/// How far (inches) a window's sill, stool or trim may be drawn past the face of the wall it is
+/// in.
+const FRAME_SILL_IN: f64 = 6.0;
+
+/// Most pairs looked at as a window's frame across a gap (a level; hostile drawings).
+const MAX_FRAME_CANDIDATES: usize = 200_000;
+
+/// Which of the pairs `cands` (faces in `faces`) are a window drawn across a gap in a wall, not a
+/// wall bridging it (Q6424). A window's gap: a pair of `cands` lies between the ends of two of the
+/// walls `hosts` in line (an opening's width apart: `range`, sheet units), its faces wholly
+/// within the gap's extent and its centreline within the walls' depth, and a line of the level's
+/// (`lines`) is drawn strictly between the walls' faces across the gap ([`glazed`]: the frame's
+/// glazing or sill line, or two glazing lines from jamb to jamb paired up themselves). Every pair
+/// of `cands` in line lying wholly within such a gap's extent, a face of it in the wall's depth or
+/// both within a sill's projection past it ([`FRAME_SILL_IN`]), is the window's (its frame's
+/// outline, an inner frame inset from the jambs, the frame paired with a sill, a sill's or a
+/// stool's outline). The walls either
+/// side must be walls: not themselves such a piece between two others (`hosts_are_cands`: the
+/// same list), so a facade of short piers drawn with lines inside them between windows keeps its
+/// piers. A wall piece in line with nothing inside it, and the pairs of a line running on past
+/// the gap (a wall drawn with a line between its faces), stay walls. `k`: sheet units per inch.
+fn frames_in_gaps(
+    cands: &[super::perceive::geometry::Pair],
+    faces: &[super::perceive::geometry::Seg],
+    hosts: &[super::perceive::geometry::Pair],
+    hosts_are_cands: bool,
+    lines: &[super::perceive::geometry::Seg],
+    (min_gap, max_gap): (f64, f64),
+    k: f64,
+) -> Vec<bool> {
+    let mut out = vec![false; cands.len()];
+    if !(k.is_finite() && k > 0.0 && min_gap.is_finite() && max_gap.is_finite() && max_gap >= min_gap) || cands.is_empty() || hosts.len() < 2 {
+        return out;
+    }
+    let (reach, tol, sill) = (FRAME_REACH_IN * k, 0.5 * k, FRAME_SILL_IN * k);
+    let longest = max_gap + 2.0 * reach;
+    let seg_len = |i: usize| faces.get(i).map(|s| s.a.dist(s.b));
+    // A pair no longer than an opening, nor are its faces.
+    let short = |p: &super::perceive::geometry::Pair| {
+        p.c0.dist(p.c1) <= longest && p.faces.iter().all(|&f| seg_len(f).is_some_and(|l| l.is_finite() && l <= longest))
+    };
+    if !cands.iter().any(short) {
+        return out;
+    }
+    // The hosts by the cells of their ends, the lines and the short pairs by their middles' (2'
+    // cells).
+    let cell = 24.0 * k;
+    let at = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut host_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, h) in hosts.iter().enumerate().take(MAX_OBJECTS) {
+        if h.c0.is_finite() && h.c1.is_finite() && h.thickness.is_finite() {
+            for p in [h.c0, h.c1] {
+                host_cells.entry(at(p)).or_default().push(i);
+            }
+        }
+    }
+    let mut line_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in lines.iter().enumerate().take(MAX_OBJECTS) {
+        let m = s.a.mid(s.b);
+        if m.is_finite() && s.a.dist(s.b) <= longest + 2.0 * max_gap.max(cell) {
+            line_cells.entry(at(m)).or_default().push(i);
+        }
+    }
+    let mut cand_cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, c) in cands.iter().enumerate().take(MAX_FRAME_CANDIDATES) {
+        let m = c.c0.mid(c.c1);
+        if m.is_finite() && short(c) {
+            cand_cells.entry(at(m)).or_default().push(i);
+        }
+    }
+    let near = |cells: &HashMap<(i64, i64), Vec<usize>>, lo: Vec2, hi: Vec2| -> Vec<usize> {
+        let ((x0, y0), (x1, y1)) = (at(lo), at(hi));
+        let mut v: Vec<usize> = Vec::new();
+        // A gap spans a few cells (at most an opening's width and a wall's depth).
+        if (x1 - x0).saturating_add(y1 - y0) > 64 {
+            return v;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                v.extend(cells.get(&(x, y)).into_iter().flatten().copied());
+            }
+        }
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    // The window gaps: (start, direction, length, host thickness, the hosts either side).
+    let mut gaps: Vec<(Vec2, Vec2, f64, f64, [usize; 2])> = Vec::new();
+    // The pairs that are such a window's piece between two others (whatever those are).
+    let mut pieces = vec![false; cands.len()];
+    for (ci, c) in cands.iter().enumerate().take(MAX_FRAME_CANDIDATES) {
+        if !short(c) || gaps.len() >= MAX_FRAME_CANDIDATES {
+            continue;
+        }
+        let len = c.c0.dist(c.c1);
+        if !(len.is_finite() && len > 1e-9) {
+            continue;
+        }
+        let u = (c.c1 - c.c0) * (1.0 / len);
+        let n = u.perp();
+        // The walls in line ending at either end of it: (end along it, centreline offset,
+        // thickness, host) — before its start, and past its end.
+        type Side = Option<(f64, f64, f64, usize)>;
+        let (mut before, mut after): (Side, Side) = (None, None);
+        let r = Vec2::new(reach + cell, reach + cell);
+        let mut by: Vec<usize> = near(&host_cells, c.c0 - r, c.c0 + r);
+        by.extend(near(&host_cells, c.c1 - r, c.c1 + r));
+        for hi in by {
+            let Some(h) = hosts.get(hi) else { continue };
+            let hl = h.c0.dist(h.c1);
+            if hl.is_nan() || hl <= 1e-9 || u.cross((h.c1 - h.c0) * (1.0 / hl)).abs() > 0.02 {
+                continue;
+            }
+            // Its centreline within the wall's depth.
+            let off = n.dot(h.c0 - c.c0);
+            if off.abs() > h.thickness / 2.0 + tol {
+                continue;
+            }
+            let (s0, s1) = (u.dot(h.c0 - c.c0).min(u.dot(h.c1 - c.c0)), u.dot(h.c0 - c.c0).max(u.dot(h.c1 - c.c0)));
+            // The thickest wall of each side: the wall, not a lining of it.
+            let pick = |cur: Side, end: f64| match cur {
+                Some(x) if x.2 >= h.thickness => Some(x),
+                _ => Some((end, off, h.thickness, hi)),
+            };
+            if s1.abs() <= reach && s0 < -reach {
+                before = pick(before, s1);
+            } else if (s0 - len).abs() <= reach && s1 > len + reach {
+                after = pick(after, s0);
+            }
+        }
+        let (Some((g0, off0, t0, h0)), Some((g1, off1, t1, h1))) = (before, after) else { continue };
+        let gap = g1 - g0;
+        if gap < min_gap || gap > max_gap {
+            continue;
+        }
+        // Both faces wholly within the gap's extent.
+        let within = c.faces.iter().all(|&f| {
+            faces.get(f).is_some_and(|s| {
+                let (p0, p1) = (u.dot(s.a - c.c0), u.dot(s.b - c.c0));
+                p0.min(p1) >= g0 - reach && p0.max(p1) <= g1 + reach
+            })
+        });
+        if !within {
+            continue;
+        }
+        // Glazing (or a sill line) drawn between the walls' faces across the gap.
+        let (t, off) = (t0.min(t1), (off0 + off1) / 2.0);
+        let (a, b) = (c.c0 + u * g0 + n * off, c.c0 + u * g1 + n * off);
+        let pad = Vec2::new(t + reach, t + reach);
+        let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)) - pad, Vec2::new(a.x.max(b.x), a.y.max(b.y)) + pad);
+        let here: Vec<super::perceive::geometry::Seg> = near(&line_cells, lo, hi).into_iter().filter_map(|i| lines.get(i).cloned()).collect();
+        if glazed(&here, a, b, t, k) {
+            if let Some(x) = pieces.get_mut(ci) {
+                *x = true;
+            }
+            gaps.push((a, u, gap, t, [h0, h1]));
+        }
+    }
+    // Each gap whose walls either side are walls (not pieces between two others themselves):
+    // every pair wholly within it, in line, is the window's.
+    for (a, u, len, t, hs) in gaps {
+        if hosts_are_cands && hs.iter().any(|&h| pieces.get(h).copied().unwrap_or(false)) {
+            continue;
+        }
+        let n = u.perp();
+        let b = a + u * len;
+        let pad = Vec2::new(t + reach, t + reach);
+        let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)) - pad, Vec2::new(a.x.max(b.x), a.y.max(b.y)) + pad);
+        for ci in near(&cand_cells, lo, hi) {
+            let Some(c) = cands.get(ci) else { continue };
+            let cl = c.c0.dist(c.c1);
+            if cl.is_nan() || cl <= 1e-9 || u.cross((c.c1 - c.c0) * (1.0 / cl)).abs() > 0.02 {
+                continue;
+            }
+            let inside = c.faces.iter().all(|&f| {
+                faces.get(f).is_some_and(|s| {
+                    let (p0, p1) = (u.dot(s.a - a), u.dot(s.b - a));
+                    p0.min(p1) >= -reach && p0.max(p1) <= len + reach
+                })
+            });
+            // A face of it in the wall's depth (a frame line, paired with another of the window's
+            // lines however far out), or both within a sill's projection past its face (a sill's,
+            // a stool's or trim's outline).
+            let off = |f: usize| faces.get(f).map(|s| n.dot(s.a.mid(s.b) - a).abs());
+            let framed = c.faces.iter().any(|&f| off(f).is_some_and(|o| o <= t / 2.0 + tol))
+                || c.faces.iter().all(|&f| off(f).is_some_and(|o| o <= t / 2.0 + sill));
+            if inside
+                && framed
+                && let Some(x) = out.get_mut(ci)
+            {
+                *x = true;
+            }
+        }
+    }
+    out
 }
 
 /// The share of a plan's lines (on its wall layers) drawn solid for its screened lines to be left
@@ -3921,12 +5692,31 @@ fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figu
     before - found.len()
 }
 
+/// Line pairs that are no wall: both faces tread lines of one stair flight
+/// ([`super::stairs::tread_lines`]: a row of four or more equal lines a tread apart, stopping on
+/// the stringers or the enclosure's walls at both ends). How many were dropped.
+pub(crate) fn drop_stair_treads(segs: &[super::perceive::geometry::Seg], found: &mut Vec<super::perceive::geometry::Pair>, k: f64) -> usize {
+    if found.is_empty() {
+        return 0;
+    }
+    let lines: Vec<(Vec2, Vec2)> = segs.iter().map(|s| (s.a, s.b)).collect();
+    let treads = super::stairs::tread_lines(&lines, k);
+    let tread = |i: usize| treads.get(i).copied().unwrap_or(false);
+    let before = found.len();
+    found.retain(|p| {
+        let [a, b] = p.faces;
+        !(tread(a) && tread(b))
+    });
+    before - found.len()
+}
+
 /// Keep the building on a plan drawn in `region` (sheet units, `upf` per foot). The building is
 /// the walls that touch one another (within 4'), in clusters of at least a tenth of the largest's
 /// length, found among the walls shorter than 40% of the region (a grid line or the border runs
 /// the sheet's length). Every wall reaching more than 2' (and its thickness) out of those
 /// clusters' extents goes: grid lines out to their bubbles, dimension strings and match lines
-/// beside the building, the border and the title block. A cluster drawn at a larger scale (its
+/// beside the building, the border and the title block. A stack of walls side by side all
+/// running one way (rows of a table, stripes: no corner) is no building either. A cluster drawn at a larger scale (its
 /// walls [`ENLARGED_THICKER`] the largest cluster's or more) is an enlarged view and goes too.
 fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
     let span = (region[2] - region[0]).abs().max((region[3] - region[1]).abs());
@@ -4013,11 +5803,34 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
         length.iter().filter_map(|(r, l)| median(*r).filter(|t| *t > 0.0).map(|t| (*r, l / t))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(r, _)| r);
     let main_t = main.and_then(median).filter(|t| *t > 0.0);
     let enlarged = |r: usize| Some(r) != main && main_t.zip(median(r)).is_some_and(|(m, t)| t >= ENLARGED_THICKER * m);
+    // A stack of walls side by side all running one way turns no corner: rows of a table,
+    // stripes, a run of parallel linework beside the plan (Q6583), no building. (A cluster of
+    // one wall, or of pieces in line, is a building's side whose corners are its long walls.)
+    // Each cluster's first direction (half-turn degrees), whether it turns, and the lines across
+    // it its walls stand on.
+    let mut turns: HashMap<usize, (f64, bool, Vec<f64>)> = HashMap::new();
+    for (k, &i) in short.iter().enumerate() {
+        let (Some(&r), Some(w)) = (roots.get(k), walls.get(i)) else { continue };
+        let d = w.b - w.a;
+        let ang = d.y.atan2(d.x).to_degrees().rem_euclid(180.0);
+        let e = turns.entry(r).or_insert((ang, false, Vec::new()));
+        let off = (ang - e.0).abs();
+        if off.min(180.0 - off) > ONE_WAY_DEG {
+            e.1 = true;
+            continue;
+        }
+        let n = Vec2::new(-e.0.to_radians().sin(), e.0.to_radians().cos());
+        let at = n.dot(w.a.mid(w.b));
+        if e.2.len() < ONE_WAY_ROWS && !e.2.iter().any(|o| (o - at).abs() <= (w.thickness / 2.0).max(1.0)) {
+            e.2.push(at);
+        }
+    }
+    let one_way = |r: usize| Some(r) != main && turns.get(&r).is_some_and(|t| !t.1 && t.2.len() >= ONE_WAY_ROWS);
     let mut dropped = vec![false; walls.len()];
     let mut b = cadaddy_geom::Bounds2::EMPTY;
     for (k, &i) in short.iter().enumerate() {
         let r = roots.get(k).copied().unwrap_or(k);
-        if length.get(&r).copied().unwrap_or(0.0) < 0.1 * largest {
+        if length.get(&r).copied().unwrap_or(0.0) < 0.1 * largest || one_way(r) {
             continue;
         }
         if enlarged(r) {
@@ -4040,6 +5853,11 @@ fn keep_building(walls: &mut Vec<PlanWall>, region: [f64; 4], upf: f64) {
         !gone && inside(w.a, m) && inside(w.b, m)
     });
 }
+
+/// Walls within this of one direction (degrees) run one way: a cluster of them turns no corner.
+const ONE_WAY_DEG: f64 = 10.0;
+/// A stack of at least this many walls side by side, all one way, is rows of linework.
+const ONE_WAY_ROWS: usize = 3;
 
 /// How much thicker than the plan's typical wall a separate cluster's walls read when it is a
 /// view at a larger scale (an enlarged plan at 1/4" beside a 1/8" plan reads twice as thick).
@@ -4218,6 +6036,49 @@ fn one_door_per_opening(leaves: &mut Vec<Leaf>, tol: f64, same: &mut Vec<(Handle
 
 #[cfg(test)]
 mod tests {
+    /// Q6410: a floor plate tiled in rectangles that meet in a T (one rectangle's side runs past
+    /// two others') draws its outline only, facing up or down, as a sheet or a slab.
+    #[test]
+    fn a_floor_plate_draws_its_outline_not_its_rectangles() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        // A 20 x 20 square: the left half one rectangle, the right half two, meeting in a T at
+        // (10, 10).
+        let rects = vec![[v(0.0, 0.0), v(10.0, 20.0)], [v(10.0, 0.0), v(20.0, 10.0)], [v(10.0, 10.0), v(20.0, 20.0)]];
+        let edges = vec![
+            (v(0.0, 0.0), v(10.0, 0.0)),
+            (v(10.0, 0.0), v(20.0, 0.0)),
+            (v(20.0, 0.0), v(20.0, 10.0)),
+            (v(20.0, 10.0), v(20.0, 20.0)),
+            (v(20.0, 20.0), v(10.0, 20.0)),
+            (v(10.0, 20.0), v(0.0, 20.0)),
+            (v(0.0, 20.0), v(0.0, 0.0)),
+        ];
+        let o = super::outline::Outline { rects, edges };
+        let len = |m: &Mesh| -> f64 {
+            m.edges().iter().filter_map(|(a, b)| Some(m.vertices.get(*a as usize)?.xy().dist(m.vertices.get(*b as usize)?.xy()))).sum()
+        };
+        for down in [false, true] {
+            let m = super::plate_faces(&o, 0.0, down);
+            // The 80 of outline, none of the 40 of seams inside.
+            assert!((len(&m) - 80.0).abs() < 1e-9, "facing down {down}: {} drawn of {:?}", len(&m), m.edges());
+        }
+        // The slab: its top and underside draw nothing of their own; the sides draw the outline
+        // top and bottom and a vertical at each of the 4 corners only.
+        let m = super::plate_slab(&o, 10.0, 1.0);
+        // Where a vertical draws (the two sides meeting at a corner each have one there).
+        let mut verticals: Vec<(i64, i64)> = m
+            .edges()
+            .iter()
+            .filter_map(|(a, b)| Some((m.vertices.get(*a as usize)?.xy(), m.vertices.get(*b as usize)?.xy())))
+            .filter(|(p, q)| p.dist(*q) < 1e-9)
+            .map(|(p, _)| ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64))
+            .collect();
+        verticals.sort_unstable();
+        verticals.dedup();
+        let verticals = verticals.len();
+        assert!((len(&m) - 160.0).abs() < 1e-9 && verticals == 4, "{} drawn, {verticals} verticals", len(&m));
+    }
+
     fn line_pair(a: [f64; 2], b: [f64; 2], thickness: f64) -> crate::cmd::perceive::geometry::Pair {
         let (c0, c1) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
         crate::cmd::perceive::geometry::Pair { layer: "0".into(), c0, c1, thickness, length: c0.dist(c1), confidence: 1.0, faces: [0, 1] }
@@ -4290,7 +6151,7 @@ mod tests {
     }
 
     #[test]
-    fn grey_glazing_in_line_with_a_wall_fills_its_gap_but_a_grey_headboard_is_no_wall() {
+    fn grey_glazing_in_line_with_a_wall_is_its_window_but_a_grey_headboard_is_no_wall() {
         let mut d = Drawing::new_imperial();
         let grey = cadaddy_color::Color::True(cadaddy_color::Rgb(170, 170, 170));
         let mut add = |a: (f64, f64), b: (f64, f64), screened: bool| {
@@ -4331,10 +6192,15 @@ mod tests {
         .unwrap();
         let level = rules.levels[0].clone();
         let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
-        let walls = plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls;
-        // The two pieces of the south wall, the glazing between them, and the other three walls.
-        assert_eq!(walls.len(), 6, "{:?}", walls.iter().map(|w| (w.a / 12.0, w.b / 12.0)).collect::<Vec<_>>());
+        let pl = plan_level(&d, &g, &level, 12.0, &mut Vec::new());
+        let walls = &pl.walls;
+        // The two pieces of the south wall and the other three walls: the grey glazing across the
+        // gap is the window there, not a wall bridging it (Q6424), nor furniture.
+        assert_eq!(walls.len(), 5, "{:?}", walls.iter().map(|w| (w.a / 12.0, w.b / 12.0)).collect::<Vec<_>>());
         assert!(walls.iter().all(|w| w.a.y.min(w.b.y) / 12.0 < 0.5 || w.a.y.max(w.b.y) / 12.0 > 9.0 || (w.a.x - w.b.x).abs() < 1.0));
+        let windows: Vec<(Vec2, Vec2)> = pl.leaves.iter().filter(|l| l.window).map(|l| (l.a / 12.0, l.b / 12.0)).collect();
+        assert_eq!(windows.len(), 1, "{windows:?}");
+        assert!(windows.iter().all(|(a, b)| a.x.min(b.x) >= 7.9 && a.x.max(b.x) <= 12.1), "the window in the gap: {windows:?}");
     }
 
     #[test]
@@ -4397,7 +6263,49 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+            edit: None,
         }
+    }
+
+    /// Q6614: a pair of faces too short for a wall is a jamb only when a crossing wall holds one
+    /// end and the other is an opening's side (a wall in line across the gap, or a door's swing on
+    /// its end line), drawn closed, and no part of something set aside (a window's frame).
+    #[test]
+    fn a_squat_pair_is_a_jamb_only_held_capped_and_beside_an_opening() {
+        use super::super::perceive::geometry::{Pair, Seg};
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let seg = |a: (f64, f64), b: (f64, f64)| Seg {
+            a: v(a.0, a.1),
+            b: v(b.0, b.1),
+            layer: "A-WALL".into(),
+            outline_width: f64::INFINITY,
+            unit_run: false,
+        };
+        let thick = |a: (f64, f64), b: (f64, f64)| PlanWall { thickness: 9.0, ..plan_wall(a, b) };
+        // A 6" piece of a 9" wall from a crossing wall's face (x 9) to its jamb line (x 15).
+        let squat =
+            vec![Pair { layer: "A-WALL".into(), c0: v(9.0, 4.5), c1: v(15.0, 4.5), thickness: 9.0, length: 6.0, confidence: 1.0, faces: [0, 1] }];
+        let faces = vec![seg((9.0, 0.0), (15.0, 0.0)), seg((9.0, 9.0), (15.0, 9.0))];
+        let mut capped = faces.clone();
+        capped.push(seg((15.0, 0.0), (15.0, 9.0)));
+        let crossing = thick((4.5, -60.0), (4.5, 120.0));
+        let beyond = thick((65.0, 4.5), (200.0, 4.5));
+        let both = vec![crossing.clone(), beyond.clone()];
+        assert_eq!(jamb_pairs(&squat, &capped, &[], &both, &[], 1.0), vec![0], "between the crossing wall and a 50\" opening");
+        assert!(jamb_pairs(&squat, &faces, &[], &both, &[], 1.0).is_empty(), "its end at the opening not drawn closed");
+        let frame = [(v(12.0, 4.5), v(60.0, 4.5), 9.0)];
+        assert!(jamb_pairs(&squat, &capped, &frame, &both, &[], 1.0).is_empty(), "over a window's frame set aside");
+        assert!(jamb_pairs(&squat, &capped, &[], std::slice::from_ref(&beyond), &[], 1.0).is_empty(), "no crossing wall holds it");
+        let alone = vec![crossing.clone()];
+        assert!(jamb_pairs(&squat, &capped, &[], &alone, &[], 1.0).is_empty(), "nothing at its other end");
+        assert_eq!(jamb_pairs(&squat, &capped, &[], &alone, &[v(15.0, 0.5)], 1.0), vec![0], "a door hung on its end");
+        assert!(jamb_pairs(&squat, &capped, &[], &alone, &[v(26.0, -6.0)], 1.0).is_empty(), "a swing off its end line");
+        // A crossing wall across the gap: the wall beyond is another room's.
+        let cut = vec![crossing, beyond, thick((40.0, -60.0), (40.0, 120.0))];
+        assert!(jamb_pairs(&squat, &capped, &[], &cut, &[], 1.0).is_empty(), "a wall crosses the gap");
     }
 
     #[test]
@@ -4708,6 +6616,38 @@ mod tests {
         assert!(WindowBasis::TagTypicalWidth.why().contains("typical window width"));
     }
 
+    #[test]
+    fn a_window_sized_by_its_jambs_stands_between_them_not_at_its_tag() {
+        // Jambs 8'4" and 14'4" across the south wall (72"); the tag off-centre at 9'2", 20"
+        // outside the wall. The window fills the drawn opening, 100" to 172", and the wall is cut
+        // there (Q6450; before, centred on the tag: 74" to 146").
+        let (j0, j1) = (100.0 / 12.0, 172.0 / 12.0);
+        for tag_x in [110.0 / 12.0, 160.0 / 12.0, 136.0 / 12.0] {
+            let jambs = vec![
+                ("A-ANNO", text_ft((tag_x, -20.0 / 12.0), "W7")),
+                ("A-WALL", line_ft((j0, 0.0), (j0, 0.5))),
+                ("A-WALL", line_ft((j1, 0.0), (j1, 0.5))),
+            ];
+            let (pl, notes) = plan_room(&[], &[], jambs, &|_| {});
+            assert_eq!(windows_of(&pl), [(72.0, Some("tag_jambs"))], "tag at {tag_x}: {notes:?}");
+            let leaf = pl.leaves.iter().find(|l| l.window).map(|l| (l.a.x.min(l.b.x).round(), l.a.x.max(l.b.x).round()));
+            assert_eq!(leaf, Some((100.0, 172.0)), "tag at {tag_x}: {notes:?}");
+            // The wall's window cut is the same stretch.
+            let cuts: Vec<(f64, f64)> = pl
+                .walls
+                .iter()
+                .flat_map(|w| {
+                    let u = (w.b - w.a) * (1.0 / w.a.dist(w.b));
+                    w.cuts.iter().filter(|c| c.window).map(move |c| {
+                        let (x0, x1) = ((w.a + u * c.s0).x, (w.a + u * c.s1).x);
+                        (x0.min(x1).round(), x0.max(x1).round())
+                    })
+                })
+                .collect();
+            assert_eq!(cuts, [(100.0, 172.0)], "tag at {tag_x}: {notes:?}");
+        }
+    }
+
     fn line_ft(a: (f64, f64), b: (f64, f64)) -> EntityKind {
         EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0 * 12.0, a.1 * 12.0, 0.0), b: Vec3::new(b.0 * 12.0, b.1 * 12.0, 0.0) })
     }
@@ -4787,6 +6727,12 @@ mod tests {
     /// A level planned from `lines` (feet, layer A-WALL unless given): its window panes' ends
     /// (feet) and the notes.
     fn plan_lines(lines: Vec<(&str, EntityKind)>) -> (Vec<(Vec2, Vec2)>, Vec<String>) {
+        let (pl, notes) = plan_lines_level(lines);
+        (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect(), notes)
+    }
+
+    /// The level planned from `lines` (as [`plan_lines`]) and the notes.
+    fn plan_lines_level(lines: Vec<(&str, EntityKind)>) -> (PlanLevel, Vec<String>) {
         let mut d = Drawing::new_imperial();
         for (layer, kind) in lines {
             let h = Handle(d.handseed);
@@ -4805,7 +6751,7 @@ mod tests {
         let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
         let mut notes = Vec::new();
         let pl = plan_level(&d, &g, &level, 12.0, &mut notes);
-        (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect(), notes)
+        (pl, notes)
     }
 
     /// A wall's two face lines (feet) along x from `x0` to `x1` at `y` (its centreline), `t_in`
@@ -4837,6 +6783,74 @@ mod tests {
             out.push(("A-WALL", line_ft((face, from), (face, y1))));
         }
         out
+    }
+
+    /// A door swing (feet) hinged at `hinge`, `r` wide, from angle `a0` to `a1` (degrees).
+    fn swing_ft(hinge: (f64, f64), r: f64, a0: f64, a1: f64) -> (&'static str, EntityKind) {
+        (
+            "A-DOOR",
+            EntityKind::Arc(cadaddy_doc::Arc {
+                center: Vec3::new(hinge.0 * 12.0, hinge.1 * 12.0, 0.0),
+                radius: r * 12.0,
+                start: a0.to_radians(),
+                end: a1.to_radians(),
+            }),
+        )
+    }
+
+    /// The pieces over the gaps of the wall line on `y` (feet) that start above the floor
+    /// (headers, a window's head): their x extents in feet, sorted.
+    fn heads_on_line(pl: &PlanLevel, y: f64) -> Vec<(f64, f64)> {
+        let mut out: Vec<(f64, f64)> = pl
+            .walls
+            .iter()
+            .flat_map(|w| w.extra.iter())
+            .filter(|(a, b, lo, _)| *lo > pl.z0 + 1.0 && (a.y / 12.0 - y).abs() < 0.2 && (b.y / 12.0 - y).abs() < 0.2)
+            .map(|(a, b, ..)| ((a.x.min(b.x) / 12.0), (a.x.max(b.x) / 12.0)))
+            .collect();
+        out.sort_by(|p, q| p.0.total_cmp(&q.0));
+        out
+    }
+
+    #[test]
+    fn a_doors_header_stops_at_the_wall_crossing_its_gap() {
+        // A 40' x 30' building of 6" walls. Inside it a wall line on y = 15: A from the west wall
+        // to x = 10, B from x = 25 to the east wall (a 15' gap between lined-up walls). A 4' door
+        // hangs from A's end; a 5" wall at x = 15 crosses the gap (or ends on its line), the
+        // stretch past it to B inside a room. Before Q6616 the door's header ran over the whole
+        // gap, x 10–25, through the crossing wall and 10' into the room beyond.
+        let building = |crossing: Vec<(&'static str, EntityKind)>, doors: Vec<(&'static str, EntityKind)>, gap: (f64, f64)| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(0.25, 6.0, 0.0, 40.0, &[]));
+            lines.extend(wall_x(29.75, 6.0, 0.0, 40.0, &[]));
+            lines.extend(wall_y(0.25, 6.0, 0.0, 30.0, &[]));
+            lines.extend(wall_y(39.75, 6.0, 0.0, 30.0, &[]));
+            lines.extend(wall_x(15.0, 6.0, 0.5, 39.5, &[gap]));
+            lines.extend(crossing);
+            lines.extend(doors);
+            plan_lines_level(lines)
+        };
+        let door_at_a = || vec![swing_ft((10.0, 15.0), 4.0, 0.0, 90.0)];
+        for (what, crossing) in [("across the gap", wall_y(15.0, 5.0, 5.0, 25.0, &[])), ("ending on its line", wall_y(15.0, 5.0, 15.0, 25.0, &[]))] {
+            let (pl, notes) = building(crossing, door_at_a(), (10.0, 25.0));
+            assert!(pl.leaves.iter().any(|l| !l.window), "{what}: no door hung: {notes:?}");
+            let heads = heads_on_line(&pl, 15.0);
+            assert!(heads.iter().all(|(_, x1)| *x1 < 15.0), "{what}: a header past the crossing wall: {heads:?} {notes:?}");
+            assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && *x1 > 14.5), "{what}: no header over the door: {heads:?} {notes:?}");
+            assert!(notes.iter().any(|n| n.contains("1 stretches of a door's gap past a wall crossing it")), "{what}: {notes:?}");
+        }
+        // Two doors either side of a wall across a 10' gap (two units' entries): each keeps its
+        // header, the crossing wall a pier between them.
+        let doors = vec![swing_ft((10.0, 15.0), 4.0, 0.0, 90.0), swing_ft((20.0, 15.0), 4.0, 90.0, 180.0)];
+        let (pl, notes) = building(wall_y(15.0, 5.0, 5.0, 25.0, &[]), doors, (10.0, 20.0));
+        assert_eq!(pl.leaves.iter().filter(|l| !l.window).count(), 2, "{notes:?}");
+        let heads = heads_on_line(&pl, 15.0);
+        assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && *x1 > 14.5 && *x1 < 15.0), "west door: {heads:?} {notes:?}");
+        assert!(heads.iter().any(|(x0, x1)| (x1 - 20.0).abs() < 0.1 && *x0 > 15.0 && *x0 < 15.5), "east door: {heads:?} {notes:?}");
+        // A door in a gap no wall parts: its header over the whole gap, as before.
+        let (pl, notes) = building(Vec::new(), door_at_a(), (10.0, 14.0));
+        let heads = heads_on_line(&pl, 15.0);
+        assert!(heads.iter().any(|(x0, x1)| (x0 - 10.0).abs() < 0.1 && (x1 - 14.0).abs() < 0.1), "{heads:?} {notes:?}");
     }
 
     #[test]
@@ -4895,6 +6909,124 @@ mod tests {
     }
 
     #[test]
+    fn glazing_or_a_tag_in_a_corridor_end_wins_over_the_walls_crossing_its_ends() {
+        // A 30' x 20' building of 8" walls; a corridor between two 5" partitions on x = 12 and
+        // x = 18 runs to the south outside wall, the partitions drawn on through it past its
+        // outside face (fins). The outside wall is open between the partitions' faces, a 5' window
+        // drawn there (glazing lines and a W5 tag). Before Q6510 the gap was taken as one
+        // between two walls crossing its line at both ends: no window, no header.
+        let building = |extra: Vec<(&'static str, EntityKind)>| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(1.0 / 3.0, 8.0, 0.0, 30.0, &[(12.0 - 2.5 / 12.0, 18.0 + 2.5 / 12.0)]));
+            lines.extend(wall_x(20.0 - 1.0 / 3.0, 8.0, 0.0, 30.0, &[]));
+            lines.extend(wall_y(1.0 / 3.0, 8.0, 0.0, 20.0, &[]));
+            lines.extend(wall_y(30.0 - 1.0 / 3.0, 8.0, 0.0, 20.0, &[]));
+            lines.extend(wall_y(12.0, 5.0, -1.5, 15.0, &[]));
+            lines.extend(wall_y(18.0, 5.0, -1.5, 15.0, &[]));
+            lines.extend(extra);
+            plan_lines(lines)
+        };
+        let glass = || vec![("A-GLAZ", line_ft((12.5, 0.28), (17.5, 0.28))), ("A-GLAZ", line_ft((12.5, 0.39), (17.5, 0.39)))];
+        let tag = || ("A-ANNO", text_ft((15.0, -1.0), "W5"));
+        let mut both = glass();
+        both.push(tag());
+        for (what, extra) in [("glazing and a tag", both), ("glazing", glass()), ("a tag", vec![tag()])] {
+            let (windows, notes) = building(extra);
+            assert_eq!(windows.len(), 1, "{what}: {windows:?} {notes:?}");
+            let (a, b) = windows[0];
+            assert!((a.y - 1.0 / 3.0).abs() < 0.1 && (b.y - 1.0 / 3.0).abs() < 0.1, "{what}: off the outside wall: {a:?} {b:?}");
+            assert!(a.x.min(b.x) > 11.9 && a.x.max(b.x) < 18.1, "{what}: not between the partitions: {a:?} {b:?}");
+            assert!(notes.iter().any(|n| n.contains("window drawn wins over the walls crossing")), "{what}: {notes:?}");
+        }
+        // Nothing drawn in it: still no window.
+        let (windows, notes) = building(Vec::new());
+        assert!(windows.is_empty(), "{windows:?} {notes:?}");
+        assert!(notes.iter().any(|n| n.contains("cross their line at both ends")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_tag_printed_off_centre_by_an_end_wall_slides_its_window_into_the_wall() {
+        // A 20' x 7' corridor of 6" walls. A 5' gap in the south wall tagged W5 (the mark's
+        // width); another W5 printed outside the west end wall a foot from its south corner. A
+        // window centred at that tag runs past the end wall's corner: before Q6510 the tag had no
+        // wall to hold it. Its window stands in the end wall, clear of the walls at its ends.
+        let mut lines = Vec::new();
+        lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[(8.0, 13.0)]));
+        lines.extend(wall_x(7.25, 6.0, 0.0, 20.0, &[]));
+        lines.extend(wall_y(0.25, 6.0, 0.0, 7.5, &[]));
+        lines.extend(wall_y(19.75, 6.0, 0.0, 7.5, &[]));
+        lines.push(("A-ANNO", text_ft((10.5, -1.0), "W5")));
+        lines.push(("A-ANNO", text_ft((-1.0, 1.0), "W5")));
+        let (windows, notes) = plan_lines(lines);
+        assert_eq!(windows.len(), 2, "{windows:?} {notes:?}");
+        let end = windows.iter().find(|(a, b)| a.x < 1.0 && b.x < 1.0).unwrap_or_else(|| panic!("no window in the end wall: {windows:?} {notes:?}"));
+        let (y0, y1) = (end.0.y.min(end.1.y), end.0.y.max(end.1.y));
+        assert!((y1 - y0 - 5.0).abs() < 0.05, "its type's width: {end:?}");
+        assert!(y0 >= 0.5 - 0.05 && y1 <= 7.0 + 0.05, "in the wall, clear of the corners: {end:?}");
+        assert!((end.0.x - 0.25).abs() < 0.1, "{end:?}");
+    }
+
+    #[test]
+    fn a_window_tag_at_an_open_corridor_end_builds_the_end_wall_and_its_window() {
+        // Two rooms' blocks either side of a 6' corridor (walls on y = 10 and y = 16, 6"); the
+        // south block's outside wall on x = 20, the north block reaching out to x = 24. The plan
+        // draws no wall across the corridor's east end (its window is in a block of its own):
+        // a W5 tag just outside it (out of reach of the north block's wall), the mark's width
+        // from a tagged 5' gap in the west wall. Before
+        // Q6510 the tag had no wall to hold it and the end was left open.
+        let plan_open = |tag_at: (f64, f64), west: &[(f64, f64)]| {
+            let mut lines = Vec::new();
+            lines.extend(wall_x(0.25, 6.0, 0.0, 20.0, &[]));
+            lines.extend(wall_y(0.25, 6.0, 0.0, 26.0, west));
+            lines.extend(wall_y(20.0, 6.0, 0.0, 10.0, &[]));
+            lines.extend(wall_x(10.0, 6.0, 0.0, 20.0, &[]));
+            lines.extend(wall_x(16.0, 6.0, 0.0, 24.0, &[]));
+            lines.extend(wall_y(24.0, 6.0, 16.0, 26.0, &[]));
+            lines.extend(wall_x(25.75, 6.0, 0.0, 24.0, &[]));
+            lines.push(("A-ANNO", text_ft((-1.0, 4.5), "W5")));
+            lines.push(("A-ANNO", text_ft(tag_at, "W5")));
+            plan_lines_level(lines)
+        };
+        let plan_level = |tag_at: (f64, f64)| plan_open(tag_at, &[(2.0, 7.0)]);
+        let plan = |tag_at: (f64, f64)| {
+            let (pl, notes) = plan_level(tag_at);
+            (pl.leaves.iter().filter(|l| l.window).map(|l| (l.a * (1.0 / 12.0), l.b * (1.0 / 12.0))).collect::<Vec<_>>(), notes)
+        };
+        let (windows, notes) = plan((21.0, 11.0));
+        assert_eq!(windows.len(), 2, "{windows:?} {notes:?}");
+        let end =
+            windows.iter().find(|(a, b)| a.x > 19.0 && b.x > 19.0).unwrap_or_else(|| panic!("no window at the open end: {windows:?} {notes:?}"));
+        // In line with the south block's outside wall, centred between the corridor's walls.
+        assert!((end.0.x - 20.0).abs() < 0.1 && (end.1.x - 20.0).abs() < 0.1, "{end:?}");
+        let (y0, y1) = (end.0.y.min(end.1.y), end.0.y.max(end.1.y));
+        assert!((y0 - 10.5).abs() < 0.1 && (y1 - 15.5).abs() < 0.1, "{end:?}");
+        assert!(notes.iter().any(|n| n.contains("1 open ends of the plan")), "{notes:?}");
+        // The end wall and its window say they were inferred, and why; the window keeps its mark.
+        let (pl, _) = plan_level((21.0, 11.0));
+        let parts = pl.meshes();
+        let inferred = |part: Part| {
+            parts.iter().filter(|(p, ..)| *p == part).any(|(.., tags)| {
+                tags.iter().any(|t| t == "status:inferred") && tags.iter().any(|t| t.starts_with("basis:") && t.contains("open end"))
+            })
+        };
+        assert!(inferred(Part::Wall), "no inferred end wall");
+        assert!(inferred(Part::Glass), "no inferred window");
+        assert!(parts.iter().any(|(p, .., tags)| *p == Part::Glass && tags.iter().any(|t| t == "found:tag_open_end")));
+        assert_eq!(
+            parts.iter().filter(|(p, .., tags)| *p == Part::Wall && tags.iter().any(|t| t == "status:inferred")).count(),
+            1,
+            "only the end wall is inferred"
+        );
+        // A tag well inside the corridor (past its reach of the end) builds nothing there.
+        let (windows, notes) = plan((10.0, 13.0));
+        assert_eq!(windows.len(), 1, "{windows:?} {notes:?}");
+        // The corridor open at its west end too (a passage out): the tag printed outside the east
+        // end still marks that end.
+        let (pl, notes) = plan_open((21.0, 11.0), &[(2.0, 7.0), (10.25, 15.75)]);
+        assert!(pl.leaves.iter().any(|l| l.window && (l.a.x / 12.0 - 20.0).abs() < 0.1 && (l.b.x / 12.0 - 20.0).abs() < 0.1), "{notes:?}");
+    }
+
+    #[test]
     fn a_ray_out_through_a_rooms_window_is_still_inside_the_building() {
         // A row of rooms: the south outside wall has a 4' window (glazing drawn) at x 8-12; the
         // room's north wall (on a corridor) has a 4' opening at the same x, nothing drawn in it;
@@ -4925,6 +7057,10 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+            edit: None,
         };
         let (p, nrm) = (Vec2::new(50.0, 10.0), Vec2::new(0.0, 1.0));
         // Alone: outside both ways.
@@ -4953,6 +7089,10 @@ mod tests {
             cuts: Vec::new(),
             extra: Vec::new(),
             wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+            edit: None,
         };
         // Pieces 0 and 1 on x = 0 (y -100..-3 and 63..160); corridor walls on y = 0 and y = 60.
         let corridor =
@@ -5059,5 +7199,310 @@ mod tests {
         assert!(walls[1].a.dist(Vec2::new(-3.0, 0.0)) < 1e-6, "{:?}", walls[1].a);
         assert!(walls[2].b.dist(Vec2::new(300.0, 40.0)) < 1e-9 && walls[3].a.dist(Vec2::new(340.0, 0.0)) < 1e-9);
         assert!(walls[4].b.dist(Vec2::new(700.0, 0.0)) < 1e-9 && walls[5].a.dist(Vec2::new(706.0, 0.0)) < 1e-9);
+    }
+
+    /// Q6583: a one-room-deep building (40' × 16', 6" walls; units inches) with what a plan
+    /// draws beside its walls: a counter (a closed 24"-deep outline against the back wall, the
+    /// line of its top 3" in from its front edge), a chase (two walls 17" apart, their faces 4"
+    /// and 6" apart), and a wall read twice (four lines: two 3" readings 2" apart). The walls
+    /// planned there.
+    fn planned_small_building() -> Vec<PlanWall> {
+        let mut d = Drawing::new_imperial();
+        let mut add = |kind: EntityKind| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        };
+        let line = |a: (f64, f64), b: (f64, f64)| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) });
+        let outline = |pts: &[(f64, f64)]| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts
+                    .iter()
+                    .map(|&(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        // The shell: its outside and inside faces.
+        add(outline(&[(0.0, 0.0), (480.0, 0.0), (480.0, 192.0), (0.0, 192.0)]));
+        add(outline(&[(6.0, 6.0), (474.0, 6.0), (474.0, 186.0), (6.0, 186.0)]));
+        // The counter: 8' long, 24" deep against the back (north) wall's inside face; its top's
+        // line 3" in from its front edge.
+        add(outline(&[(48.0, 162.0), (144.0, 162.0), (144.0, 186.0), (48.0, 186.0)]));
+        add(line((48.0, 165.0), (144.0, 165.0)));
+        // The chase: a 4" wall and a 6" wall 17" apart, off the south wall's inside face.
+        for x in [240.0, 244.0, 261.0, 267.0] {
+            add(line((x, 6.0), (x, 72.0)));
+        }
+        // One wall read twice: lines 2", 1" and 2" apart.
+        for x in [360.0, 362.0, 363.0, 365.0] {
+            add(line((x, 6.0), (x, 72.0)));
+        }
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        plan_level(&d, &g, &level, 12.0, &mut Vec::new()).walls
+    }
+
+    #[test]
+    fn casework_the_air_in_a_chase_and_a_wall_read_twice_are_no_more_walls() {
+        let walls = planned_small_building();
+        let mid_x = |w: &PlanWall| (w.a.x + w.b.x) / 2.0;
+        let mid_y = |w: &PlanWall| (w.a.y + w.b.y) / 2.0;
+        let listed = || walls.iter().map(|w| format!("{:?}-{:?} {:.1}", w.a, w.b, w.thickness)).collect::<Vec<_>>().join("; ");
+        // The shell's four walls.
+        let shell = walls.iter().filter(|w| (w.thickness - 6.0).abs() < 0.1 && (w.a.dist(w.b) > 150.0)).count();
+        assert_eq!(shell, 4, "{}", listed());
+        // Nothing inside the counter's outline: its edge and its top's line are the counter's.
+        assert!(!walls.iter().any(|w| (48.0..=144.0).contains(&mid_x(w)) && mid_y(w) > 158.0 && mid_y(w) < 184.0), "{}", listed());
+        // The chase: its two walls, not the 17" of air between them.
+        let short = |w: &PlanWall| w.a.dist(w.b) < 100.0;
+        let chase: Vec<&PlanWall> = walls.iter().filter(|w| short(w) && (238.0..=270.0).contains(&mid_x(w)) && mid_y(w) < 80.0).collect();
+        assert_eq!(chase.len(), 2, "{}", listed());
+        assert!(chase.iter().all(|w| w.thickness < 7.0), "{}", listed());
+        // The wall read twice: one wall.
+        assert_eq!(walls.iter().filter(|w| short(w) && (358.0..=367.0).contains(&mid_x(w)) && mid_y(w) < 80.0).count(), 1, "{}", listed());
+        assert_eq!(walls.len(), 7, "{}", listed());
+    }
+
+    #[test]
+    fn walls_back_to_back_stay_two_and_a_closet_drawn_as_one_outline_keeps_its_walls() {
+        // Two walls sharing a face (6" and 4", touching): two walls, not one.
+        let w = |a: (f64, f64), b: (f64, f64), t: f64| PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: t,
+            top: 0.0,
+            source: Handle(0),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+            edit: None,
+        };
+        assert!(!same_wall(&w((0.0, 3.0), (100.0, 3.0), 6.0), &w((0.0, 8.0), (100.0, 8.0), 4.0), 1.0));
+        // Two readings whose bodies overlap: one.
+        assert!(same_wall(&w((0.0, 1.5), (100.0, 1.5), 3.0), &w((0.0, 3.5), (100.0, 3.5), 3.0), 1.0));
+        // A U of walls round a 30" closet drawn as one outline (its own sides pair as the walls):
+        // deeper than a wall, no deeper than casework, but its walls are its own sides.
+        let pts = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(40.0, 40.0),
+            Vec2::new(36.0, 40.0),
+            Vec2::new(36.0, 4.0),
+            Vec2::new(4.0, 4.0),
+            Vec2::new(4.0, 40.0),
+            Vec2::new(0.0, 40.0),
+        ];
+        let segs: Vec<crate::cmd::perceive::geometry::Seg> = pts
+            .iter()
+            .zip(pts.iter().cycle().skip(1))
+            .map(|(a, b)| crate::cmd::perceive::geometry::Seg { a: *a, b: *b, layer: "A-WALL".into(), outline_width: 4.0, unit_run: false })
+            .collect();
+        let lim = crate::cmd::perceive::geometry::Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 };
+        let mut found = crate::cmd::perceive::geometry::pairs(&Drawing::new_imperial(), &segs, &lim);
+        let before = found.len();
+        assert!(before >= 3, "{before}");
+        let n = crate::cmd::perceive::geometry::drop_casework_pairs(&segs, &mut found, std::slice::from_ref(&pts), 1.0);
+        assert_eq!((n, found.len()), (0, before));
+    }
+
+    #[test]
+    fn a_stack_of_rows_beside_the_plan_is_no_building_but_a_side_alone_stays() {
+        let w = |a: (f64, f64), b: (f64, f64)| PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: 6.0,
+            top: 0.0,
+            source: Handle(0),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+            edit: None,
+        };
+        // Rooms 10' square in a 3 x 2 grid (inches), on a 1,000" sheet region.
+        let mut walls = Vec::new();
+        for i in 0..=3 {
+            let x = 120.0 * f64::from(i);
+            walls.push(w((x, 0.0), (x, 120.0)));
+            walls.push(w((x, 120.0), (x, 240.0)));
+        }
+        for j in 0..=2 {
+            let y = 120.0 * f64::from(j);
+            for i in 0..3 {
+                walls.push(w((120.0 * f64::from(i), y), (120.0 * f64::from(i + 1), y)));
+            }
+        }
+        let rooms = walls.len();
+        // A table's rows beside it: three lines' pairs 8" apart, far off, one way.
+        for k in 0..3 {
+            let y = 700.0 + 8.0 * f64::from(k);
+            walls.push(w((500.0, y), (800.0, y)));
+        }
+        keep_building(&mut walls, [0.0, 0.0, 1000.0, 1000.0], 12.0);
+        assert_eq!(walls.len(), rooms, "the rows go, the rooms stay: {:?}", walls.iter().map(|x| (x.a, x.b)).collect::<Vec<_>>());
+    }
+
+    /// A level of walls in inches (12 a foot), its floor at `z0`: 7' door heads, 2'–7' windows.
+    fn level_at(z0: f64, walls: Vec<PlanWall>) -> PlanLevel {
+        PlanLevel {
+            walls,
+            leaves: Vec::new(),
+            skipped: Vec::new(),
+            z0,
+            top: z0 + 238.8,
+            door_head: 84.0,
+            sill: 24.0,
+            head: 84.0,
+            k: 1.0,
+            window_tally: WindowTally::default(),
+            door_tags: doortags::DoorTagReport::default(),
+        }
+    }
+
+    /// A 6" wall from `a` to `b` (inches), up to `top`.
+    fn plain_wall(a: (f64, f64), b: (f64, f64), top: f64) -> PlanWall {
+        PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: 6.0,
+            top,
+            source: Handle(1),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+            fixed_top: false,
+            head: None,
+            basis: None,
+            edit: None,
+        }
+    }
+
+    /// An opening's leaf filling its frame `a`–`b`: a pane, or a door leaf standing open at `a`.
+    fn leaf(a: (f64, f64), b: (f64, f64), window: bool) -> Leaf {
+        let (a, b) = (Vec2::new(a.0, a.1), Vec2::new(b.0, b.1));
+        let open = if window { b } else { a + (b - a).perp() };
+        Leaf {
+            a,
+            b: open,
+            window,
+            thickness: 6.0,
+            source: Handle(2),
+            head: None,
+            sill: None,
+            along: (!window).then(|| (b - a) * (1.0 / a.dist(b))),
+            pair: None,
+            frame: Some((a, b)),
+            mark: None,
+            basis: window.then_some(WindowBasis::Glazing),
+            at_tag: None,
+            lift: 0.0,
+        }
+    }
+
+    /// Whether any box of `m` (8 vertices each) holds the point.
+    fn solid_at(m: &Mesh, x: f64, y: f64, z: f64) -> bool {
+        m.vertices.chunks(8).any(|b| {
+            let lo = b.iter().fold((f64::MAX, f64::MAX, f64::MAX), |a, v| (a.0.min(v.x), a.1.min(v.y), a.2.min(v.z)));
+            let hi = b.iter().fold((f64::MIN, f64::MIN, f64::MIN), |a, v| (a.0.max(v.x), a.1.max(v.y), a.2.max(v.z)));
+            x > lo.0 && x < hi.0 && y > lo.1 && y < hi.1 && z > lo.2 && z < hi.2
+        })
+    }
+
+    /// Q6451: a mezzanine's door in a wall of its own the storey builds full height goes to the
+    /// storey's wall: cut there from the mezzanine's floor to its head, the leaf standing on that
+    /// floor, on the storey's wall's centreline (the mezzanine's drawn 2" off it).
+    #[test]
+    fn a_mezzanine_door_in_a_removed_wall_is_cut_into_the_storey_wall() {
+        let storey = level_at(0.0, vec![plain_wall((0.0, 0.0), (720.0, 0.0), 238.8)]);
+        let mut mezz = level_at(120.0, Vec::new());
+        mezz.leaves.push(leaf((1440.0, 2.0), (1476.0, 2.0), false));
+        let gone = vec![plain_wall((1200.0, 2.0), (1920.0, 2.0), 238.8)];
+        let mut planned = vec![(0, storey), (1, mezz)];
+        let tall = [(Vec2::new(0.0, 0.0), Vec2::new(720.0, 0.0), 6.0)];
+        let mut notes = Vec::new();
+        rehost_mezzanine_openings(
+            &mut planned,
+            (1, Vec2::new(1200.0, 0.0), "M"),
+            (0, Vec2::new(0.0, 0.0), "S"),
+            (&[0], &tall),
+            &gone,
+            12.0,
+            &mut notes,
+        );
+        assert!(planned[1].1.leaves.is_empty(), "nothing left on the mezzanine");
+        let st = &planned[0].1;
+        assert_eq!(st.leaves.len(), 1);
+        let l = &st.leaves[0];
+        assert!((l.lift - 120.0).abs() < 1e-9 && l.a.y.abs() < 1e-9 && (l.a.x - 240.0).abs() < 1e-9, "{:?} {}", l.a, l.lift);
+        let c = &st.walls[0].cuts[0];
+        assert!((c.s0 - 240.0).abs() < 1e-9 && (c.s1 - 276.0).abs() < 1e-9 && !c.window, "{c:?}");
+        let meshes = st.meshes();
+        let wall = &meshes.iter().find(|(p, ..)| *p == Part::Wall).unwrap().1;
+        assert!(!solid_at(wall, 258.0, 0.0, 150.0), "the door's opening at the mezzanine");
+        assert!(solid_at(wall, 258.0, 0.0, 60.0) && solid_at(wall, 258.0, 0.0, 220.0), "the wall under the mezzanine, over the door");
+        let door = &meshes.iter().find(|(p, ..)| *p == Part::Door).unwrap().1;
+        let zs = door.vertices.iter().fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)));
+        assert!((zs.0 - 120.0).abs() < 1e-9 && (zs.1 - 204.0).abs() < 1e-9, "on the mezzanine's floor: {zs:?}");
+        assert!(notes.iter().any(|n| n.contains("1 opening(s)") && n.contains("re-hosted")), "{notes:?}");
+    }
+
+    /// Q6451: an opening of a wall the storey builds where the storey has no wall to hold it
+    /// (past the storey wall's end) is left out with a note, not left standing in the air.
+    #[test]
+    fn a_mezzanine_opening_with_no_storey_wall_is_left_out_with_a_note() {
+        let storey = level_at(0.0, vec![plain_wall((0.0, 0.0), (720.0, 0.0), 238.8)]);
+        let mut mezz = level_at(120.0, Vec::new());
+        mezz.leaves.push(leaf((1940.0, 0.0), (1952.0, 0.0), true));
+        // Its wall runs 40" past the storey's (97% along it: built by the storey).
+        let gone = vec![plain_wall((1200.0, 0.0), (1960.0, 0.0), 238.8)];
+        let mut planned = vec![(0, storey), (1, mezz)];
+        let tall = [(Vec2::new(0.0, 0.0), Vec2::new(720.0, 0.0), 6.0)];
+        let mut notes = Vec::new();
+        rehost_mezzanine_openings(
+            &mut planned,
+            (1, Vec2::new(1200.0, 0.0), "M"),
+            (0, Vec2::new(0.0, 0.0), "S"),
+            (&[0], &tall),
+            &gone,
+            12.0,
+            &mut notes,
+        );
+        assert!(planned[0].1.leaves.is_empty() && planned[1].1.leaves.is_empty() && planned[0].1.walls[0].cuts.is_empty());
+        assert!(notes.iter().any(|n| n.contains("1 opening(s)") && n.contains("left out")), "{notes:?}");
+    }
+
+    /// Q6451: openings stacked in one stretch of wall (a storey's window under a mezzanine's
+    /// re-hosted there) are both open, the wall solid between them.
+    #[test]
+    fn stacked_openings_in_one_wall_stretch_are_both_open() {
+        let mut w = plain_wall((0.0, 0.0), (720.0, 0.0), 238.8);
+        w.cuts.push(Cut { s0: 240.0, s1: 288.0, window: true, head: None, sill: None, lift: 0.0 });
+        w.cuts.push(Cut { s0: 248.0, s1: 280.0, window: true, head: Some(84.0), sill: Some(24.0), lift: 120.0 });
+        let pl = level_at(0.0, vec![w]);
+        let meshes = pl.meshes();
+        let wall = &meshes.iter().find(|(p, ..)| *p == Part::Wall).unwrap().1;
+        for (x, z, open) in
+            [(264.0, 50.0, true), (264.0, 100.0, false), (264.0, 170.0, true), (264.0, 220.0, false), (244.0, 170.0, false), (244.0, 50.0, true)]
+        {
+            assert_eq!(!solid_at(wall, x, 0.0, z), open, "at x {x}, z {z}");
+        }
+        assert!(solid_at(wall, 100.0, 0.0, 170.0) && solid_at(wall, 500.0, 0.0, 50.0), "the wall beside them");
     }
 }

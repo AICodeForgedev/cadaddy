@@ -14,8 +14,13 @@ use serde_json::json;
 fn harness(state: Option<UiState>) -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
     app.run("circle", json!({"center":[0,0],"radius":5})).unwrap();
-    if let Some(state) = state {
-        app.ui = state;
+    match state {
+        Some(state) => app.ui = state,
+        // Palettes docked in the main window, pinned, as they stood before the rail.
+        None => {
+            app.ui.docking = Workspace::docked();
+            app.ui.show_palettes = true;
+        }
     }
     app.ui.in_window_menu = false;
     let mut harness = Harness::builder().with_size(vec2(1280.0, 760.0)).build_ui_state(
@@ -119,14 +124,14 @@ fn hostile_palette_window_requests_and_saved_settings_are_refused() {
         assert!(dock(&mut h, bad.clone()).is_err(), "{bad}");
     }
     assert_eq!(serde_json::to_value(&h.state().ui.docking).unwrap(), serde_json::to_value(&before).unwrap());
-    let mut ws = Workspace::default();
+    let mut ws = Workspace::docked();
     ws.detached.push(Detached { panel: Panel::Layers, rect: [0.0, 0.0, 300.0, 300.0], monitor: None });
     assert!(ws.validate().is_err(), "in the layout and in a window at once");
-    let mut ws = Workspace::default();
+    let mut ws = Workspace::docked();
     ws.detach(Panel::Layers, [0.0, 0.0, 300.0, 300.0], None).unwrap();
     ws.detached.push(ws.detached[0].clone());
     assert!(ws.validate().is_err(), "twice");
-    let mut ws = Workspace::default();
+    let mut ws = Workspace::docked();
     ws.detach(Panel::Layers, [0.0, 0.0, 300.0, 300.0], None).unwrap();
     ws.detached[0].rect[0] = f32::NAN;
     assert!(ws.validate().is_err(), "not finite");

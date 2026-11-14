@@ -26,6 +26,15 @@ struct CADaddyFieldApp: App {
     }
 }
 
+/// A building on screen: its set and the packages read to open it.
+struct OpenBuilding: Identifiable {
+    let id = UUID()
+    let record: SetRecord
+    let model: PackageSetModel
+    let opening: [LoadedPackage]
+    let failures: [String: String]
+}
+
 extension UTType {
     static let glb = UTType(importedAs: "org.khronos.gltf.binary")
 }
@@ -40,6 +49,12 @@ final class AppModel: ObservableObject {
 
     let library: PackageLibrary?
     @Published var packages: [PackageRecord] = []
+    /// Buildings opened from their package sets (Q6431).
+    let sets: PackageSetStore?
+    @Published var buildings: [SetRecord] = []
+    /// The building on screen (its set read and its opening packages loaded).
+    @Published var openBuilding: OpenBuilding?
+    @Published var openingBuilding = false
     @Published var selection: UUID?
     @Published var importing = false
     @Published var alert: String?
@@ -59,6 +74,7 @@ final class AppModel: ObservableObject {
 
     init() {
         library = try? PackageLibrary(root: PackageLibrary.defaultRoot())
+        sets = try? PackageSetStore(root: PackageSetStore.defaultRoot())
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "-demo"), args.indices.contains(i + 1) { demoScreen = args[i + 1] } else { demoScreen = nil }
@@ -72,7 +88,19 @@ final class AppModel: ObservableObject {
         // `-updateserver URL` presets the address and `-autoupdate` taps Update once at launch (simulator end-to-end run).
         if let i = args.firstIndex(of: "-updateserver"), args.indices.contains(i + 1) { serverAddress = args[i + 1] }
         if args.contains("-autoupdate") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.tapUpdate() } }
-        if args.contains("-design") { showBuilding = true }
+        if args.contains("-design"), !args.contains("-openset"), !args.contains("-bigset") { showBuilding = true }
+        // `-openset FOLDER` imports a package set folder (once) and opens it; `-bigset N` generates a synthetic
+        // building of N rooms (scale runs) the same way.
+        if let i = args.firstIndex(of: "-openset"), args.indices.contains(i + 1) { debugOpenSet(URL(fileURLWithPath: args[i + 1])) }
+        if let i = args.firstIndex(of: "-bigset"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { debugBigSet(rooms: n) }
+        if #available(iOS 18.0, *) {
+            NotificationCenter.default.addObserver(forName: DesignDemo.standIn, object: nil, queue: .main) { [weak self] n in
+                MainActor.assumeIsolated {
+                    guard let self, let room = n.object as? String, let b = self.openBuilding else { return }
+                    self.standIn(room: room, of: b.record)
+                }
+            }
+        }
         #endif
     }
 
@@ -95,6 +123,7 @@ final class AppModel: ObservableObject {
 
     func runUpdate() {
         guard let library, !updating else { return }
+        let sets = self.sets
         updating = true
         updateReport = nil
         updateProgress = UpdateProgress(done: 0, total: 1, current: "Checking the office for updates…")
@@ -103,7 +132,20 @@ final class AppModel: ObservableObject {
             let updater = PackageUpdater(library: library)
             let outcome: Result<UpdateReport, FieldError>
             do {
-                outcome = .success(try await updater.run(address: address) { p in Task { @MainActor in self?.updateProgress = p } })
+                // A building's set first (only the packages whose content hash changed), then the single packages.
+                var setNames = Set<String>()
+                var setReport: SetUpdateReport?
+                if let sets, let url = try? UpdateServer.manifestURL(address) {
+                    setReport = try await SetUpdater(store: sets, library: library).run(manifestURL: url) { p in Task { @MainActor in self?.updateProgress = p } }
+                    if let r = setReport { setNames = Set(r.updated + r.added + r.unchanged + r.failed.map(\.name)) }
+                }
+                var r = try await updater.run(address: address, excluding: setNames) { p in Task { @MainActor in self?.updateProgress = p } }
+                if let s = setReport {
+                    r.notes.insert(s.summary, at: 0)
+                    r.notes += s.notes
+                    r.failed += s.failed
+                }
+                outcome = .success(r)
             } catch {
                 outcome = .failure((error as? FieldError) ?? FieldError("The update stopped: \(error.localizedDescription)"))
             }
@@ -122,17 +164,31 @@ final class AppModel: ObservableObject {
 
     func reload() {
         packages = library?.list() ?? []
+        buildings = sets?.list() ?? []
         if let s = selection, !packages.contains(where: { $0.id == s }) { selection = nil }
     }
 
     func record(_ id: UUID?) -> PackageRecord? { packages.first { $0.id == id } }
 
-    /// Imports files, folders or zips (from the Files picker, share sheet, AirDrop or "Open in").
+    /// Imports files, folders or zips (from the Files picker, share sheet, AirDrop or "Open in"). A folder with a
+    /// building.json is a building's package set.
     func importItems(_ urls: [URL]) {
         guard let library else { return }
         importing = true
+        let sets = self.sets
         Task.detached(priority: .userInitiated) {
-            let (last, errors) = Self.runImports(urls, library: library)
+            var plain: [URL] = [], setErrors: [String] = []
+            for url in urls.prefix(20) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                if PackageSetStore.isSet(url), let sets {
+                    do { _ = try sets.importFolder(url) } catch { setErrors.append("\(url.lastPathComponent): \((error as? FieldError)?.message ?? "could not be opened.")") }
+                } else {
+                    plain.append(url)
+                }
+            }
+            var (last, errors) = Self.runImports(plain, library: library)
+            errors = setErrors + errors
             await MainActor.run {
                 self.importing = false
                 self.reload()
@@ -203,6 +259,78 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    // MARK: buildings (package sets)
+
+    /// Reads the building's set and its opening packages off the main thread, then shows it.
+    func open(building r: SetRecord) {
+        guard let sets, !openingBuilding else { return }
+        openingBuilding = true
+        let root = sets.folder(r.id)
+        Task {
+            do {
+                let t0 = Date()
+                let (m, opening, failed) = try await PackageSetModel.open(root: root)
+                #if DEBUG
+                print(String(format: "FIELD-OPEN %.2f s graph %d packages %d opening %d elements %.0f MB geometry", Date().timeIntervalSince(t0), m.index.graph.count,
+                             m.index.allPackages.count, opening.reduce(0) { $0 + $1.elements.count }, Double(opening.reduce(0) { $0 + $1.bytes }) / 1_048_576))
+                #endif
+                self.openBuilding = OpenBuilding(record: r, model: m, opening: opening, failures: failed)
+            } catch {
+                self.alert = (error as? FieldError)?.message ?? "The building could not be opened."
+            }
+            self.openingBuilding = false
+        }
+    }
+
+    /// "Stand in this room": the room's own package (made a library package the first time, with its marks and
+    /// saved alignment after that), opened in AR alignment.
+    func standIn(room: String, of r: SetRecord) {
+        guard let sets, let library else { return }
+        do {
+            let latest = buildings.first { $0.id == r.id } ?? r
+            let (_, rec) = try sets.roomRecord(latest, room: room, library: library)
+            openBuilding = nil
+            reload()
+            selection = rec.id
+            openARRequest = true
+        } catch {
+            alert = (error as? FieldError)?.message ?? "The room could not be opened."
+        }
+    }
+
+    func deleteBuildings(_ ids: [UUID]) {
+        for id in ids { try? sets?.delete(id) }
+        reload()
+    }
+
+    #if DEBUG
+    private func debugOpenSet(_ url: URL) {
+        guard let sets else { return }
+        let r = sets.list().first { $0.title == ((try? PackageSetIndex.parse(Data(contentsOf: url.appendingPathComponent("building.json"))))?.title ?? "") }
+            ?? (try? sets.importFolder(url))
+        reload()
+        if let r { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.open(building: r) } }
+    }
+
+    private func debugBigSet(rooms: Int) {
+        guard let sets else { return }
+        Task.detached(priority: .userInitiated) {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bigset-\(rooms)", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: dir.appendingPathComponent("building.json").path) {
+                let t0 = Date()
+                do { try SyntheticSet.write(to: dir, spec: .scale(rooms: rooms)) } catch { print("FIELD-BIGSET failed: \(error)"); return }
+                print(String(format: "FIELD-BIGSET generated in %.1f s", Date().timeIntervalSince(t0)))
+            }
+            await MainActor.run {
+                let title = SyntheticSet.Spec.scale(rooms: rooms).title
+                let r = sets.list().first { $0.title == title } ?? (try? sets.importFolder(dir))
+                self.reload()
+                if let r { self.open(building: r) }
+            }
+        }
+    }
+    #endif
 
     func delete(_ ids: [UUID]) {
         for id in ids { try? library?.delete(id) }

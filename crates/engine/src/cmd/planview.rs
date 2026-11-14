@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(WallM::default()))),
         CommandSpec::new("plan.door", "Place Door in Wall", run_door)
             .menu(&["Draw", "BIM", "Door"])
-            .params("{wall: handle, position?: station (0-1 along wall, default 0.5), width?: inches (default 36), height?: feet (default 6.67), swing?: \"left\" | \"right\" (default \"left\")} → {handle, plan_handles: [string]}")
+            .params("{wall: handle, position?: station (0-1 along wall, default 0.5), width?: inches (default 36), height?: feet (default 6.67), swing?: \"left\" | \"right\" (default \"left\")} → {handle, plan_handles: [string]} | by schedule mark (Q6609: a door with no wall gap drawn, a counter shutter, a coiling or sliding door): {mark: string, at: [x,y] (on its level's plan), level?: string (default the level whose plan holds `at`), width?: inches, height?: feet, sill?: feet (above its floor), type?: string (the schedule's type words: ROLLING, SLIDING, COUNTER… say how it opens), build?: bool (default true: build the model again)} → {mark, level, stored: true, row: {mark, width_in?, height_in?, sill_ft?, type?}, built, handle?, found?, operation?, sill_in?, head_in?}: kept in the building spec's door schedule (a row and a tag), so every build builds it again")
             .interactive(|_| Ok(Box::new(DoorWindowM::new("plan.door")))),
         CommandSpec::new("plan.window", "Place Window in Wall", run_window)
             .menu(&["Draw", "BIM", "Window"])
@@ -403,6 +403,22 @@ fn generate_device_plan(d: &mut Drawing, el: &ModelElement, level: &str, counts:
                 clip: None,
             }),
         );
+    } else if let Some((strokes, turn)) = library_symbol(d, model_ent) {
+        // Its kind's universal symbol from the shared library (Q6484), whatever its print drew,
+        // at the size a 1/4" = 1'-0" plan draws it, turned as the print drew it.
+        let k = 4.0 * super::elemprops::units_per_foot(d);
+        for st in strokes.iter().take(64) {
+            let kind = match st.turned(turn) {
+                super::symtable::Stroke::Seg([a, b, x, y]) => EntityKind::Line(cadaddy_doc::Line {
+                    a: v3(Vec2::new(pos.x + a * k, pos.y + b * k)),
+                    b: v3(Vec2::new(pos.x + x * k, pos.y + y * k)),
+                }),
+                super::symtable::Stroke::Round([x, y, r]) => {
+                    EntityKind::Circle(cadaddy_doc::Circle { center: v3(Vec2::new(pos.x + x * k, pos.y + y * k)), radius: r * k })
+                }
+            };
+            let _ = d.add(&Space::Model, Common { layer: layer.into(), xdata: xtags.clone().into(), ..Common::default() }, kind);
+        }
     } else {
         let _ = d.add(
             &Space::Model,
@@ -411,6 +427,18 @@ fn generate_device_plan(d: &mut Drawing, el: &ModelElement, level: &str, counts:
         );
     }
     counts.devices += 1;
+}
+
+/// The shared library's drawing a device is shown with (its `symbol_shown_as`, Q6484), and its
+/// quarter turn.
+fn library_symbol(d: &Drawing, e: &Entity) -> Option<(Vec<super::symtable::Stroke>, u8)> {
+    let props = super::elemprops::effective(e, "device", super::elemprops::units_per_foot(d));
+    let get = |key: &str| props.iter().find(|(k, p, _)| k.eq_ignore_ascii_case(key) && p.has_value()).map(|(_, p, _)| p.text());
+    let name = get("symbol_shown_as")?;
+    let turn = get("symbol_turn").and_then(|t| t.trim().parse::<u8>().ok()).unwrap_or(0);
+    let lib = super::symtable::library(None);
+    let sym = lib.into_iter().map(|(s, _)| s).find(|s| s.name.eq_ignore_ascii_case(name.trim()) && !s.strokes.is_empty())?;
+    Some((sym.strokes, turn))
 }
 
 fn device_plan_layer(e: &Entity) -> &'static str {
@@ -586,6 +614,9 @@ fn run_wall(s: &mut Session, p: &Value) -> Result<Value> {
 // ─── plan.door ───────────────────────────────────────────────────────────────
 
 fn run_door(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("mark").is_some() {
+        return run_door_by_mark(s, p);
+    }
     let wall_hex = str_param(p, "wall").ok_or_else(|| bad("plan.door", "`wall` handle is required"))?;
     let wall_h = Handle(u64::from_str_radix(wall_hex.trim_start_matches("0x"), 16).map_err(|_| bad("plan.door", "invalid wall handle"))?);
     let width_in = p.get("width").and_then(Value::as_f64).unwrap_or(36.0);
@@ -664,6 +695,155 @@ fn run_door(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.echo(format!("Door placed: {width_in}\" wide, {height_ft}' high, {swing} swing."));
     Ok(json!({ "handle": door_handle.hex(), "plan_handles": plan_handles }))
+}
+
+/// Longest door mark kept.
+const MAX_MARK_CHARS: usize = 40;
+/// Widest door placed by mark, inches; highest head or sill, feet.
+const MAX_DOOR_WIDTH_IN: f64 = 600.0;
+const MAX_DOOR_FT: f64 = 40.0;
+/// Most door schedule rows, and tags, a spec keeps (as the spec's own lists).
+const MAX_SCHEDULE_ITEMS: usize = 10_000;
+
+/// `plan.door` by schedule mark (Q6609): the door goes into the building spec's door schedule (its
+/// row, made or updated with the size given, and its tag at `at` on its level's plan, replacing
+/// the mark's tag there), and the model is built again: the build makes the door at its tag
+/// (`wallgen::doortags`) whether or not the plan draws an opening, and every later build again.
+fn run_door_by_mark(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "plan.door";
+    let mark = str_param(p, "mark").map(str::trim).filter(|m| !m.is_empty()).ok_or_else(|| bad(CMD, "`mark` must be the door's schedule mark"))?;
+    if mark.chars().count() > MAX_MARK_CHARS {
+        return Err(bad(CMD, format!("`mark` is longer than {MAX_MARK_CHARS} characters")));
+    }
+    let at = p
+        .get("at")
+        .and_then(Value::as_array)
+        .and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]))
+        .filter(|a| a.iter().all(|c| c.is_finite()))
+        .ok_or_else(|| bad(CMD, "`at` must be [x, y] on the door's level plan"))?;
+    let num = |key: &str, max: f64| -> Result<Option<f64>> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && *x >= 0.0 && *x <= max)
+                .map(Some)
+                .ok_or_else(|| bad(CMD, format!("`{key}` must be a number from 0 to {max}"))),
+        }
+    };
+    let width_in = num("width", MAX_DOOR_WIDTH_IN)?.filter(|w| *w > 0.0);
+    let height_ft = num("height", MAX_DOOR_FT)?.filter(|h| *h > 0.0);
+    let sill_ft = num("sill", MAX_DOOR_FT)?;
+    let ty = str_param(p, "type").map(str::trim).filter(|t| !t.is_empty()).map(|t| t.chars().take(200).collect::<String>());
+    let build = bool_param(CMD, p, "build")?.unwrap_or(true);
+    let (mut sp, _) = super::bspec::current(s, CMD)?;
+    let levels = sp.to_rules().levels;
+    let level = match str_param(p, "level").map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) => levels
+            .iter()
+            .find(|x| x.name.eq_ignore_ascii_case(l))
+            .map(|x| x.name.clone())
+            .ok_or_else(|| bad(CMD, format!("no level `{l}` in the building spec")))?,
+        None => levels
+            .iter()
+            .find(|l| {
+                l.region.is_some_and(|[x0, y0, x1, y1]| at[0] >= x0.min(x1) && at[0] <= x0.max(x1) && at[1] >= y0.min(y1) && at[1] <= y0.max(y1))
+            })
+            .or_else(|| levels.iter().find(|l| l.region.is_none()))
+            .map(|l| l.name.clone())
+            .ok_or_else(|| bad(CMD, "no level's plan holds `at`: give `level`"))?,
+    };
+    use cadaddy_walk3d::{FamilyKind, OpeningTag, ScheduleRow};
+    if sp.schedule.row(mark).is_some_and(|r| r.kind != FamilyKind::Door) {
+        return Err(bad(CMD, format!("`{mark}` is a window's mark in the schedule")));
+    }
+    let row = match sp.schedule.rows.iter_mut().find(|r| r.mark.trim().eq_ignore_ascii_case(mark)) {
+        Some(r) => r,
+        None => {
+            if sp.schedule.rows.len() >= MAX_SCHEDULE_ITEMS {
+                return Err(bad(CMD, "the door schedule is full"));
+            }
+            sp.schedule.rows.push(ScheduleRow {
+                kind: FamilyKind::Door,
+                mark: mark.to_string(),
+                width_in: None,
+                height_in: None,
+                sill_ft: None,
+                head_ft: None,
+                kind_type: None,
+                frame: None,
+                fire_rating: None,
+                hardware: None,
+            });
+            sp.schedule.rows.last_mut().ok_or_else(|| bad(CMD, "the door schedule row could not be made"))?
+        }
+    };
+    if width_in.is_some() {
+        row.width_in = width_in;
+    }
+    if let Some(h) = height_ft {
+        row.height_in = Some(h * 12.0);
+    }
+    if sill_ft.is_some() {
+        row.sill_ft = sill_ft;
+    }
+    if ty.is_some() {
+        row.kind_type = ty;
+    }
+    let row_json = json!({"mark": row.mark, "width_in": row.width_in, "height_in": row.height_in, "sill_ft": row.sill_ft, "type": row.kind_type});
+    // The mark's tag on this level is where the door is now (a moved door is not two).
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let reach = super::wallgen::DOOR_TAG_MOVE_FT * upf;
+    sp.schedule.tags.retain(|t| {
+        !(t.mark.trim().eq_ignore_ascii_case(mark)
+            && t.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&level))
+            && (t.at[0] - at[0]).hypot(t.at[1] - at[1]) <= reach)
+    });
+    if sp.schedule.tags.len() >= MAX_SCHEDULE_ITEMS {
+        return Err(bad(CMD, "the door schedule has too many tags"));
+    }
+    sp.schedule.tags.push(OpeningTag {
+        mark: mark.to_string(),
+        at,
+        level: Some(level.clone()),
+        source: Some(CMD.into()),
+        status: Some("user".into()),
+        ..OpeningTag::default()
+    });
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    let mut out = json!({"mark": mark, "level": level, "stored": true, "row": row_json, "built": false});
+    if !build {
+        return Ok(out);
+    }
+    s.execute("model.build", &json!({"echo": false}))?;
+    // The door the build made at the tag.
+    let d = s.doc()?;
+    let built = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).is_some_and(|k| k.eq_ignore_ascii_case("door")))
+        .filter(|e| super::bimlook::made_tag(e, "mark").is_some_and(|m| m.eq_ignore_ascii_case(mark)))
+        .filter(|e| wallgen_level(e).is_some_and(|l| l.eq_ignore_ascii_case(&level)))
+        .map(|e| (cadaddy_doc::entity_bounds(d, e, 0).center().dist(Vec2::new(at[0], at[1])), e))
+        .filter(|(dd, _)| dd.is_finite())
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, e)| e);
+    if let Some(e) = built {
+        let k = upf / 12.0;
+        let tag_num = |key: &str| {
+            super::bimlook::made_tag(e, key).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).map(|v| (v / k * 100.0).round() / 100.0)
+        };
+        out["built"] = json!(true);
+        out["handle"] = json!(e.handle.hex());
+        out["found"] = json!(super::bimlook::made_tag(e, "found"));
+        out["operation"] = json!(super::bimlook::made_tag(e, "operation"));
+        out["sill_in"] = json!(tag_num("sill"));
+        out["head_in"] = json!(tag_num("head"));
+        s.echo(format!("Door {mark} built at its tag on {level}."));
+    } else {
+        s.echo(format!("Door {mark} kept in the door schedule; the build made no door there (see model.build's schedule_doors)."));
+    }
+    Ok(out)
 }
 
 // ─── plan.window ─────────────────────────────────────────────────────────────

@@ -21,7 +21,8 @@ pub fn pick_aperture(s: &Session) -> f64 {
 /// The object under `p` in the current space.
 pub fn pick_at(s: &Session, p: Vec2) -> Option<Handle> {
     let space = s.space();
-    crate::select::pick(s.doc().ok()?, &space, p, pick_aperture(s))
+    // With a print set's sheet open, only its objects (`sheetnav`).
+    crate::select::pick(&*s.view_doc().ok()?, &space, p, pick_aperture(s))
 }
 
 pub fn entity(s: &Session, h: Handle) -> Result<Entity> {

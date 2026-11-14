@@ -357,9 +357,16 @@ fn is_number_label(t: &str) -> bool {
     ["SHEET NO", "SHEET NUMBER", "DWG NO", "DRAWING NO", "DRAWING NUMBER"].contains(&u)
 }
 
+/// Whether a line says `NOT TO SCALE` (or holds it, `whole: false`) however its letters are
+/// spaced: lettering read off the page can split a word (`NO T TO SCALE`).
+fn says_not_to_scale(u: &str, whole: bool) -> bool {
+    let letters: String = u.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
+    if whole { letters == "NOTTOSCALE" } else { letters.contains("NOTTOSCALE") }
+}
+
 fn is_scale_line(t: &TextItem) -> bool {
     let u = t.value.trim().to_ascii_uppercase();
-    u.starts_with("SCALE") || u == "NTS" || u == "NOT TO SCALE" || is_bare_scale(&u)
+    u.starts_with("SCALE") || u == "NTS" || says_not_to_scale(&u, true) || is_bare_scale(&u)
 }
 
 /// A scale printed on its own under a view title (`1/8" = 1'-0"`, `1" = 20'`).
@@ -388,11 +395,95 @@ fn is_view_designator(t: &str) -> bool {
     letters <= 2 && (1..=2).contains(&digits) && t.chars().skip(letters).all(|c| c.is_ascii_digit())
 }
 
+/// Most horizontal rules gathered for the title bars of one sheet (a guard against hostile files).
+const MAX_TITLE_RULES: usize = 100_000;
+/// A title bar's rule is at least this many scale-note heights long...
+const MIN_TITLE_RULE: f64 = 8.0;
+/// ...and no thicker than this share of its length.
+const TITLE_RULE_THINNESS: f64 = 0.02;
+
+/// The sheet's horizontal rules `[x0, x1, y]`: straight lines and thin polylines (a title bar is
+/// often a long filled strip).
+fn title_rules(d: &Drawing) -> Vec<[f64; 3]> {
+    let mut out = Vec::new();
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        if !matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+            continue;
+        }
+        let b = entity_bounds(d, e, 0);
+        if b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
+            continue;
+        }
+        let w = b.max.x - b.min.x;
+        if w > 0.0 && b.max.y - b.min.y <= TITLE_RULE_THINNESS * w {
+            out.push([b.min.x, b.max.x, (b.min.y + b.max.y) / 2.0]);
+            if out.len() >= MAX_TITLE_RULES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// An underlined view title (a title bar): the view's number bubble and title stand on a rule,
+/// the scale note under the rule anywhere along it (often at its far end, beside a graphic
+/// scale). The title is the larger lettering of words nearest above the rule the scale note
+/// hangs under.
+fn bar_title<'a>(texts: &'a [TextItem], s: &TextItem, rules: &[[f64; 3]]) -> Option<&'a TextItem> {
+    let h = s.height;
+    let rule = rules
+        .iter()
+        .filter(|r| r[1] - r[0] >= MIN_TITLE_RULE * h && r[0] - h <= s.at.x && s.at.x <= r[1] && r[2] > s.at.y && r[2] - s.at.y <= 3.0 * h)
+        .min_by(|a, b| (a[2] - s.at.y).total_cmp(&(b[2] - s.at.y)))?;
+    texts
+        .iter()
+        .filter(|t| {
+            horizontal(t)
+                && !is_scale_line(t)
+                && !is_view_designator(&t.value)
+                && t.value.chars().filter(char::is_ascii_alphabetic).count() >= 2
+                && t.height > 1.2 * h
+                && rule[0] - h <= t.at.x
+                && t.at.x <= rule[1]
+                && t.at.y > rule[2]
+                && t.at.y - rule[2] <= 2.0 * t.height
+        })
+        .min_by(|a, b| (a.at.y - rule[2]).total_cmp(&(b.at.y - rule[2])).then(a.at.x.total_cmp(&b.at.x)))
+}
+
 /// The views on the sheet: a title is the larger line right above a "SCALE:" line, or the name
-/// beside the designator that stands above it.
+/// beside the designator that stands above it, or the title standing on the rule the "SCALE:"
+/// line hangs under (a title bar).
 pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
+    views_and_notes(d, texts).0
+}
+
+/// A scale note on a sheet and the title of the view it stands under (none: a note in the title
+/// block, or under no title).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScaleNote {
+    /// Sheet inches per foot, when the note reads and is not NOT TO SCALE.
+    pub scale: Option<f64>,
+    pub view: Option<String>,
+    /// Where the note is, and its lettering's height.
+    pub at: [f64; 2],
+    pub height: f64,
+}
+
+/// Whether two texts stand at one spot: two readings of one line of lettering (the page's text
+/// and the lettering read from its strokes, each its own height).
+fn one_spot(a: &TextItem, b: &TextItem) -> bool {
+    let h = a.height.min(b.height);
+    (a.at.x - b.at.x).abs() <= 0.5 * h && (a.at.y - b.at.y).abs() <= 0.5 * h
+}
+
+/// [`view_titles`] and every scale line of the sheet with the view it titles.
+fn views_and_notes(d: &Drawing, texts: &[TextItem]) -> (Vec<ViewTitle>, Vec<ScaleNote>) {
     let regions = view_regions(d);
     let mut out: Vec<ViewTitle> = Vec::new();
+    let mut notes: Vec<ScaleNote> = Vec::new();
+    // The sheet's horizontal rules, gathered the first time a title bar is looked for.
+    let mut rules: Option<Vec<[f64; 3]>> = None;
     for s in texts.iter().filter(|t| horizontal(t) && is_scale_line(t)) {
         let h = s.height;
         let Some(title) = texts
@@ -406,7 +497,9 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
                     && t.height > 1.2 * h
             })
             .min_by(|a, b| (a.at.y - s.at.y).total_cmp(&(b.at.y - s.at.y)))
+            .or_else(|| bar_title(texts, s, rules.get_or_insert_with(|| title_rules(d))))
         else {
+            notes.push(ScaleNote { scale: note_scale(&s.value), view: None, at: [s.at.x, s.at.y], height: h });
             continue;
         };
         // A boxed title: the view's designator (`A1`) stands over the scale, its name beside it.
@@ -441,8 +534,30 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
                 .map(|t| t.value.clone())
         });
         let st = scale_text(&s.value);
-        let nts = st.to_ascii_uppercase().contains("NOT TO SCALE") || st.eq_ignore_ascii_case("NTS");
-        if out.iter().any(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
+        // Two readings of one note at one spot (the page's text, and its lettering read from
+        // strokes, which can stop at the gap of its "="): the one that reads (Q6518: a plan
+        // titled over `SCALE: 3/16"` had no scale, and its details' note scaled the sheet).
+        let st = if note_scale(&st).is_none() {
+            texts
+                .iter()
+                .filter(|o| horizontal(o) && is_scale_line(o) && one_spot(o, s))
+                .map(|o| scale_text(&o.value))
+                .find(|t| note_scale(t).is_some())
+                .unwrap_or(st)
+        } else {
+            st
+        };
+        let nts = says_not_to_scale(&st, false) || st.eq_ignore_ascii_case("NTS");
+        notes.push(ScaleNote { scale: if nts { None } else { note_scale(&st) }, view: Some(title.value.clone()), at: [s.at.x, s.at.y], height: h });
+        // The same title over two readings of one note (the page's text and its lettering read
+        // from strokes, which can stop at the gap of its "="): the reading whose scale reads is
+        // the view's (Q6518: a plan titled over `SCALE: 3/16"` had no scale, and the details'
+        // note beside it scaled the sheet).
+        if let Some(v) = out.iter_mut().find(|v| v.title == title.value && v.at == [title.at.x, title.at.y]) {
+            let reads = |t: &str| crate::sheet_reader::parse_scale(t).is_some_and(|k| k.is_finite() && k > 0.0);
+            if !nts && !v.not_to_scale && reads(&st) && !v.scale_text.as_deref().is_some_and(reads) {
+                v.scale_text = Some(st);
+            }
             continue;
         }
         out.push(ViewTitle {
@@ -455,7 +570,22 @@ pub fn view_titles(d: &Drawing, texts: &[TextItem]) -> Vec<ViewTitle> {
         });
     }
     out.sort_by(|a, b| a.number.as_deref().unwrap_or("~").cmp(b.number.as_deref().unwrap_or("~")).then(a.title.cmp(&b.title)));
-    out
+    // A reading of a note whose title is out of its reach (the shorter lettering of two readings)
+    // is the view's its other reading at that spot titles.
+    let titled: Vec<([f64; 2], f64, String)> = notes.iter().filter_map(|n| Some((n.at, n.height, n.view.clone()?))).collect();
+    for n in notes.iter_mut().filter(|n| n.view.is_none()) {
+        let near = |at: [f64; 2], h: f64| {
+            let h = h.min(n.height);
+            (at[0] - n.at[0]).abs() <= 0.5 * h && (at[1] - n.at[1]).abs() <= 0.5 * h
+        };
+        n.view = titled.iter().find(|(at, h, _)| near(*at, *h)).map(|(_, _, v)| v.clone());
+    }
+    (out, notes)
+}
+
+/// The scale a scale line prints (sheet inches per foot), when it reads.
+fn note_scale(line: &str) -> Option<f64> {
+    crate::sheet_reader::parse_scale(&scale_text(line)).filter(|k| k.is_finite() && *k > 0.0)
 }
 
 /// The block a title labels: the largest block holding the title, else the nearest block right
@@ -537,6 +667,190 @@ pub fn view_regions(d: &Drawing) -> Vec<([f64; 4], usize)> {
         }
     }
     out
+}
+
+/// A text this many words or fewer is a heading (`ELECTRICAL SYMBOL LEGEND`), more a sentence.
+const HEADING_WORDS: usize = 6;
+/// A text this many words or more is a line of notes or specification text.
+const SENTENCE_WORDS: usize = 6;
+/// A text with this many words of two letters or more is a line of words (`DUPLEX RECEPTACLE,
+/// 20A, AFF`), not a tag or a mark.
+const WORD_LINE_WORDS: usize = 3;
+/// Shortest straight line weighed as a wall's face, in the page's size (about 1/2" on a 36"
+/// sheet).
+const WALL_FACE_MIN: f64 = 0.015;
+/// The faces of a wall stand this far apart at least and at most, in the page's size (about
+/// 0.03" to 0.43" on a 36" sheet: a 4" partition at 1/8" scale to a 12" wall at 1/2").
+const WALL_GAP_MIN: f64 = 0.0008;
+const WALL_GAP_MAX: f64 = 0.012;
+/// A wall's faces have no parallel line this many of their gaps beyond them (a room on either
+/// side); a table's rules and a hatch's lines are spaced evenly, each with one beside it.
+const WALL_CLEAR_GAPS: f64 = 2.5;
+/// Most pairs of lines compared per page (hostile files).
+const MAX_FACE_PAIRS: usize = 4_000_000;
+
+/// What a page's drawing area holds: the walls its linework draws (pairs of parallel lines a
+/// wall's thickness apart, clear on both sides), its lines of notes and specification text, the
+/// view titles naming a plan and the headings of legends, notes and specifications. A plan's
+/// linework is walls; a sheet of legends, notes and specifications has none, only table rules
+/// (spaced evenly), sample symbols and lettering (Q6361).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PageContent {
+    /// Pairs of lines read as a wall's two faces.
+    pub wall_faces: usize,
+    /// Their length together, in the page's size (its longer side is 1).
+    pub wall_length: f64,
+    /// Lines of lettering of [`SENTENCE_WORDS`] words or more.
+    pub sentences: usize,
+    /// Lines of lettering in all.
+    pub texts: usize,
+    /// Lines of lettering of [`WORD_LINE_WORDS`] words or more (a word two letters or more): a
+    /// legend's descriptions and the notes, where a plan's lettering is mostly tags, marks and
+    /// numbers (`S3`, `A-1`, `12x8`, `200 CFM`).
+    pub word_lines: usize,
+    /// View titles naming a plan of some kind ([`names_a_plan`]), key plans left out.
+    pub plan_views: usize,
+    /// Headings of legends, notes, abbreviations and specifications (`sheets.legend_notes_heading_words`).
+    pub headings: usize,
+}
+
+/// [`PageContent`] of a page: its straight linework (lines and polyline sides, screened ones too:
+/// a trade's plan prints the walls grey; borders and title-block rules left out), its lettering,
+/// its view titles and headings.
+pub fn page_content(d: &Drawing, texts: &[TextItem], views: &[ViewTitle]) -> PageContent {
+    let heading_words = crate::wordrules::words("sheets.legend_notes_heading_words");
+    let words_of = |t: &TextItem| -> Vec<String> {
+        t.value.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    };
+    let mut out = PageContent { texts: texts.len(), ..PageContent::default() };
+    for t in texts {
+        let w = words_of(t);
+        if !w.is_empty() && w.len() <= HEADING_WORDS && w.iter().any(|x| heading_words.contains(&x.as_str())) {
+            out.headings += 1;
+        }
+        if w.len() >= SENTENCE_WORDS {
+            out.sentences += 1;
+        }
+        if t.value.split(|c: char| !c.is_ascii_alphabetic()).filter(|x| x.len() >= 2).count() >= WORD_LINE_WORDS {
+            out.word_lines += 1;
+        }
+    }
+    out.plan_views = views.iter().filter(|v| names_a_plan(&v.title) && !names_key_plan(&v.title)).count();
+    let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+    for e in d.model.iter().take(MAX_OBJECTS) {
+        match &e.kind {
+            EntityKind::Line(l) => segs.push((l.a.xy(), l.b.xy())),
+            EntityKind::LwPolyline(p) => {
+                let n = p.vertices.len();
+                let sides = if p.closed { n } else { n.saturating_sub(1) };
+                for i in 0..sides {
+                    if let (Some(a), Some(b)) = (p.vertices.get(i), p.vertices.get((i + 1) % n.max(1)))
+                        && a.bulge.abs() < 1e-9
+                    {
+                        segs.push((a.p, b.p));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    segs.retain(|(a, b)| a.is_finite() && b.is_finite());
+    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in segs.iter().flat_map(|(a, b)| [*a, *b]).chain(texts.iter().map(|t| t.at)) {
+        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+    let size = w.max(h);
+    if !(size.is_finite() && size > 0.0) {
+        return out;
+    }
+    // Each straight line across or up the page: (where it stands, from, to).
+    let (mut across, mut up): (Vec<(f64, f64, f64)>, Vec<(f64, f64, f64)>) = (Vec::new(), Vec::new());
+    for (a, b) in &segs {
+        let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+        let len = dx.max(dy);
+        if len < WALL_FACE_MIN * size || dx > SPAN_LIMIT * w || dy > SPAN_LIMIT * h {
+            continue;
+        }
+        if dy <= 0.02 * dx {
+            across.push(((a.y + b.y) / 2.0, a.x.min(b.x), a.x.max(b.x)));
+        } else if dx <= 0.02 * dy {
+            up.push(((a.x + b.x) / 2.0, a.y.min(b.y), a.y.max(b.y)));
+        }
+    }
+    let mut budget = MAX_FACE_PAIRS;
+    for lines in [&mut across, &mut up] {
+        let (n, len) = wall_faces(lines, size, &mut budget);
+        out.wall_faces += n;
+        out.wall_length += len / size;
+    }
+    out
+}
+
+/// The wall faces among parallel lines `lines` (where each stands, from, to): each pair a wall's
+/// thickness apart that overlap along half the shorter, nearest to each other, with no other
+/// overlapping line [`WALL_CLEAR_GAPS`] of their gap beyond either. The pairs and their overlap
+/// length together.
+fn wall_faces(lines: &mut [(f64, f64, f64)], size: f64, budget: &mut usize) -> (usize, f64) {
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let reach = WALL_GAP_MAX * WALL_CLEAR_GAPS * size;
+    let overlap = |a: &(f64, f64, f64), b: &(f64, f64, f64)| {
+        let o = a.2.min(b.2) - a.1.max(b.1);
+        (o >= 0.5 * (a.2 - a.1).min(b.2 - b.1)).then_some(o)
+    };
+    // Each line's nearest overlapping line beyond it each way: (gap, index).
+    let n = lines.len();
+    let mut below: Vec<Option<(f64, usize)>> = vec![None; n];
+    let mut above: Vec<Option<(f64, usize)>> = vec![None; n];
+    for i in 0..n {
+        let Some(a) = lines.get(i) else { continue };
+        for j in i + 1..n {
+            let Some(b) = lines.get(j) else { break };
+            let gap = b.0 - a.0;
+            if gap > reach || *budget == 0 {
+                break;
+            }
+            *budget -= 1;
+            // the same line drawn twice
+            if gap < WALL_GAP_MIN * size * 0.25 || overlap(a, b).is_none() {
+                continue;
+            }
+            if above.get(i).is_some_and(|x| x.is_none_or(|(g, _)| gap < g))
+                && let Some(x) = above.get_mut(i)
+            {
+                *x = Some((gap, j));
+            }
+            if below.get(j).is_some_and(|x| x.is_none_or(|(g, _)| gap < g))
+                && let Some(x) = below.get_mut(j)
+            {
+                *x = Some((gap, i));
+            }
+        }
+    }
+    let (mut count, mut length) = (0usize, 0.0);
+    for i in 0..n {
+        let Some(Some((gap, j))) = above.get(i).copied() else { continue };
+        if gap < WALL_GAP_MIN * size || gap > WALL_GAP_MAX * size || below.get(j).copied().flatten().map(|(_, k)| k) != Some(i) {
+            continue;
+        }
+        let clear = |x: Option<Option<(f64, usize)>>| x.flatten().is_none_or(|(g, _)| g > WALL_CLEAR_GAPS * gap);
+        if clear(below.get(i).copied())
+            && clear(above.get(j).copied())
+            && let (Some(a), Some(b)) = (lines.get(i), lines.get(j))
+            && let Some(o) = overlap(a, b)
+        {
+            count += 1;
+            length += o;
+        }
+    }
+    (count, length)
+}
+
+/// A key plan's title (the small plan marking where a view is): no plan of the sheet's own.
+fn names_key_plan(title: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    up.contains("KEY PLAN") || up.contains("KEYPLAN") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "KEY")
 }
 
 /// A circuit label: panel letters, a dash, the circuit number(s), maybe a switch leg
@@ -741,6 +1055,23 @@ pub fn is_site_sheet(discipline: &str, title: &str) -> bool {
     words.iter().any(|w| crate::wordrules::words("sheets.site_title_words").contains(w))
 }
 
+/// Whether a line read as a sheet's title is a street address or a phone number (Q6582): a
+/// title block's firm or project address line (`1234 MAIN ST, SUITE 200`, `(555) 555-0100`)
+/// read where the title is. It is no sheet title: nothing files the sheet by it. An address: a
+/// street number (1 to 6 digits) first and a street-type word of the rules data
+/// (`sheets.address_words`) after the street's name; a phone: ten digits grouped 3, 3, 4.
+pub fn is_address_line(text: &str) -> bool {
+    let up = text.to_ascii_uppercase();
+    let digits: Vec<&str> = up.split(|c: char| !c.is_ascii_digit()).filter(|g| !g.is_empty()).collect();
+    if digits.windows(3).any(|w| matches!(w, [a, b, c] if a.len() == 3 && b.len() == 3 && c.len() == 4)) {
+        return true;
+    }
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let numbered = words.first().is_some_and(|w| w.len() <= 6 && w.chars().all(|c| c.is_ascii_digit()));
+    let street = crate::wordrules::words("sheets.address_words");
+    numbered && words.iter().skip(2).any(|w| street.contains(w))
+}
+
 /// Whether a view's title names a plan of some kind (`ROOF PLAN`, `FIRST FLOOR PLAN`, `RCP`): a
 /// word of the rules data's `sheets.plan_view_words`, and none of `sheets.not_plan_view_words`
 /// (`KEY PLAN`, `PLAN DETAIL`).
@@ -757,39 +1088,84 @@ pub fn names_a_plan(title: &str) -> bool {
 const MAX_SCALE_VIEWS: usize = 500;
 
 /// The scale a sheet's plans print at (sheet inches per foot: 0.125 for `1/8" = 1'-0"`) and the
-/// biggest plan view printing it: the scale most of its plan views ([`names_a_plan`]) print, and
-/// between scales printed as often, the one whose views cover more of the sheet. A view not to
-/// scale or whose note doesn't read has no say. `None` without a plan view at a scale.
+/// biggest plan view printing it. Where every plan view's region was found: the scale of the plan
+/// views ([`names_a_plan`]) that draw the most of the building, each view's area on the sheet
+/// over its scale squared (a 1/4" power plan draws the whole floor, the two 1/2" enlarged plans
+/// beside it a room each, however many there are and however much of the sheet they take,
+/// Q6498). Else, and between scales that draw as much, the scale more of its plan views print,
+/// then the one whose views cover more of the sheet. A view not to scale or whose note doesn't
+/// read has no say. `None` without a plan view at a scale.
 pub fn plan_print_scale(views: &[ViewTitle]) -> Option<(f64, &ViewTitle)> {
-    // (scale, views, their area, the biggest of them and its area)
-    let mut by: Vec<(f64, usize, f64, &ViewTitle, f64)> = Vec::new();
+    // (scale, views, their area, the biggest of them and its area, the building they draw)
+    let mut by: Vec<(f64, usize, f64, &ViewTitle, f64, f64)> = Vec::new();
+    let mut all_regions = true;
     for v in views.iter().take(MAX_SCALE_VIEWS) {
-        if v.not_to_scale || !names_a_plan(&v.title) {
-            continue;
-        }
-        let Some(k) = v.scale_text.as_deref().and_then(crate::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0) else {
-            continue;
-        };
+        let Some(k) = plan_view_scale(v) else { continue };
+        all_regions &= v.region.is_some();
         let a = v.region.map_or(0.0, |r| ((r[2] - r[0]) * (r[3] - r[1])).abs()).max(0.0);
         let a = if a.is_finite() { a } else { 0.0 };
+        // the building the view draws (square feet, in the sheet's units)
+        let drawn = a / (k * k);
+        let drawn = if drawn.is_finite() { drawn } else { 0.0 };
         match by.iter_mut().find(|e| (e.0 - k).abs() <= 1e-6 * k) {
             Some(e) => {
                 e.1 += 1;
                 e.2 += a;
+                e.5 += drawn;
                 if a > e.4 {
                     e.3 = v;
                     e.4 = a;
                 }
             }
-            None => by.push((k, 1, a, v, a)),
+            None => by.push((k, 1, a, v, a, drawn)),
         }
     }
-    by.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2))).map(|e| (e.0, e.3))
+    let drawn = |e: &(f64, usize, f64, &ViewTitle, f64, f64)| if all_regions { e.5 } else { 0.0 };
+    by.into_iter().max_by(|a, b| drawn(a).total_cmp(&drawn(b)).then(a.1.cmp(&b.1)).then(a.2.total_cmp(&b.2))).map(|e| (e.0, e.3))
+}
+
+/// The scale a view prints (sheet inches per foot), when it is to scale and its note reads.
+fn view_scale(v: &ViewTitle) -> Option<f64> {
+    if v.not_to_scale {
+        return None;
+    }
+    v.scale_text.as_deref().and_then(crate::sheet_reader::parse_scale).filter(|k| k.is_finite() && *k > 0.0)
+}
+
+/// [`view_scale`] of a plan view ([`names_a_plan`]).
+fn plan_view_scale(v: &ViewTitle) -> Option<f64> {
+    if names_a_plan(&v.title) { view_scale(v) } else { None }
+}
+
+/// The scales a sheet of several scale notes prints (sheet inches per foot): its plans'
+/// ([`plan_print_scale`]) and the view that gave it, and every scale its plan views print and its
+/// other views (elevations, sections, details, key plans) print, each once.
+#[derive(Clone, Debug)]
+pub struct SheetScales {
+    pub plans: f64,
+    pub view: ViewTitle,
+    pub plan_views: Vec<f64>,
+    pub other_views: Vec<f64>,
+}
+
+impl SheetScales {
+    /// Whether one of the sheet's plan views (`plans: true`) or its other views prints `k` sheet
+    /// inches per foot, within `tolerance` (relative).
+    pub fn prints(&self, k: f64, plans: bool, tolerance: f64) -> bool {
+        let list = if plans { &self.plan_views } else { &self.other_views };
+        k.is_finite() && k > 0.0 && list.iter().any(|s| (s / k - 1.0).abs() <= tolerance)
+    }
 }
 
 /// [`plan_print_scale`] of a drawing of one sheet, read only when the sheet prints more than one
 /// scale note (with one, the sheet's note is its plans'): the scale and the view (cloned).
 pub fn sheet_plan_print_scale(d: &Drawing) -> Option<(f64, ViewTitle)> {
+    sheet_scales(d).map(|s| (s.plans, s.view))
+}
+
+/// [`SheetScales`] of a drawing of one sheet, read only when the sheet prints more than one scale
+/// note (with one, the sheet's note is its plans'), and only with a plan view at a scale.
+pub fn sheet_scales(d: &Drawing) -> Option<SheetScales> {
     let t = texts(d);
     // By the notes' lettering (a note the scale reader can't read is another scale all the same).
     let mut seen: Vec<String> = Vec::new();
@@ -805,7 +1181,36 @@ pub fn sheet_plan_print_scale(d: &Drawing) -> Option<(f64, ViewTitle)> {
         return None;
     }
     let views = view_titles(d, &t);
-    plan_print_scale(&views).map(|(k, v)| (k, v.clone()))
+    let (plans, view) = plan_print_scale(&views).map(|(k, v)| (k, v.clone()))?;
+    let (mut plan_views, mut other_views): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+    for v in views.iter().take(MAX_SCALE_VIEWS) {
+        let (Some(k), list) = (view_scale(v), if names_a_plan(&v.title) { &mut plan_views } else { &mut other_views }) else { continue };
+        if !list.iter().any(|x| (x - k).abs() <= 1e-6 * k) {
+            list.push(k);
+        }
+    }
+    Some(SheetScales { plans, view, plan_views, other_views })
+}
+
+/// The title of a view that is no plan (a detail, a section, an elevation) printing `k` sheet
+/// inches per foot, when only such views print it on a drawing of one sheet: every scale note
+/// giving `k` (within `tolerance`, relative) stands under a view title that says it is no plan
+/// (a word of `sheets.not_plan_view_words`, [`crate::sheet_reader::names_no_plan`]); none
+/// stands alone (in the title block, under no title) or under any other title. A title that names
+/// neither may be the plan's (`PLUMBING 1ST FLOOR - SANITARY`, `LOW VOLTAGE - 3RD FLOOR` title
+/// plans with no PLAN in them). `None` otherwise: the reading may be the plans' (Q6518: a
+/// ceiling plan whose own note didn't read came in at its three details' 3" = 1'-0").
+pub fn only_other_views_print(d: &Drawing, k: f64, tolerance: f64) -> Option<String> {
+    if !(k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let t = texts(d);
+    let (_, notes) = views_and_notes(d, &t);
+    let giving: Vec<&ScaleNote> = notes.iter().filter(|n| n.scale.is_some_and(|s| (s / k - 1.0).abs() <= tolerance)).collect();
+    if giving.iter().any(|n| n.view.as_deref().is_none_or(|v| !crate::sheet_reader::names_no_plan(v))) {
+        return None;
+    }
+    giving.first().and_then(|n| n.view.clone())
 }
 
 /// The sheet and its views.
@@ -820,6 +1225,28 @@ mod tests {
     use cadaddy_doc::{Common, HAlign, Line, Space, Text, VAlign};
     use cadaddy_geom::Vec3;
 
+    /// Q6582: a title block's address or phone line read as the title is no sheet title; a
+    /// sheet title with numbers in it (a level, a building, a sheet count) is one.
+    #[test]
+    fn an_address_or_phone_line_is_no_sheet_title() {
+        for line in
+            ["1234 Sample Avenue, Suite 200", "88 N. Example Rd.", "(555) 555-0100", "TEL 555.555.0199  FAX 555.555.0198", "4500 W Made Up Blvd"]
+        {
+            assert!(is_address_line(line), "{line}");
+        }
+        for title in [
+            "FLOOR PLAN",
+            "2ND FLOOR PLAN",
+            "LEVEL 3 POWER PLAN",
+            "BUILDING 2 - ROOF PLAN",
+            "ROOF TRUSS FRAMING PLAN",
+            "100 SERIES DETAILS",
+            "1/4\" = 1'-0\"",
+        ] {
+            assert!(!is_address_line(title), "{title}");
+        }
+    }
+
     fn view(title: &str, scale: Option<&str>, area: f64) -> ViewTitle {
         ViewTitle {
             number: None,
@@ -831,9 +1258,9 @@ mod tests {
         }
     }
 
-    /// Q6396: a sheet's plans print the scale most of its plan views do (a detail's or an
-    /// elevation's note is none of theirs, nor a key plan's), the bigger between scales printed as
-    /// often.
+    /// Q6396: a sheet's plans print the scale of its plan views (a detail's or an elevation's note
+    /// is none of theirs, nor a key plan's) that draw the most of the building (Q6498), the bigger
+    /// between scales that draw as much.
     #[test]
     fn a_sheets_plans_print_the_scale_of_its_plan_views() {
         let roof = [
@@ -844,14 +1271,31 @@ mod tests {
         ];
         let (k, v) = plan_print_scale(&roof).expect("a plan at a scale");
         assert_eq!((k, v.title.as_str()), (0.125, "ROOF PLAN"));
-        // Two enlarged plans at 1/2" over one at 1/4", whatever their sizes.
+        // Q6498: a floor's plan at 1/4" with two enlarged plans at 1/2" beside it prints 1/4", the
+        // scale of the plan that draws the floor, even where the two take more of the sheet.
         let enlarged = [
             view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 50.0),
             view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 60.0),
             view("PARTIAL FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0),
             view("SECTION", Some("3/4\" = 1'-0\""), 80.0),
         ];
-        assert_eq!(plan_print_scale(&enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.5, "ENLARGED PLAN - ROOM B".to_string())));
+        assert_eq!(plan_print_scale(&enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.25, "PARTIAL FLOOR PLAN".to_string())));
+        let big_enlarged = [
+            view("POWER PLAN", Some("1/4\" = 1'-0\""), 400.0),
+            view("ENLARGED KITCHEN PLAN", Some("1/2\" = 1'-0\""), 300.0),
+            view("ENLARGED RESTROOM PLAN", Some("1/2\" = 1'-0\""), 250.0),
+        ];
+        assert_eq!(plan_print_scale(&big_enlarged).map(|(k, v)| (k, v.title.clone())), Some((0.25, "POWER PLAN".to_string())));
+        // A sheet of enlarged plans only (each a room) prints theirs; with no view's region found,
+        // the scale more of them print.
+        let rooms = [view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 50.0), view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 60.0)];
+        assert_eq!(plan_print_scale(&rooms).map(|(k, _)| k), Some(0.5));
+        let no_regions = [
+            view("ENLARGED PLAN - ROOM A", Some("1/2\" = 1'-0\""), 0.0),
+            view("ENLARGED PLAN - ROOM B", Some("1/2\" = 1'-0\""), 0.0),
+            view("PARTIAL FLOOR PLAN", Some("1/4\" = 1'-0\""), 0.0),
+        ];
+        assert_eq!(plan_print_scale(&no_regions).map(|(k, _)| k), Some(0.5));
         // As often: the bigger.
         let tie = [view("FLOOR PLAN", Some("1/4\" = 1'-0\""), 500.0), view("ENLARGED PLAN", Some("1/2\" = 1'-0\""), 300.0)];
         assert_eq!(plan_print_scale(&tie).map(|(k, _)| k), Some(0.25));
@@ -872,6 +1316,74 @@ mod tests {
         text(&mut d, "ELEVATION", 10.0, 2.0, 0.25);
         text(&mut d, "1/2\" = 1'-0\"", 10.0, 1.6, 0.12);
         assert_eq!(sheet_plan_print_scale(&d).map(|(k, v)| (k, v.title)), Some((0.125, "ROOF PLAN".to_string())));
+        // What its plan views and its other views print (Q6498: a reading at the elevation's
+        // scale is no plan's; one at the roof plan's is).
+        let sc = sheet_scales(&d).expect("two scales");
+        assert_eq!((sc.plan_views.clone(), sc.other_views.clone()), (vec![0.125], vec![0.5]));
+        assert!(sc.prints(0.5, false, 0.02) && !sc.prints(0.5, true, 0.02) && sc.prints(0.126, true, 0.02));
+        assert!(!sc.prints(f64::NAN, true, 0.02) && !sc.prints(0.0, false, 0.02));
+    }
+
+    /// Q6518: a plan's note read twice (the page's text, and its lettering read only up to the
+    /// gap of its "=") is the plan's scale whichever reading comes first; the details' note
+    /// beside it is theirs.
+    #[test]
+    fn a_plans_note_read_twice_is_its_scale_whichever_reading_comes_first() {
+        for cut_first in [true, false] {
+            let mut d = Drawing::default();
+            text(&mut d, "CEILING PLAN", 0.0, 2.0, 0.25);
+            // the page's text at its letters' height (its title out of its reach), the reading of
+            // its strokes at their em, cut at the "="
+            let (full, cut) = (("SCALE: 1/4\" = 1'-0\"", 0.086), ("SCALE: 1/4\"", 0.12));
+            let (a, b) = if cut_first { (cut, full) } else { (full, cut) };
+            text(&mut d, a.0, 0.0, 1.6, a.1);
+            text(&mut d, b.0, 0.0, 1.6, b.1);
+            for x in [20.0, 30.0] {
+                text(&mut d, "CEILING DETAIL", x, 2.0, 0.25);
+                text(&mut d, "SCALE: 3\" = 1'-0\"", x, 1.6, 0.12);
+            }
+            let sc = sheet_scales(&d).unwrap_or_else(|| panic!("the plan prints its scale (cut reading first: {cut_first})"));
+            assert_eq!((sc.plans, sc.view.title.as_str()), (0.25, "CEILING PLAN"), "cut reading first: {cut_first}");
+            assert_eq!((sc.plan_views.clone(), sc.other_views.clone()), (vec![0.25], vec![3.0]));
+            // the 1/4" is the plan's, 3" only the details'
+            assert_eq!(only_other_views_print(&d, 0.25, 0.02), None);
+            assert_eq!(only_other_views_print(&d, 3.0, 0.02).as_deref(), Some("CEILING DETAIL"));
+        }
+    }
+
+    /// Q6518: a scale only the sheet's details print (each of its notes under a detail's title)
+    /// is theirs; one that also stands alone (the title block's) or under a plan's title is not.
+    #[test]
+    fn a_scale_only_details_print_is_theirs() {
+        let details = |d: &mut Drawing| {
+            for x in [20.0, 30.0, 40.0] {
+                text(d, "CEILING DETAIL", x, 2.0, 0.25);
+                text(d, "SCALE: 3\" = 1'-0\"", x, 1.6, 0.12);
+            }
+        };
+        // the plan's title over no note of its own
+        let mut d = Drawing::default();
+        text(&mut d, "CEILING PLAN", 0.0, 2.0, 0.25);
+        details(&mut d);
+        assert_eq!(only_other_views_print(&d, 3.0, 0.02).as_deref(), Some("CEILING DETAIL"));
+        assert_eq!(only_other_views_print(&d, 0.25, 0.02), None, "nothing prints 1/4\"");
+        assert_eq!(only_other_views_print(&d, f64::NAN, 0.02), None);
+        // the same note in the title block (under no title): the sheet's, not only the details'
+        let mut alone = d.clone();
+        text(&mut alone, "SCALE: 3\" = 1'-0\"", 80.0, 0.5, 0.12);
+        assert_eq!(only_other_views_print(&alone, 3.0, 0.02), None);
+        // a view titled with no word of either (a trade's plan of a floor titled by its trade and
+        // floor): it may be the plan's
+        let mut untold = d.clone();
+        text(&mut untold, "PLUMBING 1ST FLOOR - SANITARY", 60.0, 2.0, 0.25);
+        text(&mut untold, "SCALE: 3\" = 1'-0\"", 60.0, 1.6, 0.12);
+        assert_eq!(only_other_views_print(&untold, 3.0, 0.02), None);
+        // a plan view printing it: the plans'
+        let mut plan = Drawing::default();
+        text(&mut plan, "ENLARGED PLAN", 0.0, 2.0, 0.25);
+        text(&mut plan, "SCALE: 3\" = 1'-0\"", 0.0, 1.6, 0.12);
+        details(&mut plan);
+        assert_eq!(only_other_views_print(&plan, 3.0, 0.02), None);
     }
 
     #[test]
@@ -1069,6 +1581,70 @@ mod tests {
         assert!(r2[0] >= 850.0 && r2[2] <= 1110.0 && r2[3] >= 800.0 && r2[1] >= 550.0, "{r2:?}");
     }
 
+    /// A made-up 42x30 sheet's border (spans the sheet: not a view).
+    fn bordered() -> Drawing {
+        let mut d = Drawing::default();
+        line(&mut d, (0.0, 0.0), (2016.0, 0.0));
+        line(&mut d, (2016.0, 0.0), (2016.0, 1440.0));
+        line(&mut d, (2016.0, 1440.0), (0.0, 1440.0));
+        line(&mut d, (0.0, 1440.0), (0.0, 0.0));
+        d
+    }
+
+    /// A view titled on a title bar: its number bubble and title stand on a long rule (here a
+    /// thin filled strip), the scale note under the rule at its far end beside a graphic scale.
+    fn bar_view(d: &mut Drawing, x: f64, y: f64, number: &str, title: &str, scale: &str) {
+        plan(d, x, y + 40.0, 360.0, 240.0);
+        add(
+            d,
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: [(x, y), (x + 300.0, y), (x + 300.0, y + 1.2), (x, y + 1.2)]
+                    .iter()
+                    .map(|&(a, b)| cadaddy_geom::PolyVertex { p: Vec2::new(a, b), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            }),
+        );
+        text(d, number, x + 12.0, y + 3.5, 6.5);
+        text(d, title, x + 30.0, y + 5.0, 6.5);
+        text(d, scale, x + 230.0, y - 10.0, 4.9);
+        for (i, mark) in ["0'", "2'", "4'"].iter().enumerate() {
+            text(d, mark, x + 310.0 + 24.0 * i as f64, y - 13.0, 4.5);
+        }
+    }
+
+    #[test]
+    fn a_title_bar_titles_its_view_with_the_scale_at_its_far_end() {
+        let mut d = bordered();
+        bar_view(&mut d, 100.0, 60.0, "1", "FLOOR PLAN", "SCALE: 1/4\" = 1'-0\"");
+        bar_view(&mut d, 700.0, 60.0, "2", "INTERIOR WALL TYPES", "NO T TO SCALE");
+        let v = view_titles(&d, &texts(&d));
+        let plan = v.iter().find(|x| x.title == "FLOOR PLAN").unwrap_or_else(|| panic!("the floor plan's title: {v:?}"));
+        assert_eq!((plan.number.as_deref(), plan.scale_text.as_deref()), (Some("1"), Some("1/4\" = 1'-0\"")));
+        let r = plan.region.expect("its block");
+        assert!(r[0] <= 100.0 && r[2] >= 460.0 && r[2] < 700.0, "{r:?}");
+        let types = v.iter().find(|x| x.title == "INTERIOR WALL TYPES").expect("the detail's title");
+        assert!(types.not_to_scale && types.region.is_some_and(|r| r[0] >= 690.0), "{types:?}");
+        assert_eq!(v.len(), 2, "{v:?}");
+    }
+
+    #[test]
+    fn a_note_beside_a_rule_is_no_title_bar() {
+        // A scale note under a short rule (a dimension's tick, a table's rule), or under no rule:
+        // no title.
+        let mut d = bordered();
+        plan(&mut d, 100.0, 100.0, 360.0, 240.0);
+        line(&mut d, (90.0, 60.0), (120.0, 60.0));
+        text(&mut d, "GENERAL NOTES APPLY", 125.0, 65.0, 6.5);
+        text(&mut d, "SCALE: 1/4\" = 1'-0\"", 100.0, 50.0, 4.9);
+        text(&mut d, "DOOR NOTES", 400.0, 30.0, 6.5);
+        text(&mut d, "SCALE: 1/8\" = 1'-0\"", 560.0, 20.0, 4.9);
+        assert!(view_titles(&d, &texts(&d)).is_empty());
+    }
+
     #[test]
     fn census_counts_type_tags_and_untyped_circuits() {
         let d = sheet();
@@ -1217,5 +1793,54 @@ mod tests {
         let f = read_sheet_facts(&d);
         let _ = tag_census(&texts(&d), [f64::NEG_INFINITY, f64::NAN, 0.0, 1.0]);
         assert!(f.views.len() <= 2);
+    }
+
+    /// Q6361: a plan's walls are pairs of parallel faces a wall's thickness apart with rooms on
+    /// both sides; a legend table's rules are spaced evenly (none is a wall), its lettering is
+    /// notes and headings.
+    #[test]
+    fn page_content_tells_walls_from_table_rules() {
+        // A 36" x 24" sheet in sheet inches: rooms 4" wide, walls 0.06" thick.
+        let mut plan = Drawing::default();
+        line(&mut plan, (0.0, 0.0), (36.0, 24.0));
+        for k in 0..6 {
+            let x = 4.0 + 4.0 * f64::from(k);
+            line(&mut plan, (x, 4.0), (x, 12.0));
+            line(&mut plan, (x + 0.06, 4.0), (x + 0.06, 12.0));
+        }
+        text(&mut plan, "FIRST FLOOR PLAN", 4.0, 2.0, 0.2);
+        let c = page_content(&plan, &texts(&plan), &[view("FIRST FLOOR PLAN", Some("1/8\" = 1'-0\""), 0.0)]);
+        assert_eq!(c.wall_faces, 6, "{c:?}");
+        assert!((c.wall_length - 6.0 * 8.0 / 36.0).abs() < 0.05, "{c:?}");
+        assert_eq!(c.plan_views, 1);
+        // A legend: 20 rows ruled every 0.3", a symbol column, headings and notes.
+        let mut legend = Drawing::default();
+        line(&mut legend, (0.0, 0.0), (36.0, 24.0));
+        for k in 0..=20 {
+            let y = 20.0 - 0.3 * f64::from(k);
+            line(&mut legend, (1.0, y), (6.0, y));
+        }
+        for x in [1.0, 1.8, 6.0] {
+            line(&mut legend, (x, 14.0), (x, 20.0));
+        }
+        text(&mut legend, "ELECTRICAL SYMBOL LEGEND", 1.0, 20.4, 0.2);
+        text(&mut legend, "GENERAL NOTES", 8.0, 20.4, 0.2);
+        for k in 0..8 {
+            text(&mut legend, "1. COORDINATE THE DEVICE LOCATIONS WITH THE FURNITURE LAYOUT.", 8.0, 20.0 - 0.3 * f64::from(k), 0.1);
+        }
+        let c = page_content(&legend, &texts(&legend), &[]);
+        assert_eq!(c.wall_faces, 0, "evenly spaced rules are no walls: {c:?}");
+        assert_eq!((c.headings, c.sentences, c.plan_views), (2, 8, 0), "{c:?}");
+        // Its headings and notes are lines of words; a plan's tags and marks are not.
+        assert_eq!(c.word_lines, 9, "{c:?}");
+        let mut tags = Drawing::default();
+        for (k, t) in ["S3", "A-1,3", "12x8", "200 CFM", "SD-1", "EF-2 ABOVE", "12'-0\""].iter().enumerate() {
+            text(&mut tags, t, 1.0, f64::from(u8::try_from(k).unwrap_or(0)), 0.1);
+        }
+        text(&mut tags, "SUPPLY AIR DIFFUSER", 1.0, 9.0, 0.1);
+        let c = page_content(&tags, &texts(&tags), &[]);
+        assert_eq!((c.texts, c.word_lines), (8, 1), "{c:?}");
+        // A key plan's title is no plan view.
+        assert_eq!(page_content(&legend, &texts(&legend), &[view("KEY PLAN", None, 0.0)]).plan_views, 0);
     }
 }

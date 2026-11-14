@@ -1,0 +1,140 @@
+{
+  "diagram_titles": ["ONE-LINE DIAGRAM", "ONE LINE DIAGRAM", "ONELINE DIAGRAM", "SINGLE-LINE DIAGRAM", "SINGLE LINE DIAGRAM", "POWER RISER DIAGRAM", "ELECTRICAL RISER DIAGRAM", "RISER DIAGRAM", "POWER ONE-LINE", "ELECTRICAL ONE-LINE"],
+  "diagram_source": "a sheet titled as a one-line (single-line or power riser) diagram: the equipment it draws is the service and distribution gear",
+  "label_max_chars": 60,
+  "label_skip_prefixes": ["TO ", "FROM ", "SEE ", "PROVIDE ", "ALL ", "EACH ", "CONTRACTOR", "NOTE", "VERIFY ", "COORDINATE ", "REFER "],
+  "label_reach_h": 2.6,
+  "label_width_h": 14.0,
+  "incoming_reach_h": 10.0,
+  "incoming_side_h": 3.0,
+  "incoming_left_h": 8.0,
+  "source_reach_h": 40.0,
+  "source_side_h": 8.0,
+  "unsized_tags": ["XX", "XXX", "X", "TBD", "?", "N/A"],
+  "unsized_source": "a feeder tagged unsized (XX, TBD) or with a feeder schedule row giving no conductors: the engineer still has to size it",
+  "egc_table": [[15.0, "14"], [20.0, "12"], [60.0, "10"], [100.0, "8"], [200.0, "6"], [300.0, "4"], [400.0, "3"], [500.0, "2"], [600.0, "1"], [800.0, "1/0"], [1000.0, "2/0"], [1200.0, "3/0"]],
+  "code_conduit": "EMT",
+  "code_conduit_min_in": 0.5,
+  "code_size_source": "inferred (code): the feeder the one-line leaves unsized is built the way the field sizes it, for the rating of the gear it feeds: the smallest copper whose 75 C ampacity carries it (NEC 215.2(A), 240.4, Table 310.16), its equipment ground by NEC Table 250.122 (never larger than the phase conductors), a neutral with the phases, and the raceway by NEC Chapter 9 fill; the engineer's size replaces it",
+  "gap_in": 6.0,
+  "layout_source": "proposed: beside the gear it feeds, in the one-line's order (the plans don't locate it); trade practice sets service gear side by side on one wall",
+  "kinds": [
+    {
+      "kind": "meter_socket", "title": "Meter socket", "tag_prefix": "MTR",
+      "words": ["METER SOCKET", "METER BASE", "METER CENTER", "METER STACK", "METER PACK", "MULTI-METER", "UTILITY METER", "METER"],
+      "not_words": ["GAS METER", "WATER METER", "METERING TRANSFORMER", "SUBMETER", "SUB-METER"],
+      "sizes": [[200.0, 15.0, 11.0, 4.5], [400.0, 30.0, 14.0, 6.0], [100000.0, 36.0, 30.0, 10.0]],
+      "mount": "wall", "center_in": 60.0,
+      "size_source": "trade practice: a typical meter socket up to that rating (height x width x depth in, ringless/ring type), the utility's approved socket governs; mounted at 5 ft to its center (common utility service rules)"
+    },
+    {
+      "kind": "ct_cabinet", "title": "CT cabinet", "tag_prefix": "CTC",
+      "words": ["CT CABINET", "CT ENCLOSURE", "CT CAN", "CURRENT TRANSFORMER CABINET", "CURRENT TRANSFORMER ENCLOSURE", "INSTRUMENT TRANSFORMER CABINET"],
+      "not_words": [],
+      "sizes": [[800.0, 36.0, 36.0, 11.0], [100000.0, 48.0, 48.0, 13.0]],
+      "mount": "wall", "top_in": 78.0,
+      "size_source": "trade practice: a typical utility CT cabinet up to that rating (height x width x depth in), to the serving utility's standard"
+    },
+    {
+      "kind": "disconnect", "title": "Disconnect switch", "tag_prefix": "DISC",
+      "words": ["SERVICE DISCONNECT", "DISCONNECT SWITCH", "SAFETY SWITCH", "FUSED SWITCH", "NON-FUSED SWITCH", "DISCONNECT", "DISC SW", "DISC. SW", "FUSED DISC", "NF DISC"],
+      "not_words": ["DISCONNECTED", "DISCONNECTING MEANS FOR", "DISCONNECT ALL"],
+      "sizes": [[30.0, 10.0, 7.0, 5.0], [60.0, 14.0, 9.0, 6.0], [100.0, 18.0, 11.0, 7.0], [200.0, 28.0, 17.0, 8.0], [400.0, 48.0, 25.0, 13.0], [600.0, 54.0, 31.0, 13.0], [800.0, 66.0, 36.0, 14.0], [1200.0, 72.0, 40.0, 15.0], [100000.0, 90.0, 40.0, 20.0]],
+      "mount": "wall", "top_in": 78.0,
+      "size_source": "trade practice: a typical heavy-duty safety switch enclosure up to that rating (height x width x depth in, NEMA 1/3R); its submittal replaces it"
+    },
+    {
+      "kind": "enclosed_breaker", "title": "Enclosed circuit breaker", "tag_prefix": "ECB",
+      "words": ["ENCLOSED CIRCUIT BREAKER", "ENCLOSED BREAKER", "ENCLOSED CB"],
+      "not_words": [],
+      "sizes": [[100.0, 16.0, 10.0, 6.0], [250.0, 30.0, 14.0, 7.0], [600.0, 48.0, 24.0, 10.0], [100000.0, 60.0, 30.0, 12.0]],
+      "mount": "wall", "top_in": 78.0,
+      "size_source": "trade practice: a typical enclosed molded-case breaker up to that frame (height x width x depth in); its submittal replaces it"
+    },
+    {
+      "kind": "gutter", "title": "Wireway (gutter)", "tag_prefix": "GUT",
+      "words": ["AUXILIARY GUTTER", "WIREWAY", "WIRE WAY", "WIRE TROUGH", "GUTTER"],
+      "not_words": ["ROOF GUTTER", "GUTTERS AND DOWNSPOUTS"],
+      "sizes": [[400.0, 8.0, 48.0, 8.0], [1200.0, 12.0, 60.0, 12.0], [100000.0, 12.0, 72.0, 12.0]],
+      "mount": "wall", "top_in": 84.0,
+      "size_source": "trade practice: a typical service wireway up to that rating (height x length x depth in, the length along the wall spanning the gear it joins); a size printed on the one-line governs"
+    },
+    {
+      "kind": "switchboard", "title": "Switchboard", "tag_prefix": "SWBD",
+      "words": ["MAIN SWITCHBOARD", "SERVICE ENTRANCE SECTION", "SERVICE ENTRANCE ENCLOSURE", "SERVICE ENCLOSURE", "SWITCHBOARD", "SWITCHGEAR", "DISTRIBUTION SWITCHBOARD"],
+      "not_words": [],
+      "sizes": [[1200.0, 90.0, 36.0, 24.0], [2000.0, 90.0, 40.0, 30.0], [100000.0, 90.0, 48.0, 36.0]],
+      "mount": "floor", "bottom_in": 0.0,
+      "size_source": "trade practice: a typical front-accessible switchboard section up to that rating (height x width x depth in); its submittal replaces it"
+    },
+    {
+      "kind": "transformer", "title": "Transformer", "tag_prefix": "XFMR",
+      "words": ["DRY TYPE TRANSFORMER", "DRY-TYPE TRANSFORMER", "STEP DOWN TRANSFORMER", "TRANSFORMER", "XFMR"],
+      "not_words": ["UTILITY", "POWER COMPANY", "POLE MOUNT", "CURRENT TRANSFORMER", "CT CABINET", "CONTROL TRANSFORMER"],
+      "rating": "kva",
+      "sizes": [[15.0, 22.0, 18.0, 12.0], [45.0, 30.0, 24.0, 20.0], [75.0, 36.0, 30.0, 24.0], [150.0, 45.0, 36.0, 30.0], [100000.0, 60.0, 48.0, 36.0]],
+      "mount": "floor", "bottom_in": 4.0,
+      "size_source": "trade practice: a typical ventilated dry-type transformer up to that kVA (height x width x depth in), on a 4 in pad; its submittal replaces it"
+    },
+    {
+      "kind": "lighting_contactor", "title": "Lighting contactor", "tag_prefix": "LC",
+      "words": ["LIGHTING CONTACTOR", "CONTACTOR"],
+      "not_words": ["CONTACTOR SCHEDULE"],
+      "sizes": [[100000.0, 16.0, 12.0, 6.0]],
+      "mount": "wall", "top_in": 78.0,
+      "size_source": "trade practice: a typical electrically held lighting contactor in a NEMA 1 enclosure (height x width x depth in)"
+    },
+    {
+      "kind": "time_switch", "title": "Time switch", "tag_prefix": "TC",
+      "words": ["ASTRONOMICAL TIME SWITCH", "TIME SWITCH", "TIME CLOCK", "TIMECLOCK", "ASTRONOMICAL TIMER"],
+      "not_words": [],
+      "sizes": [[100000.0, 10.0, 8.0, 4.0]],
+      "mount": "wall", "top_in": 78.0,
+      "size_source": "trade practice: a typical 7-day astronomical time switch enclosure (height x width x depth in)"
+    },
+    {
+      "kind": "photocell", "title": "Photocell", "tag_prefix": "PC",
+      "words": ["PHOTOCELL", "PHOTO CELL", "PHOTO-CELL", "PHOTOELECTRIC CONTROL"],
+      "not_words": [],
+      "sizes": [[100000.0, 4.0, 3.0, 3.0]],
+      "mount": "wall", "top_in": 120.0,
+      "size_source": "trade practice: a typical exterior photocontrol on a weatherproof box, 10 ft up on the outside wall, facing north"
+    }
+  ],
+  "electrode_words": [
+    {"kind": "ground_rod", "words": ["GROUND ROD", "GROUNDING ROD", "DRIVEN ROD", "GND ROD"]},
+    {"kind": "concrete_encased", "words": ["UFER", "CONCRETE ENCASED", "CONCRETE-ENCASED", "FOOTING ELECTRODE"]},
+    {"kind": "water_pipe", "words": ["COLD WATER", "WATER PIPE", "METAL WATER", "WATER SERVICE"]},
+    {"kind": "building_steel", "words": ["BUILDING STEEL", "STRUCTURAL STEEL", "BLDG STEEL"]},
+    {"kind": "ground_ring", "words": ["GROUND RING", "GROUNDING RING"]}
+  ],
+  "electrode_label_words": ["GROUNDING ELECTRODE", "GROUND ELECTRODE", "GROUND ROD", "GROUNDING ROD", "UFER", "CONCRETE ENCASED ELECTRODE", "CONCRETE-ENCASED ELECTRODE", "COLD WATER", "WATER PIPE", "BUILDING STEEL", "GROUND RING", "GND ROD", "WATER SERVICE"],
+  "electrode_not_words": ["ELECTRODE CONDUCTOR", "GROUNDING CONDUCTOR", "BONDING JUMPER", "EQUIPMENT GROUND"],
+  "electrode_tag_prefix": "GE",
+  "electrode_detail_titles": ["GROUNDING DETAIL", "GROUNDING DIAGRAM", "GROUNDING RISER", "GROUNDING ELECTRODE SYSTEM", "GROUNDING SYSTEM", "SERVICE GROUNDING", "GROUNDING SCHEMATIC"],
+  "electrode_detail_reach_h": 40.0,
+  "rod_length_ft": 8.0,
+  "rod_source": "trade practice: a 5/8 in x 8 ft copper-clad rod (NEC 250.52(A)(5), 250.53(A)(4): 8 ft in contact with the earth)",
+  "ufer_length_ft": 20.0,
+  "ufer_source": "NEC 250.52(A)(3): at least 20 ft of bare copper (or rebar) in a footing in contact with the earth",
+  "gec_table": [[66360.0, "#8"], [105600.0, "#6"], [167800.0, "#4"], [350000.0, "#2"], [600000.0, "1/0"], [1100000.0, "2/0"], [1.0e12, "3/0"]],
+  "gec_rod_max": "#6",
+  "gec_ufer_max": "#4",
+  "gec_source": "NEC Table 250.66: the grounding electrode conductor by the largest service-entrance conductor (copper); a rod's need not be larger than #6, a concrete-encased electrode's than #4 (250.66(A), (B))",
+  "panel_sizes": [
+    {"max_amps": 125.0, "max_circuits": 18, "height_in": 30.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 125.0, "max_circuits": 30, "height_in": 38.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 125.0, "max_circuits": 42, "height_in": 44.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 225.0, "max_circuits": 30, "height_in": 44.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 225.0, "max_circuits": 42, "height_in": 50.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 225.0, "max_circuits": 84, "height_in": 86.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 400.0, "max_circuits": 42, "height_in": 62.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 400.0, "max_circuits": 84, "height_in": 86.0, "width_in": 20.0, "depth_in": 5.75},
+    {"max_amps": 600.0, "max_circuits": 84, "height_in": 72.0, "width_in": 32.0, "depth_in": 9.5},
+    {"max_amps": 800.0, "max_circuits": 84, "height_in": 90.0, "width_in": 36.0, "depth_in": 9.5},
+    {"max_amps": 100000.0, "max_circuits": 10000, "height_in": 90.0, "width_in": 36.0, "depth_in": 24.0}
+  ],
+  "panel_default_amps": 225.0,
+  "panel_switchboard_over_amps": 800.0,
+  "panel_size_source": "inferred (trade practice): a typical panelboard enclosure for its rating and circuits (manufacturers' standard boxes: 20 in wide and 5.75 in deep up to 400 A); no gear submittal gives its box, which replaces this when one does"
+}

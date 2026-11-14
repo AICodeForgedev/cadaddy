@@ -357,3 +357,56 @@ fn cdy_roundtrip_preserves_plan_tags() {
     assert_eq!(kind, "wall");
     assert_eq!(level, "Level 1");
 }
+
+/// Q6484: a device whose kind the shared symbol library draws is shown with the library's symbol
+/// in the plan views, turned as its print drew it, whatever the print's own drawing was; a device
+/// with no library symbol keeps the plain mark.
+#[test]
+fn plan_views_draw_a_device_with_its_library_symbol() {
+    use cadaddy_engine::doc::props::{self, Prop, Props, Source};
+    let _g = SERIAL.lock().unwrap();
+    let mut s = new_session();
+    {
+        let d = s.doc_mut().unwrap();
+        let spec_json = r#"{"units_per_foot":12,"levels":[{"name":"Level 1","elevation_ft":0,"height_ft":10,"ceiling_ft":9,"base":[0,0]}],"layers":[],"wall_types":[],"rooms":[],"families":[],"materials":{},"devices":{},"stairs":[],"exterior":{},"rcp":{},"mep":{}}"#;
+        d.building_spec = Some(spec_json.into()).into();
+        for (x, shown) in [(24.0, true), (96.0, false)] {
+            let h = new_handle(d);
+            let v = |dx: f64, dy: f64, z: f64| Vec3::new(x + dx, 12.0 + dy, z);
+            let vertices = vec![
+                v(0.0, 0.0, 18.0),
+                v(4.0, 0.0, 18.0),
+                v(4.0, 2.0, 18.0),
+                v(0.0, 2.0, 18.0),
+                v(0.0, 0.0, 22.0),
+                v(4.0, 0.0, 22.0),
+                v(4.0, 2.0, 22.0),
+                v(0.0, 2.0, 22.0),
+            ];
+            let f = |a: [u32; 4]| MeshFace { v: a.to_vec(), hidden: 0 };
+            let faces = vec![f([0, 3, 2, 1]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])];
+            let mut e = Entity::new(h, EntityKind::Mesh(Mesh { vertices, faces, ..Default::default() }));
+            e.common.layer = "3D-Devices".into();
+            let mut store = Props::default();
+            store.set("type", Prop::new(json!("Duplex receptacle"), Source::print("Sample Sheet E-101", None)));
+            if shown {
+                store.set("symbol_shown_as", Prop::new(json!("duplex receptacle"), Source::print("Sample Sheet E-101", None)));
+                store.set("symbol_turn", Prop::new(json!("1"), Source::print("Sample Sheet E-101", None)));
+            }
+            e.common.xdata = props::write(&wallgen_xdata("device", "Level 1", Handle(0)), &store).into();
+            d.ensure_layer("3D-Devices");
+            d.model.push(e);
+        }
+    }
+    let r = s.execute("plan.views", &json!({ "underlay": false })).expect("plan.views failed");
+    assert_eq!(r["devices"].as_u64(), Some(2), "{r}");
+    let d = s.doc().unwrap();
+    let marks: Vec<&Entity> = d.model.iter().filter(|e| planview::plan_of(e).is_some_and(|(k, _, _)| k == "device")).map(|e| e.as_ref()).collect();
+    // The library's duplex: its circle (3" at a 1/4" plan's size) and two bars, turned a
+    // quarter (the bars upright); the other device a plain circle.
+    let circles: Vec<f64> = marks.iter().filter_map(|e| if let EntityKind::Circle(c) = &e.kind { Some(c.radius) } else { None }).collect();
+    let bars: Vec<&Line> = marks.iter().filter_map(|e| if let EntityKind::Line(l) = &e.kind { Some(l) } else { None }).collect();
+    assert_eq!(circles.len(), 2, "{marks:?}");
+    assert_eq!(bars.len(), 2, "{marks:?}");
+    assert!(bars.iter().all(|l| (l.a.x - l.b.x).abs() < 1e-6 && (l.a.y - l.b.y).abs() > 8.0), "{bars:?}");
+}

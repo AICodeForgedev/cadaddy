@@ -694,6 +694,123 @@ fn refs(ids: &[usize]) -> String {
     format!("({})", v.join(","))
 }
 
+/// The build part of a structural grid line (the engine's `grids::GRID_PART`).
+const GRID_PART: &str = "structural-grid";
+/// Most grid lines written (hostile drawings).
+const MAX_GRID_AXES: usize = 10_000;
+
+/// A storey as written: its instance, its placement, its elevation, its name's hash and the
+/// plan point at the building origin.
+type Storey = (usize, usize, f64, u64, cadaddy_geom::Vec2);
+
+/// The structural grid lines model.build made (Q6407) as `IfcGrid`s: one per storey and building
+/// they stand on, placed at the lines' height in the storey; its U axes the lines along the first
+/// line's direction, its V axes the lines across them (a grid of one direction only has no V
+/// axes, which IFC requires: it is left out). Each axis an `IfcGridAxis` tagged with its label
+/// on a 2D polyline in the grid's plane; the lines are its FootPrint too, for viewers that draw
+/// that. Each grid goes in its storey's contents.
+#[allow(clippy::too_many_arguments)]
+fn write_grids(
+    o: &mut Out,
+    d: &Drawing,
+    levels: &[(String, f64)],
+    storeys: &[Storey],
+    contained: &mut [Vec<usize>],
+    k: f64,
+    context: usize,
+    zdir: usize,
+    xdir: usize,
+    id: &dyn Fn(u64, u64) -> String,
+) {
+    type Axis = (String, cadaddy_geom::Vec2, cadaddy_geom::Vec2, f64);
+    // (storey, building) → its axes: label, ends in the storey's plan coordinates, height.
+    let mut grids: Vec<((usize, String), Vec<Axis>)> = Vec::new();
+    let mut n = 0usize;
+    for e in d.model.iter() {
+        let EntityKind::Line(l) = &e.kind else { continue };
+        let Some(t) = tag_strings(e, "CADADDY_WALLGEN") else { continue };
+        if t.first().map(String::as_str) != Some(GRID_PART) {
+            continue;
+        }
+        n += 1;
+        if n > MAX_GRID_AXES {
+            break;
+        }
+        let z = l.a.z.min(l.b.z);
+        let si = t
+            .get(1)
+            .and_then(|lv| levels.iter().position(|(name, _)| name == lv))
+            .unwrap_or_else(|| levels.iter().rposition(|(_, sz)| *sz <= z + 1e-6).unwrap_or(0));
+        let Some(&(_, _, sz, _, base)) = storeys.get(si) else { continue };
+        let base = base + stacked_by(e);
+        let label = t.iter().skip(3).find_map(|v| v.strip_prefix("grid:")).unwrap_or("").to_string();
+        let building = cadaddy_doc::props::read(&e.common.xdata).get("building").map(|p| p.text()).unwrap_or_default();
+        let axis = (label, l.a.xy() - base, l.b.xy() - base, z - sz);
+        match grids.iter_mut().find(|g| g.0.0 == si && g.0.1 == building) {
+            Some(g) => g.1.push(axis),
+            None => grids.push(((si, building), vec![axis])),
+        }
+    }
+    if grids.is_empty() {
+        return;
+    }
+    let mut footprint: Option<usize> = None;
+    for ((si, building), axes) in grids {
+        let Some(&(_, storey_place, _, _, _)) = storeys.get(si) else { continue };
+        let Some(first) = axes.first() else { continue };
+        let dir = |a: &Axis| {
+            let v = a.2 - a.1;
+            let len = v.len();
+            if len > 1e-12 { v * (1.0 / len) } else { cadaddy_geom::Vec2::new(1.0, 0.0) }
+        };
+        let u0 = dir(first);
+        // Within 10° of the first line: along it.
+        let along = |a: &Axis| u0.cross(dir(a)).abs() <= 0.17;
+        let (u, v): (Vec<&Axis>, Vec<&Axis>) = axes.iter().partition(|a| along(a));
+        if u.is_empty() || v.is_empty() {
+            continue;
+        }
+        let square = v.iter().all(|a| u0.dot(dir(a)).abs() <= 0.17);
+        let fp = *footprint
+            .get_or_insert_with(|| o.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('FootPrint','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)")));
+        let mut polys = Vec::new();
+        let mut write_axes = |o: &mut Out, list: &[&Axis]| -> Vec<usize> {
+            list.iter()
+                .map(|(label, a, b, _)| {
+                    let p = o.add(format!("IFCCARTESIANPOINT(({},{}))", real(a.x * k), real(a.y * k)));
+                    let q = o.add(format!("IFCCARTESIANPOINT(({},{}))", real(b.x * k), real(b.y * k)));
+                    let poly = o.add(format!("IFCPOLYLINE((#{p},#{q}))"));
+                    polys.push(poly);
+                    let tag = if label.trim().is_empty() { "$".to_string() } else { step_str(label.trim()) };
+                    o.add(format!("IFCGRIDAXIS({tag},#{poly},.T.)"))
+                })
+                .collect()
+        };
+        let us = write_axes(o, &u);
+        let vs = write_axes(o, &v);
+        let set = o.add(format!("IFCGEOMETRICCURVESET({})", refs(&polys)));
+        let shape = o.add(format!("IFCSHAPEREPRESENTATION(#{fp},'FootPrint','GeometricCurveSet',(#{set}))"));
+        let pds = o.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+        let dz = first.3;
+        let origin = o.add(format!("IFCCARTESIANPOINT((0.,0.,{}))", real(dz * k)));
+        let axis = o.add(format!("IFCAXIS2PLACEMENT3D(#{origin},#{zdir},#{xdir})"));
+        let place = o.add(format!("IFCLOCALPLACEMENT(#{storey_place},#{axis})"));
+        let level = levels.get(si).map_or("", |l| l.0.as_str());
+        let name = if building.is_empty() { "Grid".to_string() } else { format!("Grid {building}") };
+        let grid = o.add(format!(
+            "IFCGRID('{}',$,{},$,$,#{place},#{pds},{},{},$,.{}.)",
+            id(hash(&format!("grid:{level}:{building}")), 32),
+            step_str(&name),
+            refs(&us),
+            refs(&vs),
+            if square { "RECTANGULAR" } else { "IRREGULAR" }
+        ));
+        if let Some(list) = contained.get_mut(si) {
+            list.push(grid);
+        }
+    }
+}
+
 /// A wall, door or window as written: its class, product and placement instances, storey, and
 /// its extents in the storey's coordinates.
 struct Placed {
@@ -1208,6 +1325,9 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
         let Some(e) = d.entity(cadaddy_doc::Handle(handle)) else { continue };
         element_props(&mut o, product, handle, class, &cadaddy_doc::props::read(&e.common.xdata), &|n, salt| id(n, salt));
     }
+    // The structural grid (Q6407): model.build's grid lines, one IfcGrid per storey and building
+    // they are on, its axes the lines across (U) and along (V), each tagged with its label.
+    write_grids(&mut o, d, &levels, &storeys, &mut contained, k, context, zdir, xdir, &|n, salt| id(n, salt));
     for ((st, _, _, h, _), (inside, rooms)) in storeys.iter().zip(contained.iter().zip(&spaces)) {
         if !inside.is_empty() {
             o.add(format!("IFCRELCONTAINEDINSPATIALSTRUCTURE('{}',$,$,$,{},#{st})", id(*h, 3), refs(inside)));
@@ -2491,8 +2611,8 @@ impl Reader<'_> {
     }
 }
 
-/// Spatial structure and openings: not objects of their own.
-const NOT_OBJECTS: [&str; 6] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCOPENINGELEMENT", "IFCANNOTATION"];
+/// Spatial structure, openings and grids: not objects of their own.
+const NOT_OBJECTS: [&str; 7] = ["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCOPENINGELEMENT", "IFCANNOTATION", "IFCGRID"];
 
 /// `IFCWALLSTANDARDCASE` → `WallStandardCase`, as the IFC schema writes it.
 fn class_name(upper: &str) -> String {

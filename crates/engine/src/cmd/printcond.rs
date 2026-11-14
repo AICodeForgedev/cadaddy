@@ -27,7 +27,7 @@
 //! runs carry (`<tag id>#<n>`), so the takeoff counts conduit, wire, boxes and fittings by level
 //! and circuit ([`super::bom`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_mepfix::conduit_reader::{DEFAULT_SIZE_IN, parse_boc, parse_conduit_tag};
@@ -499,6 +499,7 @@ pub(crate) fn run(system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>,
         made: Default::default(),
         basis: String::new(),
         corrections: Vec::new(),
+        storey_points: Default::default(),
     }
 }
 
@@ -515,14 +516,19 @@ fn system(name: &str, bottom: f64) -> MepSystem {
     }
 }
 
-/// Whether `dv` was read on `sh`.
+/// Whether `dv` was read on `sh`. One view of a several-view sheet (each level's plan on one
+/// sheet, read as a sheet of its own that keeps the sheet's number) holds only what its frame
+/// holds (Q6625): a device of the view's level (the level read where it stands), else one inside
+/// the view; never the other plan's.
 fn on_sheet(dv: &ReadDevice, sh: &SheetRef) -> bool {
-    if dv.sheet.is_empty() {
-        let [x0, y0, x1, y1] = sh.rect;
-        dv.at[0] >= x0 && dv.at[0] <= x1 && dv.at[1] >= y0 && dv.at[1] <= y1
-    } else {
-        dv.sheet.eq_ignore_ascii_case(&sh.number)
+    let inside = |[x0, y0, x1, y1]: [f64; 4]| dv.at[0] >= x0 && dv.at[0] <= x1 && dv.at[1] >= y0 && dv.at[1] <= y1;
+    let sheet = if dv.sheet.is_empty() { inside(sh.rect) } else { dv.sheet.eq_ignore_ascii_case(&sh.number) };
+    let Some(view) = sh.view.filter(|_| sheet) else { return sheet };
+    let level = dv.level.trim();
+    if level.is_empty() {
+        return inside(view);
     }
+    level.eq_ignore_ascii_case(sh.level.trim()) || sh.levels.iter().any(|l| l.trim().eq_ignore_ascii_case(level))
 }
 
 /// Read every electrical plan among `sheets` of `d` (`upf` drawing units per foot): drawn
@@ -728,23 +734,49 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, devices: &
 }
 
 /// Put the estimated routes at their level's ceiling (just above it), now the spec has its
-/// levels: the legs at that height, each drop up to it. Drawn conduit keeps its own.
+/// levels: the legs at that height, each drop up to it. A roof has no ceiling (Q6489): its legs
+/// lie on supports on the deck (the routing rules' roof band), never a ceiling's height over it.
+/// Drawn conduit keeps its own.
 pub(crate) fn seat_heights(sp: &mut BuildingSpec) {
+    let on_deck = super::conduitroute::rules().route.roof_band_ft().0;
     let ceilings: BTreeMap<String, f64> = sp
         .levels
         .iter()
-        .filter(|l| l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0 && l.ceiling_ft + ABOVE_CEILING_FT < l.height_ft.max(l.ceiling_ft + 1.0))
-        .map(|l| (l.name.to_ascii_lowercase(), l.ceiling_ft + ABOVE_CEILING_FT))
+        .filter_map(|l| {
+            if super::wallgen::roof_level(&sp.levels, &l.name) {
+                return Some((l.name.to_ascii_lowercase(), on_deck));
+            }
+            (l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0 && l.ceiling_ft + ABOVE_CEILING_FT < l.height_ft.max(l.ceiling_ft + 1.0))
+                .then(|| (l.name.to_ascii_lowercase(), l.ceiling_ft + ABOVE_CEILING_FT))
+        })
         .collect();
-    for r in sp.mep.runs.iter_mut().filter(|r| r.system == CIRCUIT_SYSTEM) {
+    // A drop runs between the device and the legs' height either way: down from a ceiling to a
+    // wall device, up from a roof deck's supports to a device mounted over it. Where the two
+    // meet there is no vertical piece (a riser no taller than this is none).
+    const NO_RISE_FT: f64 = 0.01;
+    let mut flat: BTreeSet<usize> = BTreeSet::new();
+    for (i, r) in sp.mep.runs.iter_mut().enumerate().filter(|(_, r)| r.system == CIRCUIT_SYSTEM) {
         let Some(&h) = ceilings.get(&r.level.to_ascii_lowercase()) else { continue };
         match r.top_ft {
             Some(_) => {
                 let mount = r.bottoms_ft.first().copied().unwrap_or(0.0);
-                r.top_ft = Some(h.max(mount));
+                let (low, high) = if mount <= h { (mount, h) } else { (h, mount) };
+                if high - low <= NO_RISE_FT {
+                    flat.insert(i);
+                }
+                r.bottoms_ft = vec![low];
+                r.top_ft = Some(high);
             }
             None => r.bottoms_ft.iter_mut().for_each(|b| *b = h),
         }
+    }
+    if !flat.is_empty() {
+        let mut i = 0usize;
+        sp.mep.runs.retain(|_| {
+            let keep = !flat.contains(&i);
+            i += 1;
+            keep
+        });
     }
 }
 
@@ -1249,6 +1281,39 @@ mod tests {
     }
 
     #[test]
+    fn a_two_plan_sheet_books_each_circuit_label_to_the_view_holding_it() {
+        // Q6625: one sheet printing two levels' plans, read as one sheet per view (both keep the
+        // sheet's number). A label printed only in one view is that view's level's circuit.
+        let mut s = Session::new();
+        text(&mut s, [50.0, 50.0], "LEVEL 1 PLAN", 6.0);
+        text(&mut s, [50.0, 550.0], "LEVEL 2 PLAN", 6.0);
+        line(&mut s, [0.0, 450.0], [1800.0, 450.0]);
+        line(&mut s, [0.0, 950.0], [1800.0, 950.0]);
+        let view = |level: &str, y0: f64, y1: f64| SheetRef { view: Some([0.0, y0, 2000.0, y1]), ..sheet("EX-2", level, 0.0) };
+        let on = |level: &str, x: f64, y: f64, circuit: &str| ReadDevice { level: level.into(), ..dev("A", x, y, circuit, "EX-2") };
+        let devices = vec![
+            on("2", 300.0, 700.0, "Q-4"),
+            on("2", 600.0, 700.0, "Q-4"),
+            on("1", 300.0, 200.0, "Q-1"),
+            // No level read for it: the view whose frame holds it says.
+            on("", 900.0, 750.0, "Q-6"),
+        ];
+        let d = s.doc().expect("doc").clone();
+        let r = read_sheets(&d, &[view("1", 0.0, 500.0), view("2", 500.0, 1000.0)], 12.0, &devices);
+        let mut booked: Vec<(String, String, String)> =
+            r.circuits.iter().map(|t| (t.fields["circuit"].value.clone(), t.level.clone(), t.fields["devices"].value.clone())).collect();
+        booked.sort();
+        let want = |c: &str, l: &str, n: &str| (c.to_string(), l.to_string(), n.to_string());
+        assert_eq!(
+            booked,
+            vec![want("Q-1", "Level 1", "1"), want("Q-4", "Level 2", "2"), want("Q-6", "Level 2", "1")],
+            "{:?} {:?}",
+            r.circuits,
+            r.warnings
+        );
+    }
+
+    #[test]
     fn two_places_printing_one_label_get_no_conduit_between_them() {
         let mut s = Session::new();
         let mut devices = plan(&mut s);
@@ -1353,5 +1418,79 @@ mod tests {
         let leg = sp.mep.runs.iter().find(|x| x.top_ft.is_none()).expect("leg");
         assert_eq!(leg.bottoms_ft, vec![9.25]);
         assert!(sp.mep.runs.iter().filter(|x| x.top_ft.is_some()).all(|x| x.top_ft == Some(9.25) && x.bottoms_ft == vec![4.0]));
+    }
+
+    /// Q6489: a roof has no ceiling: an estimated route on it lies on the deck (the routing rules'
+    /// roof supports), never the default ceiling's height in the air over it.
+    #[test]
+    fn a_roofs_estimated_route_lies_on_the_deck() {
+        let level = |name: &str, elevation_ft: f64, height_ft: f64| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft,
+            height_ft,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![level("Level 1", 0.0, 12.0), level("Roof", 12.0, 4.0)], ..BuildingSpec::default() };
+        let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
+        sp.mep.runs = vec![
+            run(CIRCUIT_SYSTEM, "Roof", "E-9", vec![[0.0, 0.0], [816.0, 0.0]], DEFAULT_SIZE_IN, bottom),
+            run(CIRCUIT_SYSTEM, "Level 1", "E-1", vec![[0.0, 0.0], [120.0, 0.0]], DEFAULT_SIZE_IN, bottom),
+        ];
+        seat_heights(&mut sp);
+        let deck = super::super::conduitroute::rules().route.roof_band_ft();
+        let roof = sp.mep.runs.iter().find(|r| r.level == "Roof").expect("roof leg");
+        assert!(roof.bottoms_ft.iter().all(|b| (deck.0..=deck.1).contains(b) && *b < 2.0), "{:?}", roof.bottoms_ft);
+        let storey = sp.mep.runs.iter().find(|r| r.level == "Level 1").expect("storey leg");
+        assert_eq!(storey.bottoms_ft, vec![8.25], "a storey's stays over its ceiling");
+    }
+
+    /// A roof's legs lie on the deck, under a device mounted over it: its drop is a rise from
+    /// the deck up to the device (bottom under top, a valid riser), never a riser with its top
+    /// at its own bottom that fails the spec check and stops the whole build; where the device
+    /// sits at the legs' own height there is no vertical piece.
+    #[test]
+    fn a_roof_devices_drop_rises_from_the_deck_and_the_spec_stays_valid() {
+        let level = |name: &str, elevation_ft: f64, height_ft: f64| cadaddy_walk3d::Level {
+            name: name.into(),
+            elevation_ft,
+            height_ft,
+            ceiling_ft: 8.0,
+            region: None,
+            base: None,
+            attr: None,
+            sheet: None,
+        };
+        let mut sp = BuildingSpec { levels: vec![level("Level 1", 0.0, 12.0), level("Roof", 12.0, 4.0)], ..BuildingSpec::default() };
+        sp.mep.systems.push(system(CIRCUIT_SYSTEM, 8.25));
+        let bottom = DEFAULT_CEILING_FT + ABOVE_CEILING_FT;
+        let deck = super::super::conduitroute::rules().route.roof_band_ft().0;
+        let drop = |lvl: &str, mount: f64, id: &str| {
+            let mut r = run(CIRCUIT_SYSTEM, lvl, "E-9", vec![[10.0, 10.0]], DEFAULT_SIZE_IN, bottom);
+            r.bottoms_ft = vec![mount];
+            r.top_ft = Some(bottom);
+            r.id = id.into();
+            r
+        };
+        sp.mep.runs = vec![
+            run(CIRCUIT_SYSTEM, "Roof", "E-9", vec![[0.0, 0.0], [816.0, 0.0]], DEFAULT_SIZE_IN, bottom),
+            drop("Roof", 1.5, "roof-high"),
+            drop("Roof", deck, "roof-flush"),
+            drop("Level 1", 1.5, "storey"),
+        ];
+        seat_heights(&mut sp);
+        let get = |id: &str| sp.mep.runs.iter().find(|r| r.id == id);
+        let high = get("roof-high").expect("the roof device's rise is kept");
+        assert_eq!(high.bottoms_ft, vec![deck], "it starts on the deck");
+        assert_eq!(high.top_ft, Some(1.5), "and rises to the device");
+        assert!(get("roof-flush").is_none(), "a device at the legs' height takes no vertical piece");
+        let storey = get("storey").expect("storey drop");
+        assert_eq!((storey.bottoms_ft.clone(), storey.top_ft), (vec![1.5], Some(8.25)), "a storey's drop still hangs from over its ceiling");
+        let bad: Vec<String> =
+            sp.check().into_iter().filter(|i| i.path.starts_with("mep.runs")).map(|i| format!("{}: {}", i.path, i.message)).collect();
+        assert!(bad.is_empty(), "{bad:?}");
     }
 }

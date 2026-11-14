@@ -60,6 +60,9 @@ pub struct GpuNotice {
     pub fault: crate::gpu::GpuFault,
     /// Drawings autosaved because of it (0: nothing unsaved, or autosave is off).
     pub autosaved: usize,
+    /// The device was lost and the window was made again on a new one
+    /// ([`CadApp::restart_graphics`]).
+    pub restarted: bool,
 }
 
 /// The default autosave folder of this run (`<settings folder>/autosave`), set by
@@ -200,7 +203,7 @@ impl CadApp {
             self.gpu_caps.notes.push("after a GPU error, 3D views are drawn by the CPU".into());
             self.canvas.shade.reset_gpu();
             if let Some(w) = self.walk.as_mut() {
-                w.gpu = None;
+                w.reset_gpu();
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -208,7 +211,7 @@ impl CadApp {
         #[cfg(target_arch = "wasm32")]
         let saved = 0;
         let autosaved = self.gpu_notice.as_ref().map_or(0, |n| n.autosaved) + saved;
-        self.gpu_notice = Some(GpuNotice { fault, autosaved });
+        self.gpu_notice = Some(GpuNotice { fault, autosaved, restarted: false });
         ctx.request_repaint();
     }
 
@@ -325,8 +328,10 @@ pub fn gpu_notice(app: &mut CadApp, ctx: &egui::Context) {
         .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 48.0))
         .show(ctx, |ui| {
             ui.set_width(440.0);
-            if n.fault.lost {
-                ui.label("The graphics device stopped working (a driver reset or a GPU that stopped responding). CADaddy can't draw again until it restarts.");
+            if n.restarted {
+                ui.label("The graphics device stopped working (a driver reset, a GPU that stopped responding or ran out of memory). CADaddy made its window again on a new one; your drawings are open as they were.");
+            } else if n.fault.lost {
+                ui.label("The graphics device stopped working (a driver reset, a GPU that stopped responding or ran out of memory). CADaddy can't draw again until it restarts.");
             } else {
                 let times = if n.fault.errors == 1 { String::new() } else { format!(" ({} times)", n.fault.errors) };
                 ui.label(format!("The graphics driver reported an error{times}. CADaddy kept running, but the drawing may not display correctly."));
@@ -337,7 +342,11 @@ pub fn gpu_notice(app: &mut CadApp, ctx: &egui::Context) {
                 1 => ui.label("A recovery copy of the open drawing with unsaved changes was autosaved."),
                 k => ui.label(format!("Recovery copies of {k} drawings with unsaved changes were autosaved.")),
             };
-            ui.label(RichText::new("Save your work and restart CADaddy. Recovery copies are offered at the next start if needed.").strong());
+            if n.restarted {
+                ui.label(RichText::new("Save your work. Recovery copies are offered at the next start if needed.").strong());
+            } else {
+                ui.label(RichText::new("Save your work and restart CADaddy. Recovery copies are offered at the next start if needed.").strong());
+            }
             ui.add_space(4.0);
             ui.collapsing("Details", |ui| {
                 ui.label(RichText::new(&n.fault.message).color(t.text_dim).monospace());

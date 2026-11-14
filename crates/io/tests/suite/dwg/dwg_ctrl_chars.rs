@@ -39,6 +39,7 @@ fn attrib(tag: &str, value: &str) -> cadaddy_doc::Attrib {
 
 fn dimension(t: &str) -> Dimension {
     Dimension {
+        insertion_point: Default::default(),
         kind: DimKind::Linear { rotation: 0.0 },
         defpt: v(5.0, 3.0),
         text_mid: v(5.0, 6.0),
@@ -208,6 +209,90 @@ fn the_battle_files_show_no_caret_codes_after_the_round_trip() {
                 let twice = cadaddy_io::read_dwg(&cadaddy_io::write_dwg(&once, version, w).unwrap(), r).unwrap();
                 assert_eq!(carets(&twice), want, "{f} {ver} {w:?}->{r:?} second generation");
             }
+        }
+    }
+}
+
+/// A DWG written by one codec and read by the other keeps every string: both hold text in the DWG
+/// as its characters (a tab as a tab, a typed `^I` as the caret and the letter), so neither
+/// reads the other's caret codes as text or its typed carets as control characters.
+#[test]
+fn control_characters_survive_a_dwg_written_by_one_codec_and_read_by_the_other() {
+    let d = drawing();
+    let want = strings(&d);
+    for ver in VERSIONS {
+        let version = cadaddy_io::Version::for_acadver(ver).unwrap();
+        let (bytes, _) = cadaddy_io::dwg_write::write(&d, ver).unwrap();
+        check(&format!("native {ver} -> bridge"), &want, &cadaddy_io::read_dwg(&bytes, DwgEngine::Bridge).unwrap());
+        // The bridge's own writing of a typed `^I` in multiline text is ambiguous (see
+        // `bridge_ambiguous`): the label starting "bridge" skips those strings.
+        let bytes = cadaddy_io::write_dwg(&d, version, DwgEngine::Bridge).unwrap();
+        check(&format!("bridge {ver} -> native"), &want, &cadaddy_io::dwg_read::read(&bytes).unwrap().0);
+    }
+}
+
+/// What CADaddy's own codec stores in the DWG: the characters, as an AutoCAD DWG has them (a tab
+/// in MTEXT where its DXF has `^I`), never DXF's caret codes.
+#[test]
+fn the_native_dwg_holds_text_as_its_characters() {
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::MText(mtext("\u{2022}\tFirst item ^I typed"))).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Text(text("10^2 and\ta tab"))).unwrap();
+    for ver in VERSIONS {
+        let (bytes, _) = cadaddy_io::dwg_write::write(&d, ver).unwrap();
+        let doc = acadrust::DwgReader::from_stream(std::io::Cursor::new(bytes)).read().unwrap();
+        let mut seen = Vec::new();
+        for e in doc.entities() {
+            match e {
+                acadrust::EntityType::MText(t) => seen.push(t.value.clone()),
+                acadrust::EntityType::Text(t) => seen.push(t.value.clone()),
+                _ => {}
+            }
+        }
+        seen.sort();
+        assert_eq!(seen, ["10^2 and\ta tab", "\u{2022}\tFirst item ^I typed"], "{ver}");
+    }
+}
+
+/// A DWG from another writer holds text as its characters: a typed `^I` or `^ ` stays the
+/// characters through CADaddy's own codec, and a tab stays a tab. The bridge reads the same
+/// except a TEXT's caret before a space: its DXF writer leaves that caret unescaped (its rule for
+/// SAT data), so the space reads as the caret's escape.
+#[test]
+fn typed_carets_in_another_writers_dwg_stay_text() {
+    for ver in [acadrust::DxfVersion::AC1015, acadrust::DxfVersion::AC1018, acadrust::DxfVersion::AC1032] {
+        let mut doc = acadrust::CadDocument::new();
+        doc.version = ver;
+        for (i, value) in ["A^IB", "caret ^ space", "real\ttab"].into_iter().enumerate() {
+            let at = acadrust::Vector3::new(0.0, 10.0 * i as f64, 0.0);
+            doc.add_entity(acadrust::EntityType::MText(Box::new(acadrust::MText::with_value(value, at)))).unwrap();
+            doc.add_entity(acadrust::EntityType::Text(acadrust::Text::with_value(value, at))).unwrap();
+        }
+        let bytes = acadrust::DwgWriter::write_to_vec(&doc).unwrap();
+        for (label, back) in
+            [("native", cadaddy_io::dwg_read::read(&bytes).unwrap().0), ("bridge", cadaddy_io::read_dwg(&bytes, DwgEngine::Bridge).unwrap())]
+        {
+            let mut got: Vec<String> = back
+                .model
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntityKind::MText(m) => Some(format!("MTEXT {:?}", m.contents)),
+                    EntityKind::Text(t) => Some(format!("TEXT {:?}", t.value)),
+                    _ => None,
+                })
+                .collect();
+            got.sort();
+            let want = [
+                "MTEXT \"A^IB\"",
+                "MTEXT \"caret ^ space\"",
+                "MTEXT \"real\\ttab\"",
+                "TEXT \"A^IB\"",
+                "TEXT \"caret ^ space\"",
+                "TEXT \"real\\ttab\"",
+            ];
+            let want: Vec<&str> = want.into_iter().filter(|w| label == "native" || *w != "TEXT \"caret ^ space\"").collect();
+            got.retain(|g| label == "native" || !g.starts_with("TEXT \"caret ^"));
+            assert_eq!(got, want, "{label} {ver:?}");
         }
     }
 }

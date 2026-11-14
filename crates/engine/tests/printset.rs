@@ -285,10 +285,111 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     let units: f64 = lines.iter().filter_map(|l| l["net"].as_f64()).sum();
     // Another trade's devices (thermostats, fire alarm, low voltage: bim.scope) leave the device
     // lines for `by_others`, one entry each (Q6167).
-    let others = bom["by_others"].as_array().into_iter().flatten().filter(|x| x["trade"] != "concrete").count();
+    // The fire alarm circuits' cable rows and the control panel its wiring places by rule
+    // (Q6503) are by others too, but not the model's devices.
+    // A built device is listed by its element's handle (Q6525), an unbuilt one by its tag.
+    let device_handles: std::collections::BTreeSet<String> = s
+        .doc()
+        .ok()
+        .map(|d| {
+            d.model
+                .iter()
+                .filter(|e| e.common.xdata.iter().any(|t| t.code == 1000 && t.value.starts_with("devid:device:")))
+                .map(|e| e.handle.hex())
+                .collect()
+        })
+        .unwrap_or_default();
+    let others = bom["by_others"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["trade"] != "concrete" && x["element"].as_str().is_some_and(|e| e.starts_with("device:") || device_handles.contains(e)))
+        .count();
     assert_eq!(units + others as f64, (inserted + site) as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
     assert!(lines.iter().all(|l| l["level"].as_str().is_some_and(|v| !v.is_empty())));
     assert!(lines.iter().all(|l| (l["category"] == "devices") == (l["trade"] == "electrical")), "{lines:#?}");
     assert!(!lines.iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with("device type"))), "{lines:#?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ─── Q6514: a sheet title that lists parts is filed by the plan it lists ─────
+
+/// A plotted sheet as DXF: some linework and a title block (the title lines under "DRAWING
+/// TITLE:", the number in large lettering below).
+fn titled_sheet(number: &str, title: &str) -> Vec<u8> {
+    use cadaddy_doc::{Common, Drawing, EntityKind, HAlign, Line, Space, Text, VAlign};
+    use cadaddy_geom::Vec3;
+    let mut d = Drawing::default();
+    let mut add = |kind: EntityKind| {
+        let _ = d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, kind);
+    };
+    for i in 0..6 {
+        let x = 100.0 + 150.0 * f64::from(i);
+        add(EntityKind::Line(Line { a: Vec3::new(x, 100.0, 0.0), b: Vec3::new(x + 120.0, 100.0, 0.0) }));
+        add(EntityKind::Line(Line { a: Vec3::new(x, 100.0, 0.0), b: Vec3::new(x, 600.0, 0.0) }));
+    }
+    let text = |value: &str, y: f64, height: f64| {
+        EntityKind::Text(Text {
+            insert: Vec3::new(1500.0, y, 0.0),
+            align_pt: None,
+            height,
+            value: value.into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::Left,
+            valign: VAlign::Baseline,
+        })
+    };
+    add(text("DRAWING TITLE:", 300.0, 8.0));
+    add(text(title, 285.0, 8.0));
+    add(text(number, 200.0, 30.0));
+    cadaddy_io::write(&d, "sheet.dxf").expect("dxf")
+}
+
+fn titled_set(tag: &str, sheets: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cadaddy_ps_titles_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("folder");
+    for (number, title) in sheets {
+        std::fs::write(dir.join(format!("{number}.dxf")), titled_sheet(number, title)).expect("write sheet");
+    }
+    dir
+}
+
+#[test]
+fn classify_files_a_listed_title_by_its_plan_and_asks_about_a_floor_plan_filed_otherwise() {
+    // The floor's only floor plan shares its sheet with details and schedules: it is the plan,
+    // not the tile plan, and nothing is left to ask.
+    let dir = titled_set(
+        "listed",
+        &[
+            ("A1.1", "FLOOR PLAN/ DETAILS/ SCHEDULES"),
+            ("A1.2", "FLOOR TILE PLAN"),
+            ("A2.1", "REFLECTED CEILING PLAN/ CEILING DETAILS"),
+            ("A3.1", "ROOF PLAN/ ROOF DETAILS"),
+        ],
+    );
+    let mut s = Session::new();
+    s.execute("printset.open", &json!({"path": dir.display().to_string()})).expect("open");
+    let r = s.execute("printset.classify", &json!({})).expect("classify");
+    let sheets = r["sheets"].as_array().expect("index");
+    let of = |n: &str| sheets.iter().find(|e| e["number"] == n).unwrap_or_else(|| panic!("{n}: {r}"));
+    let filed: Vec<(String, String)> = sheets.iter().map(|e| (e["number"].to_string(), e["type"].to_string())).collect();
+    for (n, want) in [("A1.1", "plan"), ("A1.2", "plan"), ("A2.1", "rcp"), ("A3.1", "plan")] {
+        assert_eq!(of(n)["type"], want, "{n}: {filed:?}");
+    }
+    assert_eq!(of("A1.1")["views"], json!(["detail", "schedule"]));
+    assert_eq!(of("A1.1")["level"], "1");
+    assert_eq!(r["floor_plans_filed_otherwise"], json!([]), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A sheet titled as a floor plan still filed otherwise, on a floor with no floor plan: listed.
+    let dir = titled_set("otherwise", &[("A1.1", "FLOOR PLAN NOTES"), ("A1.2", "FLOOR TILE PLAN")]);
+    let mut s = Session::new();
+    s.execute("printset.open", &json!({"path": dir.display().to_string()})).expect("open");
+    let r = s.execute("printset.classify", &json!({})).expect("classify");
+    assert_eq!(r["floor_plans_filed_otherwise"], json!([{"sheet": "A1.1", "title": "FLOOR PLAN NOTES", "type": "schedule", "level": "1"}]), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }

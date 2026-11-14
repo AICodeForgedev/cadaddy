@@ -64,6 +64,12 @@ pub(crate) struct Class {
     /// a leading `_` matches the end of the kind).
     pub also_kinds: Vec<String>,
     pub source: String,
+    /// The rooms it goes in by trade practice (`KITCHEN` for a range): where an object only a
+    /// note names is set when no plan draws it, one a room, a room whose name holds every word of
+    /// one entry. Empty: no room is its own, and an object no plan places is asked about, never
+    /// set at a stand-in place (fix-objects-far-outside-building).
+    pub place_words: Vec<String>,
+    pub place_source: String,
 }
 
 fn yes() -> bool {
@@ -95,9 +101,18 @@ pub(crate) struct Rules {
     pub classes: Vec<Class>,
     pub connections: Vec<Connection>,
     pub not_new_words: Vec<String>,
+    /// The model's kinds of runs (`conduit`, `pipe`, `duct`): never an object of a class.
+    pub run_kinds: Vec<String>,
     /// `ALL`, `EACH`: a note naming a class after one speaks of every one there is (a rule), not
     /// of new ones.
     pub all_words: Vec<String>,
+    /// Words of a note that call for objects (`PROVIDE`, `INSTALL`): a note naming a class with
+    /// none of them, no count and no `AT EACH …` tells how to wire or build the ones there are
+    /// (`CIRCUIT EXIT SIGNS TO …`, `EXIT SIGNS SHALL BE LED`), it calls for none (Q6361).
+    pub call_words: Vec<String>,
+    /// Words after a class's words that call for one at every place of a kind (`EXIT SIGN AT EACH
+    /// STAIR DOOR`); `ANY` is none (`… AHEAD OF ANY SWITCH`).
+    pub each_words: Vec<String>,
     /// Words that end a note's room type (`EACH GUEST ROOM SHALL …`: the type is `GUEST`).
     pub room_stop_words: Vec<String>,
     /// Words of a room type that name no type of their own (`ROOM`, `TYPE`): left out when the
@@ -124,6 +139,18 @@ pub(crate) struct Rules {
     pub existing_reach_ft: f64,
     pub max_sheets: usize,
     pub max_elements: usize,
+    /// The receptacle built for an object whose note calls for one (`PROVIDE 30A 120V RECEPTACLE
+    /// FOR RANGE`) where no drawn receptacle stands at its marker.
+    pub receptacle_box: BoxRule,
+    /// How far from a typical room's keynote marker (feet) a drawn receptacle is the one its note
+    /// speaks of.
+    pub receptacle_reach_ft: f64,
+    /// Words of a note's sentence that say where its receptacle is mounted.
+    pub mount_words: Vec<String>,
+    /// The words after a load's `<n>VA/` (or `<n> VA PER`) that make a load calculation's line one
+    /// unit's (`RANGE CONNECTION (2,400VA/SUITE)`).
+    pub per_unit_words: Vec<String>,
+    pub load_calc_source: String,
 }
 
 pub(crate) fn rules() -> &'static Rules {
@@ -177,6 +204,12 @@ pub(crate) fn same_noun(class: &Class, meaning: &str) -> bool {
         .iter()
         .filter_map(|g| g.last())
         .any(|n| w.iter().any(|x| x.eq_ignore_ascii_case(n) || x.strip_suffix('S').is_some_and(|y| y.eq_ignore_ascii_case(n))))
+}
+
+/// Whether an element kind is a run's (a conduit, a pipe, a duct: the rules' `run_kinds`): a run
+/// whose words name a class (a note's stub-up to the chargers) is none of its objects.
+pub(crate) fn is_run_kind(kind: &str) -> bool {
+    rules().run_kinds.iter().any(|k| k.eq_ignore_ascii_case(kind.trim()))
 }
 
 /// A class by its element kind.
@@ -391,13 +424,29 @@ pub(crate) fn schedule_marks(texts: &[TextItem]) -> BTreeMap<String, String> {
 /// than `class` (an `SD-5` the air device schedule lists, though the legend's `SD` is a duct
 /// detector): its title, `a schedule` when it has none. A tag without its number is no mark.
 pub(crate) fn of_another_schedule(code: &str, number: &str, class: &Class, scheduled: &BTreeMap<String, String>) -> Option<String> {
-    let title = mark_key(&format!("{code}-{number}")).and_then(|k| scheduled.get(&k))?;
-    class_of(title).is_none_or(|c| c.kind != class.kind).then(|| if title.is_empty() { "a schedule".to_string() } else { title.clone() })
+    of_another_schedule_by(&format!("{code}-{number}"), scheduled, &|title| class_of(title).is_some_and(|c| c.kind == class.kind))
+}
+
+/// The one rule for a numbered tag (`SD-5`) and a code's kind (readers and Validate's coverage):
+/// the schedule that lists the tag as one of its rows, when that schedule is not of the kind
+/// (`its_kind` says by the schedule's title; an untitled schedule is another's): its title, `a
+/// schedule` when it has none. `None`: no schedule lists it, or the kind's own does; then the
+/// tag is the code's kind's.
+pub(crate) fn of_another_schedule_by(tag: &str, scheduled: &BTreeMap<String, String>, its_kind: &dyn Fn(&str) -> bool) -> Option<String> {
+    let title = mark_key(tag).and_then(|k| scheduled.get(&k))?;
+    (title.is_empty() || !its_kind(title)).then(|| if title.is_empty() { "a schedule".to_string() } else { title.clone() })
 }
 
 /// How many objects a note gives (`(2) EV CHARGING STATIONS`, `TWO SITE CAMERAS`,
 /// `… STATIONS (QTY 2)`), 1 when it doesn't say; capped by the rules.
+#[cfg(test)]
 pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
+    note_count_given(text, class).unwrap_or(1)
+}
+
+/// The count a note gives for its class, `None` when it gives none (`PROVIDE POWER FOR EV
+/// CHARGERS`): a note naming a class without a number says nothing of how many there are.
+pub(crate) fn note_count_given(text: &str, class: &Class) -> Option<u32> {
     let r = rules();
     let cap = r.max_note_count.max(1);
     let w = words(text);
@@ -412,15 +461,14 @@ pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
     if let Some(n) = before {
         // `ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR`: each `AND <count>` after it is more of it.
         let more: u32 = w.windows(2).skip(at).filter(|p| p.first().is_some_and(|x| x == "AND")).filter_map(|p| p.get(1).and_then(count_of)).sum();
-        return n.saturating_add(more).min(cap);
+        return Some(n.saturating_add(more).min(cap));
     }
     // `(QTY 2)` / `QTY: 2` anywhere.
-    if let Some(i) = w.iter().position(|x| x == "QTY" || x == "QUANTITY")
-        && let Some(n) = w.get(i + 1).and_then(|x| x.parse::<u32>().ok()).filter(|n| (1..=cap).contains(n))
-    {
-        return n;
-    }
-    1
+    w.iter()
+        .position(|x| x == "QTY" || x == "QUANTITY")
+        .and_then(|i| w.get(i + 1))
+        .and_then(|x| x.parse::<u32>().ok())
+        .filter(|n| (1..=cap).contains(n))
 }
 
 /// An object a note names.
@@ -428,6 +476,8 @@ pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
 pub(crate) struct Named {
     pub class: &'static Class,
     pub count: u32,
+    /// The count the note gives in so many words, `None` when it gives none (`count` is then 1).
+    pub given: Option<u32>,
     /// What connects it (`power`), empty when the note says nothing of it.
     pub via: &'static str,
     /// The note speaks of every one there is (`ALL ROOFTOP UNITS SHALL SHUT DOWN`): a rule, not a call
@@ -436,6 +486,20 @@ pub(crate) struct Named {
     /// The room type it is called for in every room of (`… IN EACH GUEST SUITE`: `GUEST SUITE`),
     /// upper case; empty when the note names none.
     pub rooms: Vec<String>,
+    /// The note calls for objects of the class ([`calls_for`]); false: it only says how to wire
+    /// or build the ones there are, and proposes none.
+    pub calls: bool,
+}
+
+/// Whether a note's sentence `w` calls for objects of the class whose words start at `class_at`
+/// (Q6361): a call word of the rules (`PROVIDE ONE EXIT SIGN`), a count it gives (`(2) EV
+/// CHARGERS`) or an `EACH` / `EVERY` word after the class (`EXIT SIGN AT EACH STAIR DOOR`). A note
+/// that only says how to circuit or build the ones there are (`CIRCUIT EXIT SIGNS TO THE NEAREST
+/// LIGHTING CIRCUIT`, `EXIT SIGNS SHALL BE LED`) calls for none.
+fn calls_for(w: &[String], class_at: usize, given: Option<u32>) -> bool {
+    let r = rules();
+    let is = |list: &[String], x: &str| list.iter().any(|a| a.eq_ignore_ascii_case(x));
+    given.is_some() || w.iter().any(|x| is(&r.call_words, x)) || w.iter().skip(class_at + 1).any(|x| is(&r.each_words, x))
 }
 
 /// The objects a note names (each sentence's first) with their count and what it connects them
@@ -457,7 +521,9 @@ pub(crate) fn note_objects(text: &str) -> Vec<Named> {
         let first = c.words.iter().filter_map(|g| g.first()).filter_map(|f| w.iter().position(|x| x.eq_ignore_ascii_case(f))).min().unwrap_or(0);
         let all = w.get(first.saturating_sub(2)..first).unwrap_or(&[]).iter().any(|x| r.all_words.iter().any(|a| a.eq_ignore_ascii_case(x)));
         let rooms = if all { Vec::new() } else { room_type_after(&w, first) };
-        out.push(Named { class: c, count: note_count(part, c), via: connection_via(part).unwrap_or(via), all, rooms });
+        let given = note_count_given(part, c);
+        let calls = calls_for(&w, first, given);
+        out.push(Named { class: c, count: given.unwrap_or(1), given, via: connection_via(part).unwrap_or(via), all, rooms, calls });
     }
     out
 }
@@ -481,6 +547,26 @@ fn room_type_after(w: &[String], class_at: usize) -> Vec<String> {
         .take_while(|x| !is(&r.room_stop_words, x) && !is(&r.all_words, x))
         .take(r.room_type_words.max(1))
         .cloned()
+        .collect()
+}
+
+/// The rooms `class` goes in by trade practice ([`Class::place_words`]), of `rooms` (level, name,
+/// outline): on `level` when one is given (any level otherwise), in their order. None when the
+/// class names no room of its own.
+pub(crate) fn place_rooms<T>(class: &Class, rooms: &[(String, String, T)], level: Option<&str>) -> Vec<usize> {
+    let places: Vec<Vec<String>> = class.place_words.iter().map(|p| words(p)).filter(|w| !w.is_empty()).collect();
+    if places.is_empty() {
+        return Vec::new();
+    }
+    rooms
+        .iter()
+        .enumerate()
+        .filter(|(_, (l, _, _))| level.is_none_or(|v| l.trim().eq_ignore_ascii_case(v.trim())))
+        .filter(|(_, (_, n, _))| {
+            let have = words(n);
+            places.iter().any(|p| p.iter().all(|w| have.contains(w)))
+        })
+        .map(|(i, _)| i)
         .collect()
 }
 
@@ -621,6 +707,44 @@ pub(crate) struct Found {
     /// Its type mark, from the object the model already has beside it that the same keynote
     /// describes (the schedule's exit sign type); empty when nothing gives one.
     pub type_mark: String,
+    /// The typical room's view whose keynote marker it was read at (`E-7 ENLARGED STUDIO`): it is
+    /// laid into every room of the view's type, one a room; empty otherwise.
+    pub typical: String,
+    /// The room it was laid into (its number, else its name), for a typical room's object.
+    pub room: String,
+}
+
+/// How many of `class` one load calculation line counts (`RANGE CONNECTION (2,400VA/SUITE):
+/// 153.60 KVA`: 64): a line whose label names the class and a load per unit (`<n>VA/<unit>`, `<n>
+/// VA PER <unit>`, a unit the rules' `per_unit_words` name), its total its first number (kVA where
+/// its text says so): the total over the per-unit load, when that is a whole number. None
+/// otherwise.
+pub(crate) fn per_unit_count(label: &str, text: &str, values: &[f64], class: &Class) -> Option<u32> {
+    let r = rules();
+    if class_of(label).is_none_or(|c| c.kind != class.kind) {
+        return None;
+    }
+    // (`2,400VA` is one number)
+    let w = words(&label.replace(',', ""));
+    let unit = |x: Option<&String>| x.is_some_and(|u| r.per_unit_words.iter().any(|p| p.eq_ignore_ascii_case(u)));
+    let is = |i: usize, v: &str| w.get(i).is_some_and(|x| x == v);
+    let per = w.iter().enumerate().find_map(|(i, x)| {
+        // `2400VA/SUITE`, `2400 VA PER SUITE`
+        let (n, next) = match x.strip_suffix("VA") {
+            Some(n) if !n.is_empty() => (n, i + 1),
+            _ if is(i + 1, "VA") => (x.as_str(), i + 2),
+            _ => return None,
+        };
+        let va = n.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+        let after = if is(next, "PER") { w.get(next + 1) } else { w.get(next) };
+        unit(after).then_some(va)
+    })?;
+    let first = values.first().copied().filter(|v| v.is_finite() && *v > 0.0)?;
+    let total = if words(text).iter().any(|x| x == "KVA") { first * 1000.0 } else { first };
+    let n = total / per;
+    let whole = n.round();
+    // (A total printed to its last digit or two: within a twentieth of a unit.)
+    ((n - whole).abs() <= 0.05 && (1.0..=100_000.0).contains(&whole)).then_some(whole as u32)
 }
 
 /// One object per place: the same kind on the same level within `reach` (plan units), read on
@@ -848,8 +972,30 @@ mod tests {
         assert_eq!(one("SUMP PUMP (QTY 3): 120V CONNECTION").map(|n| n.1), Some(3));
         // One here and one there: two.
         assert_eq!(one("PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR").map(|n| n.1), Some(2));
+        // Q6361: a note calls for objects with a call word, a count or an `EACH` after them; one
+        // saying how to circuit or build the ones there are calls for none.
+        let calls = |t: &str| note_objects(t).into_iter().next().map(|n| (n.class.kind.clone(), n.calls));
+        for t in ["CIRCUIT EXIT SIGNS TO THE LOCAL LIGHTING CIRCUIT AHEAD OF ANY SWITCH.", "EXIT SIGNS SHALL BE LED WITH BATTERY BACKUP."] {
+            assert_eq!(calls(t), Some(("exit_sign".into(), false)), "{t}");
+        }
+        for t in ["PROVIDE EXIT SIGN ABOVE THE DOOR.", "EXIT SIGN AT EACH STAIR DOOR.", "TWO EXIT SIGNS IN THE CORRIDOR.", "INSTALL A NEW EXIT SIGN."]
+        {
+            assert_eq!(calls(t), Some(("exit_sign".into(), true)), "{t}");
+        }
+        assert_eq!(calls("SUMP PUMP (QTY 3): 120V CONNECTION"), Some(("sump_pump".into(), true)));
         // A bare number far from the words is no count.
         assert_eq!(note_count("CIRCUIT 12 TO PANEL; PROVIDE SUMP PUMP CONNECTION", class_by_kind("sump_pump").unwrap()), 1);
+        // A count said in words or figures is given; none said is none given (counted as 1, the
+        // plans' count governs) (fix-note-proposal-beside-drawn-devices).
+        let given = |t: &str| note_objects(t).into_iter().next().map(|n| (n.class.kind.clone(), n.given));
+        assert_eq!(given("PROVIDE POWER FOR ELECTRIC VEHICLE CHARGERS."), Some(("ev_charging_station".into(), None)));
+        assert_eq!(given("PROVIDE (5) EV CHARGERS"), Some(("ev_charging_station".into(), Some(5))));
+        assert_eq!(given("PROVIDE POWER FOR TWO SITE CAMERAS ON THE POLE"), Some(("site_camera".into(), Some(2))));
+        assert_eq!(given("SUMP PUMP (QTY 3): 120V CONNECTION").and_then(|g| g.1), Some(3));
+        // The site plan's charger is the class's; a stub-up run naming it is no object of it.
+        let ev = class_by_kind("ev_charging_station").unwrap();
+        assert!(is_class(ev, "ev_charger", ""));
+        assert!(is_run_kind("conduit") && is_run_kind("Pipe") && !is_run_kind("equipment"));
     }
 
     #[test]
@@ -963,5 +1109,24 @@ mod tests {
         // An exit sign luminaire is the class by its schedule row's words, whatever its kind.
         assert!(is_class(class("exit_sign"), "light_fixture", "X1 EDGE-LIT EXIT SIGN, UNIVERSAL MOUNT"));
         assert!(!is_class(class("exit_sign"), "light_fixture", "A 2X4 RECESSED TROFFER"));
+    }
+
+    /// Q6547: a load calculation's per-unit line counts the units that have the class's object.
+    #[test]
+    fn a_load_calculations_per_unit_line_counts_the_units() {
+        let range = class_by_kind("range").unwrap();
+        let count = |label: &str, text: &str, values: &[f64]| per_unit_count(label, text, values, range);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "153.60 KVA", &[153.6]), Some(64));
+        assert_eq!(count("RANGES (8000 VA PER UNIT)", "96,000", &[96_000.0]), Some(12));
+        assert_eq!(count("COOKTOP 3500VA/APARTMENT", "17.5 kVA", &[17.5]), Some(5));
+        // Not a count: another class's line, no unit after the load, no whole number, no total,
+        // hostile numbers.
+        assert_eq!(count("MICROWAVE RECEPTACLE (1,200VA/SUITE):", "76.80 KVA", &[76.8]), None);
+        assert_eq!(count("RANGE CONNECTION 2,400VA", "153.60 KVA", &[153.6]), None);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "100.00 KVA", &[100.0]), None);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "", &[]), None);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "KVA", &[f64::NAN]), None);
+        assert_eq!(count("RANGE CONNECTION (0VA/SUITE):", "KVA", &[10.0]), None);
+        assert_eq!(count("RANGE HOOD (300VA/SUITE):", "KVA", &[3.0]), None, "a hood is no range");
     }
 }

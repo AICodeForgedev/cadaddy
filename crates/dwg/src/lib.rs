@@ -171,17 +171,17 @@ mod native {
         }
         let mut doc = outcome.document;
         notes.extend(unkept_note(&doc));
-        names_by_current(&mut doc);
-        table_merges(&mut doc);
-        table_style_rows(&mut doc, false);
-        let orphans = drop_orphaned_dgn_components(&mut doc);
+        let orphans = guarded(AssertUnwindSafe(|| post_process(&mut doc))).map_err(|_| "the DWG post-processing failed on this file".to_string())?;
         if orphans > 0 {
             let (s, were) = if orphans == 1 { ("", "was") } else { ("s", "were") };
             notes.push(format!("DWG: {orphans} DGN line style component{s} that no line style definition uses {were} left out"));
         }
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
-        let written = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)))
-            .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
+        let written = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            acadrust::DxfWriter::new(&doc).write_to_writer(&mut out)?;
+            mtext_contents(&doc, &mut out)
+        }))
+        .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
         if out.exceeded {
             return Err(format!(
                 "DWG: converting this {} file produced more than {} {}; \
@@ -193,6 +193,94 @@ mod native {
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
         Ok((add_materials(add_header_vars(out.buf, &doc.header), &doc), notes))
+    }
+
+    /// acadrust 0.6.6's ASCII writer treats a caret followed by a literal space as already
+    /// escaped, and turns line feeds into paragraph codes. Serialize affected MTEXT contents
+    /// from the native values instead, using its lossless string writer. All other groups,
+    /// including embedded-object data, remain byte-for-byte as the DXF writer emitted them.
+    fn mtext_contents(doc: &acadrust::CadDocument, out: &mut CappedWriter) -> acadrust::Result<()> {
+        use acadrust::io::dxf::{DxfStreamWriter, DxfTextWriter};
+        let contents: std::collections::HashMap<_, _> = doc
+            .entities()
+            .filter_map(|e| match e {
+                acadrust::EntityType::MText(t) if t.value.contains(['^', '\t', '\n']) => Some((t.common.handle.value(), t.value.as_str())),
+                _ => None,
+            })
+            .collect();
+        if contents.is_empty() {
+            return Ok(());
+        }
+        let dxf = std::mem::take(&mut out.buf);
+        let mut lines = dxf.split_inclusive(|b| *b == b'\n');
+        let (mut mtext, mut text, mut written) = (false, None, false);
+        while let Some(code) = lines.next() {
+            let value = lines.next().ok_or_else(|| std::io::Error::other("incomplete DWG bridge DXF pair"))?;
+            match code.trim_ascii() {
+                b"0" => {
+                    mtext = value.trim_ascii() == b"MTEXT";
+                    text = None;
+                    written = false;
+                }
+                b"5" if mtext => {
+                    text = std::str::from_utf8(value.trim_ascii()).ok().and_then(|s| u64::from_str_radix(s, 16).ok()).and_then(|h| contents.get(&h));
+                }
+                b"101" => mtext = false,
+                b"1" | b"3" if mtext && text.is_some() => {
+                    if let Some(&text) = text
+                        && !written
+                    {
+                        let mut writer = DxfTextWriter::new(&mut *out);
+                        if doc.version < acadrust::DxfVersion::AC1021
+                            && let Some(encoding) = acadrust::io::dxf::code_page::encoding_from_code_page(&doc.header.code_page)
+                        {
+                            writer.set_encoding(encoding);
+                        }
+                        // Each character can expand to two caret-escape characters. Keep
+                        // those pairs together and each group within 250 characters.
+                        let mut rest = text;
+                        while let Some((end, _)) = rest.char_indices().nth(125) {
+                            let (chunk, tail) = rest.split_at(end);
+                            writer.write_xrecord_string(3, chunk)?;
+                            rest = tail;
+                        }
+                        writer.write_xrecord_string(1, rest)?;
+                        written = true;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            out.write_all(code)?;
+            out.write_all(value)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn mtext_contents_keeps_other_groups_and_the_output_limit() -> acadrust::Result<()> {
+        for version in [acadrust::DxfVersion::AC1015, acadrust::DxfVersion::AC1032] {
+            let mut doc = acadrust::CadDocument::new();
+            doc.version = version;
+            doc.header.code_page = "ANSI_1252".into();
+            let mut t = acadrust::MText::with_value("é ^ C", acadrust::Vector3::ZERO);
+            t.common.handle = acadrust::Handle::new(0x10);
+            doc.add_entity(acadrust::EntityType::MText(Box::new(t)))?;
+            // Only the MTEXT's own 1/3 groups change. The embedded object's groups and the
+            // following TEXT record must survive byte-for-byte, including their spaces.
+            let prefix = b"  0\r\nMTEXT\r\n  5\r\n10\r\n  8\r\n0\r\n";
+            let suffix = b"101\r\nEmbedded Object\r\n  1\r\n^ embedded\r\n  3\r\n^ tail\r\n  0\r\nTEXT\r\n  1\r\n^ plain\r\n";
+            let raw = [prefix.as_slice(), b"  3\r\nold\r\n  1\r\ntext\r\n", suffix.as_slice()].concat();
+            let mut out = CappedWriter { buf: raw.clone(), limit: 4096, exceeded: false };
+            mtext_contents(&doc, &mut out)?;
+            let value: &[u8] = if version == acadrust::DxfVersion::AC1015 { b"\xe9 ^  C" } else { "é ^  C".as_bytes() };
+            assert_eq!(out.buf, [prefix.as_slice(), b"  1\r\n", value, b"\r\n", suffix.as_slice()].concat());
+            let mut limited = CappedWriter { buf: raw, limit: 1, exceeded: false };
+            assert!(mtext_contents(&doc, &mut limited).is_err());
+            assert!(limited.exceeded);
+        }
+        Ok(())
     }
 
     /// Most record types named in the skipped-records note.
@@ -305,6 +393,72 @@ mod native {
     /// cells already carry merges are left alone. Each range's first cell gets the span; the
     /// cells it covers are marked merged with no span of their own, as CADaddy's DXF writer does.
     fn table_merges(doc: &mut acadrust::CadDocument) {
+        table_merges_within(doc, MAX_MERGE_CELLS);
+    }
+
+    /// The most table cells [`table_merges`] visits in one document: each range is capped, but
+    /// can cover rows × cols cells, so the total is bounded too.
+    const MAX_MERGE_CELLS: usize = 1 << 24;
+
+    /// A table cell's own text height only when the file says it overrides the table style's.
+    /// acadrust's DXF writer writes a cell style's height (group 140) whenever the cell has a
+    /// style record, even a default 0.18 with no override flag, and CADaddy reads a 140 as an
+    /// override (#2501). The override is the cell style's TEXT_HEIGHT property flag or the
+    /// content's format override bit 128; without either the height is cleared (0 is no
+    /// override), so the table style's height applies.
+    fn table_cell_heights(doc: &mut acadrust::CadDocument) {
+        use acadrust::entities::table::CellStylePropertyFlags;
+        const CONTENT_TEXT_HEIGHT: i32 = 128;
+        for e in doc.entities_mut() {
+            let acadrust::entities::EntityType::Table(t) = e else { continue };
+            for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                // The first content's own height (group 144) when its format override sets bit 128.
+                // CADaddy keeps one height for the cell's text, so a later content's override
+                // must not stand in for the first content's.
+                let content_height = cell
+                    .contents
+                    .first()
+                    .filter(|c| c.format_override_flags & CONTENT_TEXT_HEIGHT != 0)
+                    .map(|c| c.text_height)
+                    .filter(|h| h.is_finite() && *h > 0.0);
+                if let Some(h) = content_height {
+                    // CADaddy reads only the style's height (group 140), so carry it there.
+                    cell.style.get_or_insert_with(acadrust::entities::table::CellStyle::new).text_height = h;
+                    continue;
+                }
+                // A style overrides through its property flags or, in newer files, its override
+                // flags; anything else is the writer's default and is cleared.
+                if let Some(style) = cell.style.as_mut()
+                    && !style.property_flags.contains(CellStylePropertyFlags::TEXT_HEIGHT)
+                    && style.override_flags & CellStylePropertyFlags::TEXT_HEIGHT.bits() as i32 == 0
+                {
+                    style.text_height = 0.0;
+                }
+            }
+        }
+    }
+
+    /// The fix-ups made to a document after the DWG read, returning how many orphaned DGN
+    /// components were dropped. The document comes from a third-party reader and is hostile.
+    fn post_process(doc: &mut acadrust::CadDocument) -> usize {
+        super::fail_in_test("post_process");
+        names_by_current(doc);
+        table_merges(doc);
+        table_cell_heights(doc);
+        table_style_rows(doc, false);
+        keep_sort_handles(doc);
+        drop_orphaned_dgn_components(doc)
+    }
+
+    /// Runs `f`, turning a panic into an error (the reader and writer are guarded the same way).
+    fn guarded<R>(f: impl FnOnce() -> R + std::panic::UnwindSafe) -> Result<R, ()> {
+        std::panic::catch_unwind(f).map_err(|_| ())
+    }
+
+    /// [`table_merges`] visiting at most `budget` cells in all; a range that would pass it is
+    /// left unmerged. Returns the cells visited.
+    fn table_merges_within(doc: &mut acadrust::CadDocument, budget: usize) -> usize {
+        let mut left = budget;
         for e in doc.entities_mut() {
             let acadrust::entities::EntityType::Table(t) = e else { continue };
             if t.merged_ranges.is_empty() || t.rows.iter().flat_map(|r| &r.cells).any(|c| c.merge_width > 1 || c.merge_height > 1) {
@@ -320,6 +474,11 @@ mod native {
                 if r.top_row > bottom || r.left_col > right || rows == 0 || cols == 0 || (r.top_row, r.left_col) == (bottom, right) {
                     continue;
                 }
+                let area = (bottom - r.top_row + 1).saturating_mul(right - r.left_col + 1);
+                if area > left {
+                    continue;
+                }
+                left -= area;
                 let span = |n: usize| i32::try_from(n + 1).unwrap_or(i32::MAX);
                 for (ri, row) in t.rows.iter_mut().enumerate().take(bottom + 1).skip(r.top_row) {
                     for (ci, cell) in row.cells.iter_mut().enumerate().take(right + 1).skip(r.left_col) {
@@ -330,6 +489,28 @@ mod native {
                     }
                 }
             }
+        }
+        budget - left
+    }
+
+    /// Draw-order tables (SORTENTSTABLE) keep the sort handles the file gave them. acadrust's DXF
+    /// writer renumbers them past every entity handle, but an entity left out of a table sorts by
+    /// its own handle, so after renumbering it would draw below every listed entity (#2410). Giving
+    /// the table its codes verbatim makes the writer emit them unchanged.
+    fn keep_sort_handles(doc: &mut acadrust::CadDocument) {
+        use acadrust::objects::ObjectType;
+        let version = doc.version;
+        for o in doc.objects.values_mut() {
+            let ObjectType::SortEntitiesTable(t) = o else { continue };
+            let hex = |h: acadrust::types::Handle| format!("{:X}", h.value());
+            let mut codes =
+                vec![(5, hex(t.handle)), (330, hex(t.owner_handle)), (100, "AcDbSortentsTable".to_string()), (330, hex(t.block_owner_handle))];
+            for e in t.entries() {
+                codes.push((331, hex(e.entity_handle)));
+                codes.push((5, hex(e.sort_handle)));
+            }
+            t.raw_dxf_codes = Some(codes);
+            t.raw_dxf_version = Some(version);
         }
     }
 
@@ -500,15 +681,22 @@ mod native {
     /// Leave out what acadrust can't write as this DWG version: other programs' custom entities
     /// and objects without raw DWG data of that version. acadrust 0.6.4 refuses the whole file
     /// for one of them (0.6.3 left them out); CADaddy already tells the user which entity types
-    /// a DWG doesn't keep (`not_saved`), so the rest of the drawing is written. Returns how many.
-    fn drop_unwritable(doc: &mut acadrust::CadDocument) -> usize {
+    /// a DWG doesn't keep (`not_saved`), so the rest of the drawing is written. Returns how many
+    /// records of each DXF type were left out, so a save can say so.
+    fn drop_unwritable(doc: &mut acadrust::CadDocument) -> super::Unwritten {
         let version = doc.version;
+        let mut dropped = super::Unwritten::new();
+        let mut count = |name: &str| {
+            let n = dropped.entry(name.trim().to_ascii_uppercase()).or_insert(0);
+            *n = n.saturating_add(1);
+        };
         let unwritable: Vec<acadrust::Handle> = doc
             .entities()
             .filter_map(|e| match e {
                 acadrust::entities::EntityType::Unknown(u)
                     if u.raw_dwg_data.is_none() || u.dwg_source_version.is_some_and(|v| v != version) || version == acadrust::DxfVersion::AC1009 =>
                 {
+                    count(&u.dxf_name);
                     Some(u.common.handle)
                 }
                 _ => None,
@@ -521,9 +709,10 @@ mod native {
             .objects
             .iter()
             .filter_map(|(h, o)| match o {
-                acadrust::objects::ObjectType::Unknown { raw_dwg_data, raw_dwg_version, .. }
+                acadrust::objects::ObjectType::Unknown { type_name, raw_dwg_data, raw_dwg_version, .. }
                     if raw_dwg_data.is_none() || raw_dwg_version.is_some_and(|v| v != version) || version == acadrust::DxfVersion::AC1009 =>
                 {
+                    count(type_name);
                     Some(*h)
                 }
                 _ => None,
@@ -532,7 +721,7 @@ mod native {
         for h in &objects {
             doc.objects.remove(h);
         }
-        unwritable.len() + objects.len()
+        dropped
     }
 
     /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.3) leaves out of
@@ -799,7 +988,7 @@ mod native {
     /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
     /// (AC1018).
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
-        convert(dxf, None, None, Source::OUTSIDE)
+        convert(dxf, None, None, Source::OUTSIDE).map(|(dwg, _)| dwg)
     }
 
     /// The writer's version for a code from [`super::VERSIONS`] ("AC1032").
@@ -818,6 +1007,13 @@ mod native {
     /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
     /// whatever version the DXF declares.
     pub fn dxf_to_dwg_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
+        dxf_to_dwg_noted(dxf, version).map(|(dwg, _)| dwg)
+    }
+
+    /// [`dxf_to_dwg_as`], also returning what the DWG writer left out: how many records of each
+    /// DXF type it can't write (other programs' custom entities and objects that the DWG reader
+    /// didn't read from a DWG of this version), empty when the DWG keeps everything.
+    pub fn dxf_to_dwg_noted(dxf: &[u8], version: &str) -> Result<(Vec<u8>, super::Unwritten), String> {
         convert(dxf, Some(dwg_version(version)?), None, Source::OUTSIDE)
     }
 
@@ -825,6 +1021,12 @@ mod native {
     /// gives (`linetypes`: the LTYPE table's names, as written), so they need not be read back
     /// from the DXF.
     pub fn dxf_to_dwg_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+        dxf_to_dwg_named_noted(dxf, version, linetypes).map(|(dwg, _)| dwg)
+    }
+
+    /// [`dxf_to_dwg_named`], also returning what the DWG writer left out (as
+    /// [`dxf_to_dwg_noted`]).
+    pub fn dxf_to_dwg_named_noted(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<(Vec<u8>, super::Unwritten), String> {
         convert(dxf, Some(dwg_version(version)?), Some(linetypes), Source::OUTSIDE)
     }
 
@@ -835,6 +1037,11 @@ mod native {
     /// the result is the caller's check, on the drawing and the DWG). Errors speak of the DWG
     /// being written, never of the DXF in between, which the user didn't ask for.
     pub fn own_dxf_to_dwg(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+        own_dxf_to_dwg_noted(dxf, version, linetypes).map(|(dwg, _)| dwg)
+    }
+
+    /// [`own_dxf_to_dwg`], also returning what the DWG writer left out (as [`dxf_to_dwg_noted`]).
+    pub fn own_dxf_to_dwg_noted(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<(Vec<u8>, super::Unwritten), String> {
         convert(dxf, Some(dwg_version(version)?), Some(linetypes), Source::Own)
     }
 
@@ -853,13 +1060,13 @@ mod native {
     }
 
     /// `linetypes`: the DXF's linetype names when the caller knows them; otherwise they are read
-    /// from the (ASCII) DXF.
+    /// from the (ASCII) DXF. Also returns how many records of each DXF type the writer left out.
     pub(crate) fn convert(
         dxf: &[u8],
         version: Option<acadrust::DxfVersion>,
         linetypes: Option<&[String]>,
         source: Source,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(Vec<u8>, super::Unwritten), String> {
         // Reject a pathologically large DXF from outside before handing it to the third-party
         // decoder, which allocates tables and section buffers from the input's declared sizes and
         // cannot be interrupted once it starts (CWE-789). This bounds the large-input variant; the
@@ -888,21 +1095,28 @@ mod native {
             None if doc.version < MIN_DWG_VERSION => doc.version = MIN_DWG_VERSION,
             None => {}
         }
-        other_layout_owners(&mut doc);
-        table_style_rows(&mut doc, true);
-        dimension_flags(&mut doc);
-        current_by_name(&mut doc);
-        match linetypes {
-            Some(names) => keep_linetype_case(&mut doc, names),
-            None => keep_linetype_case(&mut doc, &dxf_linetype_names(dxf)),
-        }
-        put_materials(&mut doc, dxf);
-        field_classes(&mut doc);
-        drop_unwritable(&mut doc);
-        add_variable_dictionary(&mut doc);
-        std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
+        // The fix-ups run on the third-party reader's document, so a panic in one is an error, not a crash.
+        let unwritten = guarded(AssertUnwindSafe(|| {
+            super::fail_in_test("convert");
+            other_layout_owners(&mut doc);
+            table_style_rows(&mut doc, true);
+            dimension_flags(&mut doc);
+            current_by_name(&mut doc);
+            match linetypes {
+                Some(names) => keep_linetype_case(&mut doc, names),
+                None => keep_linetype_case(&mut doc, &dxf_linetype_names(dxf)),
+            }
+            put_materials(&mut doc, dxf);
+            field_classes(&mut doc);
+            let unwritten = drop_unwritable(&mut doc);
+            add_variable_dictionary(&mut doc);
+            unwritten
+        }))
+        .map_err(|_| "the DXF to DWG conversion failed on this file".to_string())?;
+        let dwg = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
-            .map_err(|e| format!("DWG write: {e}"))
+            .map_err(|e| format!("DWG write: {e}"))?;
+        Ok((dwg, unwritten))
     }
 
     /// AutoCAD's entry name for the drawing variables dictionary (the DXF Reference calls it the
@@ -996,10 +1210,77 @@ mod native {
             }
         }
     }
+
+    #[cfg(test)]
+    mod post_tests {
+        use super::*;
+        use acadrust::entities::{CellRange, EntityType, Table};
+
+        fn doc_with_table(rows: usize, cols: usize, ranges: usize) -> acadrust::CadDocument {
+            let mut t = Table::new(acadrust::types::Vector3::new(0.0, 0.0, 0.0), rows, cols);
+            t.merged_ranges = (0..ranges).map(|_| CellRange::new(0, 0, rows - 1, cols - 1)).collect();
+            let mut doc = acadrust::CadDocument::new();
+            assert!(doc.add_entity(EntityType::Table(Box::new(t))).is_ok());
+            doc
+        }
+
+        /// Overlapping whole-table ranges can't make the merge pass visit more than its budget (#1934).
+        #[test]
+        fn merge_work_is_bounded_by_the_cell_budget() {
+            let mut doc = doc_with_table(10, 10, 50);
+            assert_eq!(table_merges_within(&mut doc, 250), 200, "two whole-table ranges fit, the rest are skipped");
+            let mut doc = doc_with_table(10, 10, 1);
+            assert_eq!(table_merges_within(&mut doc, usize::MAX), 100);
+        }
+
+        /// A height marked only in the style's override flags (as newer files store it) is kept,
+        /// and the same height with no flag at all is cleared (review on #2588). Tested on the
+        /// read document because acadrust's DWG writer doesn't write the override flags.
+        #[test]
+        fn a_style_override_flag_keeps_the_cell_height() {
+            use acadrust::entities::table::{CellStyle, CellStylePropertyFlags};
+            let height = |override_flags: i32| {
+                let mut doc = doc_with_table(1, 1, 0);
+                for e in doc.entities_mut() {
+                    if let EntityType::Table(t) = e {
+                        for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                            let mut s = CellStyle::new();
+                            s.text_height = 0.5;
+                            s.override_flags = override_flags;
+                            cell.style = Some(s);
+                        }
+                    }
+                }
+                table_cell_heights(&mut doc);
+                doc.entities().find_map(|e| match e {
+                    EntityType::Table(t) => t.rows.first()?.cells.first()?.style.as_ref().map(|s| s.text_height),
+                    _ => None,
+                })
+            };
+            assert_eq!(height(CellStylePropertyFlags::TEXT_HEIGHT.bits() as i32), Some(0.5));
+            assert_eq!(height(0), Some(0.0));
+        }
+
+        /// A panic in the post-read fix-ups is an error, not a crash (#1934).
+        #[test]
+        fn a_panic_in_post_processing_is_an_error() {
+            #[allow(clippy::panic)]
+            let r = guarded(AssertUnwindSafe(|| -> usize { panic!("boom") }));
+            assert!(r.is_err());
+            assert_eq!(guarded(|| 3), Ok(3));
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named, own_dxf_to_dwg};
+pub use native::{
+    custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named, dxf_to_dwg_named_noted,
+    dxf_to_dwg_noted, own_dxf_to_dwg, own_dxf_to_dwg_noted,
+};
+
+/// What saving as DWG left out: how many records of each DXF type (upper case) the DWG writer
+/// can't write.
+pub type Unwritten = std::collections::BTreeMap<String, usize>;
 
 /// The bridge in a child process, so a decoder that dies ends one open or save, not the app.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1023,6 +1304,23 @@ pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), St
 #[cfg(target_arch = "wasm32")]
 pub fn encode_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
     own_dxf_to_dwg(dxf, version, linetypes)
+}
+
+// Test-only: the stage ("post_process" or "convert") whose guard the current test checks. The
+// stage then panics on entry, so a test through the public API shows whether it is guarded.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+thread_local! {
+    static PANIC_IN: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Panics when a test asked for `stage` to fail (see [`PANIC_IN`]); does nothing otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::panic)]
+fn fail_in_test(_stage: &str) {
+    #[cfg(test)]
+    if PANIC_IN.with(|p| p.get()) == Some(_stage) {
+        panic!("test-forced panic in {_stage}");
+    }
 }
 
 /// The error for a DWG version CADaddy can't write.
@@ -1065,6 +1363,18 @@ pub fn dxf_to_dwg_named(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> R
 pub fn own_dxf_to_dwg(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<Vec<u8>, String> {
     Err("DWG files can't be written in the web build yet; save as DXF".into())
 }
+#[cfg(target_arch = "wasm32")]
+pub fn dxf_to_dwg_named_noted(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<(Vec<u8>, Unwritten), String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn own_dxf_to_dwg_noted(_dxf: &[u8], _version: &str, _linetypes: &[String]) -> Result<(Vec<u8>, Unwritten), String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn dxf_to_dwg_noted(_dxf: &[u8], _version: &str) -> Result<(Vec<u8>, Unwritten), String> {
+    Err("DWG files can't be written in the web build yet; save as DXF".into())
+}
 
 #[cfg(test)]
 mod tests {
@@ -1092,6 +1402,50 @@ mod tests {
         }
         let note = native::unkept_note(&doc).unwrap();
         assert!(note.starts_with("DWG: 2 objects of other programs (ACME_WIDGET × 2)") && note.contains("would lose them"), "{note}");
+    }
+
+    /// The DXF of an empty drawing, enough for the bridge to make a small DWG.
+    #[cfg(not(target_arch = "wasm32"))]
+    const MINIMAL_DXF: &str = "  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nEOF\n";
+
+    /// Makes `stage` panic on the current thread until dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    struct PanicIn;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl PanicIn {
+        fn at(stage: &'static str) -> Self {
+            PANIC_IN.with(|p| p.set(Some(stage)));
+            Self
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl Drop for PanicIn {
+        fn drop(&mut self) {
+            PANIC_IN.with(|p| p.set(None));
+        }
+    }
+
+    /// The public read reports a panic in the post-read fix-ups as an error: this fails if the
+    /// `guarded` call around `post_process` is taken out (#2402).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reading_a_dwg_survives_a_panic_in_post_processing() {
+        let dwg = dxf_to_dwg(MINIMAL_DXF.as_bytes()).unwrap();
+        assert!(dwg_to_dxf(&dwg).is_ok(), "the DWG reads without the forced panic");
+        let _panic = PanicIn::at("post_process");
+        let err = dwg_to_dxf(&dwg).unwrap_err();
+        assert!(err.contains("the DWG post-processing failed on this file"), "{err}");
+    }
+
+    /// The DXF to DWG conversion reports a panic in its fix-ups as an error, not a crash (#2402).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn converting_to_dwg_survives_a_panic_in_the_fix_ups() {
+        let _panic = PanicIn::at("convert");
+        let err = dxf_to_dwg(MINIMAL_DXF.as_bytes()).unwrap_err();
+        assert!(err.contains("the DXF to DWG conversion failed on this file"), "{err}");
     }
 
     #[test]
@@ -1331,7 +1685,7 @@ mod tests {
         let e = convert(dxf.as_bytes(), None, None, Source::Outside { max_bytes: limit }).unwrap_err();
         assert!(e.starts_with("DXF: the input is") && e.contains("larger than"), "{e}");
         assert!(convert(dxf.as_bytes(), None, None, Source::Outside { max_bytes: dxf.len() }).is_ok());
-        let own = convert(dxf.as_bytes(), None, None, Source::Own).unwrap();
+        let (own, _) = convert(dxf.as_bytes(), None, None, Source::Own).unwrap();
         assert!(is_dwg(&own));
         // The public calls: from outside held to the default limit, CADaddy's own to none.
         assert_eq!(dxf_to_dwg_as(dxf.as_bytes(), "AC1018").unwrap().len(), own_dxf_to_dwg(dxf.as_bytes(), "AC1018", &[]).unwrap().len());
@@ -1346,6 +1700,95 @@ mod tests {
             if let Err(e) = dwg_to_dxf_noted(&dwg[..keep], Limits::DEFAULT) {
                 assert!(!e.contains("partial document") && !e.contains("IO error"), "{keep}: {e}");
             }
+        }
+    }
+
+    /// Saving says what the DWG writer left out, per type: entities of types acadrust's DXF
+    /// reader doesn't model (another program's custom entity) can't be written; a drawing the DWG
+    /// keeps whole reports nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn saving_lists_the_types_the_dwg_writer_leaves_out() {
+        let line = "  0\nLINE\n  8\n0\n100\nAcDbEntity\n100\nAcDbLine\n 10\n0.0\n 20\n0.0\n 30\n0.0\n 11\n10.0\n 21\n0.0\n 31\n0.0\n";
+        let widget = "  0\nACME_WIDGET\n  8\n0\n100\nAcDbEntity\n100\nAcmeWidget\n 10\n1.0\n 20\n2.0\n 30\n0.0\n";
+        let dxf = |body: &str| {
+            format!("  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n{body}  0\nENDSEC\n  0\nEOF\n")
+        };
+        for version in ["AC1015", "AC1018", "AC1032"] {
+            let (dwg, unwritten) = dxf_to_dwg_noted(dxf(&format!("{line}{widget}{widget}")).as_bytes(), version).unwrap();
+            assert!(is_dwg(&dwg), "{version}");
+            assert_eq!(unwritten, [("ACME_WIDGET".to_string(), 2)].into_iter().collect::<Unwritten>(), "{version}");
+        }
+        let (_, unwritten) = dxf_to_dwg_noted(dxf(line).as_bytes(), "AC1032").unwrap();
+        assert!(unwritten.is_empty(), "{unwritten:?}");
+    }
+
+    /// An OLE2FRAME, which CADaddy keeps as its DXF groups without modelling it, is written to
+    /// the DWG with its data: it isn't in the list of what the writer left out.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn ole_frames_are_written_with_their_data() {
+        let ole = "  0\nOLE2FRAME\n  8\n0\n100\nAcDbEntity\n100\nAcDbOle2Frame\n 70\n2\n 10\n1.0\n 20\n9.0\n 30\n0.0\n 11\n8.0\n 21\n2.0\n 31\n0.0\n 71\n2\n 72\n0\n 73\n1\n 90\n4\n310\nDEADBEEF\n  1\nOLE\n";
+        let dxf =
+            format!("  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n{ole}  0\nENDSEC\n  0\nEOF\n");
+        for version in ["AC1015", "AC1018", "AC1032"] {
+            let (dwg, unwritten) = dxf_to_dwg_noted(dxf.as_bytes(), version).unwrap();
+            assert!(unwritten.is_empty(), "{version} {unwritten:?}");
+            let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+            let frames: Vec<Vec<u8>> = back
+                .entities()
+                .filter_map(|e| match e {
+                    acadrust::entities::EntityType::Ole2Frame(o) => Some(o.encoded_payload()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(frames, [vec![0xDE, 0xAD, 0xBE, 0xEF]], "{version}");
+        }
+    }
+
+    /// AutoCAD's DWG scale action (BLOCKSCALEACTION) ends with a byte after its three
+    /// connections that DXF doesn't carry. acadrust 0.6.4 neither read nor wrote it, so AutoCAD
+    /// read past the object and refused every DWG CADaddy wrote with a dynamic block that scales
+    /// ("Error Decrypting Data"); 0.6.5, which this uses, added it. The byte reaches the DWG, and a scale action
+    /// from DXF is written whole, with the byte AutoCAD writes (0).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn scale_actions_keep_the_byte_autocad_reads_after_their_connections() {
+        use acadrust::objects::*;
+        let scale_action = |doc: &acadrust::CadDocument| {
+            doc.objects.values().find_map(|o| match o {
+                ObjectType::DynamicBlock(DynamicBlockObject { data: DynamicBlockData::ScaleAction(s), .. }) => Some(s.clone()),
+                _ => None,
+            })
+        };
+        let mut doc = acadrust::CadDocument::new();
+        let h = doc.allocate_handle();
+        let conn = |code, name: &str| BlockConnection { code, name: name.into() };
+        let mut action = DynamicBlockObject::new("BLOCKSCALEACTION", "AcDbBlockScaleAction");
+        action.handle = h;
+        action.owner = doc.header.named_objects_dict_handle;
+        let mut a = BlockBasePointAction::default();
+        a.action.action.element.name = "Scale".into();
+        a.action.connections = vec![conn(2, "UpdatedBaseX"), conn(2, "UpdatedBaseY")];
+        a.action.dependent = true;
+        a.connections = vec![conn(2, "Scale"), conn(2, "XScale"), conn(2, "YScale")];
+        a.dwg_tail_byte = 7;
+        action.data = DynamicBlockData::ScaleAction(a.clone());
+        doc.objects.insert(h, ObjectType::DynamicBlock(action));
+
+        let dwg = acadrust::DwgWriter::write_to_vec(&doc).unwrap();
+        let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+        assert_eq!(scale_action(&back).map(|s| s.dwg_tail_byte), Some(7), "the byte isn't written");
+
+        let mut dxf = Vec::new();
+        acadrust::DxfWriter::new(&doc).write_to_writer(&mut dxf).unwrap();
+        for version in ["AC1018", "AC1032"] {
+            let dwg = dxf_to_dwg_as(&dxf, version).unwrap();
+            let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+            let read = scale_action(&back).unwrap_or_else(|| panic!("{version}: the scale action wasn't written"));
+            assert_eq!(read.connections, a.connections, "{version}");
+            assert_eq!(read.action.connections, a.action.connections, "{version}");
+            assert_eq!(read.dwg_tail_byte, 0, "{version}");
         }
     }
 }

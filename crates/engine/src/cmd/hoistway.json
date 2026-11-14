@@ -1,0 +1,34 @@
+{
+  "hoistway": {
+    "file_words": ["ELEVATOR", "ELEVATORS", "HOISTWAY", "LIFT"],
+    "hoistway_words": ["HOISTWAY", "HOISTWAYS", "HOISTWAY CLEAR", "CLEAR HOISTWAY", "ELEVATOR SHAFT"],
+    "width_words": ["WIDTH", "WIDE"],
+    "depth_words": ["DEPTH", "DEEP"],
+    "pit_words": ["PIT", "PIT DEPTH", "PIT DEPTH OF"],
+    "overhead_words": ["OVERHEAD", "OVERHEAD CLEARANCE", "TOP CLEARANCE"],
+    "not_shaft_words": ["ENTRANCE", "DOOR", "SILL", "HEADER", "CAB", "CAR", "PLATFORM", "TOLERANCE", "TOLERANCES", "MAXIMUM", "MINIMUM", "MAX", "MIN", "ROUGH", "OPENING", "BEAM"],
+    "clear_range_ft": [3.0, 15.0],
+    "pit_range_ft": [2.0, 15.0],
+    "overhead_range_ft": [8.0, 30.0],
+    "max_clear_ft": 12.0,
+    "tolerance_in": 3.0,
+    "default_pit_ft": 5.0,
+    "default_pit_basis": "trade practice: a passenger elevator's pit is about 5 ft below the lowest landing (ASME A17.1 sets it by the buffer and speed); no document gives it",
+    "default_overhead_ft": 13.0,
+    "default_overhead_basis": "trade practice: a machine-room-less traction elevator needs about 13 ft from the top landing to the hoistway's ceiling (ASME A17.1 top clearances); no document gives it",
+    "shaft_wall_in": 8.0,
+    "shaft_wall_basis": "trade practice: a hoistway is enclosed in rated shaft walls (IBC 713), 8 in masonry where the plan draws none",
+    "cap_ft": 1.0,
+    "pit_slab_ft": 1.0,
+    "rule": "IBC 713 / ASME A17.1",
+    "parts": {
+      "elevator_words": ["ELEVATOR", "ELEVATORS", "ELEV", "HOISTWAY", "HOISTWAYS", "LIFT"],
+      "pit_words": ["PIT", "SUMP"],
+      "top_words": ["SHAFT", "HOISTWAY", "HOISTWAYS", "OVERHEAD", "OVERRUN", "CAB", "CAR", "TOP"],
+      "reach_ft": 1.0,
+      "pit_basis": "trade practice: an elevator pit's devices (its light, receptacle, sump connection, detectors, switch at the pit access) are in the pit, below the lowest landing, their heights measured from the pit floor (NEC 620.23, 620.24, 620.85; ASME A17.1)",
+      "top_basis": "trade practice: a hoistway's devices (its light, receptacle, detectors, the car's and hoistway's circuits, the maker's auxiliary disconnects) are at the top of the hoistway on the top landing, where the machine-room-less controller is, never at a floor height in mid-shaft (NEC 620.22, 620.23, 620.24, 620.51; ASME A17.1)",
+      "source": "an elevator pit or top-of-hoistway (shaft) plan, and a panel row naming an elevator's pit, sump, cab, car, shaft or hoistway: elevator words with a pit word make the pit, else with a top word the top of the hoistway; a device moves only when it stands in a hoistway (within reach_ft of its outline) on the level it was read on"
+    }
+  }
+}

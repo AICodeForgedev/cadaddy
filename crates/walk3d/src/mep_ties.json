@@ -1,0 +1,13 @@
+{
+  "_comment": "Which MEP systems are one service, so a run of one ending on a run of another gets its tee, cross or reducer and the two are connected (Q6598). A service drawn as two layers or systems (a sprinkler main and its branch lines, a water main and its branches, a riser and its floor branches) is still one piping or duct service. Two systems are one service when they are the same kind (duct, pipe, conduit, tray, cable) and: pipes, what they carry (pipe_services.json) and the same circuit of it; ducts, the same duct type (supply, return, exhaust, outside air); otherwise (and for a pipe nothing names, or a service too broad to tie by), the same name once the words for a run's part in its service (`roles`) are left out. `roles`: whole words of the name (split at anything not a letter or digit, lower case). `circuits`: the circuits of a service that never connect to each other (the supply side is the circuit a name with none of these words is on): `contains` pieces of the lower-cased name, `words` whole words; the first that matches wins.",
+  "roles": ["main", "mains", "branch", "branches", "br", "brn", "brch", "riser", "risers", "ris", "rsr", "header", "hdr", "lateral", "laterals", "lat", "runout", "runouts", "mn", "line", "lines", "piping", "pipe", "duct", "ductwork", "distribution", "dist", "cross", "feed"],
+  "loose_services": ["mechanical"],
+  "circuits": [
+    {"key": "return", "contains": ["return", "recirc"], "words": ["r", "ret", "rtn", "chwr", "hhwr", "hwr", "hwc", "dhwr", "cwr", "cndr"]},
+    {"key": "suction", "contains": ["suction"], "words": ["rs"]},
+    {"key": "liquid", "contains": ["liquid"], "words": ["rl"]},
+    {"key": "hot_gas", "contains": ["hot gas"], "words": ["hg"]},
+    {"key": "dry", "contains": ["dry", "preaction", "pre-action", "deluge"], "words": ["dp"]},
+    {"key": "overflow", "contains": ["overflow", "secondary", "emergency"], "words": ["od", "osd", "ol", "ssd"]}
+  ]
+}

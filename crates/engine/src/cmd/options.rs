@@ -51,6 +51,8 @@ pub const PROFILE_VARS: &[&str] = &[
     "APERTURE",
     "GRIPSIZE",
     "CURSORSIZE",
+    "DYNRESMODE",
+    "DYNRESFPS",
     "PICKFIRST",
     "PICKADD",
     "SELECTIONCYCLING",
@@ -159,6 +161,8 @@ pub fn reset(s: &mut Session) {
     st.aperture = d.aperture;
     st.gripsize = d.gripsize;
     st.cursorsize = d.cursorsize;
+    st.dynres = d.dynres;
+    st.dynres_fps = d.dynres_fps;
     st.pickfirst = d.pickfirst;
     st.pickadd = d.pickadd;
     st.groupdisplaymode = d.groupdisplaymode;

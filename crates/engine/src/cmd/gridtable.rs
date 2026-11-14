@@ -48,12 +48,17 @@ impl GridTable {
     }
 }
 
-/// A drawing's straight line segments (lines, polylines' straight pieces).
+/// A drawing's straight line segments (lines, polylines' straight pieces) as printed: none on
+/// a layer that is off or frozen (a PDF's stroked lettering kept there once it was read).
 pub(crate) fn segments(d: &Drawing) -> Vec<(Vec2, Vec2)> {
+    let hidden: std::collections::HashSet<&str> = d.layers.iter().filter(|l| !l.on || l.frozen).map(|l| l.name.as_str()).collect();
     let mut out = Vec::new();
     for e in d.model.iter() {
         if out.len() >= MAX_SEGMENTS {
             break;
+        }
+        if hidden.contains(e.common.layer.as_str()) {
+            continue;
         }
         entity_segments(&e.kind, &mut out);
     }
@@ -107,14 +112,28 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         .map(|x| x.at.y)
         .max_by(f64::total_cmp)?;
     let tol = 0.05 * h;
+    // The header's lettering height: a rule is longer than a letter's stroke (a sheet lettered
+    // in strokes keeps them as lines, and a letter's stem crosses the header's baseline).
+    let header_h = {
+        let mut hs: Vec<f64> = texts
+            .iter()
+            .filter(|x| x.rotation.abs() < 0.05 && (x.at.y - header_y).abs() < 0.3 * h && x.height.is_finite())
+            .map(|x| x.height)
+            .collect();
+        hs.sort_by(f64::total_cmp);
+        hs.get(hs.len() / 2).copied().unwrap_or(h)
+    };
+    let column_line = |(a, b): &&(Vec2, Vec2)| (a.y - b.y).abs() > MIN_COLUMN_HEIGHTS * header_h;
     // The table's width: the rule over its header (between the title and the header), else the
     // one under it, that runs under the title. Lines of the drawing round the table (a plan's
     // walls, the sheet's frame) that cross the header's height are no columns of it.
+    // (A rule drawn a piece per cell, each cell boxed on its own, runs on through its pieces.)
     let rule = |lo: f64, hi: f64, near: f64| {
         segs.iter()
             .filter(|(a, b)| (a.y - b.y).abs() < tol && a.y > lo && a.y < hi && a.x.min(b.x) <= t.at.x + tol && a.x.max(b.x) >= t.at.x - tol)
+            .filter(|(a, b)| (a.x - b.x).abs() > MIN_RULE_HEIGHTS * header_h)
             .min_by(|(p, _), (q, _)| (p.y - near).abs().total_cmp(&(q.y - near).abs()))
-            .map(|(a, b)| (a.x.min(b.x), a.x.max(b.x)))
+            .map(|(a, b)| run_on(segs, a.y, (a.x.min(b.x), a.x.max(b.x)), tol))
     };
     let width = rule(header_y, t.at.y, header_y).or_else(|| rule(header_y - 3.0 * h, header_y, header_y));
     // Columns: the vertical lines crossing the header (within the table's width), and its
@@ -123,6 +142,7 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     let mut xs: Vec<f64> = segs
         .iter()
         .filter(|(a, b)| (a.x - b.x).abs() < tol && a.y.min(b.y) <= header_y && a.y.max(b.y) >= header_y && within(a.x))
+        .filter(column_line)
         .map(|(a, _)| a.x)
         .collect();
     if let Some((w0, w1)) = width {
@@ -143,6 +163,7 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         let next = segs
             .iter()
             .filter(|(a, b)| (a.x - b.x).abs() < tol && at_column(a.x) && a.y.max(b.y) >= reach - tol && a.y.min(b.y) < reach - tol)
+            .filter(column_line)
             .map(|(a, b)| a.y.min(b.y))
             .min_by(f64::total_cmp);
         match next {
@@ -150,17 +171,37 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
             None => break,
         }
     }
-    // Rows: the horizontal lines across the table (most of its width), down to its bottom.
-    let mut ys: Vec<f64> = segs
+    // Rows: the horizontal lines across the table (most of its width, its pieces together when
+    // each cell is boxed on its own), down to its bottom.
+    let mut pieces: Vec<(f64, f64, f64)> = segs
         .iter()
-        .filter(|(a, b)| {
-            (a.y - b.y).abs() < tol
-                && a.y < t.at.y
-                && floor.is_none_or(|f| a.y >= f - tol)
-                && (a.x.max(b.x).min(x1) - a.x.min(b.x).max(x0)) > 0.5 * (x1 - x0)
-        })
-        .map(|(a, _)| a.y)
+        .filter(|(a, b)| (a.y - b.y).abs() < tol && a.y < t.at.y && floor.is_none_or(|f| a.y >= f - tol))
+        .map(|(a, b)| (a.y, a.x.min(b.x).max(x0), a.x.max(b.x).min(x1)))
+        .filter(|(_, l, r)| r > l)
         .collect();
+    pieces.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut ys: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while let Some(&(y, _, _)) = pieces.get(i) {
+        let mut j = i;
+        while pieces.get(j).is_some_and(|p| p.0 - y < tol) {
+            j += 1;
+        }
+        let mut row: Vec<(f64, f64)> = pieces.get(i..j).unwrap_or_default().iter().map(|p| (p.1, p.2)).collect();
+        row.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut covered, mut reach) = (0.0, f64::NEG_INFINITY);
+        for (l, r) in row {
+            let l = l.max(reach);
+            if r > l {
+                covered += r - l;
+            }
+            reach = reach.max(r);
+        }
+        if covered > 0.5 * (x1 - x0) {
+            ys.push(y);
+        }
+        i = j.max(i + 1);
+    }
     ys.sort_by(|a, b| b.total_cmp(a));
     ys.dedup_by(|a, b| (*a - *b).abs() < 0.2 * h);
     // The header's band: between the lines above and below it.
@@ -173,6 +214,7 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         xs.extend(
             segs.iter()
                 .filter(|(a, b)| (a.x - b.x).abs() < tol && a.y.min(b.y) <= below + tol && a.y.max(b.y) >= reach && a.x > x0 + tol && a.x < x1 - tol)
+                .filter(column_line)
                 .map(|(a, _)| a.x),
         );
         xs.sort_by(f64::total_cmp);
@@ -184,7 +226,14 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         let mut inside: Vec<&TextItem> =
             texts.iter().filter(|x| x.rotation.abs() < 0.05 && x.at.y > lo && x.at.y < hi && x.at.x >= x0 - tol && x.at.x < x1).collect();
         inside.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+        // A word printed twice at one spot (a PDF's lettering read off its strokes over the
+        // searchable copy of it) is one word.
+        let mut seen: Vec<&TextItem> = Vec::new();
         for x in inside {
+            if seen.iter().any(|s| s.value == x.value && (s.at - x.at).len() < 0.5 * s.height.max(x.height)) {
+                continue;
+            }
+            seen.push(x);
             if let Some(c) = col(x.at.x).and_then(|c| cells.get_mut(c)) {
                 if !c.is_empty() {
                     c.push(' ');
@@ -194,7 +243,24 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         }
         cells
     };
-    let header_lo = if below.is_finite() { below } else { header_y - 0.6 * h };
+    let mut header_lo = if below.is_finite() { below } else { header_y - 0.6 * h };
+    // Rows with no rules between them or under the header (the table ruled only round its
+    // header and rows): its first column's text lines in the band, the first its heading and
+    // each next one a row's start, the lines down to the next one (a wrapped description) its own.
+    let key_lines: Vec<(f64, f64)> = {
+        let mut ks: Vec<(f64, f64)> = texts
+            .iter()
+            .filter(|x| x.rotation.abs() < 0.05 && x.at.y > header_lo && x.at.y < above && col(x.at.x) == Some(0) && !x.value.trim().is_empty())
+            .map(|x| (x.at.y, x.height.max(1e-9)))
+            .collect();
+        ks.sort_by(|a, b| b.0.total_cmp(&a.0));
+        ks.dedup_by(|a, b| (a.0 - b.0).abs() < 0.5 * b.1);
+        ks
+    };
+    let unruled = below.is_finite() && key_lines.len() >= MIN_UNRULED_LINES;
+    if unruled && let Some((y, hk)) = key_lines.get(1) {
+        header_lo = y + 0.7 * hk;
+    }
     let mut headers = gather(header_lo, above);
     // A group heading (`LAMPS` over `TYPE | COLOR | WATTS`): the text over a rule inside the
     // header's band that runs under some of the columns only. Each column under it is headed by
@@ -225,7 +291,7 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         }
     }
     let mut rows = Vec::new();
-    let mut lower: Vec<f64> = ys.iter().copied().filter(|y| *y <= below + tol).collect();
+    let mut lower: Vec<f64> = if unruled { Vec::new() } else { ys.iter().copied().filter(|y| *y <= below + tol).collect() };
     // Its last row has no rule under it: the column lines' ends close it.
     if lower.len() >= 2
         && let (Some(f), Some(l)) = (floor, lower.last().copied())
@@ -233,9 +299,18 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     {
         lower.push(f);
     }
-    if lower.len() >= 2 {
+    if unruled {
+        for (i, (y, hk)) in key_lines.iter().enumerate().skip(1).take(MAX_ROWS) {
+            let lo = key_lines.get(i + 1).map_or(below, |(n, hn)| n + 0.7 * hn);
+            rows.push(gather(lo, y + 0.7 * hk));
+        }
+    } else if lower.len() >= 2 {
         for w in lower.windows(2).take(MAX_ROWS) {
             let r = gather(w[1], w[0]);
+            // Another table drawn on under it (its notes' table): its title's row ends this one.
+            if another_title(&r) {
+                break;
+            }
             if r.iter().any(|c| !c.is_empty()) {
                 rows.push(r);
             }
@@ -254,7 +329,13 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     }
     // The table's bottom: its last row line, else where its column lines end, else its
     // last text line.
-    let bottom = if lower.len() >= 2 { lower.last().copied() } else { floor }.unwrap_or(below.max(header_y - 80.0 * h));
+    let bottom = if unruled {
+        below
+    } else if lower.len() >= 2 {
+        lower.last().copied().unwrap_or(below)
+    } else {
+        floor.unwrap_or(below.max(header_y - 80.0 * h))
+    };
     let (notes, notes_bottom) = notes_under(texts, x0, x1, bottom);
     Some(GridTable {
         headers,
@@ -264,6 +345,48 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         notes,
         extent: [x0, notes_bottom.min(bottom), x1, t.at.y + h],
     })
+}
+
+/// The extent `(x0, x1)` of the horizontal rule at `y` that `span` is a piece of: the pieces
+/// along it that touch, end to end (a table whose cells are boxed one by one).
+fn run_on(segs: &[(Vec2, Vec2)], y: f64, span: (f64, f64), tol: f64) -> (f64, f64) {
+    let mut along: Vec<(f64, f64)> =
+        segs.iter().filter(|(a, b)| (a.y - y).abs() < tol && (b.y - y).abs() < tol).map(|(a, b)| (a.x.min(b.x), a.x.max(b.x))).collect();
+    along.push(span);
+    along.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // the pieces merged into runs; the run holding `span`
+    let mut run: Option<(f64, f64)> = None;
+    for (p0, p1) in along {
+        match run {
+            Some((r0, r1)) if p0 <= r1 + tol => run = Some((r0, r1.max(p1))),
+            Some((r0, r1)) if r0 <= span.0 + tol && r1 >= span.1 - tol => return (r0, r1),
+            _ => run = Some((p0, p1)),
+        }
+    }
+    run.filter(|(r0, r1)| *r0 <= span.0 + tol && *r1 >= span.1 - tol).unwrap_or(span)
+}
+
+/// A column line is longer than this many header letter heights: a letter's stem (on a sheet
+/// lettered in strokes, kept as lines) is at most one.
+const MIN_COLUMN_HEIGHTS: f64 = 1.3;
+/// The rule a table's width is read from is longer than this many header letter heights (a
+/// letter's bar is at most one).
+const MIN_RULE_HEIGHTS: f64 = 3.0;
+
+/// A table's band holding this many lines in its first column has rows with no rules between
+/// them (a heading and two rows at least).
+const MIN_UNRULED_LINES: usize = 3;
+
+/// A row that is another table's title: one cell printed, naming a schedule or a table of notes.
+fn another_title(r: &[String]) -> bool {
+    let printed: Vec<&String> = r.iter().filter(|c| !c.trim().is_empty()).collect();
+    match printed.as_slice() {
+        [one] => {
+            let u = one.trim().trim_end_matches(':').to_ascii_uppercase();
+            u.contains("SCHEDULE") || u.ends_with("NOTES")
+        }
+        _ => false,
+    }
 }
 
 /// The text lines printed right under a table (`x0`..`x1`, its bottom at `bottom`), top down,
@@ -337,6 +460,68 @@ mod tests {
         assert_eq!(tb.column(&["DESCRIPTION"]), Some(2));
     }
 
+    /// A schedule ruled only round its header and rows (no rule under the header, none between
+    /// rows): its first column's lines are its heading and each row's start, a description's
+    /// wrapped line is its row's; the table of notes drawn on under it is no part of it.
+    #[test]
+    fn a_schedule_with_no_rules_between_its_rows_is_read_by_its_first_columns_lines() {
+        let v = vec![
+            t(2.0, 10.0, "LIGHTING FIXTURE SCHEDULE"),
+            t(0.1, 9.5, "Type"),
+            t(1.1, 9.5, "DESCRIPTION"),
+            t(3.1, 9.5, "WATTS"),
+            t(0.1, 9.1, "EL-1"),
+            t(1.1, 9.1, "EMERGENCY UNIT"),
+            t(3.1, 9.1, "5 VA"),
+            t(1.1, 8.85, "BATTERY"),
+            t(0.1, 8.5, "EX-1"),
+            t(1.1, 8.5, "EXIT SIGN"),
+            t(3.1, 8.5, "2 VA"),
+            t(0.1, 8.1, "LA-1"),
+            t(1.1, 8.1, "TROFFER"),
+            t(1.1, 7.85, "2X4"),
+            t(3.1, 8.1, "29 VA"),
+            t(1.1, 7.3, "LIGHTING FIXTURE SCHEDULE NOTES"),
+            t(0.1, 7.0, "1 INSTALL PER MANUFACTURER"),
+        ];
+        let mut segs: Vec<(Vec2, Vec2)> = [0.0, 1.0, 3.0, 6.0].iter().map(|x| (Vec2::new(*x, 6.9), Vec2::new(*x, 9.7))).collect();
+        segs.extend([9.7, 7.5, 7.2, 6.9].iter().map(|y| (Vec2::new(0.0, *y), Vec2::new(6.0, *y))));
+        let Some(title) = v.first() else { return };
+        let tb = read_at(&v, &segs, title, "X-2").unwrap_or_else(|| panic!("no table"));
+        assert_eq!(tb.headers, ["Type", "DESCRIPTION", "WATTS"], "{tb:#?}");
+        assert_eq!(
+            tb.rows,
+            vec![
+                vec!["EL-1".to_string(), "EMERGENCY UNIT BATTERY".into(), "5 VA".into()],
+                vec!["EX-1".into(), "EXIT SIGN".into(), "2 VA".into()],
+                vec!["LA-1".into(), "TROFFER 2X4".into(), "29 VA".into()],
+            ],
+            "{tb:#?}"
+        );
+    }
+
+    /// A ruled schedule with the table of its notes drawn on under it: the notes' title row ends it.
+    #[test]
+    fn the_title_of_a_table_drawn_on_under_a_schedule_ends_its_rows() {
+        let v = vec![
+            t(2.0, 10.0, "LIGHT FIXTURE SCHEDULE"),
+            t(0.1, 9.5, "TYPE"),
+            t(1.1, 9.5, "DESCRIPTION"),
+            t(0.1, 9.1, "A"),
+            t(1.1, 9.1, "TROFFER"),
+            t(0.1, 8.7, "B"),
+            t(1.1, 8.7, "DOWNLIGHT"),
+            t(1.1, 8.3, "FIXTURE SCHEDULE NOTES"),
+            t(0.1, 7.9, "1"),
+            t(1.1, 7.9, "INSTALL PER MANUFACTURER"),
+        ];
+        let mut segs: Vec<(Vec2, Vec2)> = [0.0, 1.0, 6.0].iter().map(|x| (Vec2::new(*x, 7.7), Vec2::new(*x, 9.7))).collect();
+        segs.extend([9.7, 9.3, 8.9, 8.5, 8.1, 7.7].iter().map(|y| (Vec2::new(0.0, *y), Vec2::new(6.0, *y))));
+        let tables = read_titled(&v, &segs, "light fixture schedule", "X-3");
+        let first: Vec<&str> = tables.iter().flat_map(|tb| tb.rows.iter().filter_map(|r| r.first().map(String::as_str))).collect();
+        assert_eq!(first, ["A", "B"], "{tables:#?}");
+    }
+
     /// fix-lum-fixture-schedule-not-read: a table drawn with its row rules but no border lines
     /// keeps its first and last columns; its last row, with no rule under it, ends where its
     /// column lines (drawn a piece per row) end; the lines printed under it are its notes; a
@@ -382,5 +567,37 @@ mod tests {
         assert_eq!(tb.notes, ["NOTE: 1. ALL FIXTURES LED", "2. SEE SPECIFICATIONS"]);
         assert_eq!(tb.title, "LIGHT FIXTURE SCHEDULE");
         assert!(tb.extent[0] == 0.0 && tb.extent[2] == 6.0 && tb.extent[1] < 7.8 && tb.extent[1] > 7.0, "{:?}", tb.extent);
+    }
+
+    /// Q6516: a sheet lettered in strokes keeps its letters as lines: their stems cross the
+    /// header's baseline and their bars run under the title, and none of them is a column or
+    /// the table's width.
+    #[test]
+    fn a_stroked_tables_letters_are_no_columns() {
+        let mut segs: Vec<(Vec2, Vec2)> = [0.0, 1.0, 3.0, 6.0]
+            .iter()
+            .map(|x| (Vec2::new(*x, 8.5), Vec2::new(*x, 9.7)))
+            .chain([9.7, 9.3, 8.9, 8.5].iter().map(|y| (Vec2::new(0.0, *y), Vec2::new(6.0, *y))))
+            .collect();
+        // the header's letters: stems from its baseline up a letter, and their top bars
+        for x in [0.25, 0.32, 0.4, 1.6, 1.7, 1.8, 4.0, 4.1, 4.3, 4.6] {
+            segs.push((Vec2::new(x, 9.5), Vec2::new(x, 9.6)));
+            segs.push((Vec2::new(x - 0.03, 9.6), Vec2::new(x + 0.05, 9.6)));
+        }
+        // a letter's bar right under the title's start, nearer the header than the table's rule
+        segs.push((Vec2::new(1.95, 9.6), Vec2::new(2.05, 9.6)));
+        let v = vec![
+            t(2.0, 10.0, "LIGHT FIXTURE SCHEDULE"),
+            t(0.2, 9.5, "TAG"),
+            t(1.6, 9.5, "MODEL"),
+            t(4.0, 9.5, "DESCRIPTION"),
+            t(0.1, 9.1, "A"),
+            t(1.1, 9.1, "ML4DM10"),
+            t(3.1, 9.1, "PUBLIC SPACES"),
+        ];
+        let tables = read_titled(&v, &segs, "light fixture schedule", "E-9");
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].headers, ["TAG", "MODEL", "DESCRIPTION"]);
+        assert_eq!(tables[0].rows, vec![vec!["A".to_string(), "ML4DM10".into(), "PUBLIC SPACES".into()]]);
     }
 }

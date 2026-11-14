@@ -124,7 +124,8 @@ fn screen(s: &mut Session, rules: &[&str]) -> Vec<Value> {
 fn a_circuit_tagged_on_two_sheets_has_one_route() {
     // LP1-7 is tagged on its plan and again on an enlarged plan, each read with an estimated
     // route. The routing routes the circuit by the plan's tag (its route is by the devices): the
-    // enlargement's estimate is the same conduit and goes; another circuit's estimate stays.
+    // enlargement's estimate is the same conduit and goes. LP1-9's estimate, none of its devices
+    // built, connects nothing: it goes too, and the circuit is listed as not routed (Q6489).
     let est = |id: &str, y: f64| {
         json!({"system": "E-CIRCUIT-EST", "level": "L1", "id": format!("{id}#1"), "points": [[1800.0, y], [2100.0, y]], "size_in": [0.75, 0], "bottoms_ft": [9.25],
                "size_source": "default", "height_source": "estimated route", "source_sheet": "E-601"})
@@ -138,22 +139,23 @@ fn a_circuit_tagged_on_two_sheets_has_one_route() {
         vec![est("circuit:L1:E-101:LP1-7", 120.0), est("circuit:L1:E-601:LP1-7", 420.0), est("circuit:L1:E-601:LP1-9", 200.0)],
     );
     let left = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "circuit"}));
-    let circuits: Vec<String> =
-        left["rows"].as_array().map(|a| a.iter().filter_map(|x| x["circuit"].as_str().map(String::from)).collect()).unwrap_or_default();
-    assert_eq!(circuits, ["LP1-9"], "{left}");
-    // The one left is the raceway its conductors fill at the routing's minimum (the rules'
-    // 3/4" here), not the reader's default.
-    let size = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "size"}));
-    assert_eq!(size["rows"].as_array().map(|a| a.iter().map(|x| x["size"].clone()).collect::<Vec<_>>()), Some(vec![json!("3/4\"")]), "{size}");
-    // A specification's 1/2" minimum, rerouted: the circuit still has one route, and the estimate
-    // left takes the 1/2" its 2#12 + 1#12G fill.
+    assert_eq!(left["count"], json!(0), "{left}");
+    let not_routed = |s: &mut Session| -> Vec<Value> {
+        let r = s.execute("conduit.route", &json!({})).expect("report");
+        r["unrouted"].as_array().into_iter().flatten().filter(|u| u["no_device"] == json!(true)).map(|u| u["circuit"].clone()).collect()
+    };
+    // Only LP1-9: the enlargement's LP1-7 tag is routed as the plan's.
+    assert_eq!(not_routed(&mut s), vec![json!("LP1-9")]);
+    let routed = count(&mut s, json!({"kind": "conduit", "circuit": "LP1-7"}));
+    assert!(routed["count"].as_u64().unwrap_or(0) > 0, "{routed}");
+    // A specification's 1/2" minimum, rerouted: the circuit still has one route, and no estimate
+    // comes back.
     let methods = json!({"min_size_in": 0.5, "min_size_source": "spec 26 05 33: minimum raceway size 1/2 in"});
     if let Ok(d) = s.doc_mut() {
         d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&methods).unwrap_or_default()));
     }
     s.execute("conduit.reroute", &json!({})).expect("reroute");
     let again = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "circuit"}));
-    assert_eq!(again["rows"].as_array().map(|a| a.iter().map(|x| x["circuit"].clone()).collect::<Vec<_>>()), Some(vec![json!("LP1-9")]), "{again}");
-    let size = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "size"}));
-    assert_eq!(size["rows"].as_array().map(|a| a.iter().map(|x| x["size"].clone()).collect::<Vec<_>>()), Some(vec![json!("1/2\"")]), "{size}");
+    assert_eq!(again["count"], json!(0), "{again}");
+    assert_eq!(not_routed(&mut s), vec![json!("LP1-9")]);
 }

@@ -39,6 +39,50 @@ pub(crate) fn is_luminaire_title(text: &str, electrical: bool) -> bool {
 /// Words a luminaire schedule's title may carry beside its name (`TYPICAL`, `LEVEL 1`).
 const MAX_TITLE_EXTRA_WORDS: usize = 3;
 
+/// Upper case, each run of other characters one space, a space at each end: a phrase is in it as
+/// whole words (`LLF` in ` LUM LLF `, not in ` LLFX `).
+fn spaced(v: &str) -> String {
+    let words: Vec<String> =
+        v.to_ascii_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect();
+    format!(" {} ", words.join(" "))
+}
+
+/// Whether a sheet prints a lighting calculation's results: a text with a word of
+/// `schedules.photometric_sheet_words` (a statistics table's `AVG/MIN`, `MAX/MIN`, a
+/// `CALCULATION SUMMARY`), spaces aside. A photometric plan, where the calculation program also
+/// prints its own table of the luminaires it calculated with.
+pub(crate) fn prints_calculation(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> bool {
+    let squeeze = |v: &str| v.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
+    let words: Vec<String> = cadaddy_mepfix::wordrules::words("schedules.photometric_sheet_words").iter().map(|w| squeeze(w)).collect();
+    texts.iter().take(MAX_SHEET_TEXTS).any(|t| {
+        let v = squeeze(&t.value);
+        words.iter().any(|w| !w.is_empty() && v.contains(w.as_str()))
+    })
+}
+
+/// A sheet's texts looked at for a calculation's results, at most.
+const MAX_SHEET_TEXTS: usize = 200_000;
+
+/// Whether a luminaire table is a lighting calculation's, not the designer's schedule: its title
+/// or a heading names a calculation's field (`schedules.photometric_table_words`: a light loss
+/// factor, an arrangement, a photometric file), or it is printed on a sheet of a calculation's
+/// results ([`prints_calculation`], `calc_sheet`) under a title naming no fixtures
+/// (`schedules.designed_schedule_title_words`: that sheet's `LUMINAIRE SCHEDULE` is the
+/// calculation's, a `LIGHT FIXTURE SCHEDULE` printed there the designer's).
+pub(crate) fn is_calculation_table(t: &GridTable, calc_sheet: bool) -> bool {
+    use cadaddy_mepfix::wordrules;
+    let has = |v: &str, words: &[&str]| {
+        let v = spaced(v);
+        words.iter().any(|w| {
+            let w = spaced(w);
+            w.trim() != "" && v.contains(&w)
+        })
+    };
+    let calc_words = wordrules::words("schedules.photometric_table_words");
+    let named = std::iter::once(&t.title).chain(t.headers.iter()).any(|v| has(v, calc_words));
+    named || (calc_sheet && !has(&t.title, wordrules::words("schedules.designed_schedule_title_words")))
+}
+
 /// Whether a cell reads as a type mark: short, one word, a letter in it (`A`, `F1`, `XA`), and
 /// no voltage ([`voltage_shaped`]: `MVOLT`, `120V`).
 fn mark_shaped(v: &str) -> bool {
@@ -541,5 +585,25 @@ mod tests {
         assert_eq!(marks(&tags(&["A", "B", "ZZ"])), ["A", "B"]);
         assert_eq!(marks(&tags(&["L2"])), ["L1", "L2"]);
         assert_eq!(marks(&tags(&["QQ"])), ["L1", "L2"], "no column on the plans: the first");
+    }
+
+    /// fix-fixture-schedule-wrong-table: a lighting calculation's table is told by a heading or
+    /// title naming a calculation's field (as whole words), or by a title naming no fixtures on a
+    /// sheet of a calculation's results; the designer's schedule is not, wherever it is printed.
+    #[test]
+    fn a_lighting_calculations_table_is_told_from_the_designers_schedule() {
+        let row = |c: &[&str]| c.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let table = |title: &str, headers: &[&str]| GridTable { title: title.into(), headers: row(headers), ..GridTable::default() };
+        let designed = table("LIGHT FIXTURE SCHEDULE", &["MARK", "MANUFACTURER", "MODEL", "VOLTAGE", "WATTS"]);
+        assert!(!is_calculation_table(&designed, false));
+        assert!(!is_calculation_table(&designed, true), "the designer's schedule on a photometric plan");
+        assert!(is_calculation_table(&table("LUMINAIRE SCHEDULE", &["SYMBOL", "QTY", "Light Loss Factor", "DESCRIPTION"]), false));
+        assert!(is_calculation_table(&table("LUMINAIRE SCHEDULE", &["LABEL", "Lum. Watts"]), false));
+        assert!(!is_calculation_table(&table("LUMINAIRE SCHEDULE", &["TYPE", "LLFX", "DESCRIPTION"]), false), "a word of its own");
+        assert!(is_calculation_table(&table("LUMINAIRE SCHEDULE", &["LABEL", "QTY", "DESCRIPTION"]), true));
+        let t =
+            |v: &str| cadaddy_mepfix::sheet_facts::TextItem { value: v.into(), at: cadaddy_geom::Vec2::new(0.0, 0.0), height: 0.1, rotation: 0.0 };
+        assert!(prints_calculation(&[t("PARKING LOT"), t("Max / Min")]));
+        assert!(!prints_calculation(&[t("LIGHTING PLAN"), t("MINIMUM 1 FC AT EGRESS")]));
     }
 }

@@ -4,6 +4,8 @@
 //! Rebuild and Walk. A thin view over the engine's `bspec.get`, `bspec.set`, `model.build` and
 //! `model.issues`: it reads their results and acts through [`CadApp::run`].
 
+use std::sync::Arc;
+
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -35,7 +37,20 @@ struct View {
     stored: bool,
     built: bool,
     parts: Vec<Part>,
+    /// How many parts are approved.
+    approved: usize,
+    /// The palette's rows under its buttons, in order: each section's title, then its parts.
+    rows: Vec<Row>,
     error: Option<String>,
+}
+
+/// A row of the palette's list, laid out only while it is on screen (Q6542).
+#[derive(Clone, Copy, Debug)]
+enum Row {
+    /// The title of the section the part at this index starts.
+    Section(usize),
+    /// The part at this index, with its Edit and Remove buttons (and its JSON while edited).
+    Part(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -69,10 +84,11 @@ fn key(app: &CadApp) -> (u64, u64) {
     app.session.state().map_or((0, 0), |st| (st.uid, st.revision))
 }
 
-fn view(app: &mut CadApp, ui: &egui::Ui) -> View {
+/// The palette's view, shared: a frame reads the spec and its parts without copying them (Q6482).
+fn view(app: &mut CadApp, ui: &egui::Ui) -> Arc<View> {
     let id = egui::Id::new("p2m-view");
     let k = key(app);
-    if let Some(v) = ui.data(|d| d.get_temp::<View>(id)).filter(|v| v.key == k) {
+    if let Some(v) = ui.data(|d| d.get_temp::<Arc<View>>(id)).filter(|v| v.key == k) {
         return v;
     }
     let v = match app.run("bspec.get", json!({})) {
@@ -102,12 +118,23 @@ fn view(app: &mut CadApp, ui: &egui::Ui) -> View {
                     })
                     .collect(),
                 spec: r["spec"].clone(),
-                error: None,
+                ..View::default()
             }
         }
         Err(e) => View { key: k, error: Some(e), ..View::default() },
     };
-    ui.data_mut(|d| d.insert_temp(id, v.clone()));
+    let mut v = v;
+    v.approved = v.parts.iter().filter(|p| p.approved).count();
+    let mut last: Option<&str> = None;
+    for (i, p) in v.parts.iter().enumerate() {
+        if last != Some(p.section.as_str()) {
+            last = Some(p.section.as_str());
+            v.rows.push(Row::Section(i));
+        }
+        v.rows.push(Row::Part(i));
+    }
+    let v = Arc::new(v);
+    ui.data_mut(|d| d.insert_temp(id, Arc::clone(&v)));
     v
 }
 
@@ -153,7 +180,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let issues_id = egui::Id::new("p2m-issues");
     let mut editing: Option<Editing> = ui.data(|d| d.get_temp(edit_id));
     let mut act: Option<Act> = None;
-    egui::ScrollArea::vertical().id_salt("p2m-scroll").auto_shrink([false, false]).show(ui, |ui| {
+    // The issues last checked, under the parts.
+    let issues: Option<Arc<Issues>> = ui.data(|d| d.get_temp(issues_id));
+    let scroll = egui::ScrollArea::vertical().id_salt("p2m-scroll").auto_shrink([false, false]);
+    scroll.show_viewport(ui, |ui, viewport| {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
@@ -180,7 +210,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            let n = v.parts.iter().filter(|p| p.approved).count();
+            let n = v.approved;
             let source = if v.stored { crate::tl!("Kept in the drawing.") } else { crate::tl!("Drafted from the walk rules; not saved yet.") };
             ui.label(RichText::new(source).color(t.text_dim));
             ui.label(RichText::new(crate::tf!("{n} of {total} approved", n = n, total = v.parts.len())).color(t.text_dim));
@@ -198,106 +228,61 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             if !v.stored && ui.button(crate::tl!("Save Spec")).clicked() {
                 act = Some(Act::Set(json!({})));
             }
-            if v.parts.iter().any(|p| !p.approved) && ui.button(crate::tl!("Approve All")).clicked() {
+            if v.approved < v.parts.len() && ui.button(crate::tl!("Approve All")).clicked() {
                 act = Some(Act::Set(json!({ "approved": v.parts.iter().map(|p| p.key.clone()).collect::<Vec<_>>() })));
             }
         });
-        let mut last = String::new();
-        for p in &v.parts {
-            if p.section != last {
-                last = p.section.clone();
+        // The parts, then the issues: one list, of which only the rows on screen are laid out.
+        let n_issues = issues.as_ref().map_or(0, |is| is.items.len() + 1);
+        let n = v.rows.len().saturating_add(n_issues);
+        crate::asked::rows_in_view(ui, viewport, egui::Id::new("p2m-rows"), &v.key, n, |ui, r| match v.rows.get(r) {
+            Some(Row::Section(i)) => {
+                let Some(p) = v.parts.get(*i) else { return };
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
                     ui.label(RichText::new(crate::i18n::t(section_title(&p.section))).strong());
                 });
             }
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                let mut on = p.approved;
-                if ui.checkbox(&mut on, "").on_hover_text(crate::tl!("Approved")).changed() {
-                    let mut list: Vec<String> = v.parts.iter().filter(|x| x.approved && x.key != p.key).map(|x| x.key.clone()).collect();
-                    if on {
-                        list.push(p.key.clone());
-                    }
-                    act = Some(Act::Set(json!({ "approved": list })));
-                }
-                if let Some(why) = p.guess.as_ref().filter(|_| !p.approved) {
-                    ui.label(RichText::new(crate::tl!("guess")).color(t.warn).small()).on_hover_text(why);
-                }
-                ui.add(egui::Label::new(RichText::new(&p.text).color(if p.approved { t.text } else { t.text_dim })).wrap());
-            });
-            let Some(path) = &p.path else { continue };
-            ui.horizontal(|ui| {
-                ui.add_space(36.0);
-                if ui.small_button(crate::tl!("Edit")).on_hover_text(&p.key).clicked() {
-                    let text = serde_json::to_string_pretty(&path.get(&v.spec)).unwrap_or_default();
-                    editing = Some(Editing { key: p.key.clone(), text, error: None });
-                }
-                if let Some(remove) = path.patch(&v.spec, None)
-                    && ui.small_button(crate::tl!("Remove")).on_hover_text(&p.key).clicked()
-                {
-                    act = Some(Act::Change(remove));
-                }
-            });
-            if let Some(ed) = editing.as_mut().filter(|e| e.key == p.key) {
-                ui.horizontal(|ui| {
-                    ui.add_space(36.0);
-                    ui.add(egui::TextEdit::multiline(&mut ed.text).code_editor().desired_rows(6).desired_width(f32::INFINITY));
-                });
-                if let Some(e) = &ed.error {
-                    ui.horizontal(|ui| {
-                        ui.add_space(36.0);
-                        ui.label(RichText::new(e).color(t.warn));
-                    });
-                }
-                let mut close = false;
-                ui.horizontal(|ui| {
-                    ui.add_space(36.0);
-                    if ui.button(crate::tl!("Apply")).clicked() {
-                        match serde_json::from_str::<Value>(&ed.text) {
-                            Ok(new) => act = path.patch(&v.spec, Some(new)).map(Act::Change),
-                            Err(e) => ed.error = Some(e.to_string()),
+            Some(Row::Part(i)) => {
+                let Some(p) = v.parts.get(*i) else { return };
+                part_row(ui, &v, p, &t, &mut editing, &mut act);
+            }
+            None => {
+                let Some(is) = &issues else { return };
+                match r.checked_sub(v.rows.len()) {
+                    Some(0) => {
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(crate::tf!("Issues ({n})", n = is.items.len())).strong());
+                            if is.key != v.key {
+                                ui.label(RichText::new(crate::tl!("The drawing changed since; check again.")).color(t.text_dim));
+                            }
+                        });
+                        if is.items.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.add_space(12.0);
+                                ui.label(RichText::new(crate::tl!("No issues found.")).color(t.text_dim));
+                            });
                         }
                     }
-                    if ui.button(crate::tl!("Cancel")).clicked() {
-                        close = true;
+                    Some(j) => {
+                        let Some(i) = is.items.get(j - 1) else { return };
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            let has_place = i.get("at").is_some() || i["handles"].as_array().is_some_and(|h| !h.is_empty());
+                            if ui.add_enabled(has_place, egui::Button::new(crate::tl!("Zoom")).small()).clicked() {
+                                act = Some(Act::Zoom(i.clone()));
+                            }
+                            ui.add(egui::Label::new(RichText::new(i["message"].as_str().unwrap_or_default()).color(t.warn)).wrap());
+                        });
                     }
-                });
-                if close {
-                    editing = None;
+                    None => {}
                 }
             }
-        }
-        // The model's issues, as last checked.
-        let issues: Option<Issues> = ui.data(|d| d.get_temp(issues_id));
-        if let Some(is) = issues {
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                ui.label(RichText::new(crate::tf!("Issues ({n})", n = is.items.len())).strong());
-                if is.key != v.key {
-                    ui.label(RichText::new(crate::tl!("The drawing changed since; check again.")).color(t.text_dim));
-                }
-            });
-            if is.items.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.label(RichText::new(crate::tl!("No issues found.")).color(t.text_dim));
-                });
-            }
-            for i in &is.items {
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    let has_place = i.get("at").is_some() || i["handles"].as_array().is_some_and(|h| !h.is_empty());
-                    if ui.add_enabled(has_place, egui::Button::new(crate::tl!("Zoom")).small()).clicked() {
-                        act = Some(Act::Zoom(i.clone()));
-                    }
-                    ui.add(egui::Label::new(RichText::new(i["message"].as_str().unwrap_or_default()).color(t.warn)).wrap());
-                });
-            }
-        }
+        });
     });
     ui.data_mut(|d| match &editing {
         Some(e) => {
@@ -309,7 +294,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let check = |app: &mut CadApp, ui: &egui::Ui| match app.run("model.issues", json!({ "limit": 1000 })) {
         Ok(r) => {
             let items = r["issues"].as_array().cloned().unwrap_or_default();
-            ui.data_mut(|d| d.insert_temp(issues_id, Issues { key: key(app), items }));
+            ui.data_mut(|d| d.insert_temp(issues_id, Arc::new(Issues { key: key(app), items })));
         }
         Err(e) => app.set_status(e),
     };
@@ -342,7 +327,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     Ok(r) => {
                         let items = r["issues"].as_array().cloned().unwrap_or_default();
                         let k = key(app);
-                        c.data_mut(|d| d.insert_temp(issues_id, Issues { key: k, items }));
+                        c.data_mut(|d| d.insert_temp(issues_id, Arc::new(Issues { key: k, items })));
                     }
                     Err(e) => app.set_status(e),
                 },
@@ -357,6 +342,69 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         Some(Act::Check) => check(app, ui),
         Some(Act::Zoom(i)) => zoom_to(app, &i, v.spec["units_per_foot"].as_f64().filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0)),
         None => {}
+    }
+}
+
+/// One part: its approval, its text, its Edit and Remove buttons, and its JSON while edited.
+fn part_row(ui: &mut egui::Ui, v: &View, p: &Part, t: &crate::theme::Tokens, editing: &mut Option<Editing>, act: &mut Option<Act>) {
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let mut on = p.approved;
+        if ui.checkbox(&mut on, "").on_hover_text(crate::tl!("Approved")).changed() {
+            let mut list: Vec<String> = v.parts.iter().filter(|x| x.approved && x.key != p.key).map(|x| x.key.clone()).collect();
+            if on {
+                list.push(p.key.clone());
+            }
+            *act = Some(Act::Set(json!({ "approved": list })));
+        }
+        if let Some(why) = p.guess.as_ref().filter(|_| !p.approved) {
+            ui.label(RichText::new(crate::tl!("guess")).color(t.warn).small()).on_hover_text(why);
+        }
+        ui.add(egui::Label::new(RichText::new(&p.text).color(if p.approved { t.text } else { t.text_dim })).wrap());
+    });
+    let Some(path) = &p.path else { return };
+    ui.horizontal(|ui| {
+        ui.add_space(36.0);
+        if ui.small_button(crate::tl!("Edit")).on_hover_text(&p.key).clicked() {
+            let text = serde_json::to_string_pretty(&path.get(&v.spec)).unwrap_or_default();
+            *editing = Some(Editing { key: p.key.clone(), text, error: None });
+        }
+        // Whether it can be removed is known from its place; the patch (which reads the spec) is
+        // made only on the click (Q6542).
+        let removable = !matches!(path, PartPath::Value { removable: false, .. });
+        if removable
+            && ui.small_button(crate::tl!("Remove")).on_hover_text(&p.key).clicked()
+            && let Some(remove) = path.patch(&v.spec, None)
+        {
+            *act = Some(Act::Change(remove));
+        }
+    });
+    let Some(ed) = editing.as_mut().filter(|e| e.key == p.key) else { return };
+    ui.horizontal(|ui| {
+        ui.add_space(36.0);
+        ui.add(egui::TextEdit::multiline(&mut ed.text).code_editor().desired_rows(6).desired_width(f32::INFINITY));
+    });
+    if let Some(e) = &ed.error {
+        ui.horizontal(|ui| {
+            ui.add_space(36.0);
+            ui.label(RichText::new(e).color(t.warn));
+        });
+    }
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.add_space(36.0);
+        if ui.button(crate::tl!("Apply")).clicked() {
+            match serde_json::from_str::<Value>(&ed.text) {
+                Ok(new) => *act = path.patch(&v.spec, Some(new)).map(Act::Change),
+                Err(e) => ed.error = Some(e.to_string()),
+            }
+        }
+        if ui.button(crate::tl!("Cancel")).clicked() {
+            close = true;
+        }
+    });
+    if close {
+        *editing = None;
     }
 }
 

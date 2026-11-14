@@ -10,10 +10,13 @@
 mod helper;
 
 mod accuracytrend;
+mod bimsystems;
+mod bimviews;
 mod clash_rerun;
 mod compare_export;
 mod covercheck;
 mod fidelity;
+mod governing;
 mod printcheck;
 mod reviewimpact;
 mod validateagent;

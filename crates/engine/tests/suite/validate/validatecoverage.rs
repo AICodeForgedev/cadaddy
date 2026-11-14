@@ -200,6 +200,12 @@ fn spec() -> Value {
 /// M-501 repeating two of the QSD (and nothing else), E-101's keynote and its marker, and the
 /// model's dampers (`qsd` of the QSD kind, `qfd` of the FRD kind).
 fn job(qsd: usize, qfd: usize) -> Session {
+    job_with(qsd, qfd, &|_| {}, &[])
+}
+
+/// [`job`] with more drawn on its sheets (`draw`) and more model devices (`more`: building point,
+/// type tag, kind).
+fn job_with(qsd: usize, qfd: usize, draw: &dyn Fn(&mut Session), more: &[([f64; 2], &str, &str)]) -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
     rect(&mut s, [0.0, 0.0], [40.0, 24.0]);
@@ -227,20 +233,27 @@ fn job(qsd: usize, qfd: usize) -> Session {
     // E-101: the keynote powering a motorized damper, and its marker in room 902.
     electrical_keynotes(&mut s);
     marker(&mut s, [30.0, 20.0], E, "1");
+    draw(&mut s);
     let mut items: Vec<([f64; 2], &str)> = Vec::new();
+    let mut kinds: Vec<&str> = Vec::new();
     for p in [[5.0, 12.3], [15.0, 12.3], [25.0, 12.3]].iter().take(qsd) {
         items.push((*p, "QSD"));
+        kinds.push("fire_smoke_damper");
     }
     for p in [[20.3, 16.0], [20.3, 20.0]].iter().take(qfd) {
         items.push((*p, "FRD"));
+        kinds.push("fire_damper");
+    }
+    for (p, ty, k) in more {
+        items.push((*p, ty));
+        kinds.push(k);
     }
     let (s, hs) = if items.is_empty() { (s, Vec::new()) } else { devices(s, &items) };
     let mut s = s;
     let r = s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{r}");
     s.execute("model.build", &json!({})).unwrap();
-    for (h, (_, ty)) in hs.iter().zip(&items) {
-        let kind = if *ty == "QSD" { "fire_smoke_damper" } else { "fire_damper" };
+    for (h, kind) in hs.iter().zip(&kinds) {
         s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "M-101", "kind": kind})).unwrap();
     }
     s
@@ -413,6 +426,71 @@ fn an_electrical_keynote_powering_a_kind_with_no_elements_fails() {
     assert_eq!(fs[0]["kind"], "motorized damper", "{}", fs[0]);
     // The note's receptacle is the electrical sheet's own kind, never another trade's.
     assert!(fs.iter().all(|f| f["kind"] != "receptacle" || f["measured"]["connected"].as_array().is_none_or(|a| a.is_empty())));
+}
+
+/// The mechanical schedules, on M-101 right of its legend: an air outlet schedule listing `QXD-1`…`QXD-3`
+/// down its MARK column, a unit schedule drawn turned listing `QXD-5` along its MARK row, an
+/// untitled table listing `QXD-6`, and the duct detectors' own schedule listing `QXD-7` (TAG).
+/// The plan tags each of them and an unlisted `QXD-4`.
+fn numbered_marks(s: &mut Session) {
+    layer(s, "M-ANNO-TEXT");
+    let a = at([110.0, 22.0]);
+    text(s, a, "AIR OUTLET SCHEDULE", 9.0);
+    text(s, [a[0], a[1] - 14.0], "MARK", 6.0);
+    text(s, [a[0] + 50.0, a[1] - 14.0], "NECK SIZE", 6.0);
+    for (i, m) in ["QXD-1", "QXD-2", "QXD-3"].iter().enumerate() {
+        let y = a[1] - 26.0 - 10.0 * i as f64;
+        text(s, [a[0], y], m, 6.0);
+        text(s, [a[0] + 50.0, y], "10x10", 6.0);
+    }
+    let u = at([110.0, 10.0]);
+    text(s, u, "UNIT SCHEDULE", 9.0);
+    text(s, [u[0], u[1] - 14.0], "MARK", 6.0);
+    text(s, [u[0] + 40.0, u[1] - 14.0], "QXD-5", 6.0);
+    text(s, [u[0], u[1] - 26.0], "CFM", 6.0);
+    text(s, [u[0] + 40.0, u[1] - 26.0], "400", 6.0);
+    let n = at([140.0, 10.0]);
+    text(s, [n[0], n[1] - 14.0], "MARK", 6.0);
+    text(s, [n[0], n[1] - 26.0], "QXD-6", 6.0);
+    let d = at([140.0, 22.0]);
+    text(s, d, "DUCT DETECTOR SCHEDULE", 9.0);
+    text(s, [d[0], d[1] - 14.0], "TAG", 6.0);
+    text(s, [d[0], d[1] - 26.0], "QXD-7", 6.0);
+    for (p, m) in [([6.0, 8.0], "QXD-1"), ([12.0, 8.0], "QXD-2"), ([18.0, 8.0], "QXD-3"), ([4.0, 20.0], "QXD-4"), ([26.0, 8.0], "QXD-5")] {
+        tag(s, p, M, m);
+    }
+    tag(s, [32.0, 8.0], M, "QXD-6");
+    tag(s, [37.0, 8.0], M, "QXD-7");
+}
+
+/// (6) A numbered tag a schedule lists as its row (`QXD-2` an air outlet, whether the schedule
+/// runs down a column, along a row, or has no title) is that schedule's object, not the kind the
+/// legend gives its bare code (`QXD` a duct detector): neither a plan mark nor a model element
+/// of it. The kind's own schedule's numbered tag (`QXD-7`) and one no schedule lists (`QXD-4`)
+/// are its marks.
+#[test]
+fn a_numbered_tag_another_kinds_schedule_lists_is_not_the_legend_codes_kind() {
+    let mut s = job_with(3, 2, &numbered_marks, &[([12.3, 8.0], "QXD-2", "air_terminal")]);
+    let (_, fs) = coverage(&mut s);
+    let qxd = kind(&fs, "dual duct detector");
+    // The four bare QXD, QXD-4 and QXD-7: six, none in the model (the QXD-2 air outlet is no
+    // detector).
+    assert_eq!(qxd["measured"]["plan_marks"], 6, "{qxd}");
+    assert_eq!(qxd["measured"]["model"], 0, "{qxd}");
+    assert_eq!(qxd["measured"]["model_by_tag"], 0, "{qxd}");
+    // Without the schedules every numbered tag is the legend code's.
+    let mut s = job_with(
+        3,
+        2,
+        &|s| {
+            for (p, m) in [([6.0, 8.0], "QXD-1"), ([12.0, 8.0], "QXD-2"), ([4.0, 20.0], "QXD-4")] {
+                tag(s, p, M, m);
+            }
+        },
+        &[],
+    );
+    let (_, fs) = coverage(&mut s);
+    assert_eq!(kind(&fs, "dual duct detector")["measured"]["plan_marks"], 7);
 }
 
 fn dir(name: &str) -> PathBuf {

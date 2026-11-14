@@ -38,11 +38,11 @@ fn arabic_text_is_put_in_display_order() {
 
 #[test]
 fn the_palettes_swap_sides_and_back() {
-    let w = Workspace::default();
+    let w = Workspace::docked();
     let m = w.mirrored();
     assert_ne!(layout(&w), layout(&m));
     assert_eq!(layout(&m.mirrored()), layout(&w), "mirroring twice is the original");
-    // The default: Tool Sets on the left, Layers and Properties on the right. Mirrored: the
+    // Docked: Tool Sets on the left, Layers and Properties on the right. Mirrored: the
     // first (left) side is the Layers/Properties stack, sized as before.
     let root = layout(&m)["root"].clone();
     let split = &root["Split"];

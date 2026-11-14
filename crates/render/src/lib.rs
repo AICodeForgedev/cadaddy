@@ -13,6 +13,7 @@ mod cache;
 pub use cache::{ChunkCache, build_cached, build_cached_into};
 pub mod clip;
 pub mod clouds;
+pub mod detail;
 mod dim;
 pub mod emf;
 pub mod encode;
@@ -35,6 +36,7 @@ pub mod pen;
 pub mod pia;
 mod plotstyle;
 mod point;
+pub mod profile;
 pub mod raster;
 pub mod shade;
 pub mod shapes;
@@ -184,6 +186,10 @@ pub struct DisplayList {
     pub sheet: Option<Sheet>,
     /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
     pub expanded: usize,
+    /// The expansion budget was spent: block contents past it are not in the list. The screen,
+    /// plots and exports draw what is here; the CLI and the control channel report this, so an
+    /// output that leaves contents out is never silent.
+    pub truncated: bool,
     /// Plot style end, join and fill style per primitive (parallel to `prims`; missing entries
     /// are "use object"), turned into geometry by [`pen::apply`].
     pub pens: Vec<Pen>,
@@ -314,6 +320,10 @@ pub struct Options {
     pub min_dash: f64,
     /// Draw text (off for very coarse previews).
     pub text: bool,
+    /// Draw lines with their linetypes. Off, every line is drawn whole and continuous, as picking
+    /// sees it: a dashed line is hit across its gaps, and a small pattern on a long line makes
+    /// millions of dashes.
+    pub linetypes: bool,
     /// Highlighted (selected) handles are not special here; the canvas overlays them.
     pub fill: bool,
     pub lineweights: bool,
@@ -349,6 +359,12 @@ pub struct Options {
     /// Leave hatches out (their pattern lines and fills): a boundary search follows only the
     /// linework, also inside block references and arrays.
     pub skip_hatches: bool,
+    /// The screen's detail level ([`detail`]): what is under a pixel, unreadable text, fine
+    /// hatch patterns and symbols too small for their tier are drawn as less. `None` (plots,
+    /// exports, picks and every other build) draws everything in full; plots ignore it.
+    pub detail: Option<detail::Detail>,
+    /// Count where the build spends its time ([`profile`]); `None` (the default) counts nothing.
+    pub profile: Option<std::sync::Arc<profile::BuildProfile>>,
 }
 
 impl Options {
@@ -364,6 +380,7 @@ impl Default for Options {
             tolerance: 0.001,
             min_dash: 0.0,
             text: true,
+            linetypes: true,
             fill: true,
             lineweights: false,
             view_height: 0.0,
@@ -377,6 +394,8 @@ impl Default for Options {
             color_overrides: std::collections::BTreeMap::new(),
             layer_lines: Vec::new(),
             skip_hatches: false,
+            detail: None,
+            profile: None,
         }
     }
 }
@@ -445,6 +464,8 @@ struct Builder<'a> {
     /// Drawing paper space itself (a layout's title block), not model space plotted or seen
     /// through a viewport.
     paper: bool,
+    /// Where the time goes, when [`Options::profile`] asks.
+    prof: profile::Local,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -717,10 +738,14 @@ impl Builder<'_> {
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
         self.list.expanded = self.list.expanded.saturating_add(1);
-        match self.shared_budget {
+        let ok = match self.shared_budget {
             Some(spent) => spent.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < MAX_BLOCK_EXPANSION,
             None => self.list.expanded <= MAX_BLOCK_EXPANSION,
+        };
+        if !ok {
+            self.list.truncated = true;
         }
+        ok
     }
 }
 
@@ -758,8 +783,17 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     let opts = &with_point_view(d, space, opts);
     let styler = style_table(d, space, opts, plotting).map(|t| plotstyle::Styler::new(d, t));
     let paper = matches!(space, Space::Paper(_));
-    let mut b =
-        Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None, transparency: 0, paper };
+    let mut b = Builder {
+        list: DisplayList::default(),
+        opts,
+        plotting,
+        styles: styler.as_ref(),
+        named: None,
+        shared_budget: None,
+        transparency: 0,
+        paper,
+        prof: profile::Local::new(opts),
+    };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
@@ -837,6 +871,7 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadaddy_doc::EntityStore
                 shared_budget: Some(&budget),
                 transparency: 0,
                 paper: false,
+                prof: profile::Local::new(opts),
             };
             for e in chunk {
                 top_entity(&mut part, d, e);
@@ -881,6 +916,7 @@ fn append(dst: &mut DisplayList, src: DisplayList) {
     dst.pens.extend(src.pens);
     dst.bounds = dst.bounds.union(&src.bounds);
     dst.expanded = dst.expanded.saturating_add(src.expanded);
+    dst.truncated |= src.truncated;
 }
 
 /// The plot style table a build draws with: the one in `opts`, else (on screen) the layout's
@@ -976,6 +1012,7 @@ pub fn viewport_content(d: &Drawing, space: &Space, handle: Handle, area: Bounds
         shared_budget: None,
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(opts),
     };
     contents(&mut b, d, vp, area, &Clip::Rect(area));
     b.list
@@ -1050,6 +1087,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
         shared_budget: Some(&budget),
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(b.opts),
     };
     #[cfg(not(target_arch = "wasm32"))]
     let parallel = !b.plotting && b.styles.is_none() && d.model.len() >= 2 * PARALLEL_CHUNK;
@@ -1074,6 +1112,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
                         shared_budget: Some(&budget),
                         transparency: 0,
                         paper: false,
+                        prof: profile::Local::new(opts),
                     };
                     let c = ctx();
                     for me in chunk.iter().filter(|me| seen(me)) {
@@ -1106,6 +1145,7 @@ fn contents(b: &mut Builder, d: &Drawing, vp: &cadaddy_doc::Viewport, area: Boun
     // The contents are in paper units now: draw their pens before clipping.
     pen::apply(&mut sub.list, b.list.sheet.map_or_else(|| paper::paper_unit_mm(d), |s| s.unit_mm));
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
+    b.list.truncated |= sub.list.truncated;
     append_clipped(&mut b.list, &sub.list, clip);
 }
 
@@ -1240,6 +1280,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
         shared_budget: None,
         transparency: 0,
         paper: false,
+        prof: profile::Local::new(opts),
     };
     for e in ents {
         top_entity(&mut b, d, e);
@@ -1446,7 +1487,9 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     let (saved, saved_transparency) = (b.named, b.transparency);
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
     let first = b.list.prims.len();
+    let timed = b.prof.start();
     entity_parts(b, ctx, e);
+    b.prof.stop(timed, profile::Part::of(&e.kind), ctx.depth == 0, b.list.prims.len() > first);
     // While a reference is edited in place, the rest of the drawing is faded (XFADECTL).
     if ctx.depth == 0
         && !b.plotting
@@ -1514,8 +1557,30 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
     };
     let tol = b.opts.tolerance / detail_scale(b, &ctx.xf).max(1e-12);
     let lw = if b.opts.lineweights { lw } else { 0.0 };
+    // The screen's detail level: drawn as less when too small to show (never in a plot).
+    if !b.plotting
+        && let Some(det) = &b.opts.detail
+    {
+        match det.look(ctx.d, e, &ctx.xf) {
+            detail::Look::Full => {}
+            detail::Look::Dot(p) => return b.point(ctx, rgb, p),
+            detail::Look::Box([p0, p1, p2, p3]) => {
+                b.polyline(ctx, rgb, lw, &[p0, p1, p2, p3, p0]);
+                if let EntityKind::Insert(ins) = &e.kind {
+                    attributes(b, ctx, e, ins, rgb);
+                }
+                return;
+            }
+            detail::Look::Bars(quads) => {
+                if b.opts.text {
+                    bars(b, ctx, rgb, &quads, det.rules.bar_transparency);
+                }
+                return;
+            }
+        }
+    }
     // Stroke a polyline with the entity's linetype.
-    let stroke = |b: &mut Builder, pts: &[Vec2]| match &lt {
+    let stroke = |b: &mut Builder, pts: &[Vec2]| match lt.as_ref().filter(|_| b.opts.linetypes) {
         Some(lt) => {
             let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
             for dash in linetype::apply(pts, lt, ltscale, min) {
@@ -1541,6 +1606,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            // Annotative text with "Match orientation to layout" is drawn upright (#2498).
+            let upright;
+            let t = if e.common.matches_layout_orientation() && t.rotation != 0.0 {
+                upright = cadaddy_doc::Text { rotation: 0.0, ..t.clone() };
+                &upright
+            } else {
+                t
+            };
             let mut vals = field_values(ctx.d, e.handle);
             let text: String = match with_fields(&t.value, &mut vals, b.opts.field_shading) {
                 Some(marked) => {
@@ -1572,6 +1645,14 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if !b.opts.text {
                 return;
             }
+            // Annotative text with "Match orientation to layout" is drawn upright (#2498).
+            let upright;
+            let t = if e.common.matches_layout_orientation() && t.rotation != 0.0 {
+                upright = cadaddy_doc::MText { rotation: 0.0, ..t.clone() };
+                &upright
+            } else {
+                t
+            };
             let mut vals = field_values(ctx.d, e.handle);
             let substituted = with_fields(&t.contents, &mut vals, b.opts.field_shading).map(|contents| cadaddy_doc::MText { contents, ..t.clone() });
             let t = substituted.as_ref().unwrap_or(t);
@@ -1599,7 +1680,10 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             if let Some(blk) = dm.block.as_ref().and_then(|n| ctx.d.block(n))
                 && ctx.depth < cadaddy_doc::MAX_BLOCK_DEPTH
             {
-                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, Mat3::IDENTITY) };
+                // DXF group 12: a moved dimension keeps its `*D` block where it was and the offset
+                // in the insertion point, so the block draws translated by it.
+                let off = if dm.insertion_point.is_finite() { dm.insertion_point.xy() } else { Vec2::ZERO };
+                let sub = Ctx { block_pstyle: b.named, block_transparency: b.transparency, ..sub_ctx(ctx, e, Mat3::translate(off)) };
                 for be in blk.entities.iter() {
                     if !b.expand() {
                         break;
@@ -1622,7 +1706,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 // the list serves a whole band of zooms. Plots and exports draw the band alone, and
                 // a transparent band gets none (its alpha would add up along the centre).
                 let hairline = !b.plotting && b.opts.min_dash > 0.0 && b.transparency == 0;
-                match &lt {
+                match lt.as_ref().filter(|_| b.opts.linetypes) {
                     // Dashed: each dash a filled piece of the band; dots a line across it.
                     Some(lt) => {
                         let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
@@ -1655,7 +1739,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
         }
         EntityKind::LwPolyline(p) => {
             let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
-            if p.plinegen || lt.is_none() {
+            if !b.opts.linetypes || p.plinegen || lt.is_none() {
                 stroke(b, &pl.tessellate(tol));
             } else {
                 for s in pl.segments() {
@@ -2093,7 +2177,7 @@ pub fn dimension_in(d: &Drawing, dm: &cadaddy_doc::Dimension) -> DimGeometry {
 
 /// Draw a polyline with a linetype (None: continuous).
 fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadaddy_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
-    match lt {
+    match lt.filter(|_| b.opts.linetypes) {
         Some(lt) => {
             let min = b.opts.min_dash / detail_scale(b, &ctx.xf).max(1e-12);
             for dash in linetype::apply(pts, lt, ltscale, min) {
@@ -2336,6 +2420,7 @@ fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw:
         shared_budget: b.shared_budget,
         transparency: 0,
         paper: false,
+        prof: profile::Local::off(),
     };
     part.list.expanded = b.list.expanded;
     for pe in page.model.iter() {
@@ -2348,6 +2433,7 @@ fn underlay(b: &mut Builder, ctx: &Ctx, u: &cadaddy_doc::Underlay, rgb: Ink, lw:
         entity(&mut part, &sub, pe);
     }
     b.list.expanded = part.list.expanded;
+    b.list.truncated |= part.list.truncated;
     part.list.texts.clear();
     let fade = u.fade.min(80);
     for p in &mut part.list.prims {
@@ -2460,12 +2546,14 @@ fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::In
                 sub.xf = Mat3::translate(p.project(cadaddy_geom::Vec3::new(0.0, 0.0, ins.insert.z))).then_before(sub.xf);
             }
             for be in blk.entities.iter() {
+                // Every visit is charged, drawn or not, so a block of definitions can't make the
+                // copies loop free.
+                if !b.expand() {
+                    break 'copies;
+                }
                 // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                 if matches!(be.kind, EntityKind::AttDef(_)) || depth.is_some_and(|c| c.beyond_depth(&be.kind)) {
                     continue;
-                }
-                if !b.expand() {
-                    break 'copies;
                 }
                 entity(b, &sub, be);
             }
@@ -2496,11 +2584,13 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
                     shared_budget: b.shared_budget,
                     transparency: b.transparency,
                     paper: b.paper,
+                    prof: profile::Local::off(),
                 };
                 // The same expansion budget as the rest of the list.
                 part.list.expanded = b.list.expanded;
                 insert_contents(&mut part, ctx, e, ins, blk);
                 b.list.expanded = part.list.expanded;
+                b.list.truncated |= part.list.truncated;
                 // Plot text entries point at primitives by index; the clipped copies are new ones.
                 part.list.texts.clear();
                 append_clipped(&mut b.list, &part.list, &Clip::Poly(&poly));
@@ -2522,12 +2612,39 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             None => insert_contents(b, ctx, e, ins, blk),
         }
     }
+    attributes(b, ctx, e, ins, rgb);
+}
+
+/// Text bars (filled quads in `ctx`'s coordinates) in `rgb`, at least `transparency` see-through:
+/// text too small to read, as the screen's detail level draws it.
+fn bars(b: &mut Builder, ctx: &Ctx, rgb: Ink, quads: &[[Vec2; 4]], transparency: u8) {
+    let saved = b.transparency;
+    b.transparency = b.transparency.max(transparency);
+    for [p0, p1, p2, p3] in quads {
+        b.tris(ctx, rgb, &[*p0, *p1, *p2, *p0, *p2, *p3]);
+    }
+    b.transparency = saved;
+}
+
+/// A block reference's attributes (`rgb`: the reference's colour).
+fn attributes(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb: Ink) {
     if b.opts.text {
         // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
         let attmode = ctx.d.header.i64("ATTMODE", 1);
         // The reference's transparency; each attribute draws with its own.
         let reference = b.transparency;
         let mut vals = field_values(ctx.d, e.handle);
+        // The block's first definition per tag (without case), built once for all the attributes.
+        let mut defs: std::collections::HashMap<String, &Entity> = std::collections::HashMap::new();
+        if !ins.attribs.is_empty()
+            && let Some(blk) = ctx.d.block(&ins.block)
+        {
+            for be in blk.entities.iter() {
+                if let EntityKind::AttDef(d) = &be.kind {
+                    defs.entry(d.tag.to_ascii_lowercase()).or_insert(be.as_ref());
+                }
+            }
+        }
         for a in &ins.attribs {
             // Field values are counted over every attribute, shown or not.
             let with = with_fields(&a.text.value, &mut vals, false).map(|value| {
@@ -2541,11 +2658,10 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             }
             // A multiline attribute is drawn as its multiline text.
             let multiline = a.multiline_text();
-            let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
             // Properties of the attribute's definition (as AutoCAD copies them to the attribute
             // on insertion), except those set on the attribute itself: ByBlock = the reference's,
             // layer 0 = the reference's layer.
-            let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
+            let def = defs.get(&a.tag.to_ascii_lowercase()).copied();
             let (ink, lw, shown, t) = match (def, a.props.is_empty()) {
                 (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true, reference),
                 (def, _) => {
@@ -2558,6 +2674,25 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             if shown {
                 b.transparency = t;
                 let lw = if b.opts.lineweights { lw } else { 0.0 };
+                // Too small to read on screen: a bar.
+                let look = b
+                    .opts
+                    .detail
+                    .as_ref()
+                    .filter(|_| !b.plotting && multiline.is_none())
+                    .map(|det| (det.text_look(&ctx.xf, &a.text, a.text.value.chars().count()), det.rules.bar_transparency));
+                match look {
+                    Some((detail::Look::Bars(quads), t)) => {
+                        bars(b, ctx, ink, &quads, t);
+                        continue;
+                    }
+                    Some((detail::Look::Dot(p), _)) => {
+                        b.point(ctx, ink, p);
+                        continue;
+                    }
+                    _ => {}
+                }
+                let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
                 match (&multiline, &sh) {
                     (Some(m), _) => mtext(b, ctx, m, ink, lw),
                     (None, Some(sh)) if qtext(ctx.d) => qtext_box(b, ctx, ink, lw, &[sh], a.text.rotation),
@@ -2588,11 +2723,6 @@ fn by_block() -> cadaddy_doc::Common {
         transparency: cadaddy_doc::Transparency::ByBlock,
         ..cadaddy_doc::Common::default()
     }
-}
-
-/// The attribute definition with tag `tag` (any case).
-fn attdef_tag(e: &Entity, tag: &str) -> bool {
-    matches!(&e.kind, EntityKind::AttDef(d) if d.tag.eq_ignore_ascii_case(tag))
 }
 
 /// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the
