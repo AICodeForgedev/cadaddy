@@ -1261,6 +1261,17 @@ impl GuidedJob {
         self.stages.iter().all(|s| matches!(s.status, StageStatus::Done | StageStatus::Skipped))
     }
 
+    /// The stage an error stopped the job at, when nothing is open (Q6600): the job has ended
+    /// there and runs no further on its own. Never done (nothing was built after it), never
+    /// waiting (no stage runs and no question is open); a correction or an answer that runs the
+    /// stage again goes on from it.
+    pub fn stopped_at(&self) -> Option<&StageState> {
+        if self.next_question().is_some() {
+            return None;
+        }
+        self.current_stage().filter(|st| st.status == StageStatus::Error)
+    }
+
     /// Fraction complete (0.0–1.0).
     pub fn progress(&self) -> f64 {
         let active: Vec<_> = self.stages.iter().filter(|s| s.status != StageStatus::Skipped).collect();
@@ -32743,6 +32754,17 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(existing) = load_job(s)?
         && !existing.is_done()
     {
+        // One an error stopped isn't running (Q6600): it says where it stopped and how to go on.
+        if let Some(st) = existing.stopped_at() {
+            let why: String = st.error.as_deref().unwrap_or("").chars().take(300).collect();
+            return Err(bad(
+                "job.start",
+                format!(
+                    "the job in this drawing stopped at {}: {why} — job.status says how to go on from it; another job starts in a new drawing (new)",
+                    st.name.label()
+                ),
+            ));
+        }
         let hint = if p.get("auto").and_then(Value::as_bool) == Some(true) && !existing.auto {
             "a job is already running — job.set_mode {auto: true} runs it on unattended (answers given are kept); job.status shows it"
         } else {
@@ -33060,8 +33082,9 @@ fn cmd_next_inner(s: &mut Session, _p: &Value) -> Result<Value> {
         save_job(s, &job)?;
         rerun = reset;
     }
-    // Try to advance if no questions pending.
-    if job.next_question().is_none() && !job.is_done() {
+    // Try to advance if no questions pending (a job an error stopped stays stopped: nothing
+    // runs until a correction or an answer runs its stage again).
+    if job.next_question().is_none() && !job.is_done() && job.stopped_at().is_none() {
         advance_pipeline(s, &mut job)?;
         save_job(s, &job)?;
     }
@@ -33074,8 +33097,48 @@ fn cmd_next_inner(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// What `job.next` says: the next question, done, or waiting.
+/// What a job an error stopped says (Q6600), in `job.next`, `job.answer` and `job.status`: it
+/// has ended at that stage, with the error and how to go on. Terminal: a client that asks again
+/// gets the same answer, never `waiting` (no stage runs, no question is open), and never `done`
+/// (nothing after the stage was built: Q6382).
+pub fn stopped_value(job: &GuidedJob) -> Option<Value> {
+    let st = job.stopped_at()?;
+    let message = st.error.clone().unwrap_or_default();
+    // How to go on: the actions of the stage's blocking findings, else the stage's own.
+    let mut actions: Vec<String> = Vec::new();
+    for f in job.findings.iter().filter(|f| f.stage == st.name && f.blocking) {
+        for a in &f.actions {
+            if !actions.contains(a) {
+                actions.push(a.clone());
+            }
+        }
+    }
+    if actions.is_empty() {
+        actions = stage_error_actions(st.name);
+    }
+    Some(json!({
+        "stage": st.name.label(),
+        "message": message,
+        "terminal": true,
+        "how_to_go_on": actions,
+        "note": "the job stopped here and runs no further on its own: job.next answers the same until a correction or an answer runs the stage again",
+    }))
+}
+
+/// What `job.next` says: the next question, done, stopped by an error, or waiting.
 fn cmd_next_value(s: &mut Session, job: &GuidedJob) -> Value {
+    if let Some(stopped) = stopped_value(job) {
+        return json!({
+            "done": false,
+            "waiting": false,
+            "status": "error",
+            "progress": job.progress(),
+            "stage": stopped["stage"],
+            // The message, as the error of a stage was said before (Q6382).
+            "error": stopped["message"],
+            "stopped": stopped,
+        });
+    }
     match job.next_question() {
         Some(q) => json!({
             "question": question_value(job, q),
@@ -33091,19 +33154,13 @@ fn cmd_next_value(s: &mut Session, job: &GuidedJob) -> Value {
                 "summary": job_summary(s, job, stats.as_ref()),
             })
         }
-        None => {
-            let mut v = json!({
-                "waiting": true,
-                "progress": job.progress(),
-                "stage": job.current_stage().map(|s| s.name.label()),
-                "status": job.current_stage().map(|s| format!("{:?}", s.status)),
-            });
-            // A stage stopped by an error says it (Q6382: none of the sheets could be read).
-            if let Some(e) = job.current_stage().filter(|st| st.status == StageStatus::Error).and_then(|st| st.error.as_ref()) {
-                v["error"] = json!(e);
-            }
-            v
-        }
+        // A stage still running (another caller's job.next, a job run off the UI thread).
+        None => json!({
+            "waiting": true,
+            "progress": job.progress(),
+            "stage": job.current_stage().map(|s| s.name.label()),
+            "status": job.current_stage().map(|s| format!("{:?}", s.status)),
+        }),
     }
 }
 
@@ -33532,11 +33589,23 @@ fn cmd_answer_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 "summary": job_summary(s, &job, stats.as_ref()),
             })
         }
-        None => json!({
-            "answered": answered,
-            "progress": job.progress(),
-            "stage": job.current_stage().map(|s| s.name.label()),
-        }),
+        None => match stopped_value(&job) {
+            // The answer's re-run ended on an error: the job stopped there (Q6600).
+            Some(stopped) => json!({
+                "answered": answered,
+                "done": false,
+                "status": "error",
+                "progress": job.progress(),
+                "stage": stopped["stage"],
+                "error": stopped["message"],
+                "stopped": stopped,
+            }),
+            None => json!({
+                "answered": answered,
+                "progress": job.progress(),
+                "stage": job.current_stage().map(|s| s.name.label()),
+            }),
+        },
     };
     let effects: Vec<&str> = applied.iter().map(|a| a.effect.as_str()).collect();
     out["effect"] = match (batch, effects.as_slice()) {
@@ -34027,6 +34096,10 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     // The stage that failed and why: the CLI exits non-zero on it.
     if let Some(st) = job.stages.iter().find(|st| st.status == StageStatus::Error) {
         v["error"] = json!({"stage": st.name.label(), "message": st.error.clone().unwrap_or_default()});
+    }
+    // Ended there, nothing open: terminal (Q6600).
+    if let Some(stopped) = stopped_value(job) {
+        v["stopped"] = stopped;
     }
     if let Some(at) = job.cancelled {
         v["cancelled"] = json!({"stage": at.label(), "note": "job.next goes on from there"});
