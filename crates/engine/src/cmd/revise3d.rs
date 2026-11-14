@@ -113,8 +113,9 @@ const MAX_STATES: usize = 4096;
 /// Undo and redo bring back drawing states as they are, so a state keeps the build it came from.
 #[derive(Clone, Debug, Default)]
 pub struct ModelRecords {
-    /// The records, oldest first, each with its id (ids start at 1).
-    records: Vec<(u64, ModelRecord)>,
+    /// The records, oldest first, each with its id (ids start at 1). Shared: a copy of the
+    /// session (a long command's, a dialog's read: Q6574) copied every record of a large build.
+    records: Vec<(u64, std::sync::Arc<ModelRecord>)>,
     next: u64,
     /// Drawing states and the record they come from (0: from no build: the model was undone).
     states: Vec<(std::sync::Weak<Drawing>, u64)>,
@@ -136,7 +137,7 @@ impl ModelRecords {
     /// (a drawing changed outside any command).
     pub fn for_state(&self, d: &std::sync::Arc<Drawing>) -> Option<&ModelRecord> {
         match self.state_id(d) {
-            Some(id) => self.index_of(id).and_then(|i| self.records.get(i)).map(|(_, r)| r),
+            Some(id) => self.index_of(id).and_then(|i| self.records.get(i)).map(|(_, r)| &**r),
             None => self.last(),
         }
     }
@@ -148,7 +149,7 @@ impl ModelRecords {
             return self.for_state(now);
         }
         if let Some(i) = self.fresh.and_then(|id| self.index_of(id)) {
-            return self.records.get(i).map(|(_, r)| r);
+            return self.records.get(i).map(|(_, r)| &**r);
         }
         self.for_state(before)
     }
@@ -157,11 +158,11 @@ impl ModelRecords {
             Some(id) => self.index_of(id)?,
             None => self.records.len().checked_sub(1)?,
         };
-        self.records.get_mut(i).map(|(_, r)| r)
+        self.records.get_mut(i).map(|(_, r)| std::sync::Arc::make_mut(r))
     }
     /// The last build's record.
     pub fn last(&self) -> Option<&ModelRecord> {
-        self.records.last().map(|(_, r)| r)
+        self.records.last().map(|(_, r)| &**r)
     }
     fn follow(&mut self, d: &std::sync::Arc<Drawing>, id: u64) {
         if let Some(e) = self.states.iter_mut().find(|(w, _)| std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(d))) {
@@ -180,7 +181,7 @@ impl ModelRecords {
     fn push(&mut self, rec: ModelRecord, d: &std::sync::Arc<Drawing>, fresh: bool) {
         self.next = self.next.saturating_add(1);
         let id = self.next;
-        self.records.push((id, rec));
+        self.records.push((id, std::sync::Arc::new(rec)));
         self.follow(d, id);
         // A rebuild while a command's build is still unsettled is part of that command's work.
         self.fresh = (fresh || self.fresh.is_some()).then_some(id);
@@ -393,7 +394,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     if let Some(i) = st.model_records.index_of(id)
         && let Some((_, rec)) = st.model_records.records.get_mut(i)
     {
-        rec.made = made;
+        std::sync::Arc::make_mut(rec).made = made;
     }
     st.model_records.follow(&now, id);
 }
@@ -404,7 +405,7 @@ pub(crate) fn carry(st: &mut crate::DocState, from: &std::sync::Arc<Drawing>, to
     st.model_records.followed(from, to);
     for (_, r) in &mut st.model_records.records {
         if r.built.as_ref().is_some_and(|b| std::sync::Arc::ptr_eq(&b.0, from)) {
-            r.built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
+            std::sync::Arc::make_mut(r).built = Some(BuiltDrawing(std::sync::Arc::clone(to)));
         }
     }
 }
@@ -716,6 +717,7 @@ pub(crate) fn rebuild_keeping_edits(s: &mut Session, g: &WallGen, changed: &Hash
     if let Ok(st) = s.state_mut()
         && let Some((_, rec)) = st.model_records.records.last_mut()
     {
+        let rec = std::sync::Arc::make_mut(rec);
         rec.hand_deleted = hand_deleted;
         rec.hand_edited = hand_edited;
     }

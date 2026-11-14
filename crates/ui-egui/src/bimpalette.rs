@@ -121,8 +121,11 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
 /// The BIM view's switches: on, the shell ghosted, the sheet's own lines in 3D, filled-in work apart.
 fn look_row(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
-    if st.look.is_none() {
-        st.look = app.session.execute("bim.look", &json!({})).ok();
+    // Read off the UI thread (it counts the built model): the switches show when it comes (Q6574).
+    if st.look.is_none()
+        && let Some(look) = crate::bgread::read(app, &ui.ctx().clone(), id().with("look"), &st.doc_key, "bim.look", &json!({}))
+    {
+        st.look = Some(look.unwrap_or(Value::Null));
     }
     let get = |k: &str| st.look.as_ref().and_then(|v| v.get(k)).and_then(Value::as_bool).unwrap_or(false);
     let (mut on, mut ghost, mut sheet, mut apart) = (get("on"), get("ghost"), get("sheet"), get("apart"));
@@ -250,13 +253,22 @@ fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     look_row(app, ui, st);
     ui.horizontal(|ui| {
         if ui.button(crate::i18n::t("Refresh")).clicked() {
-            st.tree_data = app.session.execute("bim.tree", &json!({})).ok().map(Arc::new);
+            st.tree_data = None;
             st.look = None;
         }
         ui.text_edit_singleline(&mut st.search);
     });
+    // The Model Tree is read off the UI thread: the palette is there at once, the tree fills in
+    // when it comes (Q6574).
     if st.tree_data.is_none() {
-        st.tree_data = app.session.execute("bim.tree", &json!({})).ok().map(Arc::new);
+        match crate::bgread::read(app, &ui.ctx().clone(), id().with("tree"), &st.doc_key, "bim.tree", &json!({})) {
+            Some(tree) => st.tree_data = Some(Arc::new(tree.unwrap_or(Value::Null))),
+            None => {
+                let r = ui.label(RichText::new(crate::i18n::t(crate::bgread::READING)).color(Tokens::get().text_dim));
+                crate::control::record_widget(ui, &r, crate::bgread::READING, "text", None);
+                return;
+            }
+        }
     }
     let data = st.tree_data.clone().unwrap_or_default();
     let levels: Vec<&Value> = kids(&data, "levels").collect();

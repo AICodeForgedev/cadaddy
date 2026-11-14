@@ -129,6 +129,13 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) -> Value {
+    entity_props_with(d, e, true)
+}
+
+/// [`entity_props`], with the object's `bounds` only when asked: measuring a block reference
+/// measures its block, and Quick Select, which never shows bounds, measured every object of the
+/// drawing (Q6574).
+pub(super) fn entity_props_with(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity, bounds: bool) -> Value {
     let mut v = json!({
         "handle": e.handle.hex(),
         "type": e.kind.type_name(),
@@ -150,7 +157,7 @@ pub(super) fn entity_props(d: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity) ->
     let geo = serde_json::to_value(&e.kind).unwrap_or(Value::Null);
     if let (Some(o), Some(g)) = (v.as_object_mut(), geo.as_object()) {
         o.insert("geometry".into(), Value::Object(g.clone()));
-        let b = cadaddy_doc::entity_bounds(d, e, 0);
+        let b = if bounds { cadaddy_doc::entity_bounds(d, e, 0) } else { cadaddy_geom::Bounds2::EMPTY };
         if !b.is_empty() {
             o.insert("bounds".into(), json!([[b.min.x, b.min.y], [b.max.x, b.max.y]]));
         }
