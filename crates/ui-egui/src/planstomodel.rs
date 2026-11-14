@@ -235,7 +235,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         // The parts, then the issues: one list, of which only the rows on screen are laid out.
         let n_issues = issues.as_ref().map_or(0, |is| is.items.len() + 1);
         let n = v.rows.len().saturating_add(n_issues);
-        rows_in_view(ui, viewport, egui::Id::new("p2m-rows"), v.key, n, |ui, r| match v.rows.get(r) {
+        crate::asked::rows_in_view(ui, viewport, egui::Id::new("p2m-rows"), &v.key, n, |ui, r| match v.rows.get(r) {
             Some(Row::Section(i)) => {
                 let Some(p) = v.parts.get(*i) else { return };
                 ui.add_space(6.0);
@@ -406,52 +406,6 @@ fn part_row(ui: &mut egui::Ui, v: &View, p: &Part, t: &crate::theme::Tokens, edi
     if close {
         *editing = None;
     }
-}
-
-/// The heights the rows of a [`rows_in_view`] list had when last laid out, for one revision.
-#[derive(Clone, Debug, Default)]
-struct Heights {
-    key: (u64, u64),
-    at: Vec<f32>,
-}
-
-/// A list of `n` rows of varying height in a scroll area (`viewport`: what is on screen, in the
-/// content's coordinates): lays out only the rows that reach onto the screen and passes over the
-/// others by the height each had when last laid out (one line's until then). So a frame costs
-/// what is on screen, not how many rows there are (Q6542). Each row gets an id of its own, so a
-/// widget's state (a text being edited) stays with its row as the list scrolls.
-fn rows_in_view(ui: &mut egui::Ui, viewport: egui::Rect, id: egui::Id, key: (u64, u64), n: usize, mut row: impl FnMut(&mut egui::Ui, usize)) {
-    let line = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
-    let mut h = ui.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Heights>(id)));
-    if h.key != key {
-        h = Heights { key, at: Vec::new() };
-    }
-    h.at.resize(n, line);
-    let top = ui.max_rect().top();
-    let mut y = ui.cursor().min.y - top;
-    let mut first = 0;
-    for &hi in &h.at {
-        if y + hi >= viewport.min.y {
-            break;
-        }
-        y += hi;
-        first += 1;
-    }
-    let skipped: f32 = h.at.iter().take(first).sum();
-    ui.add_space(skipped);
-    let mut next = first;
-    for (r, hi) in h.at.iter_mut().enumerate().skip(first) {
-        if ui.cursor().min.y - top > viewport.max.y {
-            break;
-        }
-        let before = ui.cursor().min.y;
-        ui.push_id(("row", r), |ui| row(ui, r));
-        *hi = (ui.cursor().min.y - before).max(0.0);
-        next = r + 1;
-    }
-    let rest: f32 = h.at.iter().skip(next).sum();
-    ui.add_space(rest);
-    ui.data_mut(|d| d.insert_temp(id, h));
 }
 
 /// Zoom to an issue (its point, else its objects) and select its objects.

@@ -784,8 +784,8 @@ fn finish_faces_for_wall(handle: Handle, mesh: &Mesh, asm: &Assembly, k: f64, ro
 
 /// The building spec from the drawing, if any.
 fn spec_if_any(s: &Session) -> Option<BuildingSpec> {
-    let d = s.doc().ok()?;
-    d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).and_then(|t| BuildingSpec::from_json(t).ok())
+    // Read as every other part of the command reads it (once while the command runs).
+    super::bspec::stored(s.doc().ok()?).ok().flatten()
 }
 
 /// Read the xdata tag strings for CADADDY_WALLGEN on an entity.

@@ -114,7 +114,7 @@ fn part_of(category: &str) -> Option<&'static str> {
 /// The takeoff lines, by `group_by`: each with its quantities and its elements. Our scope only:
 /// another trade's devices are not on them (`lines_of` with `others` adds them, apart).
 pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<Vec<Value>> {
-    lines_of(s, group_by, filter, false)
+    Ok(lines_of(s, group_by, filter, false)?.0)
 }
 
 /// The status of a takeoff line for another trade's devices (the BOM's `by_others`): counted, so
@@ -139,8 +139,9 @@ fn by_others_lines(bom: &Value) -> Vec<Value> {
 }
 
 /// The takeoff lines; with `others`, also another trade's devices on their own lines (status
-/// `by others`, their owner's `scope`), each the built devices it names only.
-fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Result<Vec<Value>> {
+/// `by others`, their owner's `scope`), each the built devices it names only. Beside them, the
+/// model's built devices (for [`device_check`], so the model is read for its elements once).
+fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Result<(Vec<Value>, Vec<String>)> {
     // Per level and branch circuit: lines on no circuit are the level's as they are.
     let bom = s.execute("bim.bom", &json!({"group_by": "circuit", "all_elements": true}))?;
     let d = s.doc()?;
@@ -198,6 +199,9 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
     let resolve = |h: &str| -> Vec<String> { refs.resolve(d, h) };
     let on_level = |h: &str, lv: &str| info.get(h).is_some_and(|(x, _, _)| x.eq_ignore_ascii_case(lv));
     let mut grouped: BTreeMap<String, Value> = BTreeMap::new();
+    // Each group's elements as a set beside its list (Q6568): a line merging into a group looks
+    // its elements up there, never rebuilding the set from the group's list.
+    let mut have_of: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for l in bom_lines.iter().chain(wall_lines.iter()).chain(other_lines.iter()).take(MAX_LINES) {
         let by_others = l["status"] == BY_OTHERS;
         // The line's level as the model names it (Q6271): `2` or `L2` is `Level 2`; a level no
@@ -361,12 +365,13 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
         }
         entry["elements_unresolved"] = json!(entry["elements_unresolved"].as_u64().unwrap_or(0) + unresolved as u64);
         if let Some(a) = entry["elements"].as_array_mut() {
-            let have: BTreeSet<String> = a.iter().filter_map(Value::as_str).map(str::to_string).collect();
+            let have = have_of.entry(key).or_default();
             for h in elems {
                 if a.len() >= MAX_LINE_ELEMENTS {
                     break;
                 }
                 if !have.contains(&h) {
+                    have.insert(h.clone());
                     a.push(json!(h));
                 }
             }
@@ -378,7 +383,8 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
             a.push(json!(level));
         }
     }
-    Ok(grouped
+    let devices: Vec<String> = els.iter().filter(|e| e.category == "device").map(|e| e.handle.hex()).collect();
+    let lines = grouped
         .into_values()
         .map(|mut l| {
             let q = l["qty"].as_f64().unwrap_or(0.0);
@@ -403,7 +409,8 @@ fn lines_of(s: &mut Session, group_by: &str, filter: &Value, others: bool) -> Re
             }
             l
         })
-        .collect())
+        .collect();
+    Ok((lines, devices))
 }
 
 /// Built devices a takeoff names as on no line, at most.
@@ -412,11 +419,10 @@ const MAX_UNLISTED: usize = 50;
 /// Whether every built device is on a takeoff line (Q6373): the model's devices, those on a line
 /// (ours or another trade's), those on another trade's, and those on none (the first of them).
 /// Only for an unfiltered takeoff; none for a model with no devices.
-fn device_check(d: &cadaddy_doc::Drawing, lines: &[Value], filter: &Value) -> Option<Value> {
+fn device_check(built: &[String], lines: &[Value], filter: &Value) -> Option<Value> {
     if !filter.is_null() {
         return None;
     }
-    let built: Vec<String> = elements(d).into_iter().filter(|e| e.category == "device").map(|e| e.handle.hex()).collect();
     if built.is_empty() {
         return None;
     }
@@ -550,7 +556,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let filter = p.get("filter").cloned().unwrap_or(Value::Null);
     // Our lines, and another trade's devices on lines of their own (Q6373).
-    let lines = lines_of(s, &group_by, &filter, true)?;
+    let (lines, built_devices) = lines_of(s, &group_by, &filter, true)?;
     let ours: Vec<&Value> = lines.iter().filter(|l| l["status"] != BY_OTHERS && l["status"] != FIELD_WORK).collect();
     let theirs: Vec<&Value> = lines.iter().filter(|l| l["status"] == BY_OTHERS).collect();
     let field: Vec<&Value> = lines.iter().filter(|l| l["status"] == FIELD_WORK).collect();
@@ -614,7 +620,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             row
         }))
         .collect();
-    let devices = device_check(s.doc()?, &lines, &filter);
+    let devices = device_check(&built_devices, &lines, &filter);
     let mut out = json!({"lines": lines, "totals": totals, "levels": levels, "group_by": group_by, "revision": revision});
     if let Some(dv) = devices {
         out["devices"] = dv;

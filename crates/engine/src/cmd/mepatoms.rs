@@ -1599,7 +1599,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
     }
     let Some(ix) = changed_index(before, &st.doc) else { return };
     if let Ok(d) = s.doc_mut() {
-        store(d, &ix);
+        store_live(d, ix);
     }
 }
 
@@ -1611,8 +1611,42 @@ pub(crate) fn follow_changes(before: &Drawing, d: &mut Drawing) {
         return;
     }
     if let Some(ix) = changed_index(before, d) {
-        store(d, &ix);
+        store_live(d, ix);
     }
+}
+
+thread_local! {
+    /// The index an edit's update last stored, and the very bytes it was stored as (Q6567): the
+    /// next update starts from it instead of reading the stored index again (tens of thousands of
+    /// rows on a whole building: every erase of a built device read them all).
+    static LIVE: std::cell::RefCell<Option<(std::sync::Weak<Vec<u8>>, Index)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Store `ix` as an edit's update left it, kept for the next update.
+fn store_live(d: &mut Drawing, ix: Index) {
+    let bytes = std::sync::Arc::new(ix.to_bytes());
+    LIVE.with(|c| *c.borrow_mut() = Some((std::sync::Arc::downgrade(&bytes), ix)));
+    d.embedded.insert(INDEX_FILE.into(), bytes);
+}
+
+/// `d`'s stored index: the one an update stored, when `d` holds those very bytes, else read.
+fn live_or_stored(d: &Drawing) -> Option<Index> {
+    let b = d.embedded.get(INDEX_FILE)?;
+    let held = LIVE.with(|c| {
+        let mut c = c.borrow_mut();
+        match c.take() {
+            Some((w, ix)) if std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(b)) => Some(ix),
+            other => {
+                *c = other;
+                None
+            }
+        }
+    });
+    held.or_else(|| {
+        #[cfg(test)]
+        tests::INDEX_READS.with(|n| n.set(n.get() + 1));
+        stored(d)
+    })
 }
 
 /// `before`'s stored index changed by what changed in the counted pieces from `before` to `now`
@@ -1635,7 +1669,7 @@ fn changed_index(before: &Drawing, now: &Drawing) -> Option<Index> {
     if out.is_empty() && new.is_empty() {
         return None;
     }
-    let mut ix = stored(before)?;
+    let mut ix = live_or_stored(before)?;
     for (k, m) in &out {
         ix.remove(k, m);
     }
@@ -1729,15 +1763,21 @@ impl Filter {
 /// What an element is counted as in the index: an atom by its kind, a device by its own kind;
 /// with its length (feet) and whether it is on an estimated route. Nothing for other elements.
 pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
-    let (mut k, m) = counted_as(e)?;
+    super::wallgen::made_as(e)?;
+    counted_with(e, &props::read(&e.common.xdata))
+}
+
+/// [`counted`] with the element's properties already read (`ps`, its store): a pass that reads
+/// them anyway reads them once (Q6568).
+pub(crate) fn counted_with(e: &Entity, ps: &props::Props) -> Option<(Key, Measure)> {
+    let (mut k, m) = counted_as(e, ps)?;
     k.made = made_key(e);
     Some((k, m))
 }
 
-fn counted_as(e: &Entity) -> Option<(Key, Measure)> {
+fn counted_as(e: &Entity, ps: &props::Props) -> Option<(Key, Measure)> {
     let part = super::wallgen::made_as(e)?;
     let level = super::bspec::made_level(e).unwrap_or_default();
-    let ps = props::read(&e.common.xdata);
     let text = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
     let num = |k: &str| ps.get(k).map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
     if let Some(kind) = ps.get(ATOM_KEY).map(Prop::text).filter(|k| !k.is_empty()) {
@@ -2705,6 +2745,58 @@ mod tests {
         let back = Index::from_bytes(&ix.to_bytes()).unwrap();
         assert_eq!(back, ix);
         assert!(Index::from_bytes(b"{not json").is_none());
+    }
+
+    thread_local! {
+        /// Stored indexes an edit's update read whole ([`live_or_stored`]) on this thread.
+        pub(super) static INDEX_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Q6567: erasing built devices one at a time updates the stored index from the one the last
+    /// update stored, not by reading the stored index again for every edit (tens of thousands of
+    /// rows on a whole building). It still agrees with a recount after every edit, and after an
+    /// undo the next edit starts from the index the restored drawing holds.
+    #[test]
+    fn erases_of_built_devices_update_the_index_without_reading_it_each_time() {
+        let mut s = Session::new();
+        let mut handles = Vec::new();
+        {
+            let d = s.doc_mut().unwrap();
+            for i in 0..8 {
+                let mut common = cadaddy_doc::Common { layer: "3D-Devices".into(), ..Default::default() };
+                let x = vec![
+                    cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() },
+                    cadaddy_doc::RawTag { code: 1000, value: "device".into() },
+                    cadaddy_doc::RawTag { code: 1000, value: format!("Level {}", i % 2 + 1) },
+                    cadaddy_doc::RawTag { code: 1000, value: "0".into() },
+                ];
+                let mut ps = props::Props::default();
+                ps.set("kind", Prop::new(if i % 3 == 0 { "switch" } else { "receptacle" }, Source::computed()));
+                common.xdata = props::write(&x, &ps).into();
+                let p = Vec3::new(f64::from(i) * 24.0, 0.0, 0.0);
+                handles
+                    .push(d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Point(cadaddy_doc::Point { p, angle: 0.0 })).unwrap());
+            }
+            let ix = Index::of(d);
+            assert_eq!(ix.rows.values().map(|t| t.count).sum::<u64>(), 8);
+            store(d, &ix);
+        }
+        let agrees = |s: &Session| {
+            let d = s.doc().unwrap();
+            assert_eq!(stored(d).unwrap(), Index::of(d));
+        };
+        INDEX_READS.with(|n| n.set(0));
+        for h in handles.iter().take(5) {
+            s.execute("erase", &json!({"handles": [h.hex()]})).unwrap();
+            agrees(&s);
+        }
+        let reads = INDEX_READS.with(std::cell::Cell::get);
+        assert!(reads <= 1, "five erases read the stored index {reads} times");
+        s.execute("undo", &json!({})).unwrap();
+        agrees(&s);
+        s.execute("erase", &json!({"handles": [handles[5].hex()]})).unwrap();
+        agrees(&s);
+        assert_eq!(stored(s.doc().unwrap()).unwrap().rows.values().map(|t| t.count).sum::<u64>(), 3);
     }
 
     #[test]
