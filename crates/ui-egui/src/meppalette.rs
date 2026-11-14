@@ -4,6 +4,8 @@
 //! size/height/system inline or pick a tag; mark reviewed; rebuild (`model.revise`) keeps edits.
 
 use egui::RichText;
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use crate::CadApp;
@@ -39,8 +41,25 @@ fn state_id() -> egui::Id {
     egui::Id::new("mep_palette_state")
 }
 
-/// Fetch the items list from the engine.
-fn fetch_items(app: &mut CadApp, st: &State) -> Value {
+/// A row of the list: the first item of a system, the first of a level in it, or an item.
+#[derive(Clone, Copy, Debug)]
+enum Row {
+    System(usize),
+    Level(usize),
+    Item(usize),
+}
+
+/// What the palette lists (`mep.list`) and the rows it makes, worked out once per state of the
+/// drawing and of the filter, not on every frame (Q6573).
+struct View {
+    data: Value,
+    systems: Vec<String>,
+    levels: Vec<String>,
+    rows: Vec<Row>,
+}
+
+/// The `mep.list` parameters of the filter.
+fn params(st: &State) -> Value {
     let mut params = json!({});
     if !st.system_filter.is_empty() {
         params["system"] = json!(st.system_filter);
@@ -51,7 +70,34 @@ fn fetch_items(app: &mut CadApp, st: &State) -> Value {
     if st.guessed_only {
         params["guessed_only"] = json!(true);
     }
-    app.session.execute("mep.list", &params).unwrap_or(Value::Null)
+    params
+}
+
+/// Fetch the items list from the engine and group it by system, then level.
+fn fetch_view(app: &mut CadApp, params: &Value) -> View {
+    let data = app.session.execute("mep.list", params).unwrap_or(Value::Null);
+    let items: &[Value] = data["items"].as_array().map_or(&[], Vec::as_slice);
+    let systems: Vec<String> = data["systems"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_string)).collect();
+    let mut levels: Vec<String> = items.iter().filter_map(|it| it["level"].as_str().map(str::to_string)).collect();
+    levels.sort();
+    levels.dedup();
+    let mut rows = Vec::with_capacity(items.len());
+    let (mut current_system, mut current_level) = (None, None);
+    for (i, item) in items.iter().enumerate() {
+        let sys = item["system"].as_str().unwrap_or_default();
+        let lvl = item["level"].as_str().unwrap_or_default();
+        if current_system != Some(sys) {
+            current_system = Some(sys);
+            current_level = None;
+            rows.push(Row::System(i));
+        }
+        if current_level != Some(lvl) {
+            current_level = Some(lvl);
+            rows.push(Row::Level(i));
+        }
+        rows.push(Row::Item(i));
+    }
+    View { data, systems, levels, rows }
 }
 
 /// Zoom to a run's plan objects.
@@ -89,15 +135,10 @@ fn format_bottom(bottoms: &Value) -> String {
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let mut st: State = ctx.data(|d| d.get_temp(state_id())).unwrap_or_default();
-    let data = fetch_items(app, &st);
-    let items = data["items"].as_array().cloned().unwrap_or_default();
-    let systems: Vec<String> = data["systems"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_string)).collect();
-    let levels: Vec<String> = {
-        let mut v: Vec<String> = items.iter().filter_map(|it| it["level"].as_str().map(str::to_string)).collect();
-        v.sort();
-        v.dedup();
-        v
-    };
+    let p = params(&st);
+    let view = crate::asked::kept(app, ctx, egui::Id::new("mep-view"), &p, |app| fetch_view(app, &p));
+    let items: &[Value] = view.data["items"].as_array().map_or(&[], Vec::as_slice);
+    let (systems, levels) = (&view.systems, &view.levels);
 
     let mut pick: Option<String> = None;
     let mut toggle_reviewed: Option<String> = None;
@@ -120,7 +161,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     .selected_text(if st.system_filter.is_empty() { crate::tl!("All").to_string() } else { st.system_filter.clone() })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut st.system_filter, String::new(), crate::tl!("All"));
-                        for s in &systems {
+                        for s in systems {
                             ui.selectable_value(&mut st.system_filter, s.clone(), s.as_str());
                         }
                     });
@@ -129,7 +170,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     .selected_text(if st.level_filter.is_empty() { crate::tl!("All").to_string() } else { st.level_filter.clone() })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut st.level_filter, String::new(), crate::tl!("All"));
-                        for l in &levels {
+                        for l in levels {
                             ui.selectable_value(&mut st.level_filter, l.clone(), l.as_str());
                         }
                     });
@@ -141,28 +182,30 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.separator();
 
             // Items table.
-            egui::ScrollArea::vertical().id_salt("mep_items").max_height(360.0).show(ui, |ui| {
-                if items.is_empty() {
-                    ui.label(RichText::new(crate::tl!("No MEP items found. Run mep.read first.")).color(t.text_dim));
-                    return;
-                }
-                // Group by system then level.
-                let mut current_system = String::new();
-                let mut current_level = String::new();
-                for item in &items {
+            if items.is_empty() {
+                ui.label(RichText::new(crate::tl!("No MEP items found. Run mep.read first.")).color(t.text_dim));
+            }
+            // Grouped by system then level; only the rows on screen are laid out.
+            let key = Arc::as_ptr(&view) as usize;
+            egui::ScrollArea::vertical().id_salt("mep_items").max_height(360.0).show_viewport(ui, |ui, viewport| {
+                crate::asked::rows_in_view(ui, viewport, egui::Id::new("mep_rows"), &key, view.rows.len(), |ui, r| {
+                    let Some(&row) = view.rows.get(r) else { return };
+                    let (Row::System(i) | Row::Level(i) | Row::Item(i)) = row;
+                    let Some(item) = items.get(i) else { return };
                     let sys = item["system"].as_str().unwrap_or_default();
                     let lvl = item["level"].as_str().unwrap_or_default();
                     let id = item["id"].as_str().unwrap_or_default().to_string();
-
-                    if sys != current_system {
-                        current_system = sys.to_string();
-                        current_level.clear();
-                        ui.add_space(4.0);
-                        ui.strong(sys);
-                    }
-                    if lvl != current_level {
-                        current_level = lvl.to_string();
-                        ui.label(RichText::new(format!("  {lvl}")).small().color(t.text_dim));
+                    match row {
+                        Row::System(_) => {
+                            ui.add_space(4.0);
+                            ui.strong(sys);
+                            return;
+                        }
+                        Row::Level(_) => {
+                            ui.label(RichText::new(format!("  {lvl}")).small().color(t.text_dim));
+                            return;
+                        }
+                        Row::Item(_) => {}
                     }
 
                     let selected = st.selected.as_deref() == Some(id.as_str());
@@ -210,7 +253,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             ui.horizontal(|ui| {
                                 ui.label(crate::tl!("System:"));
                                 egui::ComboBox::from_id_salt(format!("edit_sys_{id}")).selected_text(&ed.system).show_ui(ui, |ui| {
-                                    for s in &systems {
+                                    for s in systems {
                                         ui.selectable_value(&mut ed.system, s.clone(), s.as_str());
                                     }
                                 });
@@ -225,7 +268,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             });
                         });
                     }
-                }
+                });
             });
 
             ui.separator();

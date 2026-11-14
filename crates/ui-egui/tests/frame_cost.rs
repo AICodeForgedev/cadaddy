@@ -263,3 +263,140 @@ fn the_plans_to_model_palette_costs_what_is_on_screen() {
     let limit = 4.0 * one.max(0.5);
     assert!(many <= limit, "the palette's frame: {many:.2} ms on {parts} rooms, {one:.2} ms on one (limit {limit:.2})");
 }
+
+/// The dialogs that list what the building spec or the drawing holds (Q6573): the RFI List,
+/// Element Tags, MEP Review and the Layer Properties Manager, each with the command it lists from
+/// (`None`: the dialog reads the drawing itself).
+const LIST_DIALOGS: [(&str, Option<&str>); 4] =
+    [("rfilist", Some("rfi.list")), ("elementtags", Some("tags.list")), ("mepreview", Some("mep.list")), ("layers", None)];
+
+/// A drawing whose building spec has `n` RFIs, element tags and MEP runs, and `n` layers with
+/// plain objects on them (`objects` in all).
+fn listed(n: usize, objects: usize) -> Drawing {
+    let mut d = Drawing::default();
+    for i in 0..n {
+        let mut layer = d.layers.first().cloned().unwrap_or_default();
+        layer.name = format!("E-LIST-{i:05}").as_str().into();
+        d.layers.push(layer);
+    }
+    for i in 0..objects {
+        let (x, y) = (((i % 1000) * 4) as f64, ((i / 1000) * 4) as f64);
+        let h = d.new_handle();
+        let mut e = Entity::new(h, EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 3.0, y + 1.0, 0.0) }));
+        e.common.layer = format!("E-LIST-{:05}", i % n.max(1)).as_str().into();
+        d.model.push(e);
+    }
+    let level = |i: usize| format!("Level {}", i % LEVELS + 1);
+    let levels: Vec<Value> =
+        (0..LEVELS).map(|l| json!({"name": format!("Level {}", l + 1), "elevation_ft": l as f64 * 12.0, "height_ft": 12.0})).collect();
+    let severities = ["high", "medium", "low"];
+    let rfis: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({"kind": "sleeve_no_route", "severity": severities[i % 3], "level": level(i), "at": [i as f64, 10.0],
+                   "sheets": ["X-101"], "issue": format!("Sleeve {i} gives no route"), "assumed": "Not routed."})
+        })
+        .collect();
+    let tags: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({"id": format!("device:{}:{i},0", level(i)), "kind": "receptacle", "level": level(i), "at_ft": [i as f64, 0.0],
+                   "fields": {"circuit": {"value": format!("{}", i % 42 + 1), "source": "plan"}},
+                   "issues": if i % 4 == 0 { json!(["untagged"]) } else { json!([]) }})
+        })
+        .collect();
+    let systems: Vec<Value> =
+        SYSTEMS.iter().map(|s| json!({"name": s, "layer": format!("M-{s}"), "kind": "duct", "size_in": [12.0, 8.0], "bottom_ft": 9.0})).collect();
+    let runs: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({"system": SYSTEMS[i % SYSTEMS.len()], "level": level(i), "points": [[i as f64, 0.0], [i as f64, 20.0]],
+                   "size_in": [12.0, 8.0], "bottoms_ft": [9.0], "objects": [], "id": format!("R{}", i + 1)})
+        })
+        .collect();
+    let spec = json!({"levels": levels, "rfis": rfis, "tags": tags, "mep": {"systems": systems, "runs": runs}});
+    d.building_spec = Some(spec.to_string()).into();
+    d
+}
+
+/// The window with drawing `d` open (or the file at `path`) and dialog `dialog` open: how many
+/// times its command ran in `frames` frames at rest (after it has settled), and the median of
+/// those frames' dialog part (`dialog`), in ms.
+fn dialog_at_rest(d: Drawing, dialog: &str, command: Option<&str>, frames: usize) -> (usize, f64) {
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Job", None);
+    dialog_in(CadApp::new(s, Services::default()), dialog, command, frames)
+}
+
+fn dialog_in(mut app: CadApp, dialog: &str, command: Option<&str>, frames: usize) -> (usize, f64) {
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx);
+    app.ui.dialog = Some(dialog.into());
+    for _ in 0..5 {
+        frame(&mut app, &ctx);
+    }
+    assert_eq!(app.ui.dialog.as_deref(), Some(dialog), "the dialog stays open");
+    let asked = |app: &CadApp| command.map_or(0, |c| app.session.journal.lines().iter().filter(|l| l.split(' ').next() == Some(c)).count());
+    let before = asked(&app);
+    framecost::reset();
+    let mut ms: Vec<f64> = (0..frames)
+        .map(|_| {
+            frame(&mut app, &ctx);
+            framecost::report()["lastMs"]["dialog"].as_f64().unwrap_or(0.0)
+        })
+        .collect();
+    ms.sort_by(f64::total_cmp);
+    (asked(&app) - before, ms.get(ms.len() / 2).copied().unwrap_or(0.0))
+}
+
+#[test]
+fn an_open_list_dialog_asks_once_per_change_of_the_drawing() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    for (dialog, command) in LIST_DIALOGS {
+        let Some(command) = command else { continue };
+        let (asks, _) = dialog_at_rest(listed(50, 200), dialog, Some(command), 10);
+        assert_eq!(asks, 0, "{dialog}: `{command}` ran {asks} times in 10 frames with the drawing unchanged");
+    }
+}
+
+#[test]
+fn a_list_dialog_costs_what_is_on_screen() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let n = std::env::var("FRAMECOST_ITEMS").ok().and_then(|v| v.parse().ok()).unwrap_or(3_000);
+    let objects = std::env::var("FRAMECOST_N").ok().and_then(|v| v.parse().ok()).unwrap_or(120_000);
+    let big = listed(n, objects);
+    let mut failed = Vec::new();
+    for (dialog, command) in LIST_DIALOGS {
+        let (_, one) = dialog_at_rest(listed(1, 10), dialog, command, 15);
+        let (_, many) = dialog_at_rest(big.clone(), dialog, command, 15);
+        println!("{dialog} at rest (median dialog part): one item {one:.3} ms, {n} items and {objects} objects {many:.3} ms");
+        // A few times the one-item drawing's at most; below a millisecond the clock's noise rules.
+        let limit = 4.0 * one.max(1.0);
+        if many > limit {
+            failed.push(format!("{dialog}: {many:.2} ms on {n} items, {one:.2} ms on one (limit {limit:.2})"));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// The four dialogs on a saved drawing (`FRAMECOST_FILE`), for the numbers on a real model; by
+/// hand: `FRAMECOST_FILE=<model.cdy> cargo test --release -p cadaddy-ui-egui --test frame_cost
+/// list_dialogs_on_a_file -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn list_dialogs_on_a_file() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(path) = std::env::var("FRAMECOST_FILE") else { return };
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    for (dialog, command) in LIST_DIALOGS {
+        let mut s = Session::empty();
+        s.execute("open", &json!({ "path": path })).unwrap_or_else(|e| panic!("open {path}: {e}"));
+        let objects = s.doc().map_or(0, |d| d.model.len());
+        let (asks, ms) = dialog_in(CadApp::new(s, Services::default()), dialog, command, 15);
+        println!("{dialog}: {ms:.3} ms a frame (median of 15, dialog part), command ran {asks} times in 15 frames; {objects} objects");
+    }
+}

@@ -9572,6 +9572,31 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["devices_reseated"] = json!(n);
         reseated = n;
     }
+    // The controls in rooms the documents mark accessible within reach (Q6555), now every element
+    // has its room (a panel's is filled above): a panel topped at a general note's height comes
+    // down to the accessible maximum, its record with it, the design height kept beside; the
+    // conduit follows when the circuits are routed again below.
+    let mut in_reach = 0usize;
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+        let k = super::reach::keep_within(s.doc_mut()?, &sp, None, &[]);
+        if k.moved() > 0 && super::reach::follow_records(&mut sp, &k) > 0 {
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+        }
+        if k.moved() + k.recorded + k.too_tall > 0 {
+            s.touch();
+            let kinds: Vec<String> = k.by_kind.iter().map(|(kind, n)| format!("{kind} {n}")).collect();
+            progress_line(&format!(
+                "  controls in accessible rooms set within reach: {} of {} ({}); built from corrected records, their correction recorded: {}; too tall to be in reach, left for review: {}",
+                k.moved(),
+                k.checked,
+                kinds.join(", "),
+                k.recorded,
+                k.too_tall
+            ));
+        }
+        in_reach = k.moved();
+        result["accessible_reach"] = k.to_json();
+    }
     if !job.submittals.is_empty() {
         let t = web_time::Instant::now();
         submittals_step(s, job, &mut result);
@@ -9717,7 +9742,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Devices moved since the build (set in their walls again, up to their ceilings, to their RCP
     // spots, a keynote's ceiling box raised): their boxes and drops are cut again where they are.
     let raised = result["keynotes_ceiling_boxes_raised"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0));
-    match super::conduitroute::follow_reseated(s, reseated + ceiling_moved + raised) {
+    match super::conduitroute::follow_reseated(s, reseated + ceiling_moved + raised + in_reach) {
         Some(Ok(v)) => {
             progress_line(&format!("  conduit rerouted to the reseated devices: {v}"));
             // The GFCI decisions follow the circuits as now wired (Q6551): load side only where

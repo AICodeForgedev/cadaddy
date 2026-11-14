@@ -61,7 +61,7 @@ mod rooms;
 mod walls;
 
 pub(crate) use docs::Fact;
-pub(crate) use walls::studs_of;
+pub(crate) use walls::{jambs_of, off_jambs, studs_of};
 
 /// The rules data.
 const RULES: &str = include_str!("tradeatoms.json");
@@ -387,6 +387,8 @@ pub(crate) struct Batch {
     pub notes: Vec<String>,
     /// Trades left out (with why), for the report.
     pub missing: BTreeMap<String, String>,
+    /// Counts a layout keeps for its notes (what it moved or framed, and why).
+    pub tally: BTreeMap<String, usize>,
 }
 
 impl Batch {
@@ -694,7 +696,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
     let rules = Rules::of(d, sp);
     let want = |t: &str| only.is_none_or(|o| o.contains(t));
     let mut batch = Batch::default();
-    let ctx = Ctx::new(d, sp);
+    let ctx = Ctx::new(d, sp, want("framing"));
     if want("framing") || want("drywall") || want("insulation") || want("masonry") || want("cladding") || want("finishes") {
         walls::lay_out(d, sp, &rules, &ctx, &mut batch, &want);
     }
@@ -749,7 +751,7 @@ const MAX_MEMBERS: usize = 400_000;
 /// pieces are made.
 pub(crate) fn framing_members(d: &Drawing, sp: &BuildingSpec) -> Vec<Member> {
     let rules = Rules::of(d, sp);
-    let ctx = Ctx { upf: upf_of(sp), rooms: Vec::new(), devices: Vec::new() };
+    let ctx = Ctx { upf: upf_of(sp), rooms: Vec::new(), devices: Vec::new(), in_wall: InWallIndex::default() };
     let mut batch = Batch::default();
     floors::lay_out(d, sp, &rules, &ctx, &mut batch, &|t: &str| t == "framing");
     let mut out = Vec::new();
@@ -788,6 +790,127 @@ pub(crate) struct Ctx {
     pub rooms: Vec<RoomEl>,
     /// Devices and casework: level, kind, centre, handle.
     pub devices: Vec<(String, String, Vec3, Handle)>,
+    /// What the other trades set inside the walls (boxes, devices, equipment): the stud layout
+    /// stands its studs beside them (Q6623).
+    pub in_wall: InWallIndex,
+}
+
+/// A thing another trade sets in a wall: what it is, its body's points and its box.
+#[derive(Clone, Debug)]
+pub(crate) struct InWall {
+    pub what: String,
+    pub pts: Vec<Vec3>,
+    pub lo: Vec3,
+    pub hi: Vec3,
+}
+
+/// Most points of one in-wall thing's body looked at, and most things kept (hostile models).
+const MAX_IN_WALL_PTS: usize = 512;
+const MAX_IN_WALL: usize = 400_000;
+/// The index's cell, feet.
+const IN_WALL_CELL_FT: f64 = 10.0;
+
+/// The in-wall things by level and plan cell.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct InWallIndex {
+    pub items: Vec<InWall>,
+    cells: HashMap<(String, i64, i64), Vec<usize>>,
+    cell: f64,
+}
+
+impl InWallIndex {
+    fn new(items: Vec<(String, InWall)>, upf: f64) -> InWallIndex {
+        let cell = (IN_WALL_CELL_FT * upf).max(1e-6);
+        let mut out = InWallIndex { items: Vec::new(), cells: HashMap::new(), cell };
+        for (level, it) in items.into_iter().take(MAX_IN_WALL) {
+            let i = out.items.len();
+            let key = level.to_ascii_lowercase();
+            for (cx, cy) in Self::span(cell, Vec2::new(it.lo.x, it.lo.y), Vec2::new(it.hi.x, it.hi.y)) {
+                out.cells.entry((key.clone(), cx, cy)).or_default().push(i);
+            }
+            out.items.push(it);
+        }
+        out
+    }
+
+    /// The cells a plan box covers (none when it is not finite or covers too many).
+    fn span(cell: f64, lo: Vec2, hi: Vec2) -> Vec<(i64, i64)> {
+        let c = |v: f64| (v / cell).floor();
+        let (x0, y0, x1, y1) = (c(lo.x), c(lo.y), c(hi.x), c(hi.y));
+        if ![x0, y0, x1, y1].iter().all(|v| v.is_finite() && v.abs() < 1e12) || (x1 - x0 + 1.0) * (y1 - y0 + 1.0) > 4096.0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let (x0, y0, x1, y1) = (x0 as i64, y0 as i64, x1 as i64, y1 as i64);
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                out.push((x, y));
+            }
+        }
+        out
+    }
+
+    /// The things of `level` whose box meets the plan box `lo`..`hi`.
+    pub(crate) fn near(&self, level: &str, lo: Vec2, hi: Vec2) -> Vec<&InWall> {
+        let key = level.to_ascii_lowercase();
+        let mut idx: Vec<usize> =
+            Self::span(self.cell, lo, hi).into_iter().filter_map(|(x, y)| self.cells.get(&(key.clone(), x, y))).flatten().copied().collect();
+        idx.sort_unstable();
+        idx.dedup();
+        idx.into_iter()
+            .filter_map(|i| self.items.get(i))
+            .filter(|it| it.hi.x >= lo.x && it.lo.x <= hi.x && it.hi.y >= lo.y && it.lo.y <= hi.y)
+            .collect()
+    }
+}
+
+/// Whether `e` may be a thing set in a wall, by its part alone: a run's piece only when it is a box,
+/// its ring or a conduit stick (a stick standing in the wall); the wire, cable, fittings and
+/// straps of a run never (a quick test before [`in_wall_thing`] reads it).
+fn in_wall_kind(e: &cadaddy_doc::Entity) -> bool {
+    match super::bimlook::made_tag(e, "part").and_then(|p| p.strip_prefix("atom:")) {
+        Some(atom) => matches!(atom, "box" | "ring" | "conduit"),
+        None => true,
+    }
+}
+
+/// `e` as a thing another trade sets in a wall: an outlet or junction box, a device, a piece of
+/// equipment, a terminal, a conduit standing in the wall; never a run along or across it (a run
+/// across a stud bores it: the hole rules judge it).
+fn in_wall_thing(e: &cadaddy_doc::Entity) -> Option<InWall> {
+    let (trade, category, _, _) = super::bimwork::classify(e)?;
+    if !matches!(trade, "mechanical" | "plumbing" | "electrical" | "fire" | "lowvoltage") {
+        return None;
+    }
+    let what = match category.as_str() {
+        "conduit" => {
+            let ps = props::read(&e.common.xdata);
+            if ps.get("vertical").map(Prop::text).as_deref() != Some("true") {
+                return None;
+            }
+            "conduit".to_string()
+        }
+        "pipe" | "duct" | "cable" | "wire" | "tray" | "support" | "fitting" | "breaker" | "grounding" => return None,
+        "equipment" => super::bimlook::made_tag(e, "part")
+            .and_then(|p| p.strip_prefix("equipment:"))
+            .map_or_else(|| "equipment".to_string(), |k| k.replace('_', " ")),
+        c => c.to_string(),
+    };
+    let EntityKind::Mesh(m) = &e.kind else { return None };
+    let mut pts: Vec<Vec3> = m.vertices.iter().filter(|v| v.is_finite()).take(MAX_IN_WALL_PTS).copied().collect();
+    let first = *pts.first()?;
+    // Its box from every point (a big body's points past the cap still count).
+    let (lo, hi) = m.vertices.iter().filter(|v| v.is_finite()).take(super::mepatoms::MAX_ELEMENTS).fold((first, first), |(lo, hi), p| {
+        (Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)), Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)))
+    });
+    // A body of more points than are kept is taken as its box's corners.
+    if m.vertices.len() > MAX_IN_WALL_PTS {
+        pts.clear();
+        for i in 0..8u8 {
+            pts.push(Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }));
+        }
+    }
+    Some(InWall { what, pts, lo, hi })
 }
 
 /// A built room element.
@@ -803,13 +926,23 @@ pub(crate) struct RoomEl {
 }
 
 impl Ctx {
-    fn new(d: &Drawing, sp: &BuildingSpec) -> Ctx {
+    /// `framing`: the stud layout is laid, so what stands in the walls is looked up too.
+    fn new(d: &Drawing, sp: &BuildingSpec, framing: bool) -> Ctx {
         let upf = upf_of(sp);
         let mut rooms = Vec::new();
         let mut devices = Vec::new();
+        let mut in_wall: Vec<(String, InWall)> = Vec::new();
         for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some()).take(MAX_ELEMENTS) {
             let part = super::wallgen::made_as(e).unwrap_or_default();
             let level = super::bspec::made_level(e).unwrap_or_default();
+            if framing
+                && matches!(part.as_str(), "mep" | "device")
+                && in_wall.len() < MAX_IN_WALL
+                && in_wall_kind(e)
+                && let Some(it) = in_wall_thing(e)
+            {
+                in_wall.push((level.clone(), it));
+            }
             match part.as_str() {
                 "room" => {
                     let EntityKind::Mesh(m) = &e.kind else { continue };
@@ -846,7 +979,8 @@ impl Ctx {
                 _ => {}
             }
         }
-        Ctx { upf, rooms, devices }
+        let in_wall = InWallIndex::new(in_wall, upf);
+        Ctx { upf, rooms, devices, in_wall }
     }
 
     /// The room of a level a plan point is in.
