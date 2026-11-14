@@ -355,60 +355,100 @@ fn natural_lower(s: &str) -> String {
     s.to_lowercase()
 }
 
+/// What the dialog reads of the whole drawing ([`dialog`]), kept per state of it.
+#[derive(Default)]
+struct Facts {
+    /// The layers objects are on (lower case).
+    used: std::collections::HashSet<String>,
+    unreconciled: Vec<String>,
+    /// The standard linetypes the drawing doesn't have yet.
+    library: Vec<String>,
+}
+
+/// The layers listed, in order, and how many the drawing has.
+#[derive(Default)]
+struct Listed {
+    shown: Vec<Layer>,
+    total: usize,
+}
+
+/// The layers of `d` the filter, the search and the order in `key` list.
+fn listed_layers(d: &cadaddy_doc::Drawing, facts: &Facts, key: &(Shown, bool, String, bool)) -> Listed {
+    let (filter, invert, q, sort_desc) = key;
+    let in_filter: Option<std::collections::HashSet<String>> = match filter {
+        Shown::Filter(f) => {
+            cadaddy_engine::cmd::layer_filter_layers(d, f, false).ok().map(|v| v.into_iter().map(|n| n.to_ascii_lowercase()).collect())
+        }
+        _ => None,
+    };
+    let mut layers: Vec<&Layer> = d.layers.iter().collect();
+    layers.sort_by_cached_key(|l| natural_lower(&l.name));
+    if *sort_desc {
+        layers.reverse();
+    }
+    let shown = layers
+        .into_iter()
+        .filter(|l| {
+            let key = l.name.to_ascii_lowercase();
+            let pass = match filter {
+                Shown::All => true,
+                Shown::Used => facts.used.contains(&key),
+                Shown::Unreconciled => facts.unreconciled.iter().any(|n| n.eq_ignore_ascii_case(&l.name)),
+                Shown::Filter(_) => in_filter.as_ref().is_some_and(|f| f.contains(&key)),
+            };
+            pass != *invert
+        })
+        .filter(|l| q.is_empty() || crate_wild(q, &l.name.to_lowercase()))
+        .cloned()
+        .collect();
+    Listed { shown, total: d.layers.len() }
+}
+
 /// The Layer Properties Manager window.
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
     let sid = egui::Id::new("lpm_state");
     let mut st: LpmState = ctx.data_mut(|d| d.get_temp(sid)).unwrap_or_default();
     let mut actions: Vec<(&str, Value)> = Vec::new();
+    // What the dialog shows of the drawing, worked out once per state of it and of the filter,
+    // not on every frame (Q6573): finding the used layers reads every object.
+    let facts = crate::asked::kept(app, ctx, egui::Id::new("lpm-facts"), &(), |app| match app.session.doc() {
+        Ok(d) => Facts {
+            used: used_layers(d),
+            unreconciled: cadaddy_engine::cmd::unreconciled_layers(d),
+            library: cadaddy_doc::library::standard_linetypes().into_iter().map(|l| l.name).filter(|n| d.linetype(n).is_none()).collect(),
+        },
+        Err(_) => Facts::default(),
+    });
+    let Ok(dst) = app.session.state() else {
+        *open = false;
+        return;
+    };
+    if st.filter == Shown::Unreconciled && facts.unreconciled.is_empty() {
+        st.filter = Shown::All;
+    }
+    if let Shown::Filter(f) = &st.filter
+        && !dst.doc.layer_filters.iter().any(|x| &x.name == f)
+    {
+        st.filter = Shown::All;
+    }
+    let listed_key = (st.filter.clone(), st.invert, st.search.to_lowercase(), st.sort_desc);
+    let listed = crate::asked::kept(app, ctx, egui::Id::new("lpm-listed"), &listed_key, |app| match app.session.doc() {
+        Ok(d) => listed_layers(d, &facts, &listed_key),
+        Err(_) => Listed::default(),
+    });
     let Ok(dst) = app.session.state() else {
         *open = false;
         return;
     };
     let d = &dst.doc;
     let cur = d.header.str("CLAYER", "0");
-    let used = used_layers(d);
+    let (used, unreconciled, library) = (&facts.used, &facts.unreconciled, &facts.library);
     let vp: Option<(Handle, cadaddy_doc::Viewport)> = dst.active_viewport();
     let linetypes: Vec<cadaddy_doc::Linetype> = d.linetypes.clone();
-    let library: Vec<String> = cadaddy_doc::library::standard_linetypes().into_iter().map(|l| l.name).filter(|n| d.linetype(n).is_none()).collect();
     let states: Vec<String> = d.layer_states.iter().map(|s| s.name.clone()).collect();
     let filters: Vec<cadaddy_doc::LayerFilter> = d.layer_filters.clone();
-    let unreconciled: Vec<String> = cadaddy_engine::cmd::unreconciled_layers(d);
-    if st.filter == Shown::Unreconciled && unreconciled.is_empty() {
-        st.filter = Shown::All;
-    }
-    if let Shown::Filter(f) = &st.filter
-        && !filters.iter().any(|x| &x.name == f)
-    {
-        st.filter = Shown::All;
-    }
-    let in_filter: Option<std::collections::HashSet<String>> = match &st.filter {
-        Shown::Filter(f) => {
-            cadaddy_engine::cmd::layer_filter_layers(d, f, false).ok().map(|v| v.into_iter().map(|n| n.to_ascii_lowercase()).collect())
-        }
-        _ => None,
-    };
-    let mut layers: Vec<Layer> = d.layers.clone();
-    layers.sort_by_key(|l| natural_lower(&l.name));
-    if st.sort_desc {
-        layers.reverse();
-    }
-    let total = layers.len();
-    let q = st.search.to_lowercase();
-    let shown: Vec<Layer> = layers
-        .into_iter()
-        .filter(|l| {
-            let key = l.name.to_ascii_lowercase();
-            let pass = match &st.filter {
-                Shown::All => true,
-                Shown::Used => used.contains(&key),
-                Shown::Unreconciled => unreconciled.iter().any(|n| n.eq_ignore_ascii_case(&l.name)),
-                Shown::Filter(_) => in_filter.as_ref().is_some_and(|f| f.contains(&key)),
-            };
-            pass != st.invert
-        })
-        .filter(|l| q.is_empty() || crate_wild(&q, &l.name.to_lowercase()))
-        .collect();
+    let (shown, total) = (&listed.shown, listed.total);
     let title = match &vp {
         Some(_) => "Layer Properties Manager — current viewport",
         None => "Layer Properties Manager",
@@ -665,7 +705,14 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     if reopened {
                         table = table.scroll_offset(vec2(0.0, 0.0));
                     }
-                    table.show(ui, |ui| {
+                    table.show_viewport(ui, |ui, viewport| {
+                        // Only the rows on screen are laid out (Q6573), the header above them: every
+                        // row is one height. From an even row, so the stripes stay with their rows.
+                        let row_h = 22.0_f32.max(ui.spacing().interact_size.y) + 3.0;
+                        let n = shown.len();
+                        let first = ((viewport.min.y / row_h).floor().max(0.0) as usize).min(n) / 2 * 2;
+                        let last = first.saturating_add((viewport.height() / row_h).ceil().max(0.0) as usize + 2).min(n);
+                        ui.add_space(first as f32 * row_h);
                         let mut cols: Vec<&str> =
                             vec!["Status", "Name", "On", "Freeze", "Lock", "Plot", "Color", "Linetype", "Lineweight", "Transparency"];
                         if vp.is_some() {
@@ -693,12 +740,13 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                                     }
                                 }
                                 ui.end_row();
-                                for l in &shown {
-                                    row(ui, l, &cur, &used, vp.as_ref(), &linetypes, &library, &mut st, &mut actions);
+                                for l in shown.get(first..last).into_iter().flatten() {
+                                    row(ui, l, &cur, used, vp.as_ref(), &linetypes, library, &mut st, &mut actions);
                                     ui.end_row();
                                 }
                             },
                         );
+                        ui.add_space(n.saturating_sub(last) as f32 * row_h);
                     });
                 });
             });
