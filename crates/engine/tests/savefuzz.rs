@@ -707,13 +707,20 @@ fn covers_name(l: &Loss, name: &str) -> bool {
 /// comparison skips them too.
 fn drop_placeholders(kind: &EntityKind, forms: &mut [&mut Value]) {
     // Justified text's first point (DXF group 10) is worked out from its alignment point, and a
-    // writer works it out again (`kept::content`): its own, or an attribute's.
+    // writer works it out again (`kept::content`): its own, or an attribute's. Without an
+    // alignment point it is drawn at its first point, which a writer writes as its alignment point.
     fn derived(t: &cadaddy_engine::doc::Text) -> bool {
         use cadaddy_engine::doc::{HAlign, VAlign};
-        t.align_pt.is_some() && !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _))
+        !matches!((t.halign, t.valign), (HAlign::Left, VAlign::Baseline) | (HAlign::Aligned | HAlign::Fit, _))
     }
     fn drop_first_point(t: Option<&mut Value>) {
         if let Some(o) = t.and_then(Value::as_object_mut) {
+            if o.get("alignPt").is_none_or(Value::is_null) {
+                match o.get("insert").cloned() {
+                    Some(p) if !p.is_null() => o.insert("alignPt".into(), p),
+                    _ => return,
+                };
+            }
             o.remove("insert");
         }
     }

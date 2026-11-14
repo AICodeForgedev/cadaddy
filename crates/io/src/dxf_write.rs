@@ -1099,7 +1099,34 @@ fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
     if q.is_finite() { Vec3::new(q.x, q.y, t.insert.z) } else { t.insert }
 }
 
-fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>) {
+/// `t` as a DWG holds it, which always stores an alignment point (group 11): text that has none
+/// gets the point it is drawn by. Justified text is placed by its insertion point
+/// ([`Text::justify_point`]), so that point becomes its alignment point; aligned and fit text span
+/// their baseline from the insertion point, so the baseline's end as drawn (its natural width along
+/// its rotation) becomes it. Written without one, the text went to the origin in the DWG, or was
+/// stretched to it (the bridge's default alignment point). A DXF keeps such text as it was read.
+fn placed_by_alignment<'t>(d: &Drawing, t: &'t Text) -> std::borrow::Cow<'t, Text> {
+    use std::borrow::Cow;
+    let point = match (t.align_pt, t.halign, t.valign) {
+        (Some(_), ..) | (None, HAlign::Left, VAlign::Baseline) => return Cow::Borrowed(t),
+        (None, HAlign::Aligned | HAlign::Fit, _) => {
+            let ts = d.text_style(&t.style).cloned().unwrap_or_default();
+            let w = cadaddy_fonts::text_width(&cadaddy_fonts::TextFont::resolve(&ts.font), &t.value, t.height, t.width_factor);
+            if !(w.is_finite() && w > 1e-12 && t.rotation.is_finite()) {
+                return Cow::Borrowed(t);
+            }
+            t.insert + Vec3::new(w * t.rotation.cos(), w * t.rotation.sin(), 0.0)
+        }
+        (None, ..) => t.insert,
+    };
+    Cow::Owned(Text { align_pt: Some(point), ..t.clone() })
+}
+
+/// A TEXT, ATTDEF or ATTRIB record's text groups; `tilt`: its extrusion direction when the reader
+/// kept it in a tilted plane ([`kept_tilt`]); `dwg`: the tags become a DWG ([`placed_by_alignment`]).
+fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)>, attdef_prompt: Option<&str>, tilt: Option<Vec3>, dwg: bool) {
+    let t = if dwg { placed_by_alignment(d, t) } else { std::borrow::Cow::Borrowed(t) };
+    let t = &*t;
     let attdef = attdef_prompt.is_some();
     // An attribute definition with no default value is drawn as its tag, whatever its prompt: the
     // baseline start AutoCAD stored is judged against the tag's width too. A stored point that is
@@ -1144,6 +1171,9 @@ fn text_tags(w: &mut W, d: &Drawing, t: &Text, attrib: Option<(&Attrib, Version)
     if let Some(a) = t.align_pt {
         w.p(11, a);
     }
+    if let Some(n) = tilt {
+        w.p(210, n);
+    }
     match attrib {
         Some((a, target)) => {
             w.s(100, if attdef { "AcDbAttributeDefinition" } else { "AcDbAttribute" });
@@ -1187,6 +1217,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             common(w, e, owner, paper, "AcDbPoint");
             w.p(10, p.p);
             thickness(w, e);
+            if let Some(n) = kept_tilt(e) {
+                w.p(210, n);
+            }
             if p.angle != 0.0 {
                 w.f(50, p.angle.to_degrees());
             }
@@ -1223,6 +1256,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             common(w, e, owner, paper, "AcDbEllipse");
             w.p(10, el.center);
             w.p(11, el.major);
+            if let Some(n) = kept_tilt(e) {
+                w.p(210, n);
+            }
             w.f(40, el.ratio);
             w.f(41, el.start);
             w.f(42, el.end);
@@ -1248,6 +1284,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 if v.bulge != 0.0 {
                     w.f(42, v.bulge);
                 }
+            }
+            if let Some(n) = kept_tilt(e) {
+                w.p(210, n);
             }
         }
         EntityKind::MLine(m) => {
@@ -1361,8 +1400,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             thickness(w, e);
             match &f {
-                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..t.clone() }, None, None),
-                None => text_tags(w, d, t, None, None),
+                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..t.clone() }, None, None, kept_tilt(e), cx.dwg),
+                None => text_tags(w, d, t, None, None, kept_tilt(e), cx.dwg),
             }
         }
         // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
@@ -1385,8 +1424,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let f = plan_fields(w, d, cx, &e.handle.hex(), e, 0, &a.text.value);
             common_x(w, e, owner, paper, "AcDbText", None, f.as_ref().map(|f| f.1.as_str()));
             match &f {
-                Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt)),
-                None => text_tags(w, d, &a.text, Some((a, cx.target)), Some(&a.prompt)),
+                Some((shown, _)) => {
+                    text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), Some(&a.prompt), kept_tilt(e), cx.dwg)
+                }
+                None => text_tags(w, d, &a.text, Some((a, cx.target)), Some(&a.prompt), kept_tilt(e), cx.dwg),
             }
             if cx.target >= Version::R2007 {
                 multiline_tags(w, a, true);
@@ -1413,6 +1454,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.s(1, "");
             }
             w.s(7, &t.style);
+            if let Some(n) = kept_tilt(e) {
+                w.p(210, n);
+            }
             if t.rotation != 0.0 {
                 w.f(50, t.rotation.to_degrees());
             }
@@ -1455,6 +1499,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(44, i.col_spacing);
                 w.f(45, i.row_spacing);
             }
+            if let Some(n) = kept_tilt(e) {
+                w.p(210, n);
+            }
             if !i.attribs.is_empty() {
                 for (ai, a) in i.attribs.iter().enumerate() {
                     let ah = w.h();
@@ -1474,8 +1521,10 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     }
                     w.s(100, "AcDbText");
                     match &f {
-                        Some((shown, _)) => text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None),
-                        None => text_tags(w, d, &a.text, Some((a, cx.target)), None),
+                        Some((shown, _)) => {
+                            text_tags(w, d, &Text { value: shown.clone(), ..a.text.clone() }, Some((a, cx.target)), None, None, cx.dwg)
+                        }
+                        None => text_tags(w, d, &a.text, Some((a, cx.target)), None, None, cx.dwg),
                     }
                     if cx.target >= Version::R2007 {
                         multiline_tags(w, a, false);
@@ -1737,7 +1786,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(0, "HATCH");
             common(w, e, owner, paper, "AcDbHatch");
             w.p(10, Vec3::new(0.0, 0.0, h.elevation));
-            w.p(210, Vec3::Z);
+            w.p(210, kept_tilt(e).unwrap_or(Vec3::Z));
             w.s(2, &h.pattern);
             w.i(70, i64::from(h.solid));
             w.i(71, i64::from(h.associative));
@@ -1896,12 +1945,15 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.s(0, "SHAPE");
             common(w, e, owner, paper, "AcDbShape");
             thickness(w, e);
-            w.p(10, sh.insert);
+            // The reader turned the insertion point into the world system: back into its OCS.
+            let n = extrusion_of(e);
+            w.p(10, to_ocs(n, sh.insert));
             w.f(40, sh.size);
             w.s(2, &sh.name);
             w.f(50, sh.rotation.to_degrees());
             w.f(41, sh.width_factor);
             w.f(51, sh.oblique.to_degrees());
+            extrusion(w, n);
         }
         EntityKind::Tolerance(t) => {
             w.s(0, "TOLERANCE");
@@ -2040,6 +2092,16 @@ fn to_ocs(n: Vec3, p: Vec3) -> Vec3 {
 
 fn is_default_extrusion(n: Vec3) -> bool {
     n.x.abs() < 1e-12 && n.y.abs() < 1e-12 && n.z > 0.0
+}
+
+/// The extrusion direction (210) of an object whose points the reader kept as the file gave them,
+/// in the system that direction makes: a tilted one (not along the Z axis) that doesn't point
+/// down. The reader turns an object under a downward direction into the world system (mirroring
+/// it), so that one is not written; neither is the Z axis. Without it a text, block reference,
+/// polyline or hatch drawn in a tilted plane came back flat in the XY plane.
+fn kept_tilt(e: &Entity) -> Option<Vec3> {
+    let n = extrusion_of(e);
+    (!is_default_extrusion(n) && n.z >= 0.0).then_some(n)
 }
 
 /// The extrusion groups (210, 220, 230) of an object whose coordinates are in the OCS of `n`;
@@ -2650,7 +2712,7 @@ pub(crate) fn bridge_job(dwg: Version) -> crate::dxf_post::Job {
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>, usize) {
     let views = Views::of(d);
     let mut plan = crate::dxf_post::Plan::new(&views, bridge_job(dwg));
-    dwg_bridge_from(d, &mut plan)
+    dwg_bridge_from(d, &mut plan, dwg)
 }
 
 /// The DXF the DWG bridge converts ([`bridge_job`]), written from `plan` (counted already, so a
@@ -2659,7 +2721,7 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> (Vec<u8>, Vec<String>, us
 /// names and its group-code count (binary DXF has no lines to count them by). Made as the groups
 /// come, never held as a list (only a drawing with other programs' custom records is: they are
 /// moved into a kept dictionary first).
-pub(crate) fn dwg_bridge_from(d: &Drawing, plan: &mut crate::dxf_post::Plan) -> (Vec<u8>, Vec<String>, usize) {
+pub(crate) fn dwg_bridge_from(d: &Drawing, plan: &mut crate::dxf_post::Plan, dwg: Version) -> (Vec<u8>, Vec<String>, usize) {
     // Binary is faster for the bridge, but the materials it passes on (entities' and layers'
     // group 347, and the MATERIAL colours) are read from text: a drawing with materials goes as
     // text (tester 0.7.7e: through DWG the assignments were lost and colours came back white).
@@ -2701,7 +2763,12 @@ pub(crate) fn dwg_bridge_from(d: &Drawing, plan: &mut crate::dxf_post::Plan) -> 
         }
         None
     };
-    if !has_custom(d) {
+    // Other programs' objects the bridge would give back otherwise than they were read get a
+    // shadow (`dwg_keep::shadows`); worked out from the kept objects first, so a drawing without
+    // any is still written as it comes.
+    let shadows = crate::dwg_keep::shadows(d, dwg.code());
+    let custom = has_custom(d);
+    if !custom && shadows.is_empty() {
         let mut enc = encoder();
         let mut out = Vec::new();
         enc.start(&mut out);
@@ -2725,8 +2792,8 @@ pub(crate) fn dwg_bridge_from(d: &Drawing, plan: &mut crate::dxf_post::Plan) -> 
     // Other programs' custom entities and objects, which the DWG writer can't write from their
     // DXF groups, go in a kept dictionary of XRECORDs instead (`dwg_keep`; reading the DWG back
     // puts them where they were). Only a drawing with such data is checked.
-    let take = cadaddy_dwg::custom_records(&dxf);
-    if let Some((kept, _)) = crate::dwg_keep::stash_tags(&tags, &take) {
+    let take = if custom { cadaddy_dwg::custom_records(&dxf) } else { std::collections::HashSet::new() };
+    if let Some((kept, _)) = crate::dwg_keep::stash_tags(&tags, &take, &shadows) {
         return (write(&kept), names, kept.len());
     }
     (dxf, names, tags.len())

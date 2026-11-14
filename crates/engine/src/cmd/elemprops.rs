@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle? | handles?: [string] (default: the selection)} → {elements: [{handle, kind, props: {key: {value, unit?, source: {kind: print|legend|schedule|spec|submittal|note|rule|default|user|computed, doc?, at?}, confidence?, note?, stored}}, order: [key], standard: [key], missing: [key]}]}")
             .noundo(),
         CommandSpec::new(SET, "Set Element Property (BIM)", run_set)
-            .params("{handle? | handles? | filter?: {kind?, where?: {key: value | \"exists\" | \"missing\"}} (default: the selection), key?: string, value?: string | number | bool | null (null clears), unit?, note?, props?: {key: value} (several at once; with or instead of key)} → {set, elements: [{handle, kind, override?}], skipped, room_followed?}: source user; kept through rebuilds; a room's number or name set is its number everywhere: the elements in it take it as their room (room_followed: how many)"),
+            .params("{handle? | handles? | filter?: {kind?, where?: {key: value | \"exists\" | \"missing\"}} (default: the selection), key?: string, value?: string | number | bool | null (null clears), unit?, note?, props?: {key: value} (several at once; with or instead of key)} → {set, elements: [{handle, kind, override?}], skipped, room_followed?, notes?}: source user; refused, nothing set, when a value is one the element's form cannot hold (a number field: a finite number, 0 or more unless signed, up to 1e8; an enum field: an allowed value), a `level` is not one of the model's, or text is over 1000 characters or has control characters; kept through rebuilds; a room's number or name set is its number everywhere: the elements in it take it as their room (room_followed: how many)"),
         CommandSpec::new(FIND, "Find Elements by Property", run_find)
             .params("{kind?: string (wall, door, window, room, floor, ceiling, roof, device, light_fixture, plumbing_fixture, fixture, equipment, duct, pipe, conduit, or a build part such as column), where?: {key: value | \"exists\" | \"missing\"}, select?: bool, limit? (default 200)} → {count, handles, elements: [{handle, kind, level?}], more}")
             .noundo(),
@@ -649,10 +649,25 @@ fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Why text a call gives can't be kept as it is (Q6384): longer than a store keeps, or with
+/// control characters (a NUL, an escape) a store would have to replace.
+fn text_refused(what: &str, t: &str) -> Option<String> {
+    if t.chars().count() > props::MAX_TEXT {
+        return Some(format!("{what}: at most {} characters ({} given)", props::MAX_TEXT, t.chars().count()));
+    }
+    t.chars()
+        .find(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+        .map(|c| format!("{what}: control character U+{:04X} (text only: tabs and line breaks are kept)", u32::from(c)))
+}
+
 /// The value a call gives: a scalar (null clears: the user says it has none).
 fn value_param(cmd: &str, key: &str, v: &Value) -> Result<Value> {
     match v {
-        Value::String(_) | Value::Bool(_) | Value::Null => Ok(v.clone()),
+        Value::String(t) => match text_refused(&format!("`{key}`"), t) {
+            Some(why) => Err(bad(cmd, why)),
+            None => Ok(v.clone()),
+        },
+        Value::Bool(_) | Value::Null => Ok(v.clone()),
         Value::Number(n) if n.as_f64().is_some_and(f64::is_finite) => Ok(v.clone()),
         _ => Err(bad(cmd, format!("`{key}`: the value must be a string, number, boolean or null"))),
     }
@@ -661,6 +676,9 @@ fn value_param(cmd: &str, key: &str, v: &Value) -> Result<Value> {
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let unit = p.get("unit").and_then(Value::as_str);
     let note = p.get("note").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+    if let Some(why) = note.and_then(|n| text_refused("`note`", n)) {
+        return Err(bad(SET, why));
+    }
     let mut edits: Vec<(String, Value)> = Vec::new();
     if let Some(k) = p.get("key") {
         let k = k.as_str().map(str::trim).filter(|k| !k.is_empty()).ok_or_else(|| bad(SET, "`key` must be a non-empty string"))?;
@@ -717,6 +735,30 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if hs.len() > SET_MAX {
         return Err(bad(SET, format!("{} elements match: at most {SET_MAX} at a time", hs.len())));
+    }
+    // Every value is one the element can hold (Q6384), checked before anything is set: a number
+    // field of its form takes a finite number in range, an enum field an allowed value, and a
+    // level is one of the model's.
+    let d = s.doc()?;
+    let mut check = super::forms::ValueCheck::of(d);
+    for (h, kind) in &hs {
+        let Some(e) = d.model.get(*h) else { continue };
+        for en in &entries {
+            if let Some(why) = check.refuses(e, kind, &en.key, &en.prop.value) {
+                return Err(bad(SET, format!("{}: {why}", h.hex())));
+            }
+        }
+    }
+    let mut level_note = None;
+    if let Some(en) = entries.iter().find(|en| en.key.eq_ignore_ascii_case("level") && en.prop.has_value()) {
+        let want = en.prop.text();
+        let known = model_levels(d);
+        if known.is_empty() {
+            level_note = Some(format!("the model has no levels yet to check `{}` against", want.trim()));
+        } else if !known.iter().any(|l| l.trim().eq_ignore_ascii_case(want.trim())) {
+            let list: Vec<&str> = known.iter().take(20).map(String::as_str).collect();
+            return Err(bad(SET, format!("`level`: the model has no level `{}` (its levels: {})", want.trim(), list.join(", "))));
+        }
     }
     // Generated elements: as overrides, so rebuilds keep them. The others: straight into their store.
     let d = s.doc()?;
@@ -783,7 +825,24 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if followed > 0 {
         out["room_followed"] = json!(followed);
     }
+    if let Some(n) = level_note {
+        out["notes"] = json!([n]);
+    }
     Ok(out)
+}
+
+/// The levels the model knows: its building spec's and the ones its elements stand on.
+fn model_levels(d: &Drawing) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = super::bimviews::levels_of(d).into_iter().collect();
+    for e in d.model.iter().take(MAX_SCAN) {
+        if out.len() >= 10_000 {
+            break;
+        }
+        if let Some(l) = level_of(e) {
+            out.insert(l);
+        }
+    }
+    out
 }
 
 fn run_find(s: &mut Session, p: &Value) -> Result<Value> {

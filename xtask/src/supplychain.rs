@@ -259,21 +259,132 @@ pub fn run(root: &Path) -> Result<(), String> {
     }
 }
 
-/// `cargo xtask advisories`: RustSec advisories through cargo-deny (with `deny.toml`) and cargo-audit.
-pub fn advisories(root: &Path) -> Result<(), String> {
-    for (tool, args, install) in [
-        ("cargo-deny", vec!["deny", "--locked", "check"], "cargo install --locked cargo-deny"),
-        ("cargo-audit", vec!["audit", "--deny", "warnings"], "cargo install --locked cargo-audit"),
-    ] {
-        let status = Command::new(env!("CARGO")).current_dir(root).args(&args).status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) if s.code() == Some(101) && which(tool).is_none() => return Err(format!("{tool} isn't installed: {install}")),
-            Ok(s) => return Err(format!("cargo {}: {s}", args.join(" "))),
-            Err(e) => return Err(format!("{tool}: {e} ({install})")),
+const DENY_INSTALL: &str = "cargo install --locked cargo-deny";
+const AUDIT_INSTALL: &str = "cargo install --locked cargo-audit";
+
+/// `cargo xtask advisories [--fix]`: RustSec advisories through cargo-deny (with `deny.toml`) and
+/// cargo-audit. A failure names every flagged lockfile entry with the `cargo update` that clears it:
+/// a lock pinned before its crate was yanked or advised is the usual cause, and nothing in the tree
+/// changes when it happens. `--fix` runs those updates first, then the checks.
+pub fn advisories(root: &Path, args: &[&str]) -> Result<(), String> {
+    if args.contains(&"--fix") {
+        let (_, report) = audit(root)?;
+        let flagged = flagged(&report);
+        let update = update_args(&flagged);
+        if update.len() > 1 {
+            println!("advisories: cargo {}", update.join(" "));
+            let status = Command::new(env!("CARGO")).current_dir(root).args(&update).status().map_err(|e| format!("cargo update: {e}"))?;
+            if !status.success() {
+                return Err(format!("cargo {}: {status}", update.join(" ")));
+            }
         }
     }
-    Ok(())
+    let mut problems = Vec::new();
+    let deny = Command::new(env!("CARGO")).current_dir(root).args(["deny", "--locked", "check"]).status();
+    match deny {
+        Ok(s) if s.success() => {}
+        Ok(s) if s.code() == Some(101) && which("cargo-deny").is_none() => return Err(format!("cargo-deny isn't installed: {DENY_INSTALL}")),
+        Ok(s) => problems.push(format!("cargo deny --locked check: {s}")),
+        Err(e) => return Err(format!("cargo-deny: {e} ({DENY_INSTALL})")),
+    }
+    let (ok, report) = audit(root)?;
+    let flagged = flagged(&report);
+    if !ok || !flagged.is_empty() {
+        problems.push(format!("cargo audit --deny warnings: {} flagged", flagged.len()));
+        problems.extend(flagged.iter().map(Flagged::line));
+        let update = update_args(&flagged);
+        if update.len() > 1 {
+            problems.push(format!("fix: cargo {}   (or `cargo xtask advisories --fix`)", update.join(" ")));
+        }
+    }
+    if problems.is_empty() {
+        println!("advisories: cargo deny and cargo audit clean");
+        Ok(())
+    } else {
+        Err(format!("advisories failed:\n  {}", problems.join("\n  ")))
+    }
+}
+
+/// `cargo audit --deny warnings --json`: whether it passed, and its report.
+fn audit(root: &Path) -> Result<(bool, Value), String> {
+    let out = Command::new(env!("CARGO"))
+        .current_dir(root)
+        .args(["audit", "--deny", "warnings", "--json"])
+        .output()
+        .map_err(|e| format!("cargo-audit: {e} ({AUDIT_INSTALL})"))?;
+    if out.status.code() == Some(101) && which("cargo-audit").is_none() {
+        return Err(format!("cargo-audit isn't installed: {AUDIT_INSTALL}"));
+    }
+    let report = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("cargo audit: no JSON report ({e}; {}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim()))?;
+    Ok((out.status.success(), report))
+}
+
+/// A lockfile entry cargo-audit denies: a vulnerability, or a denied warning (yanked, unsound, …).
+#[derive(Debug, PartialEq)]
+pub struct Flagged {
+    pub name: String,
+    pub version: String,
+    /// `yanked`, `vulnerability`, `unsound`, …, with the advisory id when there is one.
+    pub why: String,
+    /// Whether a `cargo update` can clear it: the version is yanked, or the advisory names patched
+    /// versions. Otherwise it needs a dependency upgrade or a reasoned ignore entry.
+    pub updatable: bool,
+}
+
+impl Flagged {
+    fn line(&self) -> String {
+        let fix = if self.updatable {
+            format!("cargo update -p {}@{}", self.name, self.version)
+        } else {
+            "no fixed version: upgrade what pulls it in, or add an ignore entry with its reason to deny.toml and .cargo/audit.toml".into()
+        };
+        format!("{} {} ({}): {fix}", self.name, self.version, self.why)
+    }
+}
+
+/// The denied entries of a cargo-audit JSON report, each lockfile entry once, by name and version.
+pub fn flagged(report: &Value) -> Vec<Flagged> {
+    let mut entries: Vec<(&str, &Value)> = Vec::new();
+    for v in report["vulnerabilities"]["list"].as_array().into_iter().flatten() {
+        entries.push(("vulnerability", v));
+    }
+    let mut kinds: Vec<(&String, &Value)> = report["warnings"].as_object().into_iter().flatten().collect();
+    kinds.sort_by_key(|(kind, _)| *kind);
+    for (kind, list) in kinds {
+        for w in list.as_array().into_iter().flatten().filter(|w| w["denied"].as_bool() != Some(false)) {
+            entries.push((kind.as_str(), w));
+        }
+    }
+    let mut out: Vec<Flagged> = Vec::new();
+    for (kind, e) in entries {
+        let (Some(name), Some(version)) = (e["package"]["name"].as_str(), e["package"]["version"].as_str()) else { continue };
+        let patched = e["versions"]["patched"].as_array().is_some_and(|p| !p.is_empty());
+        let why = match e["advisory"]["id"].as_str() {
+            Some(id) => format!("{kind} {id}"),
+            None => kind.to_string(),
+        };
+        let updatable = kind == "yanked" || patched;
+        match out.iter_mut().find(|f| f.name == name && f.version == version) {
+            Some(f) => {
+                f.why = format!("{}, {why}", f.why);
+                f.updatable |= updatable;
+            }
+            None => out.push(Flagged { name: name.into(), version: version.into(), why, updatable }),
+        }
+    }
+    out.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+    out
+}
+
+/// `update -p name@version …` for the entries a `cargo update` can clear (just `update` when none).
+pub fn update_args(flagged: &[Flagged]) -> Vec<String> {
+    let mut args = vec!["update".to_string()];
+    for f in flagged.iter().filter(|f| f.updatable) {
+        args.push("-p".into());
+        args.push(format!("{}@{}", f.name, f.version));
+    }
+    args
 }
 
 fn which(tool: &str) -> Option<std::path::PathBuf> {
@@ -491,5 +602,49 @@ mod tests {
         assert_eq!(sbom_of(&graph(), lock, "2026-10-19T00:00:00Z")["serialNumber"], bom["serialNumber"], "the same lock, the same serial");
         let pinned = bom["components"].as_array().unwrap().iter().find(|c| c["name"] == "pinned").unwrap();
         assert!(pinned["purl"].as_str().unwrap().contains("vcs_url=git%2Bhttps%3A//github.com/storytold/craft-libs%40abc"), "{pinned}");
+    }
+
+    /// A cargo-audit report as `cargo audit --json` writes it, trimmed to the fields read.
+    fn audit_report() -> Value {
+        let pkg = |n: &str, v: &str| json!({ "name": n, "version": v, "source": "registry+https://github.com/rust-lang/crates.io-index" });
+        json!({
+            "vulnerabilities": { "found": true, "count": 2, "list": [
+                { "advisory": { "id": "RUSTSEC-0000-0001" }, "versions": { "patched": [">=2.0.1"] }, "package": pkg("alpha-net", "2.0.0") },
+                { "advisory": { "id": "RUSTSEC-0000-0002" }, "versions": { "patched": [] }, "package": pkg("beta-parse", "0.3.1") },
+            ]},
+            "warnings": {
+                "yanked": [
+                    { "kind": "yanked", "advisory": null, "versions": null, "denied": true, "package": pkg("gamma-exec", "1.4.0") },
+                ],
+                "unsound": [
+                    { "kind": "unsound", "advisory": { "id": "RUSTSEC-0000-0003" }, "versions": { "patched": [">=1.1.6"] }, "denied": true, "package": pkg("delta-sys", "1.1.5") },
+                    { "kind": "unsound", "advisory": { "id": "RUSTSEC-0000-0004" }, "versions": { "patched": [">=1.0.1"] }, "denied": true, "package": pkg("gamma-exec", "1.4.0") },
+                ],
+                "unmaintained": [
+                    { "kind": "unmaintained", "advisory": { "id": "RUSTSEC-0000-0005" }, "versions": { "patched": [] }, "denied": false, "package": pkg("eps-old", "0.1.0") },
+                ],
+            },
+        })
+    }
+
+    #[test]
+    fn advisories_name_the_update_for_each_flagged_crate() {
+        let flagged = flagged(&audit_report());
+        let got: Vec<(&str, &str, bool)> = flagged.iter().map(|f| (f.name.as_str(), f.version.as_str(), f.updatable)).collect();
+        // The not-denied warning is left out; a lockfile entry flagged twice is listed once.
+        assert_eq!(got, [("alpha-net", "2.0.0", true), ("beta-parse", "0.3.1", false), ("delta-sys", "1.1.5", true), ("gamma-exec", "1.4.0", true)]);
+        assert_eq!(flagged.get(3).map(|f| f.why.as_str()), Some("unsound RUSTSEC-0000-0004, yanked"));
+        assert_eq!(update_args(&flagged), ["update", "-p", "alpha-net@2.0.0", "-p", "delta-sys@1.1.5", "-p", "gamma-exec@1.4.0"]);
+        let lines: Vec<String> = flagged.iter().map(Flagged::line).collect();
+        assert!(lines.first().is_some_and(|l| l.ends_with("cargo update -p alpha-net@2.0.0")), "{lines:?}");
+        assert!(lines.get(1).is_some_and(|l| l.contains("no fixed version") && l.contains("deny.toml")), "{lines:?}");
+    }
+
+    #[test]
+    fn clean_audit_report_flags_nothing() {
+        let clean = json!({ "vulnerabilities": { "found": false, "count": 0, "list": [] }, "warnings": {} });
+        assert!(flagged(&clean).is_empty());
+        assert_eq!(update_args(&[]), ["update"]);
+        assert!(flagged(&json!({})).is_empty());
     }
 }

@@ -98,7 +98,9 @@ commands:
                   must end within a margin of the warm-up's; --passes repeats the phases
   supplychain     offline: shipped crates' licences (deny.toml; no GPL/AGPL/unknown), sources
                   (crates.io, the workspace, pinned allowed git), banned crates, and a secrets scan
-  advisories      RustSec advisories: cargo deny check + cargo audit (needs both tools and the network)
+  advisories [--fix]
+                  RustSec advisories: cargo deny check + cargo audit (needs both tools and the network);
+                  a failure names the `cargo update -p` for each yanked or patched crate, --fix runs them
   command-docs [--check]
                   generate docs/guide/command-reference.md from the live command registry;
                   --check regenerates and fails on any diff (used by `cargo xtask ci`)
@@ -181,7 +183,7 @@ fn main() -> ExitCode {
         #[cfg(feature = "app")]
         Some("pdfstats") => pdfstats::run(&root(), &rest),
         Some("supplychain") => supplychain::run(&root()),
-        Some("advisories") => supplychain::advisories(&root()),
+        Some("advisories") => supplychain::advisories(&root(), &rest),
         Some("sbom") => supplychain::sbom(&root(), &rest),
         Some("secrets") => secrets::run(&root()),
         Some("signing") => signing::run(&rest),
@@ -361,7 +363,7 @@ fn cmd_ci() -> Result<(), String> {
         ("soak", Box::new(|| soak::run(&root(), &["--minutes", "2", "--profile", "dev"]))),
         ("command-docs", Box::new(|| commanddocs::run(&root(), true))),
         ("supplychain", Box::new(|| supplychain::run(&root()))),
-        ("advisories", Box::new(|| supplychain::advisories(&root()))),
+        ("advisories", Box::new(|| supplychain::advisories(&root(), &[]))),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {
