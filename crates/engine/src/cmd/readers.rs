@@ -205,6 +205,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 equipment: f("equipment"),
                 near: String::new(),
                 derived: String::new(),
+                made: String::new(),
+                notes: Vec::new(),
                 keynote: f("keynote"),
                 located: String::new(),
                 keynotes: Vec::new(),
@@ -1248,6 +1250,12 @@ pub(crate) fn device_kind(tag: &str) -> &'static str {
     cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", tag.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
 
+/// Properties a check gives one device, written at most.
+const MAX_DEVICE_NOTES: usize = 16;
+/// The properties a check gives a device it made (Q6612) that its built element carries too: how
+/// sure it is, why no engineer's sheet has it, what is proposed for it, the RFI asking about it.
+pub(crate) const CHECK_FIELDS: [&str; 6] = ["confidence", "not_on_electrical", "proposed_type", "proposed_circuit", "proposed_control", "rfi"];
+
 /// Devices listed at most per call, and read at most.
 const DEVICES_LISTED: usize = 500;
 const MAX_DEVICES: usize = 100_000;
@@ -1537,6 +1545,15 @@ pub struct ReadDevice {
     /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// What it is by the documents when a check made it rather than a plan (`inferred`: only
+    /// another trade's sheet draws it, Q6612), its basis in `derived`. Empty: drawn, or derived
+    /// when `derived` is given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
+    /// Properties a check gives it (`confidence` unsure, `proposed_type`, `proposed_circuit`, `proposed_control`),
+    /// each with its value: written onto its element as rule values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<(String, String)>,
     /// The keynote its sheet tags it with (`E-9 keynote 4: <the note>`), when one is by its
     /// symbol and asks something of it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1890,8 +1907,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // Copied from the room it stacks with on another floor: said so, with the basis, so it
         // never passes for one its own floor's plans show.
         if !dv.derived.is_empty() {
-            e.set("status", super::waterfill::DERIVED, "rule");
+            e.set("status", if dv.made.trim().is_empty() { super::waterfill::DERIVED } else { dv.made.trim() }, "rule");
             e.set("basis", dv.derived.clone(), "rule");
+        }
+        for (k, v) in dv.notes.iter().take(MAX_DEVICE_NOTES) {
+            if !k.trim().is_empty() && !v.trim().is_empty() {
+                e.set(k.trim(), v.clone(), "rule");
+            }
         }
         // The keynote its sheet tags it with; a piece of equipment's receptacle takes what the
         // note asks of it (its rating, poles, orientation and place), the note its source.
