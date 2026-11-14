@@ -28744,15 +28744,21 @@ fn arch_placer(
                 plan_upf.get(i).copied().flatten(),
                 upf,
             );
-            let fit = if other.is_some() { None } else { lines.fit(i, &tgt, ratio) };
+            // Why a sheet fits nowhere comes from the same fits (never weighed again to say it).
+            let (fit, why) = match other {
+                Some(_) => (None, String::new()),
+                None => match lines.fit_why(i, &tgt, ratio, &mut super::grids::FitStats::default()) {
+                    Ok(f) => (Some(f), String::new()),
+                    Err(why) => (None, why),
+                },
+            };
             let number = sheet_names.get(i).cloned().unwrap_or_default();
             progress_line(&format!(
                 "  placer: {number} on {level} by its linework at {ratio:.3} of its plan: {} ({:.1} s)",
                 fit.as_ref().map_or_else(
-                    || other.as_ref().map_or_else(
-                        || format!("no fit ({})", lines.best_tried(i, &tgt, ratio)),
-                        |o| format!("not fitted (its views name another part of the site: {o})")
-                    ),
+                    || other
+                        .as_ref()
+                        .map_or_else(|| format!("no fit ({why})"), |o| format!("not fitted (its views name another part of the site: {o})")),
                     |f| format!(
                         "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best{}",
                         f.sim.scale(),

@@ -1814,6 +1814,8 @@ pub(crate) struct FitStats {
     pub thinned: usize,
     /// The most pairs one scale voted.
     pub most_votes: usize,
+    /// Plans' linework made ready for fits ([`PlanLines`]).
+    pub plans: usize,
 }
 
 /// The coarse cell of `p` (cells of `size`), none for a coordinate no linework has.
@@ -2096,9 +2098,68 @@ fn fit_linework_detail(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, who
     if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
         return None;
     }
+    let plan = PlanLines::new(tgt, k, stats);
+    fit_linework_on(&plan, src, lo, hi, whole, stats)
+}
+
+/// A floor plan's linework made ready for linework fits (its coarse cells and its 1' grid), built
+/// once for every fit against it: a sheet weighed at each of many scales, or block by block,
+/// against one plan (Q6566: each of a sheet's 15 off-scale trials built them again, and the job's
+/// sheets that fit nowhere took minutes).
+pub(crate) struct PlanLines<'a> {
+    tgt: &'a [Vec2],
+    k: f64,
+    tcells: Vec<(i64, i64)>,
+    fine: Occupancy,
+}
+
+impl<'a> PlanLines<'a> {
+    /// The plan's linework `tgt`, `k` drawing units per inch (counted in `stats`).
+    pub(crate) fn new(tgt: &'a [Vec2], k: f64, stats: &mut FitStats) -> Self {
+        stats.plans += 1;
+        let coarse = 48.0 * k;
+        let tcells = tgt.iter().filter_map(|p| coarse_cell(*p, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        PlanLines { tgt, k, tcells, fine: Occupancy::new(tgt, 12.0 * k, 1) }
+    }
+
+    /// [`linework_fit_part`] of `src` on this plan.
+    pub(crate) fn fit_part(&self, src: &[Vec2], lo: f64, hi: f64, stats: &mut FitStats) -> Option<(f64, Vec2, f64, f64)> {
+        fit_linework_on(self, src, lo, hi, false, stats).map(LineworkFit::tuple)
+    }
+
+    /// [`Self::fit_part`] at each of `scales` on its own (each the fit `fit_part(src, s, s)` gives),
+    /// the scales weighed side by side.
+    pub(crate) fn fit_part_each(&self, src: &[Vec2], scales: &[f64], stats: &mut FitStats) -> Vec<Option<(f64, Vec2, f64, f64)>> {
+        let one = |&s: &f64| {
+            let mut st = FitStats::default();
+            (self.fit_part(src, s, s, &mut st), st)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let each: Vec<(Option<(f64, Vec2, f64, f64)>, FitStats)> = {
+            use rayon::prelude::*;
+            scales.par_iter().map(one).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let each: Vec<(Option<(f64, Vec2, f64, f64)>, FitStats)> = scales.iter().map(one).collect();
+        each.into_iter()
+            .map(|(f, st)| {
+                stats.fits += st.fits;
+                stats.thinned += st.thinned;
+                stats.most_votes = stats.most_votes.max(st.most_votes);
+                f
+            })
+            .collect()
+    }
+}
+
+/// [`fit_linework_detail`] on a plan made ready ([`PlanLines`]).
+fn fit_linework_on(plan: &PlanLines, src: &[Vec2], lo: f64, hi: f64, whole: bool, stats: &mut FitStats) -> Option<LineworkFit> {
+    let (tgt, k, tcells) = (plan.tgt, plan.k, &plan.tcells);
+    if src.len() < 50 || tgt.len() < 50 || !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo) {
+        return None;
+    }
     stats.fits += 1;
     let coarse = 48.0 * k;
-    let tcells: Vec<(i64, i64)> = tgt.iter().filter_map(|p| coarse_cell(*p, coarse)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
@@ -2142,7 +2203,7 @@ fn fit_linework_detail(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, who
         stats.thinned += usize::from(thinned);
         stats.most_votes = stats.most_votes.max(votes);
     }
-    let fine = Occupancy::new(tgt, 12.0 * k, 1);
+    let fine = &plan.fine;
     // Refine every scale's proposal on the 1' grid: scale ±0.5%, offset within two coarse cells.
     let refine = |&(_, s0, o): &(f64, f64, (i64, i64))| -> (f64, f64, Vec2) {
         let t0 = Vec2::new(o.0 as f64 * coarse, o.1 as f64 * coarse);
@@ -2625,6 +2686,27 @@ mod tests {
         }
         let typical: Vec<Vec2> = sampled(&room(Vec2::new(0.0, 360.0), 240.0, 360.0, 48.0)).into_iter().map(|p| p + off).collect();
         assert!(linework_fit_part(&typical, &sampled(&rep), 1.0, 0.97, 1.03).is_none_or(|f| f.3 < 0.03), "a typical room has no one place");
+    }
+
+    /// Q6566: a sheet weighed at each of many scales against one plan, side by side on the plan
+    /// made ready once, gets at every scale the fit it gets weighed there on its own.
+    #[test]
+    fn fits_at_each_scale_side_by_side_are_the_fits_one_at_a_time() {
+        let plan = sampled(&varied_floor(Vec2::new(0.0, 0.0), 1.0));
+        let sheet = sampled(&varied_floor(Vec2::new(40_000.0, 900.0), 1.0 / 0.96));
+        let scales: Vec<f64> = (0..=14).map(|i| 0.93 + 0.01 * f64::from(i)).collect();
+        let mut stats = FitStats::default();
+        let plan_lines = PlanLines::new(&plan, 1.0, &mut stats);
+        let each = plan_lines.fit_part_each(&sheet, &scales, &mut stats);
+        let bits = |f: Option<(f64, Vec2, f64, f64)>| f.map(|f| [f.0.to_bits(), f.1.x.to_bits(), f.1.y.to_bits(), f.2.to_bits(), f.3.to_bits()]);
+        assert_eq!(each.len(), scales.len());
+        for (s, f) in scales.iter().zip(&each) {
+            assert_eq!(bits(*f), bits(linework_fit_part(&sheet, &plan, 1.0, *s, *s)), "at {s}");
+        }
+        assert_eq!((stats.plans, stats.fits), (1, scales.len()), "{stats:?}");
+        // The sheet is drawn 1/0.96 the plan's size: best at 0.96.
+        let best = scales.iter().zip(&each).filter_map(|(s, f)| f.map(|f| (*s, f.2))).max_by(|a, b| a.1.total_cmp(&b.1));
+        assert!(best.is_some_and(|(s, _)| (s / 0.96 - 1.0).abs() <= 0.011), "{best:?}");
     }
 
     /// A 200' x 60' floor of rooms of different sizes and door places along a corridor wall, its
