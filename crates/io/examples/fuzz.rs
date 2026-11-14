@@ -1,7 +1,7 @@
 //! A mutation fuzzer for the file readers that runs on stable Rust (`cargo xtask fuzz`; the
 //! coverage-guided cargo-fuzz targets live in `fuzz/` for nightly):
 //! `cargo run --release -p cadaddy-io --example fuzz -- <target|all> [seconds] [out dir]`, targets
-//! dxf dwg pdf svg image cdy shx las pts xyz cdywalk markups stl obj gltf (the engine's own readers
+//! dxf dwg dwgnative pdf svg image cdy shx las pts xyz cdywalk markups stl obj gltf (the engine's own readers
 //! — xlsx, zip, LISP — are in `cadaddy-engine`'s `fuzz` example).
 //!
 //! Seeds: a drawing of every object kind (the .cdy tests' DXF) written in each format, the
@@ -12,7 +12,8 @@
 #[path = "common/fuzz_core.rs"]
 mod fuzz_core;
 
-const TARGETS: [&str; 15] = ["dxf", "dwg", "pdf", "svg", "image", "cdy", "shx", "las", "pts", "xyz", "cdywalk", "markups", "stl", "obj", "gltf"];
+const TARGETS: [&str; 16] =
+    ["dxf", "dwg", "dwgnative", "pdf", "svg", "image", "cdy", "shx", "las", "pts", "xyz", "cdywalk", "markups", "stl", "obj", "gltf"];
 
 /// Read `bytes` as `target`; the result doesn't matter, only that it returns.
 fn run_target(target: &str, bytes: &[u8]) {
@@ -24,6 +25,9 @@ fn run_target(target: &str, bytes: &[u8]) {
             if let Ok((dxf, _)) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT) {
                 let _ = cadaddy_io::read_dxf(&dxf);
             }
+        }
+        "dwgnative" => {
+            let _ = cadaddy_io::dwg_read::read(bytes);
         }
         "pdf" => {
             let _ = cadaddy_io::pdf_read::read(bytes, &cadaddy_io::pdf_read::PdfOptions::default());
@@ -102,6 +106,12 @@ fn seeds(target: &str) -> Vec<Vec<u8>> {
             }
         }
         "dwg" => out.extend(d.as_ref().and_then(|d| cadaddy_io::write(d, "s.dwg").ok())),
+        // Every version CADaddy's own codec writes.
+        "dwgnative" => {
+            if let Some(d) = &d {
+                out.extend(cadaddy_io::Version::ALL.into_iter().filter_map(|v| cadaddy_io::write_dwg(d, v, cadaddy_io::DwgEngine::Native).ok()));
+            }
+        }
         "pdf" => out.extend(d.as_ref().and_then(|d| cadaddy_io::write(d, "s.pdf").ok())),
         "svg" => out.extend(d.as_ref().and_then(|d| cadaddy_io::write(d, "s.svg").ok())),
         "image" => out.extend(d.as_ref().and_then(|d| cadaddy_io::write(d, "s.png").ok())),
@@ -167,7 +177,7 @@ fn seeds(target: &str) -> Vec<Vec<u8>> {
     out.extend(fuzz_core::corpus(match target {
         "image" => &["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"],
         "dxf" => &["dxf"],
-        "dwg" => &["dwg"],
+        "dwg" | "dwgnative" => &["dwg"],
         "pdf" | "markups" => &["pdf"],
         "svg" => &["svg", "svgz"],
         "shx" => &["shx"],
