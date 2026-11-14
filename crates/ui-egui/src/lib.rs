@@ -163,6 +163,7 @@ pub mod workspaces;
 pub mod autocomplete;
 pub mod debug_overlay;
 pub mod designcenter;
+pub mod devicelost;
 pub mod diag;
 pub mod etransmit;
 pub mod exchange;
@@ -1288,6 +1289,10 @@ impl CadApp {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // A lost graphics device takes no more drawing (see `devicelost`).
+        if self.lost_frame(ctx) {
+            return;
+        }
         let _busy = diag::busy("logic");
         let t_start = now_ms();
         // Checks a save left running (what a DWG or DXF file didn't keep) report when done.
@@ -1505,8 +1510,13 @@ impl CadApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if self.lost_frame(ui.ctx()) {
+            return;
+        }
         let _busy = diag::busy("draw");
         i18n::with_language(self.language(), || self.draw(ui));
+        // Lost while this frame was drawn: what it painted would go to the dead device.
+        self.lost_frame(ui.ctx());
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {

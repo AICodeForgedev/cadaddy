@@ -37,6 +37,9 @@ zbus = { version = "=5.19.0", default-features = false, features = ["async-io", 
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
+# The window runs on the app's own event loop, so a panic in its drawing can't end the app
+# (graphics.rs `Guarded`). Already in Cargo.lock through eframe; the same version.
+winit = { version = "0.30", default-features = false }
 sys-locale = "0.3"
 # Checking downloaded updates (updater.rs); already built for DWG reading.
 sha2 = "0.11"
