@@ -3598,6 +3598,96 @@ fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }
 
+/// Circuit labels one equipment record's circuit lists, at most.
+const MAX_RECORD_CIRCUITS: usize = 12;
+
+/// The circuit a built element's own record names ([`record_circuit`]).
+#[derive(Debug, PartialEq)]
+struct RecordCircuit {
+    /// The circuit as one key (`LP1-2,4`; several on one panel `SP-15,13,11`, as their run
+    /// carries them).
+    key: String,
+    /// Its panel; empty when its circuits are on several.
+    panel: String,
+    /// Each circuit's own label when there are several (`SP-15`, `SP-13`, `SP-11`).
+    each: Vec<String>,
+}
+
+/// The circuit a built element's own record names (`prop:CIRCUIT`, its `prop:PANEL` beside a
+/// bare number): one circuit (`LP1-2,4`, `2,4` on panel `LP1`), or several labels (`SP-15, SP-13,
+/// SP-11`: a sign fed by three circuits). None when it names none (`not named`, `tied: RFI`).
+fn record_circuit(circuit: &str, panel: Option<&str>) -> Option<RecordCircuit> {
+    let compact: String = circuit.split_whitespace().collect();
+    if compact.is_empty() || compact.len() > 200 {
+        return None;
+    }
+    let one = super::printcond::parse_circuit(&compact).or_else(|| {
+        let p = panel.map(str::trim).filter(|p| !p.is_empty())?;
+        super::printcond::parse_circuit(&format!("{p}-{compact}"))
+    });
+    if let Some((p, n)) = one {
+        return Some(RecordCircuit { key: format!("{p}-{n}"), panel: p, each: Vec::new() });
+    }
+    // Several labels, each a circuit of its own.
+    let mut labels: Vec<(String, String)> = Vec::new();
+    for tok in circuit.split(|c: char| c.is_whitespace() || c == ';').map(|t| t.trim_matches([',', ';'])).filter(|t| !t.is_empty()) {
+        if labels.len() >= MAX_RECORD_CIRCUITS {
+            return None;
+        }
+        labels.push(super::printcond::parse_circuit(tok)?);
+    }
+    if labels.len() < 2 {
+        return None;
+    }
+    let each: Vec<String> = labels.iter().map(|(p, n)| format!("{p}-{n}")).collect();
+    let first = labels.first().map(|(p, _)| p.clone()).unwrap_or_default();
+    if labels.iter().all(|(p, _)| *p == first) {
+        let nums = labels.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(",");
+        let (p, n) = super::printcond::parse_circuit_list(&format!("{first}-{nums}"))?;
+        Some(RecordCircuit { key: format!("{p}-{n}"), panel: p, each })
+    } else {
+        Some(RecordCircuit { key: each.join(", "), panel: String::new(), each })
+    }
+}
+
+/// An equipment record's circuit set on its element: `circuit`, each one in `circuits` when it
+/// is several, its `panel` and `fed_from`; a panel no document has kept as printed and for
+/// review (the design value beside), as a device's.
+fn put_record_circuit(store: &mut Props, rc: &RecordCircuit, src: Source, known: &BTreeSet<String>, tally: &mut BTreeMap<String, usize>) {
+    // A person's circuit for it outranks its record's, panel and feed with it.
+    if store.get("circuit").is_some_and(|p| p.source.kind == SourceKind::User) {
+        return;
+    }
+    let note = "the circuit its build record names";
+    put(store, "circuit", Prop::new(rc.key.clone(), src.clone()).with_note(note), tally);
+    if rc.each.len() > 1 {
+        put(store, "circuits", Prop::new(rc.each.join(", "), src.clone()).with_note(note), tally);
+    }
+    if rc.panel.is_empty() {
+        return;
+    }
+    put(store, "panel", Prop::new(rc.panel.clone(), src.clone()).with_note(note), tally);
+    let fed = format!("panel {}, circuit {}", rc.panel, rc.key);
+    if super::breakers::names_no_panel(known, &rc.panel) {
+        if store.get("fed_from").is_some_and(|p| p.source.kind == SourceKind::User) {
+            return;
+        }
+        let br = super::breakers::rules();
+        let fix = super::provenance::Correction {
+            key: "fed_from".into(),
+            design: fed,
+            corrected: format!("no panel of the documents: circuit label {} as printed, for review", rc.key),
+            reason: br.unknown_panel_reason.clone(),
+            rule: br.panel_rule.clone(),
+        };
+        if super::provenance::correct(store, &fix, src) {
+            *tally.entry("fed_from".into()).or_default() += 1;
+        }
+    } else {
+        put(store, "fed_from", Prop::new(fed, src).with_note(note), tally);
+    }
+}
+
 /// An equipment's capacity, from its schedule row's values (`cfm`, `tons`, `MBH`, `kW`, `gpm`,
 /// `gal`): the first one there is, with its unit.
 fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
@@ -3652,6 +3742,8 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     // The panel schedules as printed (a typical guest-room panel's, panels the plans don't place).
     let schedules: HashMap<String, &cadaddy_walk3d::PanelSchedule> =
         sp.mep.panel_schedules.iter().map(|p| (p.panel.trim().to_ascii_uppercase(), p)).collect();
+    // The panels the documents have, for the circuits equipment records name.
+    let known_panels = super::breakers::documented_panels(&sp);
     // The walls, for the devices' host walls.
     let mut walls: Vec<(Handle, Option<String>, Bounds2)> = Vec::new();
     let mut work: Vec<(Handle, String)> = Vec::new();
@@ -4210,6 +4302,20 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         // unit's product, a roof heat pump's as a fan's).
                         if let Some((_, m)) = rows.iter().find(|(k, v)| k.trim().eq_ignore_ascii_case("MODEL") && !v.trim().is_empty()) {
                             put(&mut store, "model", Prop::new(m.trim().to_string(), Source::from_doc(SourceKind::Schedule, &sched)), tally);
+                        }
+                        // The circuit its own record names (Q6321: a site plan's sign on the
+                        // circuits tagged by it, a damper's power box): its circuit, panel and
+                        // feed as a device carries them, so a schedule or a find by circuit sees it.
+                        let rec =
+                            |k: &str| rows.iter().find(|(rk, v)| rk.trim().eq_ignore_ascii_case(k) && !v.trim().is_empty()).map(|(_, v)| v.trim());
+                        if let Some(rc) = rec("CIRCUIT").and_then(|c| record_circuit(c, rec("PANEL"))) {
+                            let said = super::bimlook::made_prop(e, "SOURCE circuit").filter(|v| !v.trim().is_empty());
+                            let src = match (rec("CIRCUIT_BASIS"), said) {
+                                (Some(b), _) => Source::from_doc(SourceKind::Rule, b),
+                                (None, Some(s)) => source_said(s, s),
+                                (None, None) => Source::print(&sheet, None),
+                            };
+                            put_record_circuit(&mut store, &rc, src, &known_panels, tally);
                         }
                         // A panel's schedule header (Q6591): its bus, main, volts and phase,
                         // enclosure, AIC and mounting, and the schedule itself; a typical
@@ -4912,6 +5018,45 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6321: the circuit an equipment record names, in each form a build writes it; a record
+    /// naming none (an RFI, not named) gives none.
+    #[test]
+    fn an_equipment_records_circuit_is_read_in_each_form() {
+        let rc = |c: &str, p: Option<&str>| record_circuit(c, p).map(|r| (r.key, r.panel, r.each));
+        assert_eq!(rc("LP1-2,4", None), Some(("LP1-2,4".into(), "LP1".into(), vec![])));
+        assert_eq!(rc("2, 4", Some("LP1")), Some(("LP1-2,4".into(), "LP1".into(), vec![])));
+        assert_eq!(rc("13", Some("E")), Some(("E-13".into(), "E".into(), vec![])));
+        assert_eq!(rc("SP-15, SP-13, SP-11", None), Some(("SP-15,13,11".into(), "SP".into(), vec!["SP-15".into(), "SP-13".into(), "SP-11".into()])));
+        assert_eq!(rc("H1-3, L2-5", None), Some(("H1-3, L2-5".into(), String::new(), vec!["H1-3".into(), "L2-5".into()])));
+        for none in ["not named", "tied: RFI", "none named: RFI", "", "SP-11, PROVIDE", "13"] {
+            assert_eq!(rc(none, None), None, "{none}");
+        }
+        let many = (1..=14).map(|n| format!("SP-{n}")).collect::<Vec<_>>().join(", ");
+        assert_eq!(rc(&many, None), None, "more labels than one record holds");
+    }
+
+    /// Q6321: a record's circuit on a panel no document has stays as printed, its feed for review.
+    #[test]
+    fn a_record_circuit_on_an_unknown_panel_is_kept_for_review() {
+        let known: BTreeSet<String> = ["SP".to_string()].into_iter().collect();
+        let mut tally = BTreeMap::new();
+        let mut store = Props::default();
+        let rc = record_circuit("XQ-3", None).unwrap_or_else(|| panic!("a circuit"));
+        put_record_circuit(&mut store, &rc, Source::print("E-001", None), &known, &mut tally);
+        assert_eq!(store.get("circuit").map(Prop::text).as_deref(), Some("XQ-3"));
+        assert!(store.get("fed_from").is_some_and(|p| p.text().contains("for review")), "{store:?}");
+        let mut store = Props::default();
+        let rc = record_circuit("SP-3", None).unwrap_or_else(|| panic!("a circuit"));
+        put_record_circuit(&mut store, &rc, Source::print("E-001", None), &known, &mut tally);
+        assert_eq!(store.get("fed_from").map(Prop::text).as_deref(), Some("panel SP, circuit SP-3"));
+        // A person's circuit outranks the record's.
+        let mut store = Props::default();
+        store.set("circuit", Prop::new("SP-5", Source::user()));
+        put_record_circuit(&mut store, &rc, Source::print("E-001", None), &known, &mut tally);
+        assert_eq!(store.get("circuit").map(Prop::text).as_deref(), Some("SP-5"));
+        assert!(store.get("fed_from").is_none(), "{store:?}");
+    }
 
     /// A luminaire element of `mark` as a build makes it (no guided job), `extra` its other props.
     fn luminaire(s: &mut Session, mark: &str, at: f64, extra: &[(&str, Prop)]) -> Handle {

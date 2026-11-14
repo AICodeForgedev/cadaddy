@@ -51,7 +51,7 @@ impl ForeignExtra {
 }
 
 /// Everything of a file CADaddy keeps without modelling it.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Foreign {
     /// CLASS records (groups after `0 CLASS`) of the kept objects' and entities' types.
     pub classes: Vec<Vec<RawTag>>,
@@ -75,6 +75,23 @@ pub struct Foreign {
     /// surfaces, which from 2013 on those entities don't carry themselves: each `ACDSRECORD`
     /// names its entity with a 320 handle (see [`Foreign::data_store_entities`]).
     pub data_store: Vec<RawTag>,
+}
+
+/// The very same kept data (a drawing and the copy a command took for writing share it) is equal
+/// without a walk of it: a file's data store can hold every solid's geometry (Q6330).
+impl PartialEq for Foreign {
+    fn eq(&self, other: &Self) -> bool {
+        let Foreign { classes, objects, dictionary, entities, records, targets, class_order, data_store } = self;
+        std::ptr::eq(self, other)
+            || (*classes == other.classes
+                && *objects == other.objects
+                && *dictionary == other.dictionary
+                && *entities == other.entities
+                && *records == other.records
+                && *targets == other.targets
+                && *class_order == other.class_order
+                && *data_store == other.data_store)
+    }
 }
 
 impl Foreign {

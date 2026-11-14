@@ -150,7 +150,12 @@ pub(super) fn state(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingS
     Ok((sp, st))
 }
 
+/// Keep `st` as the estimate's state. State as it already is writes nothing: a call that changed
+/// nothing (a settings call with no values, or the values set) is a read (Q6330).
 pub(super) fn store(s: &mut Session, mut sp: cadaddy_walk3d::BuildingSpec, st: Map<String, Value>) -> Result<()> {
+    if sp.estimate.as_object().is_some_and(|now| *now == st) || (sp.estimate.is_null() && st.is_empty()) {
+        return Ok(());
+    }
     sp.estimate = Value::Object(st);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
@@ -749,6 +754,7 @@ fn run_set_scope(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
     let (sp, mut st) = state(s, "estimate.settings")?;
+    let was = st.get("settings").cloned();
     let Some(set) = obj(&mut st, "settings") else { return Err(bad("estimate.settings", "no settings")) };
     for k in [
         "tax_pct",
@@ -797,7 +803,14 @@ fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
         set.insert("context".into(), json!(c.trim().chars().take(200).collect::<String>()));
     }
     let out = Value::Object(set.clone());
-    store(s, sp, st)?;
+    // No values, or the values already set: a read, which keeps nothing (Q6330).
+    let changed = match &was {
+        Some(w) => *w != out,
+        None => !set.is_empty(),
+    };
+    if changed {
+        store(s, sp, st)?;
+    }
     Ok(json!({ "settings": out }))
 }
 
