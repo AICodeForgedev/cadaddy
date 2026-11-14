@@ -3020,7 +3020,13 @@ impl Session {
             && !Arc::ptr_eq(doc, &st.doc)
             && **doc == *st.doc
         {
-            st.doc = Arc::clone(doc);
+            // The drawing as saved that was the copy stays the saved one: a save (QSAVE) or a
+            // sheet change (Q6570) marks the copy as saved, and the equal drawing kept instead
+            // must not read as an unsaved change.
+            let copy = std::mem::replace(&mut st.doc, Arc::clone(doc));
+            if Arc::ptr_eq(&st.saved, &copy) {
+                st.saved = Arc::clone(doc);
+            }
         }
         let grouped = self.lisp_groups_undo() || self.one_undo_step > 0;
         if spec.undoable
