@@ -263,11 +263,7 @@ fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     if st.tree_data.is_none() {
         match crate::bgread::read(app, &ui.ctx().clone(), id().with("tree"), &st.doc_key, "bim.tree", &json!({})) {
             Some(tree) => st.tree_data = Some(Arc::new(tree.unwrap_or(Value::Null))),
-            None => {
-                let r = ui.label(RichText::new(crate::i18n::t(crate::bgread::READING)).color(Tokens::get().text_dim));
-                crate::control::record_widget(ui, &r, crate::bgread::READING, "text", None);
-                return;
-            }
+            None => return reading(ui),
         }
     }
     let data = st.tree_data.clone().unwrap_or_default();
@@ -289,6 +285,12 @@ fn tree_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     });
     ui.separator();
     properties(app, ui, st);
+}
+
+/// The line a tab shows while what it lists is read off the UI thread (Q6574).
+fn reading(ui: &mut egui::Ui) {
+    let r = ui.label(RichText::new(crate::i18n::t(crate::bgread::READING)).color(Tokens::get().text_dim));
+    crate::control::record_widget(ui, &r, crate::bgread::READING, "text", None);
 }
 
 /// A node's place in the shared tree: the same while the tree it is in is kept.
@@ -511,8 +513,12 @@ fn form_section(ui: &mut egui::Ui, form: Option<&Value>) {
 
 /// The trade colour table: each trade's colour (editable) and whether it shows.
 fn colours_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
+    // Read off the UI thread: it counts the built model by trade (Q6574).
     if st.colours.is_none() {
-        st.colours = app.session.execute("bim.trades", &json!({})).ok();
+        match crate::bgread::read(app, &ui.ctx().clone(), id().with("colours"), &st.doc_key, "bim.trades", &json!({})) {
+            Some(colours) => st.colours = Some(colours.unwrap_or(Value::Null)),
+            None => return reading(ui),
+        }
     }
     if ui.button(crate::i18n::t("Reset Colours")).clicked() {
         st.colours = app.session.execute("bim.trades", &json!({ "reset": true })).ok();
@@ -573,9 +579,8 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     ui.horizontal(|ui| {
         ui.label(crate::i18n::t("Level:"));
         let changed = ui.text_edit_singleline(&mut st.level_filter).changed();
-        if ui.button(crate::i18n::t("Refresh")).clicked() || st.trades_data.is_none() || changed {
-            let params = if st.level_filter.is_empty() { json!({}) } else { json!({ "level": st.level_filter }) };
-            st.trades_data = app.session.execute("coordination.trades", &params).ok().map(Arc::new);
+        if ui.button(crate::i18n::t("Refresh")).clicked() || changed {
+            st.trades_data = None;
         }
         // Hide the MEP objects of the other levels (undo or Show All brings them back).
         if ui.add_enabled(!st.level_filter.trim().is_empty(), egui::Button::new(crate::i18n::t("Isolate Level"))).clicked()
@@ -585,7 +590,16 @@ fn trades_tab(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         }
     });
 
-    let Some(data) = st.trades_data.clone() else {
+    // The systems are read off the UI thread: they walk the model's runs, again as a level is
+    // typed (Q6574).
+    if st.trades_data.is_none() {
+        let params = if st.level_filter.is_empty() { json!({}) } else { json!({ "level": st.level_filter }) };
+        match crate::bgread::read(app, &ui.ctx().clone(), id().with("trades"), &st.doc_key, "coordination.trades", &params) {
+            Some(data) => st.trades_data = Some(Arc::new(data.unwrap_or(Value::Null))),
+            None => return reading(ui),
+        }
+    }
+    let Some(data) = st.trades_data.clone().filter(|d| !d.is_null()) else {
         ui.label(crate::i18n::t("No MEP systems found."));
         return;
     };
