@@ -3686,6 +3686,13 @@ impl Session {
     fn after_command(&mut self, before: Option<&Arc<Drawing>>, uid: Option<u64>, ok: bool) {
         #[cfg(test)]
         crate::guard::tests::panic_if_armed();
+        // A command that opened, closed or switched to another drawing (OPEN, NEW, CLOSE, a tab
+        // switch) started in a drawing that is not the one open now: `before` is that other
+        // drawing, not this one as it was. Compared with it, every object of the drawing now open
+        // looked added: opening a built model wrote a step into its build record with each count
+        // doubled (and so marked it changed), and a large model's open spent seconds comparing
+        // two unrelated drawings (Q6569). The drawing now open had no state before the command.
+        let before = before.filter(|_| uid.is_none_or(|u| self.state().is_ok_and(|st| st.uid == u)));
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
