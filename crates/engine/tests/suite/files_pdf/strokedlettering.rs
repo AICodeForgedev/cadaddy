@@ -211,7 +211,13 @@ fn a_schedule_sheet_lettered_in_an_unreadable_font_is_asked_for_and_answered() {
             {"number": "3", "description": "LIGHTING", "breaker": "20", "poles": 1}]}],
         "fixtures": [{"tag": "A", "description": "2X4 RECESSED TROFFER", "lamp": "LED 40W", "installation": "RECESSED"}],
     });
-    let (st, asked) = run_job(&mut s, &dir, &|_| answer.clone());
+    // The sheet's picture is there while its question is open (the size of each one asked).
+    let shown = std::cell::RefCell::new(Vec::new());
+    let (st, asked) = run_job(&mut s, &dir, &|q| {
+        let size = q["crop"].as_str().and_then(|c| std::fs::metadata(c).ok()).map_or(0, |m| m.len());
+        shown.borrow_mut().push(size);
+        answer.clone()
+    });
     assert_eq!(st["done"], json!(true), "{st}");
     // One blocking question for the sheet, with its picture: its tables are what the job needs.
     assert_eq!(asked.len(), 1, "{asked:#?}");
@@ -220,7 +226,9 @@ fn a_schedule_sheet_lettered_in_an_unreadable_font_is_asked_for_and_answered() {
     assert_eq!(q["always_asked"], true, "{q}");
     assert_eq!(q["sheet"], "E-601", "{q}");
     let crop = q["crop"].as_str().unwrap_or_else(|| panic!("a picture: {q}"));
-    assert!(std::fs::metadata(crop).is_ok_and(|m| m.len() > 1000), "{crop}");
+    assert!(shown.borrow().first().is_some_and(|&n| n > 1000), "{crop}: {:?}", shown.borrow());
+    // Q6433: the job finished, nothing is open: its pictures went with it.
+    assert!(!std::path::Path::new(crop).exists(), "{crop} left behind");
     assert!(q["evidence"]["values"]["lettering"]["ocr_share"].as_f64().is_some_and(|v| v > 0.9), "{q}");
     // The answer's tables are the job's, stored with the answer as their source.
     let spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();

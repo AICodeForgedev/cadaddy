@@ -6383,7 +6383,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // Unlisted tags printed again and again: ask which device each is, with a crop.
         let mut unlisted: Vec<(&String, &UnlistedTag)> = census.unlisted.iter().collect();
         unlisted.sort_by(|a, b| b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(b.0)));
-        let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("device-tags");
+        let crop_dir = super::jobtemp::dir(&job.id).join("device-tags");
         let unknowns: Vec<Value> = unlisted
             .iter()
             .enumerate()
@@ -13555,7 +13555,7 @@ fn architect_objects_step(
     };
     // Each open group: its RFI (with a crop of the architect's sheet where it draws them, the
     // first few), its line, and its objects built, completed by the proposal.
-    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("architect-objects");
+    let crop_dir = super::jobtemp::dir(&job.id).join("architect-objects");
     let mut rfis: Vec<cadaddy_walk3d::Rfi> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut sketches = 0usize;
@@ -13965,7 +13965,7 @@ fn plan_symbols(
     let mut kinds: Vec<String> = table.entries.iter().filter(|e| e.kind != "not_device").map(|e| e.kind.clone()).collect();
     kinds.sort();
     kinds.dedup();
-    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("symbols");
+    let crop_dir = super::jobtemp::dir(&job.id).join("symbols");
     for (sig, copies) in repeats.into_iter().take(MAX_SYMBOL_QUESTIONS) {
         let Some((sheet, at, _, handles, strokes, units, span)) = copies.first() else { continue };
         let mut sheets: BTreeMap<&str, usize> = BTreeMap::new();
@@ -32388,6 +32388,8 @@ fn question_value(job: &GuidedJob, q: &Question) -> Value {
     let ev = q.evidence.as_ref();
     let sheet = ev.and_then(|e| e.sheet.clone()).or_else(|| ev.and_then(|e| e.at).and_then(|at| job.level_at(at)).map(|r| r.number.clone()));
     let crop = ev.and_then(|e| e.crop_png_path.clone().or_else(|| e.leftovers.iter().find_map(|l| l.crop_path.clone())));
+    // A picture whose folder went (the job's drawing closed, a left-over swept) isn't offered.
+    let crop = super::jobtemp::still_there(crop);
     json!({
         "id": q.id,
         "stage": q.stage,
@@ -33065,6 +33067,10 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     if job.is_done() && !job.checkpoint_given {
         super::sheetcheck::remove_packet(job);
     }
+    // And its pictures (Q6433): with nothing left open, no question shows them again.
+    if job.is_done() && job.next_question().is_none() {
+        super::jobtemp::remove(&job.id);
+    }
     r
 }
 
@@ -33463,6 +33469,8 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let mut job = GuidedJob::new(pdfs, goal);
+    // Left-over pictures of jobs cut off long ago go (Q6433).
+    super::jobtemp::sweep_stale(s, &job.id);
     // Interactive unless asked: the job stops at each checkpoint for an answer.
     job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
     // The sheet-index checkpoint (Q6517): stops for its packet unless told to go on; its page
@@ -39645,6 +39653,94 @@ mod tests {
         assert_eq!(r["devices"]["count"], json!(15));
         assert_eq!(r["devices"]["unknowns"], json!([]));
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
+    }
+
+    /// Q6433: a job (of its own made-up prints) whose plan prints a tag no legend lists four
+    /// times: the devices stage writes its "which device is this?" crop in the job's folder in
+    /// the temporary folder. The session, the job and the crop's path.
+    fn unlisted_tag_job(prints: &str) -> (crate::Session, GuidedJob, String) {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new(prints, JobGoal::Takeoff);
+        let _ = std::fs::remove_dir_all(super::super::jobtemp::dir(&job.id));
+        job.sheets = Some(
+            json!({"sheets": [{"number": "Q-1", "sheet_type": "plan"}, {"number": "Q-2", "sheet_type": "plan"}, {"number": "E1", "sheet_type": "schedule"}]}),
+        );
+        job.sheets_loaded = true;
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut q1: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)];
+        q1.extend((0..5).map(|i| ("A", 100.0 + 40.0 * f64::from(i), 300.0)));
+        q1.extend((0..3).map(|i| ("B", 100.0 + 40.0 * f64::from(i), 200.0)));
+        q1.extend((0..4).map(|i| ("ZZ", 100.0 + 40.0 * f64::from(i), 100.0))); // unlisted, repeated
+        for (texts, syms, name) in [(schedule, q1, "Q-1"), (Vec::new(), vec![("A", 1000.0, 772.0), ("A", 1010.0, 760.0)], "Q-2")] {
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(&mut s, &texts, &syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: name.into(), lo, hi });
+        }
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let crop = r["devices"]["unknowns"][0]["crop_path"].as_str().unwrap_or_else(|| panic!("no crop: {r:#}")).to_string();
+        assert!(std::path::Path::new(&crop).is_file(), "{crop}");
+        assert!(std::path::Path::new(&crop).starts_with(super::super::jobtemp::dir(&job.id)), "{crop}");
+        (s, job, crop)
+    }
+
+    /// Q6433: a job that finishes with nothing open leaves no folder in the temporary folder.
+    #[test]
+    fn a_finished_job_leaves_no_temporary_folder() {
+        let (mut s, mut job, crop) = unlisted_tag_job("/nonexistent/q6433-finished");
+        let folder = super::super::jobtemp::dir(&job.id);
+        // While its question is open, the picture is there to show.
+        assert!(std::path::Path::new(&crop).is_file());
+        for st in &mut job.stages {
+            if st.status != StageStatus::Skipped {
+                st.status = StageStatus::Done;
+            }
+            for q in st.questions.iter_mut().chain(st.verify.iter_mut()).chain(st.completeness.iter_mut()) {
+                q.answer = Some(json!("skip"));
+            }
+        }
+        assert!(job.is_done() && job.next_question().is_none());
+        advance_pipeline(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!folder.exists(), "the finished job left {}", folder.display());
+    }
+
+    /// Q6433: closing the drawing of a job that can't ask again (no checkpoint, never saved)
+    /// takes its pictures with it; a drawing saved with the unfinished job keeps them for when
+    /// it opens again; a question whose picture went offers none.
+    #[test]
+    fn a_closed_drawing_takes_its_jobs_pictures() {
+        let (mut s, job, crop) = unlisted_tag_job("/nonexistent/q6433-closed");
+        let folder = super::super::jobtemp::dir(&job.id);
+        assert!(!job.is_done());
+        save_job(&mut s, &job).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("close", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!folder.exists(), "the closed drawing's job left {}", folder.display());
+        let q = job.stages.iter().flat_map(|st| st.completeness.iter()).find(|q| q.question.contains("'ZZ'")).cloned();
+        let q = q.unwrap_or_else(|| panic!("no ZZ question"));
+        assert_eq!(q.evidence.as_ref().and_then(|e| e.crop_png_path.as_deref()), Some(crop.as_str()));
+        assert_eq!(question_value(&job, &q)["crop"], json!(null), "a picture that went isn't offered");
+
+        // Saved to a file with the job in it: the folder stays with the file.
+        let (mut s, job, crop) = unlisted_tag_job("/nonexistent/q6433-saved");
+        save_job(&mut s, &job).unwrap_or_else(|e| panic!("{e}"));
+        if let Ok(st) = s.state_mut() {
+            st.path = Some("/nonexistent/q6433-saved/Sample Floor Plan.cdy".into());
+            st.saved = st.doc.clone();
+        }
+        let q = job.stages.iter().flat_map(|st| st.completeness.iter()).find(|q| q.question.contains("'ZZ'")).cloned();
+        let q = q.unwrap_or_else(|| panic!("no ZZ question"));
+        assert_eq!(question_value(&job, &q)["crop"], json!(crop.clone()));
+        s.execute("close", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(std::path::Path::new(&crop).is_file(), "the saved job's picture went");
+        assert!(super::super::jobtemp::remove(&job.id));
     }
 
     /// Q6007: a made-up electrical plan (level 1, inches) with a fixture schedule, three A

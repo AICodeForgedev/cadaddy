@@ -1123,7 +1123,9 @@ pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("close", "no such drawing"));
     }
     s.cancel();
-    s.docs.remove(i);
+    let closed = s.docs.remove(i);
+    // A guided job's pictures go with its drawing, unless the job can still ask (Q6433).
+    super::jobtemp::after_close(&closed, &s.docs);
     if i < s.active {
         // An earlier drawing went away: the active one shifted down by one.
         s.active -= 1;
@@ -1162,7 +1164,9 @@ fn release_closed(s: &mut Session) {
 
 fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
     s.cancel();
-    s.docs.clear();
+    for closed in std::mem::take(&mut s.docs) {
+        super::jobtemp::after_close(&closed, &[]);
+    }
     s.active = 0;
     release_closed(s);
     ok()
