@@ -34,6 +34,7 @@ use crate::{Result, Session};
 pub(crate) mod boxclear;
 pub(crate) mod build;
 pub(crate) mod splices;
+pub(crate) mod supports;
 
 /// The rules data.
 const RULES: &str = include_str!("mepatoms.json");
@@ -348,6 +349,8 @@ pub(crate) struct AtomRules {
     pub luminaire_box: LuminaireBox,
     /// The splices in each box and their connectors (Q6349).
     pub splices: splices::SpliceRules,
+    /// The strut, trapezes, rods and riser clamps of raceways run together (Q6353).
+    pub supports: supports::SupportRules,
 }
 
 /// The rules data, read once.
@@ -1459,8 +1462,26 @@ fn made_key(e: &Entity) -> String {
 }
 
 /// The kinds of piece that make up a run (not devices).
-pub(crate) const PIECES: &[&str] =
-    &["conduit", "coupling", "connector", "elbow", "offset", "strap", "locknut", "bushing", "box", "ring", "cable", "wire"];
+pub(crate) const PIECES: &[&str] = &[
+    "conduit",
+    "coupling",
+    "connector",
+    "elbow",
+    "offset",
+    "strap",
+    "locknut",
+    "bushing",
+    "box",
+    "ring",
+    "cable",
+    "wire",
+    "strut",
+    "strut_strap",
+    "rod",
+    "support_anchor",
+    "strut_nut",
+    "riser_clamp",
+];
 
 /// Whether a piece is the trade's work, not something bought (a field bend or offset).
 pub(crate) fn is_labor_item(item: &str) -> bool {
@@ -1711,6 +1732,9 @@ fn norm_kind(s: &str) -> String {
         "couplings" => "coupling".into(),
         "connectors" => "connector".into(),
         "straps" | "support" | "supports" | "staple" => "strap".into(),
+        "trapeze" | "trapezes" | "unistrut" | "channel" | "struts" => "strut".into(),
+        "threaded_rod" | "rods" | "hanger_rod" => "rod".into(),
+        "riser_clamps" => "riser_clamp".into(),
         "boxes" | "outlet_box" | "junction_box" => "box".into(),
         "mud_ring" | "plaster_ring" | "rings" => "ring".into(),
         "wires" | "conductor" | "conductors" => "wire".into(),

@@ -394,6 +394,12 @@
       "basis": "trade practice: at every box the circuit's conductors are spliced where it continues (a pigtail to each device), each luminaire's leads spliced to its circuit, the grounds bundled with pigtails to the device and a metal box (NEC 250.148), each splice in a connector listed for its conductors (UL 486C)"
     },
     {
+      "id": "E-RACEWAY-SUPPORTS",
+      "trade": "electrical",
+      "fills": "how the raceways are held up beyond their own straps: no drawing shows the strut, trapezes, rods, anchors or riser clamps",
+      "basis": "trade practice: two or more raceways run side by side (feeder banks, homerun groups, riser stacks) go on strut, a trapeze on two threaded rods from the structure overhead or a wall strut on a riser stack, a strut strap per raceway at each support, at the closest code spacing of the raceways it carries (NEC 358.30, 344.30, 352.30) and at each end of the stretch they share; a raceway run alone stays on its own straps (alternative: a rod hanger where no surface is near); a raceway rising through a floor gets a riser clamp at each floor"
+    },
+    {
       "id": "E-CONN-AT-UNIT",
       "trade": "electrical",
       "fills": "where an equipment connection goes when its plan's mark names a piece of equipment built on another level or elsewhere (a roof unit's circuit tagged on a plan under it)",
