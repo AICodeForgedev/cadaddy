@@ -1227,7 +1227,8 @@ pub fn run_classify_prints(
                 } else {
                     rec.number = id.number.clone();
                 }
-                if !id.title.is_empty() && !view {
+                // A title block's address or phone line read as its title is no title (Q6582).
+                if !id.title.is_empty() && !view && !crate::sheet_facts::is_address_line(&id.title) {
                     rec.title = id.title.clone();
                 }
                 if !id.discipline.is_empty() {
@@ -1235,7 +1236,8 @@ pub fn run_classify_prints(
                 }
             }
             e.number = if rec.number.is_empty() { format!("{}#{}", entry.file, entry.page) } else { rec.number.clone() };
-            e.title = rec.title.clone();
+            // (nor the sheet reader's: a cover filed as a plan by its firm's address, Q6582)
+            e.title = if crate::sheet_facts::is_address_line(&rec.title) { String::new() } else { rec.title.clone() };
             let printed = if rec.printed_number.is_empty() { rec.number.as_str() } else { rec.printed_number.as_str() };
             e.discipline = if rec.discipline.is_empty() { infer_discipline(printed) } else { rec.discipline.clone() };
             // A consultant's title block may carry no title: the view titles say what is drawn.
