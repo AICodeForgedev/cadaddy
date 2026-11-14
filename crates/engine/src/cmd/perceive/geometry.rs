@@ -2165,7 +2165,101 @@ pub(crate) fn note_like(t: &str) -> bool {
     let storey = plain.len() <= 3
         && cadaddy_walk3d::levels::canonical_level(&up).is_some_and(|(_, k)| k != cadaddy_walk3d::levels::DatumKind::Penthouse)
         && !plain.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(w));
-    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area || storey
+    !super::finish_codes(&up).is_empty() || ceiling || level || scale || sheet_ref || load || area || storey || sentence_line(t)
+}
+
+/// The most letters an abbreviation with a full stop has in a room's name (`ELEC.`, `STOR.`,
+/// `RECEP.`): a longer word with one ends a sentence.
+const NAME_ABBREVIATION_MAX: usize = 6;
+
+/// Whether a text is a line of a note's sentence, never a room's name (Q6298: a keynote's last
+/// line `WITH ELECTRICAL.` read as a room): it starts with a word a note's line starts with (rule
+/// data `rooms.note_lead_words`: a joining word continuing the line above, `WITH`, `AND`, `TO`,
+/// or an instruction, `PROVIDE`, `COORDINATE`, `SEE`); it continues a sentence (starts in a
+/// small letter and ends with a full stop); or it ends one (two words or more, the last a whole
+/// word with a full stop after it). A name's abbreviations keep theirs (`ELEC.`, `JAN. CLOS.`).
+pub(crate) fn sentence_line(t: &str) -> bool {
+    let t = t.trim();
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let Some(first) = words.first() else { return false };
+    let lead: String = first.chars().filter(char::is_ascii_alphabetic).collect::<String>().to_ascii_uppercase();
+    let leads = !lead.is_empty() && cadaddy_mepfix::wordrules::words("rooms.note_lead_words").contains(&lead.as_str());
+    let stop = t.ends_with('.');
+    let small_start = t.chars().next().is_some_and(char::is_lowercase);
+    let last_letters = words.last().map_or(0, |w| w.chars().filter(|c| c.is_alphabetic()).count());
+    leads || (small_start && stop) || (stop && words.len() >= 2 && last_letters > NAME_ABBREVIATION_MAX)
+}
+
+/// How far along its line a dimension string's next figure may be from a figure, in the
+/// figure's text height (insertion point to insertion point).
+const DIM_STRING_REACH: f64 = 8.0;
+/// How far off a dimension string's line its figures may sit, in their text height.
+const DIM_LINE_OFFSET: f64 = 0.6;
+/// The text heights a dimension string's figures share, as a share of one figure's.
+const DIM_HEIGHT_BAND: (f64, f64) = (0.8, 1.25);
+/// How far from parallel two figures of one dimension string may be (radians, about 5°).
+const DIM_PARALLEL: f64 = 0.09;
+
+/// A dimension's figure in feet and inches, alone (`3'-0"`, `12'-6 1/2"`, `20'`, `96"`): a
+/// length and nothing else (a ceiling note `CLG 9'-0"` is a note, no dimension's figure).
+pub(crate) fn length_figure(t: &str) -> bool {
+    let t = t.trim();
+    t.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && t.contains(['\'', '"', '\u{2019}', '\u{201d}'])
+        && t.chars().all(|c| c.is_ascii_digit() || matches!(c, '\'' | '"' | '-' | ' ' | '/' | '.' | '\u{2019}' | '\u{201d}'))
+}
+
+/// A text's words, where it is placed, its height and its turn (radians), for
+/// [`dimension_figures`].
+fn figure_text(e: &Entity) -> Option<(std::borrow::Cow<'_, str>, Vec2, f64, f64)> {
+    match &e.kind {
+        EntityKind::Text(t) => Some((std::borrow::Cow::Borrowed(t.value.trim()), t.justify_point(), t.height, t.rotation)),
+        EntityKind::MText(t) => {
+            Some((std::borrow::Cow::Owned(cadaddy_fonts::plain_text(&t.contents).trim().to_string()), t.insert.xy(), t.height, t.rotation))
+        }
+        _ => None,
+    }
+}
+
+/// The plain figures (`2160`, `450`: digits only, shaped as a room number) that are a
+/// dimension string's (Q6298): a length figure ([`length_figure`]) of about their height lies
+/// on their line, parallel, within [`DIM_STRING_REACH`] heights along it. A dimension's figure
+/// numbers no room. (A string of digit figures alone, with no length among them, a metric plan's,
+/// is not told from a row of room numbers here.)
+pub(crate) fn dimension_figures(ents: &[&std::sync::Arc<Entity>]) -> std::collections::HashSet<cadaddy_doc::Handle> {
+    let ok = |at: Vec2, h: f64, r: f64| at.is_finite() && h.is_finite() && h > 0.0 && r.is_finite();
+    // The length figures by height on the page.
+    let mut lengths: Vec<(Vec2, f64, f64)> = ents
+        .iter()
+        .filter_map(|e| figure_text(e))
+        .filter(|(t, at, h, r)| ok(*at, *h, *r) && length_figure(t))
+        .map(|(_, at, h, r)| (at, h, r))
+        .collect();
+    lengths.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
+    let mut out = std::collections::HashSet::new();
+    if lengths.is_empty() {
+        return out;
+    }
+    for e in ents {
+        let Some((t, at, h, r)) = figure_text(e) else { continue };
+        if !(ok(at, h, r) && room_number(&t) && t.chars().all(|c| c.is_ascii_digit())) {
+            continue;
+        }
+        let reach = DIM_STRING_REACH * h;
+        let first = lengths.partition_point(|(q, _, _)| q.y < at.y - reach);
+        let (c, s) = (r.cos(), r.sin());
+        let on_line = lengths.get(first..).unwrap_or_default().iter().take_while(|(q, _, _)| q.y <= at.y + reach).any(|(q, qh, qr)| {
+            let (dx, dy) = (q.x - at.x, q.y - at.y);
+            let (along, off) = (dx * c + dy * s, -dx * s + dy * c);
+            let turn = (qr - r).rem_euclid(std::f64::consts::PI);
+            let parallel = turn.min(std::f64::consts::PI - turn) <= DIM_PARALLEL;
+            parallel && *qh >= DIM_HEIGHT_BAND.0 * h && *qh <= DIM_HEIGHT_BAND.1 * h && off.abs() <= DIM_LINE_OFFSET * h && along.abs() <= reach
+        });
+        if on_line {
+            out.insert(e.handle);
+        }
+    }
+    out
 }
 
 /// How near a side of the area it is traced in an outline's side may stop and still be the
@@ -2949,13 +3043,17 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     let in_regions = |p: Vec2| {
         regions.is_none_or(|rs| rs.iter().any(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
     };
+    // A dimension string's plain figure (`2160` beside `3'-0"`) numbers no room either (Q6298).
+    let dims = dimension_figures(&ents);
     let callouts = CalloutLabels::new(
         sheet_numbers.iter().map(String::as_str),
-        all.iter().filter(|(_, t, at, _, tag)| !tag && room_number(t) && in_regions(*at)).map(|l| l.1.as_str()),
+        all.iter().filter(|(h, t, at, _, tag)| !tag && room_number(t) && in_regions(*at) && !dims.contains(h)).map(|l| l.1.as_str()),
     );
     let mut numbers: Vec<Label> = all
         .iter()
-        .filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase()) && !callouts.is_callout(t))
+        .filter(|(h, t, _, _, tag)| {
+            !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase()) && !callouts.is_callout(t) && !dims.contains(h)
+        })
         .cloned()
         .collect();
     numbers.extend(tag_numbers);
@@ -2996,7 +3094,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
             continue;
         }
         if !tag && room_number(t) {
-            candidates.numbers += 1;
+            if dims.contains(h) {
+                candidates.drop("dimension_figure", t);
+            } else {
+                candidates.numbers += 1;
+            }
             continue;
         }
         let why = if t.chars().count() > 40 {
@@ -3998,6 +4100,108 @@ mod tests {
         );
     }
 
+    /// Q6298: a keynote's last line (`WITH ELECTRICAL.`) read as a room's name, a dimension
+    /// string's plain figure beside it as its number. A note's line is no name: it starts with a
+    /// joining word or an instruction, continues a sentence in small letters or ends one.
+    #[test]
+    fn a_notes_sentence_line_is_no_rooms_name() {
+        for t in [
+            "WITH ELECTRICAL.",
+            "WITH ELECTRICAL",
+            "COORDINATE LOCATION WITH OWNER",
+            "PROVIDE BLOCKING",
+            "SEE KITCHEN EQUIPMENT",
+            "TO ELECTRICAL ROOM",
+            "AND STORAGE",
+            "with electrical.",
+            "kitchen equipment.",
+            "CONNECT TO EXISTING PANEL",
+            "FURNISHED BY OWNER",
+            "SHELVING BY KITCHEN.",
+            "SERVED FROM ELECTRICAL.",
+        ] {
+            assert!(sentence_line(t) && note_like(t) && room_name_score(t) == 0, "{t}");
+        }
+        // Names, abbreviated with full stops or starting with a word a note's line could.
+        for t in [
+            "ELECTRICAL",
+            "ELEC.",
+            "JAN. CLOS.",
+            "MECH./ELEC.",
+            "STOR.",
+            "ELEC. RM.",
+            "Office",
+            "TOILET",
+            "OR 2",
+            "ON CALL",
+            "ALL GENDER TOILET",
+            "MEN'S",
+            "DINING",
+            "WOMEN'S RR",
+        ] {
+            assert!(!sentence_line(t), "{t}");
+        }
+        for t in ["ELECTRICAL", "ELEC.", "JAN. CLOS.", "STOR.", "TOILET", "DINING", "Office"] {
+            assert!(room_name_score(t) > 0, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_dimension_strings_plain_figure_is_no_room_number() {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        let text = |s: &mut Session, t: &str, at: [f64; 2], h: f64, rot: f64| {
+            s.execute("text", &json!({"at": at, "text": t, "height": h, "rotation": rot})).unwrap()["handle"]
+                .as_str()
+                .and_then(cadaddy_doc::Handle::parse_hex)
+                .unwrap()
+        };
+        // Along a dimension string, level and turned a quarter.
+        let level = text(&mut s, "2160", [100.0, 50.0], 6.0, 0.0);
+        text(&mut s, "3'-0\"", [130.0, 50.0], 6.0, 0.0);
+        let turned = text(&mut s, "450", [400.0, 100.0], 6.0, 90.0);
+        text(&mut s, "12'-6 1/2\"", [400.0, 135.0], 6.0, 90.0);
+        // A room's number with its ceiling height under it, a number far along the line, one of
+        // another size, one across a turned string and a lettered one: room numbers.
+        let tag = text(&mut s, "101", [700.0, 50.0], 6.0, 0.0);
+        text(&mut s, "9'-0\"", [700.0, 40.0], 6.0, 0.0);
+        let far = text(&mut s, "102", [900.0, 50.0], 6.0, 0.0);
+        text(&mut s, "10'-0\"", [1000.0, 50.0], 6.0, 0.0);
+        let big = text(&mut s, "103", [1200.0, 50.0], 12.0, 0.0);
+        text(&mut s, "4'-0\"", [1240.0, 50.0], 6.0, 0.0);
+        let across = text(&mut s, "104", [1500.0, 50.0], 6.0, 0.0);
+        text(&mut s, "5'-0\"", [1530.0, 50.0], 6.0, 90.0);
+        let lettered = text(&mut s, "105A", [1800.0, 50.0], 6.0, 0.0);
+        text(&mut s, "6'-0\"", [1830.0, 50.0], 6.0, 0.0);
+        let (_, ents) = objects(&s).unwrap();
+        let dims = dimension_figures(&ents);
+        assert!(dims.contains(&level) && dims.contains(&turned), "{dims:?}");
+        for h in [tag, far, big, across, lettered] {
+            assert!(!dims.contains(&h), "{h:?} {dims:?}");
+        }
+        assert!(length_figure("3'-0\"") && length_figure("20'") && length_figure("96\"") && length_figure("12'-6 1/2\""));
+        assert!(!length_figure("CLG 9'-0\"") && !length_figure("2160") && !length_figure("'A'"));
+    }
+
+    #[test]
+    fn a_keynote_line_and_a_dimension_figure_make_no_room() {
+        // Q6298, the whole trace: a keynote's two lines in a closed area with a dimension string
+        // by them, beside a room tagged with its name and number.
+        let mut s = plan_of(&[
+            ([0.0, 0.0, 240.0, 180.0], &[("OFFICE", 80.0, 90.0), ("101", 90.0, 80.0)]),
+            (
+                [300.0, 0.0, 540.0, 180.0],
+                &[("COORDINATE EXACT LOCATION", 330.0, 100.0), ("WITH ELECTRICAL.", 330.0, 90.0), ("2160", 380.0, 80.0), ("3'-0\"", 410.0, 80.0)],
+            ),
+        ]);
+        let trace = room_trace_in(&mut s, None).unwrap();
+        let names: Vec<(String, Option<String>)> = trace.rooms.iter().map(|r| (r.name.clone(), r.number.clone())).collect();
+        assert_eq!(names, vec![("OFFICE".to_string(), Some("101".to_string()))], "a keynote names no room");
+        let c = &trace.candidates;
+        assert_eq!(c.numbers, 1, "{c:?}");
+        assert_eq!(c.dropped.get("dimension_figure"), Some(&1), "{c:?}");
+    }
+
     #[test]
     fn a_callout_with_no_room_word_and_no_number_names_no_room() {
         // Q6324: a plan's callouts and notes (a fixture's, a material's) traced as rooms. A
@@ -4020,8 +4224,10 @@ mod tests {
         );
         let c = &trace.candidates;
         assert_eq!((c.texts, c.numbers, c.kept, c.outside_plan_views), (8, 3, 2, 0), "{c:?}");
-        assert_eq!(c.dropped.get("no_room_word_or_number"), Some(&3), "{c:?}");
-        assert_eq!(c.examples.get("no_room_word_or_number").map(Vec::len), Some(3), "{c:?}");
+        // An instruction's line (`PROVIDE PLYWOOD`) is a note's (Q6298), the others name nothing.
+        assert_eq!(c.dropped.get("no_room_word_or_number"), Some(&2), "{c:?}");
+        assert_eq!(c.dropped.get("note_or_finish_code"), Some(&1), "{c:?}");
+        assert_eq!(c.examples.get("no_room_word_or_number").map(Vec::len), Some(2), "{c:?}");
         // Read in a plan view: the texts outside it are counted, never traced (sheet by sheet,
         // the texts no view holds once).
         let views = [[0.0, 0.0, 250.0, 200.0], [890.0, 0.0, 1150.0, 200.0]];

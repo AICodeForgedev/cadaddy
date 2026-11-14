@@ -11729,10 +11729,14 @@ fn stray_plan_numbers(d: &cadaddy_doc::Drawing, job: &GuidedJob, rooms: &[super:
     if plans.is_empty() {
         return out;
     }
+    // A dimension string's plain figure (`2160` beside `3'-0"`) numbers no room (Q6298).
+    let texts: Vec<_> =
+        d.model.iter().take(4_000_000).filter(|e| matches!(e.kind, cadaddy_doc::EntityKind::Text(_) | cadaddy_doc::EntityKind::MText(_))).collect();
+    let dims = super::perceive::geometry::dimension_figures(&texts);
     for e in d.model.iter().take(4_000_000) {
         let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
         let v = t.value.trim();
-        if !super::perceive::geometry::room_number(v) || sheets.contains(&v.to_ascii_uppercase()) {
+        if !super::perceive::geometry::room_number(v) || sheets.contains(&v.to_ascii_uppercase()) || dims.contains(&e.handle) {
             continue;
         }
         let p = t.insert.xy();
