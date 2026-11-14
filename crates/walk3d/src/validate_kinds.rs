@@ -106,6 +106,8 @@ pub const MODEL_KINDS: &[(&str, Producer)] = &[
     // cables (`cable`), each its own kind so a rule asks only about the pieces it judges.
     ("conduit_fitting", Producer::Piece),
     ("wire", Producer::Piece),
+    // A bank's strut, rods, anchors and nuts (Q6353): no piece of any one raceway.
+    ("raceway_support", Producer::Piece),
 ];
 
 /// Is `kind` a kind the model holds?
@@ -318,6 +320,7 @@ fn made(kind: &str, by: Producer) -> Option<Entity> {
 fn piece_atom(kind: &str) -> &str {
     match kind {
         "conduit_fitting" => "coupling",
+        "raceway_support" => "strut",
         k => k,
     }
 }
@@ -331,6 +334,7 @@ pub fn piece_kind(class: &str, part: &str) -> Option<&'static str> {
         "IfcCableCarrierSegment" => "conduit",
         "IfcCableCarrierFitting" => "conduit_fitting",
         "IfcJunctionBox" => "junction_box",
+        "IfcDiscreteAccessory" if crate::fourd::RACEWAY_SUPPORT_PARTS.contains(&part.trim()) => "raceway_support",
         "IfcCableSegment" if part.trim().eq_ignore_ascii_case("cable") => "cable",
         "IfcCableSegment" => "wire",
         _ => return None,
@@ -457,6 +461,15 @@ mod tests {
         for f in ["coupling", "connector", "elbow", "strap", "locknut", "bushing", "offset"] {
             assert_eq!(kind(f), Some("conduit_fitting"), "{f}");
         }
+        // A bank's strut support is no piece of any one raceway; its strut straps are.
+        assert_eq!(kind("strut_strap"), Some("conduit_fitting"));
+        assert_eq!(kind("riser_clamp"), Some("conduit_fitting"));
+        for f in ["strut", "rod", "support_anchor", "strut_nut"] {
+            assert_eq!(class(f), "IfcDiscreteAccessory", "{f}");
+            assert_eq!(kind(f), Some("raceway_support"), "{f}");
+        }
+        assert!(!kind_matches("raceway_piece", "raceway_support"), "the conduit rules ask nothing of a trapeze");
+        assert_eq!(category_of("raceway_support").as_deref(), Some("IfcDiscreteAccessory"));
         assert_eq!(kind("box"), Some("junction_box"));
         assert_eq!(kind("ring"), Some("junction_box"));
         assert_eq!(kind("wire"), Some("wire"));

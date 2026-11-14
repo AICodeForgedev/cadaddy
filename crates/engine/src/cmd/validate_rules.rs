@@ -1070,6 +1070,12 @@ mod tests {
         for k in ["conduit", "conduit_fitting", "wire", "cable", "junction_box"] {
             assert!(asks("E-CONDUIT-CONTINUITY", k) && asks("E-TAKEOFF", k), "{k}");
         }
+        // A bank's strut, rods, anchors and nuts (Q6353): counted in the takeoff, no raceway of
+        // their own to fill or follow.
+        assert!(asks("E-TAKEOFF", "raceway_support"));
+        for id in ["E-CONDUIT-FILL", "E-DERATE", "E-VDROP", "E-METHOD", "E-CONDUIT-CONTINUITY", "E-BOX-FILL"] {
+            assert!(!asks(id, "raceway_support"), "{id}");
+        }
         // The kinds round 3 found refused.
         assert!(asks("E-CIRCUIT", "occupancy_sensor") && asks("E-CIRCUIT", "wire"));
         // A fan's or a PTAC's circuit is judged on its equipment connection: E-CIRCUIT naming

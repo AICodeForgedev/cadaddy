@@ -562,7 +562,7 @@
     {
       "id": "E-TAKEOFF",
       "trade": "electrical",
-      "applies_to": {"kinds": ["raceway_piece"], "categories": [], "marks": []},
+      "applies_to": {"kinds": ["raceway_piece", "raceway_support"], "categories": [], "marks": []},
       "check": "The takeoff (the stored count index the BOM reads, and conduit.takeoff's lines) equals a recount of the model's pieces within takeoff_pct (1%): conduit feet by size from the sticks' ends, wire and cable feet, each fitting and box.",
       "how": [
         "The prescreen recounted every raceway piece of the levels in scope and compared each kind, item and size with the stored index and conduit.takeoff. Start from its findings.",

@@ -282,7 +282,16 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     // plumbing trade's, not electrical "device type" lines).
     let lines: Vec<&serde_json::Value> =
         bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices" || l["category"] == "plumbing fixtures").collect();
-    let units: f64 = lines.iter().filter_map(|l| l["net"].as_f64()).sum();
+    // A low-voltage sensor zone's power pack is a device line the rule adds (Q6352), not one of
+    // the model's devices: it is counted apart.
+    let units: f64 = lines.iter().filter(|l| l["made"] != "inferred").filter_map(|l| l["net"].as_f64()).sum();
+    assert!(
+        lines
+            .iter()
+            .filter(|l| l["made"] == "inferred")
+            .all(|l| l["status"] == "rule" && l["item"].as_str().is_some_and(|i| i.starts_with("Power pack"))),
+        "{lines:#?}"
+    );
     // Another trade's devices (thermostats, fire alarm, low voltage: bim.scope) leave the device
     // lines for `by_others`, one entry each (Q6167).
     // The fire alarm circuits' cable rows and the control panel its wiring places by rule
