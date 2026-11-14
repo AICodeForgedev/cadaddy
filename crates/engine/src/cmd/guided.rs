@@ -11888,10 +11888,14 @@ fn stray_plan_numbers(d: &cadaddy_doc::Drawing, job: &GuidedJob, rooms: &[super:
     if plans.is_empty() {
         return out;
     }
+    // A dimension string's plain figure (`2160` beside `3'-0"`) numbers no room (Q6298).
+    let texts: Vec<_> =
+        d.model.iter().take(4_000_000).filter(|e| matches!(e.kind, cadaddy_doc::EntityKind::Text(_) | cadaddy_doc::EntityKind::MText(_))).collect();
+    let dims = super::perceive::geometry::dimension_figures(&texts);
     for e in d.model.iter().take(4_000_000) {
         let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
         let v = t.value.trim();
-        if !super::perceive::geometry::room_number(v) || sheets.contains(&v.to_ascii_uppercase()) {
+        if !super::perceive::geometry::room_number(v) || sheets.contains(&v.to_ascii_uppercase()) || dims.contains(&e.handle) {
             continue;
         }
         let p = t.insert.xy();
@@ -18266,14 +18270,20 @@ fn copy_room_fixtures(
         let mut storeys: Vec<String> = of_type.iter().filter_map(|i| rooms.get(*i)).map(|r| storey_key(&r.1)).collect();
         storeys.sort();
         storeys.dedup();
-        // Floor by floor, the type's fixture set of that floor's own plans: one of each tag they
-        // letter in its rooms of this type, the rooms with the most first (a tag lettered across
-        // the wall, in the room behind, would put a second where there is none), taken back into
-        // the view that goes into its room. Another floor's rooms never make this floor's set.
+        // Floor by floor, the type's fixture set of that floor's own plans: one of each tag that
+        // at least half the rooms of this type they letter hold, the rooms with the most first (a
+        // tag lettered across the wall, in the room behind, would put a second where there is
+        // none), taken back into the view that goes into its room. A tag fewer of them hold is
+        // those rooms' own (an accessible or other variant unit typed with the standard ones), and
+        // of two tags of one kind no source room holds together (a sink and its accessible
+        // variant) the set keeps the one more rooms hold: [`type_fixture_set`]. Another floor's
+        // rooms never make this floor's set.
         let mut sets: BTreeMap<String, (&([f64; 4], Vec<cadaddy_geom::Vec2>), Vec<([f64; 2], &super::readers::ReadDevice)>, usize)> = BTreeMap::new();
+        let mut variants: BTreeMap<String, (Vec<String>, Vec<String>)> = BTreeMap::new();
         if let Some(vs) = views.get(words) {
             for storey in &storeys {
-                let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
+                let mut found: Vec<Vec<([f64; 2], &super::readers::ReadDevice)>> = Vec::new();
+                let mut source_rooms: Vec<usize> = Vec::new();
                 let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
                 let mut sources = 0usize;
                 let mut by_count: Vec<usize> = of_type
@@ -18290,14 +18300,25 @@ fn copy_room_fixtures(
                     };
                     v_used = Some(v);
                     sources += 1;
-                    for f in in_room.get(src).into_iter().flatten() {
-                        let Some(p) = view_point(f.at, fit_src) else { continue };
-                        if !set.iter().any(|(_, g)| g.tag == f.tag) {
-                            set.push((p, f));
-                        }
-                    }
+                    source_rooms.push(src);
+                    found.push(in_room.get(src).into_iter().flatten().filter_map(|f| Some((view_point(f.at, fit_src)?, *f))).collect());
                 }
                 if let Some(v) = v_used {
+                    let (set, left) = type_fixture_set(&found, &held);
+                    if !left.is_empty() {
+                        let mut tags: Vec<String> = left.iter().map(|f| f.tag.clone()).collect();
+                        tags.sort();
+                        tags.dedup();
+                        let mut owners: Vec<String> = source_rooms
+                            .iter()
+                            .zip(&found)
+                            .filter(|(_, fs)| fs.iter().any(|(_, f)| left.iter().any(|g| plain_tag(&g.tag) == plain_tag(&f.tag))))
+                            .filter_map(|(ri, _)| rooms.get(*ri).map(|(n, _, _, num)| stamped_room(n, num, *ri)))
+                            .take(MAX_ALONE_LISTED)
+                            .collect();
+                        owners.sort();
+                        variants.insert(storey.clone(), (tags, owners));
+                    }
                     sets.insert(storey.clone(), (v, set, sources));
                 }
             }
@@ -18312,12 +18333,15 @@ fn copy_room_fixtures(
             let Some(fit_t) = fit(v, ri) else { continue };
             let b = room_boxes.get(ri).copied().unwrap_or_default();
             let have = in_room.get(ri).cloned().unwrap_or_default();
+            let set_tags: BTreeSet<String> = set.iter().map(|(_, f)| plain_tag(&f.tag)).collect();
             let mut mine = Vec::new();
             for (p, f) in set {
                 let Some(at) = place_in_room(*p, v.0, b, fit_t) else { continue };
                 // The set is one of each tag: a room with that tag already (where the plans put it,
-                // however its fit lays the set in, or a typical view's copy) takes none.
-                if have.iter().any(|h| h.tag == f.tag) || held.has_tag(ri, &f.tag) {
+                // however its fit lays the set in, or a typical view's copy) takes none, nor does a
+                // room holding its own fixture of the kind, one of a tag the set hasn't (its
+                // accessible sink, where the set has the standard one).
+                if have.iter().any(|h| h.tag == f.tag) || held.has_tag(ri, &f.tag) || held.has_other_of_kind(ri, &f.tag, &set_tags) {
                     continue;
                 }
                 mine.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
@@ -18392,6 +18416,13 @@ fn copy_room_fixtures(
             .collect();
         if !said.is_empty() {
             report.insert(format!("{label}: {}", said.join("; ")), took);
+        }
+        for (storey, (tags, owners)) in &variants {
+            let on = if sets.len() == 1 { String::new() } else { format!("storey {storey}: ") };
+            report.insert(
+                format!("{label}: {on}fixtures left out of the set, in fewer than half its source rooms: {tags:?}, the own of rooms {owners:?} (a variant unit)"),
+                owners.len(),
+            );
         }
         if stacked > 0 {
             report.insert(format!("{label}: rooms derived from the room they stack with on another floor"), stacked);
@@ -18482,6 +18513,13 @@ impl RoomFixtures {
         self.tags.get(ri).is_some_and(|t| t.contains(&plain_tag(tag)))
     }
 
+    /// Whether room `ri` holds a fixture of the tag's kind whose tag (written plain) is none of
+    /// `set`'s: a fixture of its own in place of the set's of that kind.
+    fn has_other_of_kind(&self, ri: usize, tag: &str, set: &BTreeSet<String>) -> bool {
+        let kind = self.kind(tag);
+        self.tags.get(ri).is_some_and(|t| t.iter().any(|h| !set.contains(h) && self.kind(h) == kind))
+    }
+
     /// Whether room `ri` holds a fixture of the tag's kind.
     fn has_kind(&self, ri: usize, tag: &str) -> bool {
         self.kinds.get(ri).is_some_and(|k| k.contains(&self.kind(tag)))
@@ -18495,6 +18533,49 @@ impl RoomFixtures {
             .get(&(storey, self.kind(tag)))
             .is_some_and(|v| v.iter().any(|(p, room)| room.is_none_or(|r| r == ri) && (p[0] - at[0]).hypot(p[1] - at[1]) <= clear))
     }
+}
+
+/// A room type's fixture set from the fixtures of its source rooms (`found`: per room, each
+/// fixture with where it is in the typical view; the rooms with the most first): one of each tag
+/// (written plain) that at least half the rooms hold, where the first room holding it has it. Of
+/// two such tags of one kind (`held`'s: the schedule family, else the tag) that no room holds
+/// together, the set keeps the one more rooms hold (the first found when as many do): the other is
+/// a variant of it. The set, and the fixtures left out of it (one each, the first found).
+fn type_fixture_set<'a>(
+    found: &[Vec<([f64; 2], &'a super::readers::ReadDevice)>],
+    held: &RoomFixtures,
+) -> (Vec<([f64; 2], &'a super::readers::ReadDevice)>, Vec<&'a super::readers::ReadDevice>) {
+    // Each tag's first fixture, and the rooms holding it.
+    let mut order: Vec<(String, [f64; 2], &super::readers::ReadDevice)> = Vec::new();
+    let mut holding: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    for (i, fs) in found.iter().enumerate() {
+        for (p, f) in fs {
+            let t = plain_tag(&f.tag);
+            if !holding.contains_key(&t) {
+                order.push((t.clone(), *p, *f));
+            }
+            holding.entry(t).or_default().insert(i);
+        }
+    }
+    let rooms_of = |t: &str| holding.get(t).map_or(0, BTreeSet::len);
+    let common = |t: &str| rooms_of(t) * 2 >= found.len();
+    let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
+    let mut left: Vec<&super::readers::ReadDevice> = Vec::new();
+    for (t, p, f) in &order {
+        let rivals = order.iter().filter(|(u, _, g)| {
+            u != t && common(u) && held.kind(&g.tag) == held.kind(&f.tag) && holding.get(u).zip(holding.get(t)).is_some_and(|(a, b)| a.is_disjoint(b))
+        });
+        // A rival more rooms hold, or as many and found first, keeps the kind's place.
+        let beaten = rivals.into_iter().any(|(u, _, _)| {
+            rooms_of(u) > rooms_of(t) || (rooms_of(u) == rooms_of(t) && order.iter().position(|o| o.0 == *u) < order.iter().position(|o| o.0 == *t))
+        });
+        if common(t) && !beaten {
+            set.push((*p, *f));
+        } else {
+            left.push(*f);
+        }
+    }
+    (set, left)
 }
 
 /// The first of the rooms `on` (places in `rooms`) that `hit` takes.
@@ -18881,6 +18962,43 @@ fn gear_space_after_layout(s: &mut Session, job: &mut GuidedJob, sp: &mut cadadd
 
 /// The job's finding of what the build ran through electrical gear's dedicated space (its
 /// `gearSpace` report, [`super::gearspace::Cleared::json`]): how many runs, how many offset.
+/// A level's open holes (its `window_tags` row's `open_holes`, Q6435): the gaps in its outside
+/// walls with no door or window drawn in them, built open. One finding a level, for review: a
+/// window drawn where the build couldn't read it, or a real opening.
+fn open_hole_finding(job: &mut GuidedJob, level: &str, row: &Value) {
+    let n = row["open_hole_count"].as_u64().unwrap_or(0);
+    if n == 0 {
+        return;
+    }
+    let listed: Vec<String> = row["open_holes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(5)
+        .map(|h| {
+            format!(
+                "{:.0},{:.0} to {:.0},{:.0}",
+                h["from"][0].as_f64().unwrap_or(0.0),
+                h["from"][1].as_f64().unwrap_or(0.0),
+                h["to"][0].as_f64().unwrap_or(0.0),
+                h["to"][1].as_f64().unwrap_or(0.0)
+            )
+        })
+        .collect();
+    job.add_finding(
+        StageName::BimBuild,
+        &format!("{n} gaps in outside walls on {level} are built as open holes"),
+        &format!(
+            "No door swing, glazing or window tag was found in these gaps in the outside walls, so each is built open, not closed silently: {}",
+            listed.join("; ")
+        ),
+        2,
+        vec!["Check each against the plans: a window or door drawn there the build could not read, or a real opening".into()],
+        None,
+        false,
+    );
+}
+
 /// The build's window tags against its windows (`window_tags`, one row a level, Q6311): a tag no
 /// window was built for is a finding a level, and the window types the plans tag that no window
 /// schedule row gives one finding (their sizes are the plan's openings, their sill and head the
@@ -18891,6 +19009,7 @@ fn window_tag_findings(job: &mut GuidedJob, rows: &Value) {
     for r in rows.iter().take(MAX_LEVELS_REPORTED) {
         let level = r["level"].as_str().unwrap_or("?");
         unscheduled.extend(r["marks_without_schedule_row"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string));
+        open_hole_finding(job, level, r);
         let n = r["no_host_count"].as_u64().unwrap_or(0);
         if n == 0 {
             continue;
@@ -35230,6 +35349,22 @@ mod model_stats_tests {
         assert_eq!(st["elements"]["count"], json!({"complete": true, "scanned": 600_003}));
     }
 
+    /// A level whose outside walls keep gaps with no door or window in them raises one finding
+    /// for review, saying where (Q6435); a level with none raises nothing.
+    #[test]
+    fn open_holes_in_outside_walls_are_a_finding_for_review() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        let rows = json!([
+            {"level": "L1", "no_host_count": 0, "open_hole_count": 2,
+             "open_holes": [{"from": [0.0, 0.0], "to": [60.0, 0.0], "width": 60.0}, {"from": [100.0, 0.0], "to": [148.0, 0.0], "width": 48.0}]},
+            {"level": "L2", "no_host_count": 0, "open_hole_count": 0, "open_holes": []}
+        ]);
+        window_tag_findings(&mut job, &rows);
+        let holes: Vec<&JobFinding> = job.findings.iter().filter(|f| f.description.contains("open holes")).collect();
+        assert_eq!(holes.len(), 1, "{:?}", job.findings.iter().map(|f| &f.description).collect::<Vec<_>>());
+        assert!(holes.iter().all(|f| f.description.contains("2 gaps") && f.description.contains("L1") && f.why.contains("0,0 to 60,0")));
+    }
+
     /// Q6619: what to ask before building leads the report and the status, by the build step it
     /// blocks; a built set of several storeys with nothing open is a warning, never "clean".
     #[test]
@@ -43730,6 +43865,116 @@ mod tests {
         }
         // The rooms kept from a second set are counted in the report.
         assert!(report.iter().any(|(k, n)| k.contains("the room holds one of their kind") && *n >= 12), "{report:?}");
+    }
+
+    /// Q6632: six rooms of one type (TWIN SUITE) on one floor under a typical view, the plumbing
+    /// plan lettering only some. One of them is the accessible unit, typed with the standard ones:
+    /// its kitchen sink is the accessible variant (`S-1A`, the schedule's sink family) where the
+    /// others have `S-1`. Every room of the standard ones also has a bar sink (`S-2`, a sink too).
+    /// The set is what most of the lettered rooms share: no room takes the accessible sink, the
+    /// accessible unit takes no standard sink beside its own, a room lettered with its kitchen
+    /// sink only still takes the bar sink, and the report names the accessible sink as its room's own.
+    #[test]
+    fn one_rooms_variant_fixture_stays_out_of_its_types_set() {
+        let (s, mut job) = stacked_floors();
+        // The six rooms stacked_floors() draws, all typed on floor 3.
+        let xs = [10_000.0, 10_200.0, 30_000.0, 30_200.0, 50_000.0, 50_200.0];
+        let rooms: Vec<Value> = xs
+            .iter()
+            .enumerate()
+            .map(|(k, x)| {
+                json!({"name": "TWIN SUITE", "number": format!("37{}", k + 1), "level": "3",
+                "outline": [[*x, 0], [x + 144.0, 0], [x + 144.0, 288], [*x, 288]]})
+            })
+            .collect();
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({ "rooms": rooms }));
+        }
+        let fixture = |tag: &str, x: f64, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at: [x + at[0], at[1]],
+            level: "Level 3".into(),
+            sheet: "P-201".into(),
+            kind: "plumbing fixture".into(),
+            handle: format!("{tag}@{x}"),
+            ..Default::default()
+        };
+        let bath = |x: f64| vec![fixture("WC-1", x, [20.0, 40.0]), fixture("L-1", x, [100.0, 40.0]), fixture("T-1", x, [60.0, 20.0])];
+        let mut placed = Vec::new();
+        // 371: the accessible unit, its accessible kitchen sink where the others have theirs.
+        placed.extend(bath(xs[0]));
+        placed.push(fixture("S-1A", xs[0], [100.0, 200.0]));
+        placed.push(fixture("S-2", xs[0], [40.0, 240.0]));
+        // 372, 373: the standard set.
+        for x in [xs[1], xs[2]] {
+            placed.extend(bath(x));
+            placed.push(fixture("S-1", x, [100.0, 200.0]));
+            placed.push(fixture("S-2", x, [40.0, 240.0]));
+        }
+        // 374: only its kitchen sink lettered. 375, 376: none.
+        placed.push(fixture("S-1", xs[3], [100.0, 200.0]));
+        let names: BTreeMap<String, String> = [
+            ("WC-1", "WATER CLOSET"),
+            ("L-1", "LAVATORY"),
+            ("T-1", "BATHTUB"),
+            ("S-1", "KITCHEN SINK"),
+            ("S-1A", "KITCHEN SINK, ADA"),
+            ("S-2", "BAR SINK"),
+        ]
+        .iter()
+        .map(|(t, n)| (t.to_string(), n.to_string()))
+        .collect();
+        let (copies, report) = copy_room_fixtures(s.doc().unwrap(), &job, &placed, &[], &names);
+        let mut got: Vec<(String, String)> = copies.iter().map(|c| (c.room.clone(), c.tag.clone())).collect();
+        got.sort();
+        let accessible = copies.iter().filter(|c| c.tag == "S-1A").count();
+        let sinks_in_371 = 2 + copies.iter().filter(|c| c.room == "371" && c.tag.starts_with('S')).count();
+        eprintln!("Q6632 copies {} (accessible sinks laid {accessible}, sinks in the accessible unit {sinks_in_371}): {got:?}", copies.len());
+        let mut want: Vec<(String, String)> = Vec::new();
+        for t in ["WC-1", "L-1", "T-1", "S-2"] {
+            want.push(("374".into(), t.into()));
+        }
+        for r in ["375", "376"] {
+            for t in ["WC-1", "L-1", "T-1", "S-1", "S-2"] {
+                want.push((r.into(), t.into()));
+            }
+        }
+        want.sort();
+        assert_eq!(got, want, "{report:?}");
+        // The accessible sink is named as its room's own, the set keeping the standard one.
+        let (said, n) = report.iter().find(|(k, _)| k.contains("left out of the set")).expect("the variant is reported");
+        assert!(said.contains("\"S-1A\"") && said.contains("\"371\"") && *n == 1, "{report:?}");
+        assert!(report.keys().any(|k| k.contains("set [") && !k.contains("S-1A")), "{report:?}");
+        // The unit check after the build: one kitchen sink and one bar sink a unit, none off.
+        let all: Vec<super::super::readers::ReadDevice> = placed.iter().cloned().chain(copies.iter().cloned()).collect();
+        let (sets, off) = unit_plumbing_check(&job, &all, &names);
+        eprintln!("Q6632 unit check: {sets:?} off {off:?}");
+        assert!(off.is_empty(), "{off:?}");
+        assert!(sets.iter().all(|u| u.set.get("sink") == Some(&2)), "{sets:?}");
+    }
+
+    /// Two source rooms, one standard and one variant: as many hold each sink, so the set keeps
+    /// the one found first and leaves the other to its room, never both.
+    #[test]
+    fn a_type_set_keeps_one_of_two_rival_fixtures_of_a_kind() {
+        let held = RoomFixtures::new(
+            &[],
+            &[],
+            &[],
+            &[("S-1", "KITCHEN SINK"), ("S-1A", "KITCHEN SINK, ADA")].iter().map(|(t, n)| (t.to_string(), n.to_string())).collect(),
+            0.0,
+        );
+        let dv = |tag: &str| super::super::readers::ReadDevice { tag: tag.into(), kind: "plumbing fixture".into(), ..Default::default() };
+        let (wc, s1, s1a) = (dv("WC-1"), dv("S-1"), dv("S-1A"));
+        let found = vec![vec![([0.0, 0.0], &wc), ([1.0, 0.0], &s1)], vec![([0.0, 0.0], &wc), ([1.0, 0.0], &s1a)]];
+        let (set, left) = type_fixture_set(&found, &held);
+        let tags: Vec<&str> = set.iter().map(|(_, f)| f.tag.as_str()).collect();
+        assert_eq!(tags, vec!["WC-1", "S-1"]);
+        assert_eq!(left.iter().map(|f| f.tag.as_str()).collect::<Vec<_>>(), vec!["S-1A"]);
+        // Two of a kind every room holds together are both the set's (a kitchen and a bar sink).
+        let s2 = dv("S-2");
+        let both = vec![vec![([1.0, 0.0], &s1), ([2.0, 0.0], &s2)], vec![([1.0, 0.0], &s1), ([2.0, 0.0], &s2)]];
+        assert_eq!(type_fixture_set(&both, &held).0.len(), 2);
     }
 
     /// Q6317: a one-room plan (a mechanical room's, its trace leaked and its area laid round its

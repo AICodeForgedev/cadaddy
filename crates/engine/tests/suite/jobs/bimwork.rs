@@ -717,3 +717,53 @@ fn a_calls_labor_rate_never_replaces_the_projects_crew_rate() {
         assert_eq!(crew(&mut s), Some(50.0));
     }
 }
+
+/// The labels the next `n` undos would take back (undone, then redone again).
+fn next_undos(s: &mut Session, n: usize) -> Vec<String> {
+    let v = s.execute("undo", &json!({"count": n})).unwrap();
+    s.execute("redo", &json!({"count": n})).unwrap();
+    v["undone"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect()
+}
+
+/// Q6330: reads and reports that keep nothing add no undo step. A bid with its alternates (the
+/// value-engineering study looks up the crew rate), a settings call with no parameters, or with
+/// the values already set, a scope set again as it is, a bid with nothing new to keep: after a
+/// marker edit and three such calls, the next undo takes back the marker. A real change still
+/// is one step, and undo puts the old value back.
+#[test]
+fn reads_and_unchanged_settings_add_no_undo_step() {
+    let mut s = building();
+    s.execute("estimate.settings", &json!({"crew_rate": 50, "today": "2026-11-08"})).unwrap();
+    s.execute("estimate.set_scope", &json!({"trade": "electrical", "scope": "in_contract", "reason": "all ours"})).unwrap();
+    s.execute("bim.bid", &json!({"today": "2026-11-08"})).unwrap();
+    let calls = [
+        ("bim.bid", json!({"keep": false, "today": "2026-11-08"})),
+        ("bim.bid", json!({"keep": false, "alternates": false, "today": "2026-11-08"})),
+        ("bim.bid", json!({"today": "2026-11-08"})),
+        ("estimate.settings", json!({})),
+        ("estimate.settings", json!({"crew_rate": 50, "today": "2026-11-08"})),
+        ("estimate.set_scope", json!({"trade": "electrical", "scope": "in_contract", "reason": "all ours"})),
+        ("estimate.status", json!({})),
+    ];
+    let mut found = Vec::new();
+    for (i, (cmd, p)) in calls.iter().enumerate() {
+        let y = -9000.0 - 20.0 * i as f64;
+        s.execute("line", &json!({"points": [[-9000.0, y], [-8990.0, y]]})).unwrap();
+        for _ in 0..3 {
+            s.execute(cmd, p).unwrap();
+        }
+        let undos = next_undos(&mut s, 4);
+        if undos.first().map(String::as_str) != Some("Line") {
+            found.push(format!("{cmd} {p} x3, then undo 4 takes {undos:?}"));
+        }
+    }
+    assert!(found.is_empty(), "calls that changed nothing left undo steps:\n{}", found.join("\n"));
+
+    // A real change is one step; undo puts the old rate back.
+    let crew = |s: &mut Session| s.execute("estimate.settings", &json!({})).unwrap()["settings"]["crew_rate"].as_f64();
+    s.execute("estimate.settings", &json!({"crew_rate": 60})).unwrap();
+    assert_eq!(crew(&mut s), Some(60.0));
+    assert_eq!(next_undos(&mut s, 1), vec!["Estimate Settings".to_string()]);
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(crew(&mut s), Some(50.0), "undo of a settings change restores the rate");
+}
