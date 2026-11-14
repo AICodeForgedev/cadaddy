@@ -696,7 +696,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
     let rules = Rules::of(d, sp);
     let want = |t: &str| only.is_none_or(|o| o.contains(t));
     let mut batch = Batch::default();
-    let ctx = Ctx::new(d, sp);
+    let ctx = Ctx::new(d, sp, want("framing"));
     if want("framing") || want("drywall") || want("insulation") || want("masonry") || want("cladding") || want("finishes") {
         walls::lay_out(d, sp, &rules, &ctx, &mut batch, &want);
     }
@@ -863,6 +863,16 @@ impl InWallIndex {
     }
 }
 
+/// Whether `e` may be a thing set in a wall, by its part alone: a run's piece only when it is a box,
+/// its ring or a conduit stick (a stick standing in the wall); the wire, cable, fittings and
+/// straps of a run never (a quick test before [`in_wall_thing`] reads it).
+fn in_wall_kind(e: &cadaddy_doc::Entity) -> bool {
+    match super::bimlook::made_tag(e, "part").and_then(|p| p.strip_prefix("atom:")) {
+        Some(atom) => matches!(atom, "box" | "ring" | "conduit"),
+        None => true,
+    }
+}
+
 /// `e` as a thing another trade sets in a wall: an outlet or junction box, a device, a piece of
 /// equipment, a terminal, a conduit standing in the wall; never a run along or across it (a run
 /// across a stud bores it: the hole rules judge it).
@@ -915,7 +925,8 @@ pub(crate) struct RoomEl {
 }
 
 impl Ctx {
-    fn new(d: &Drawing, sp: &BuildingSpec) -> Ctx {
+    /// `framing`: the stud layout is laid, so what stands in the walls is looked up too.
+    fn new(d: &Drawing, sp: &BuildingSpec, framing: bool) -> Ctx {
         let upf = upf_of(sp);
         let mut rooms = Vec::new();
         let mut devices = Vec::new();
@@ -923,8 +934,10 @@ impl Ctx {
         for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some()).take(MAX_ELEMENTS) {
             let part = super::wallgen::made_as(e).unwrap_or_default();
             let level = super::bspec::made_level(e).unwrap_or_default();
-            if matches!(part.as_str(), "mep" | "device")
+            if framing
+                && matches!(part.as_str(), "mep" | "device")
                 && in_wall.len() < MAX_IN_WALL
+                && in_wall_kind(e)
                 && let Some(it) = in_wall_thing(e)
             {
                 in_wall.push((level.clone(), it));
