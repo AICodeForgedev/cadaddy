@@ -3,7 +3,8 @@
   "unit_loads": [
     {"kinds": ["receptacle", "gfci_receptacle", "weatherproof_receptacle", "ceiling_receptacle", "usb_receptacle", "floor_receptacle"], "category": "receptacle", "va": 180, "cite": "NEC 220.14(I): 180 VA per single or duplex receptacle on one yoke"},
     {"kinds": ["quad_receptacle", "fourplex_receptacle"], "category": "receptacle", "va": 360, "cite": "NEC 220.14(I): 180 VA per yoke, a quad is two"},
-    {"kinds": ["luminaire", "wall_luminaire", "exit_sign", "emergency_light", "pendant", "downlight", "strip_light", "track_light", "sign"], "category": "lighting", "cite": "NEC 220.14(D): the luminaire's rated VA (the fixture schedule's)"},
+    {"kinds": ["luminaire", "wall_luminaire", "exit_sign", "emergency_light", "pendant", "downlight", "strip_light", "track_light"], "category": "lighting", "cite": "NEC 220.14(D): the luminaire's rated VA (the fixture schedule's)"},
+    {"kinds": ["sign", "monument_sign", "pylon_sign"], "category": "lighting", "va": 1200, "cite": "NEC 220.14(F): a sign outlet at 1200 VA minimum for each required branch circuit (600.5(A)); the sign's rating (its submittal's) governs"},
     {"kinds": ["equipment_connection", "motor", "appliance", "disconnect", "fan", "exhaust_fan", "water_heater", "hand_dryer"], "category": "equipment", "cite": "NEC 220.14(A): the appliance's or equipment's rating (its submittal's)"},
     {"kinds": ["switch", "dimmer", "occupancy_sensor", "vacancy_sensor", "thermostat", "low_voltage_outlet", "data_outlet", "telephone_outlet", "catv_outlet", "speaker", "keypad", "card_reader", "bda_antenna_box", "bda_riser_box", "smoke_detector", "fire_alarm_device", "horn", "strobe", "pull_station"], "category": "control", "va": 0, "cite": "a control or low-voltage device: no load of its own"}
   ],

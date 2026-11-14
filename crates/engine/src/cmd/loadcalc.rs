@@ -259,16 +259,40 @@ fn model_devices(d: &cadaddy_doc::Drawing, rules: &Rules) -> BTreeMap<(String, S
         let st = props::read(&e.common.xdata);
         let text = |k: &str| st.get(k).filter(|v| v.has_value()).map(|v| v.text().trim().to_string()).unwrap_or_default();
         let (panel, label) = (text("panel").to_ascii_uppercase(), text("circuit"));
-        if panel.is_empty() || label.is_empty() {
-            continue;
-        }
-        let number = circuit_number(&label, &panel);
-        if number.is_empty() {
+        // The circuits it is on: each one it holds when several (a sign fed by three circuits,
+        // Q6321: it is on each, its load by circuit), else its one circuit.
+        let held = super::mepatoms::circuit_list(&text("circuits"));
+        let keys: Vec<(String, String)> = if held.len() > 1 {
+            held.iter()
+                .filter_map(|l| {
+                    let (p, n) = super::printcond::parse_circuit(l)?;
+                    let n = n.split(',').next().unwrap_or("").trim().to_string();
+                    (!n.is_empty()).then_some((p, n))
+                })
+                .take(MAX_HELD)
+                .collect()
+        } else if panel.is_empty() || label.is_empty() {
+            Vec::new()
+        } else {
+            vec![(panel.clone(), circuit_number(&label, &panel))]
+        };
+        let keys: Vec<(String, String)> = keys.into_iter().filter(|(_, n)| !n.is_empty()).collect();
+        if keys.is_empty() {
             continue;
         }
         let kind = super::elemprops::reported_kind(e, base.clone());
         let kind_l = kind.to_ascii_lowercase();
-        let rule = rules.unit_loads.iter().find(|u| u.kinds.iter().any(|k| k.eq_ignore_ascii_case(&kind_l)));
+        // A piece of equipment by the kind its build made it (`equipment:sign`): the rules name
+        // kinds, not `equipment`.
+        let part_kind = (base == "equipment")
+            .then(|| super::bimlook::made_tag(e, "part").and_then(|p| p.strip_prefix("equipment:")).map(|k| k.trim().to_ascii_lowercase()))
+            .flatten()
+            .filter(|k| !k.is_empty());
+        let rule = rules
+            .unit_loads
+            .iter()
+            .find(|u| u.kinds.iter().any(|k| k.eq_ignore_ascii_case(&kind_l)))
+            .or_else(|| part_kind.as_deref().and_then(|pk| rules.unit_loads.iter().find(|u| u.kinds.iter().any(|k| k.eq_ignore_ascii_case(pk)))));
         let doc_of = |k: &str| st.get(k).and_then(|p| p.source.doc.clone()).unwrap_or_default();
         // Its own rating first (the fixture schedule's VA, a nameplate the documents give it).
         let own = ["fixture_va", "load_va", "va", "wattage"].iter().find_map(|k| {
@@ -294,10 +318,15 @@ fn model_devices(d: &cadaddy_doc::Drawing, rules: &Rules) -> BTreeMap<(String, S
                 None => Dev { kind: kind_l, room: text("room"), va: None, cat, source: String::new(), documented: false },
             },
         };
-        out.entry((panel, number)).or_default().push(dev);
+        for key in keys {
+            out.entry(key).or_default().push(dev.clone());
+        }
     }
     out
 }
+
+/// Circuits one element is counted on, at most (the circuits it holds).
+const MAX_HELD: usize = 12;
 
 // ---------------------------------------------------------------- the panels
 
