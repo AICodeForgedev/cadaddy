@@ -84,10 +84,19 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     }
     let revision = app.session.state().map(|s| s.revision).unwrap_or(0);
     if st.revision != Some(revision) {
-        st.list = app.session.execute("fourd.list", &json!({})).unwrap_or(Value::Null);
-        st.revision = Some(revision);
-        st.counts_for = None;
+        // The tasks with what each links, and every object not yet linked, across the whole set:
+        // on a worker thread, the palette open meanwhile (Q6585).
+        let revision_of = |app: &CadApp| app.session.state().map(|s| s.revision).unwrap_or(0);
+        let listed = crate::asked::worked_out(app, ctx, egui::Id::new("fourd-palette-list"), "fourd.list", revision_of, |s| {
+            s.execute("fourd.list", &json!({})).unwrap_or(Value::Null)
+        });
+        if let Some(list) = listed {
+            st.list = (*list).clone();
+            st.revision = Some(revision);
+            st.counts_for = None;
+        }
     }
+    let listing = st.revision != Some(revision);
     let tasks: Vec<Value> = st.list["tasks"].as_array().cloned().unwrap_or_default();
     let span = st.list["span"].as_array().and_then(|a| Some((day(a.first()?.as_str()?)?, day(a.get(1)?.as_str()?)?)));
     let mut shown = app.fourd;
@@ -134,6 +143,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     export = true;
                 }
             });
+            if listing {
+                crate::asked::working(ui);
+                return;
+            }
             let Some((a, b)) = span else {
                 ui.label(RichText::new(crate::tl!("No schedule yet. Import one to show the model on a date.")).color(t.text_dim));
                 return;

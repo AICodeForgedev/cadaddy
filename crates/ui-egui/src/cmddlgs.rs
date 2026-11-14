@@ -85,19 +85,20 @@ fn show_holders(app: &mut CadApp, handles: &[String]) {
 /// it selected and zoomed to.
 pub fn purge(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
-    // The lists are worked out again only when the drawing changes (a purge, an undo).
-    let key = app.session.doc().map(|d| std::ptr::from_ref(d) as usize).unwrap_or(0);
+    // The lists are worked out again only when the drawing changes (a purge, an undo). What is
+    // unused is looked for in every object of the whole set: on a worker thread, the dialog open
+    // meanwhile (Q6585).
     let state_id = egui::Id::new("purge_state");
     let mut st: PurgeState = ctx.data_mut(|d| d.get_temp(state_id)).unwrap_or_default();
-    let cache = egui::Id::new(("purge_list", st.held_view));
-    let list = match ctx.data_mut(|d| d.get_temp::<(usize, Value)>(cache)) {
-        Some((k, v)) if k == key => v,
-        _ => {
-            let v = app.session.execute("purge", &json!({ "list": true, "reasons": st.held_view })).unwrap_or(Value::Null);
-            ctx.data_mut(|d| d.insert_temp(cache, (key, v.clone())));
-            v
-        }
-    };
+    let held = st.held_view;
+    let listed = crate::asked::worked_out(
+        app,
+        ctx,
+        egui::Id::new(("purge_list", held)),
+        "purge",
+        |app| app.session.doc().map(|d| std::ptr::from_ref(d) as usize).unwrap_or(0),
+        move |s| s.execute("purge", &json!({ "list": true, "reasons": held })).unwrap_or(Value::Null),
+    );
     let mut run: Option<Vec<(String, String, String)>> = None;
     let mut answer: Option<&str> = None;
     let mut holders: Option<Vec<String>> = None;
@@ -119,6 +120,11 @@ pub fn purge(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.selectable_value(&mut st.held_view, true, crate::tl!("Find Non-Purgeable Items"));
             });
             ui.separator();
+            let Some(list) = &listed else {
+                crate::asked::working(ui);
+                return;
+            };
+            let list: &Value = list;
             if let Some((_, kkey, name)) = st.queue.first().cloned() {
                 // Confirm each item.
                 let label = PURGE_KINDS.iter().find(|(k, _, _)| *k == kkey).map_or("", |(_, _, l)| *l);
@@ -175,8 +181,8 @@ pub fn purge(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.label(RichText::new(crate::tl!("Unused items in this drawing")).strong());
                 egui::ScrollArea::vertical().id_salt("purge_items").max_height(300.0).show(ui, |ui| {
                     for (key, _, label) in PURGE_KINDS.iter() {
-                        let n = purgeable(&list, key);
-                        let names = names_of(&list, key);
+                        let n = purgeable(list, key);
+                        let names = names_of(list, key);
                         if names.is_empty() {
                             // A count only (zero-length geometry, empty text) or nothing.
                             let mut on = n > 0 && !st.off.contains(&(key.to_string(), String::new()));
@@ -231,9 +237,9 @@ pub fn purge(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 let items = |only_checked: bool| -> Vec<(String, String, String)> {
                     let mut v = Vec::new();
                     for (key, ty, _) in PURGE_KINDS.iter() {
-                        let names = names_of(&list, key);
+                        let names = names_of(list, key);
                         if names.is_empty() {
-                            if purgeable(&list, key) > 0 && !(only_checked && st.off.contains(&(key.to_string(), String::new()))) {
+                            if purgeable(list, key) > 0 && !(only_checked && st.off.contains(&(key.to_string(), String::new()))) {
                                 v.push((ty.to_string(), key.to_string(), String::new()));
                             }
                             continue;

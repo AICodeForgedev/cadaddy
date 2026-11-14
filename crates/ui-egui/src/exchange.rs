@@ -76,34 +76,58 @@ pub(crate) fn preview_plot(app: &mut CadApp, ctx: &egui::Context, params: Value,
 /// Pixels across the preview image: enough to zoom in on details.
 const PREVIEW_WIDTH: u32 = 2400;
 
-/// Render the plot preview of the current layout (or model), or of the Plot dialog's settings,
-/// as a texture.
-fn render(app: &mut CadApp, ctx: &egui::Context) -> Result<(TextureHandle, String), String> {
-    if let Some(f) = ctx.data(|d| d.get_temp::<FromPlot>(egui::Id::new(FROM_PLOT))) {
-        let r = app.session.execute("plot", &f.params).map_err(|e| e.to_string())?;
-        let png = r["data"].as_str().and_then(cadaddy_engine::cmd::file::base64_decode).ok_or("the preview has no image")?;
-        let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_rgba8();
-        let size = [img.width() as usize, img.height() as usize];
-        let tex = ctx.load_texture("plot-preview", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR);
-        return Ok((tex, f.info));
-    }
-    // As sharp as the GPU's largest texture allows (a portrait sheet is taller than wide).
-    let max = u32::try_from(ctx.input(|i| i.max_texture_side)).unwrap_or(2048).max(64);
-    let mut r = app.session.execute("preview", &json!({ "width": PREVIEW_WIDTH.min(max) })).map_err(|e| e.to_string())?;
-    let (w, h) = (r["width"].as_u64().unwrap_or(0), r["height"].as_u64().unwrap_or(0));
-    if h > u64::from(max) && h > 0 {
-        let width = (w * u64::from(max) / h).max(16);
-        r = app.session.execute("preview", &json!({ "width": width })).map_err(|e| e.to_string())?;
-    }
+/// What the preview shows: the plot's pixels (RGBA) and their size, and the line about the sheet;
+/// or why there is none.
+type Picture = Result<(Vec<u8>, [usize; 2], String), String>;
+
+/// The pixels of a plot or preview reply's PNG, and their size.
+fn pixels(r: &Value) -> Result<(Vec<u8>, [usize; 2]), String> {
     let png = r["data"].as_str().and_then(cadaddy_engine::cmd::file::base64_decode).ok_or("the preview has no image")?;
     let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
-    let tex = ctx.load_texture("plot-preview", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR);
+    Ok((img.into_raw(), size))
+}
+
+/// Plot the preview of the current layout (or model), or of the Plot dialog's settings
+/// (`from_plot`), at most `max` pixels on a side: on a worker thread, as it plots the whole set
+/// (Q6585).
+fn picture(s: &mut cadaddy_engine::Session, from_plot: Option<FromPlot>, max: u32) -> Picture {
+    if let Some(f) = from_plot {
+        let r = s.execute("plot", &f.params).map_err(|e| e.to_string())?;
+        let (px, size) = pixels(&r)?;
+        return Ok((px, size, f.info));
+    }
+    let mut r = s.execute("preview", &json!({ "width": PREVIEW_WIDTH.min(max) })).map_err(|e| e.to_string())?;
+    let (w, h) = (r["width"].as_u64().unwrap_or(0), r["height"].as_u64().unwrap_or(0));
+    if h > u64::from(max) && h > 0 {
+        let width = (w * u64::from(max) / h).max(16);
+        r = s.execute("preview", &json!({ "width": width })).map_err(|e| e.to_string())?;
+    }
+    let (px, size) = pixels(&r)?;
     let mut info = format!("{} · {}", r["layout"].as_str().unwrap_or(""), r["paper"].as_str().unwrap_or(""));
     if r["landscape"].as_bool() == Some(true) {
         info.push_str(" · landscape");
     }
-    Ok((tex, info))
+    Ok((px, size, info))
+}
+
+/// The preview of the current layout (or model), or of the Plot dialog's settings, as a texture:
+/// `None` while it is being plotted.
+fn render(app: &mut CadApp, ctx: &egui::Context, generation: u32) -> Option<Result<(TextureHandle, String), String>> {
+    let from_plot = ctx.data(|d| d.get_temp::<FromPlot>(egui::Id::new(FROM_PLOT)));
+    // As sharp as the GPU's largest texture allows (a portrait sheet is taller than wide).
+    let max = u32::try_from(ctx.input(|i| i.max_texture_side)).unwrap_or(2048).max(64);
+    let id = egui::Id::new("cc_plot_preview_picture");
+    let pic = crate::asked::worked_out(app, ctx, id, "preview", move |_| generation, move |s| picture(s, from_plot, max))?;
+    // The texture holds the pixels from here on.
+    crate::asked::forget_worked::<u32, Picture>(ctx, id);
+    Some(match &*pic {
+        Ok((px, size, info)) => {
+            let tex = ctx.load_texture("plot-preview", egui::ColorImage::from_rgba_unmultiplied(*size, px), egui::TextureOptions::LINEAR);
+            Ok((tex, info.clone()))
+        }
+        Err(e) => Err(e.clone()),
+    })
 }
 
 /// The Plot Preview window: the sheet as it plots, with Print and Close.
@@ -112,12 +136,12 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let generation = PREVIEW_GEN.load(Ordering::Relaxed);
     let cached = ctx.data(|d| d.get_temp::<Preview>(id)).filter(|p| p.generation == generation);
     let preview = match cached {
-        Some(p) => p,
-        None => {
-            let p = Preview { generation, shown: render(app, ctx) };
+        Some(p) => Some(p),
+        None => render(app, ctx, generation).map(|shown| {
+            let p = Preview { generation, shown };
             ctx.data_mut(|d| d.insert_temp(id, p.clone()));
             p
-        }
+        }),
     };
     let (mut close, mut print, mut fit) = (false, false, false);
     // Nearly the whole window: the sheet as it plots, panned by dragging and zoomed with the
@@ -140,14 +164,15 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 print = ui.button(crate::tl!("Print...")).clicked();
                 fit = ui.button(crate::tl!("Zoom to Fit")).clicked();
                 close = ui.button(crate::tl!("Close")).clicked();
-                if let Ok((_, info)) = &preview.shown {
+                if let Some(Ok((_, info))) = preview.as_ref().map(|p| &p.shown) {
                     ui.label(info);
                 }
                 ui.label(egui::RichText::new(crate::tl!("Drag to pan, scroll to zoom")).small().weak());
             });
             ui.separator();
-            match &preview.shown {
-                Ok((tex, _)) => {
+            match preview.as_ref().map(|p| &p.shown) {
+                None => crate::asked::working(ui),
+                Some(Ok((tex, _))) => {
                     let size = tex.size_vec2();
                     if fit || !scene_rect.is_finite() || scene_rect.size() == egui::Vec2::ZERO {
                         scene_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
@@ -158,7 +183,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         });
                     });
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     ui.label(e);
                 }
             }
