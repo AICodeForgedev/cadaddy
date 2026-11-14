@@ -3009,11 +3009,13 @@ impl Session {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
         };
-        // A refused command that took the drawing for writing (copy on write) without changing it
-        // gets the very same drawing back, so it leaves no undo step: an empty step made the
-        // next U do nothing (layer.delete of layer 0, layer.new of a name in use: undofuzz).
-        if result.is_err()
-            && let Some((doc, _, uid)) = &before
+        // A command that took the drawing for writing (copy on write) without changing it gets
+        // the very same drawing back, so it leaves no undo step: an empty step made the next U do
+        // nothing. A refused one (layer.delete of layer 0, layer.new of a name in use: undofuzz),
+        // and as much one that did its work: a read or report that keeps nothing, a settings call
+        // with nothing new, a lookup through another command (bim.bid's value-engineering study,
+        // `estimate.settings {}`: one empty step per call, Q6330).
+        if let Some((doc, _, uid)) = &before
             && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
             && !Arc::ptr_eq(doc, &st.doc)
             && **doc == *st.doc
