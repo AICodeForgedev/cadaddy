@@ -400,3 +400,173 @@ fn list_dialogs_on_a_file() {
         println!("{dialog}: {ms:.3} ms a frame (median of 15, dialog part), command ran {asks} times in 15 frames; {objects} objects");
     }
 }
+
+/// The palettes and dialogs that read the whole print set as they open (Q6585): a count and a
+/// purge look at every object, a plot preview and a transmittal at everything they will write, a
+/// standards check at every object's properties, the room list traces rooms from the plans, the
+/// 4D schedule counts every object not yet linked, Validate and the agent's work list check the
+/// model against the prints. "palette X" opens docked palette X, "dialog X" dialog X.
+const WHOLE_SET_OPENERS: &[&str] = &[
+    "palette validate",
+    "dialog agentwork",
+    "dialog preview",
+    "dialog countpalette",
+    "dialog etransmit",
+    "dialog purge",
+    "dialog checkstandards",
+    "dialog rooms",
+    "dialog fourd",
+];
+
+fn open_it(app: &mut CadApp, what: &str, open: bool) {
+    if let Some(panel) = what.strip_prefix("palette ") {
+        let op = if open { "open" } else { "close" };
+        app.run("ui.dock", json!({ "operation": op, "panel": panel })).unwrap_or_else(|e| panic!("ui.dock {op} {panel}: {e}"));
+    } else if let Some(id) = what.strip_prefix("dialog ") {
+        app.ui.dialog = open.then(|| id.to_string());
+    }
+}
+
+/// Frames until no work runs in the background (at most `limit_ms`), ms taken.
+fn settle(app: &mut CadApp, ctx: &egui::Context, limit_ms: u128) -> f64 {
+    let t = std::time::Instant::now();
+    while cadaddy_ui_egui::busy::running(app).is_some() && t.elapsed().as_millis() < limit_ms {
+        frame(app, ctx);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    frame(app, ctx);
+    t.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Each of [`WHOLE_SET_OPENERS`] opened in turn on the print set `app` holds with its other
+/// sheets out of memory: the wall-clock time of the frame that opens it (ms), and until its
+/// content is worked out (ms); then closed and the sheets let out again.
+fn whole_set_first_frames(app: CadApp) -> Vec<(String, f64, f64)> {
+    first_frames(app, WHOLE_SET_OPENERS.iter().map(|w| (*w).to_string()).collect())
+}
+
+/// Every palette on the rail and every dialog, as [`WHOLE_SET_OPENERS`].
+fn every_opener() -> Vec<String> {
+    let mut v: Vec<String> = cadaddy_ui_egui::docking::Panel::RAIL.iter().map(|p| format!("palette {}", p.id())).collect();
+    v.extend(cadaddy_ui_egui::dialogs::IDS.iter().map(|id| format!("dialog {id}")));
+    v
+}
+
+/// What `ui.elements` finds labelled `label` on screen, as the control channel answers it.
+fn on_screen(app: &mut CadApp, ctx: &egui::Context, label: &str) -> bool {
+    let (req, pending) = cadaddy_ui_egui::control::ControlRequest::new("ui.elements", json!({ "label": label }));
+    app.serve_control_request(ctx, req);
+    let v = pending.wait(std::time::Duration::from_millis(500));
+    v["result"].to_string().contains(label)
+}
+
+fn first_frames(mut app: CadApp, openers: Vec<String>) -> Vec<(String, f64, f64)> {
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx);
+    // `ui.elements` reads the accessibility tree, built from the first request on.
+    on_screen(&mut app, &ctx, WORKING);
+    settle(&mut app, &ctx, 600_000);
+    let mut out = Vec::new();
+    for what in &openers {
+        let what = what.as_str();
+        // The sheets out of memory first, as after opening the file.
+        for _ in 0..200 {
+            if app.session.has_parked_sheets() && !app.session.whole_set_in_memory() && cadaddy_ui_egui::busy::running(&app).is_none() {
+                break;
+            }
+            cadaddy_ui_egui::sheetload::forget_holds();
+            frame(&mut app, &ctx);
+            settle(&mut app, &ctx, 600_000);
+        }
+        assert!(app.session.has_parked_sheets(), "before {what}: the other sheets are out of memory");
+        open_it(&mut app, what, true);
+        let t = std::time::Instant::now();
+        frame(&mut app, &ctx);
+        let first = t.elapsed().as_secs_f64() * 1000.0;
+        let said_working = on_screen(&mut app, &ctx, WORKING);
+        let still = cadaddy_ui_egui::busy::running(&app).is_some();
+        let ready = first + settle(&mut app, &ctx, 600_000);
+        // Opened at once, saying it is working its content out.
+        assert!(!still || said_working, "{what}: its work runs and it doesn't say so");
+        frame(&mut app, &ctx);
+        // Worked out: what it shows is there, not the note that it is being worked out.
+        assert!(!on_screen(&mut app, &ctx, WORKING), "{what}: still \"{WORKING}\" after the work ended");
+        out.push((what.to_string(), first, ready));
+        open_it(&mut app, what, false);
+        cadaddy_ui_egui::sheetload::forget_holds();
+        frame(&mut app, &ctx);
+        settle(&mut app, &ctx, 600_000);
+    }
+    out
+}
+
+/// What a palette or dialog says while its content is worked out off the UI thread.
+const WORKING: &str = "Working it out…";
+
+/// The longest a frame that opens a palette or dialog may take (Q6585), ms.
+const FIRST_FRAME_MS: f64 = 250.0;
+
+/// A made-up print set big enough that loading its sheets takes a while, open as the interface
+/// opens one (on its first sheet, the others out of memory); with how long loading the others
+/// takes, ms.
+fn big_print_set() -> (CadApp, f64) {
+    let sheets = std::env::var("FRAMECOST_SHEETS").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
+    let per = std::env::var("FRAMECOST_PER_SHEET").ok().and_then(|v| v.parse().ok()).unwrap_or(6_000);
+    let set = cadaddy_engine::sample::job_print_set(sheets, per);
+    let mut probe = Session::new();
+    probe.sheets_on_demand = true;
+    probe.open_drawing(set.clone(), "Sample Set", None);
+    assert!(probe.open_first_sheet());
+    let t = std::time::Instant::now();
+    probe.load_all_sheets().unwrap();
+    let load = t.elapsed().as_secs_f64() * 1000.0;
+    let mut s = Session::new();
+    s.open_drawing(set, "Sample Set", None);
+    (CadApp::new(s, Services::default()), load)
+}
+
+/// Opening a palette or dialog that reads the whole print set never holds the window while the
+/// set loads and what it shows is worked out (Q6585): that runs on a worker thread, under the
+/// busy card when it takes long, and the content appears when it is ready. The frame that opens
+/// it costs a small part of loading the set, which before took the whole load and the reading.
+#[test]
+fn opening_a_whole_set_dialog_never_holds_the_window_for_the_load() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let (app, load) = big_print_set();
+    let rows = if std::env::var("FRAMECOST_EVERY").is_ok() { first_frames(app, every_opener()) } else { whole_set_first_frames(app) };
+    let mut held = Vec::new();
+    for (what, first, ready) in &rows {
+        println!("{what}: first frame {first:.0} ms, worked out after {ready:.0} ms (loading the set alone: {load:.0} ms)");
+        // A few frames of waiting and the dialog's own layout at most.
+        if *first > FIRST_FRAME_MS {
+            held.push(format!("{what}: first frame {first:.0} ms"));
+        }
+    }
+    assert!(held.is_empty(), "these held the window as they opened:\n{}", held.join("\n"));
+}
+
+/// The same on a saved print set (`FRAMECOST_FILE`), for the numbers on a real model; by hand:
+/// `FRAMECOST_FILE=<model.cdy> cargo test --release -p cadaddy-ui-egui --test frame_cost
+/// whole_set_dialogs_on_a_file -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn whole_set_dialogs_on_a_file() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(path) = std::env::var("FRAMECOST_FILE") else { return };
+    cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    let mut s = Session::new();
+    s.sheets_on_demand = true;
+    s.execute("open", &json!({ "path": path })).unwrap_or_else(|e| panic!("open {path}: {e}"));
+    let objects = s.doc().map_or(0, |d| d.model.len());
+    println!("{objects} objects in memory after opening, parked sheets: {}", s.has_parked_sheets());
+    for (what, first, ready) in whole_set_first_frames(CadApp::new(s, Services::default())) {
+        println!("{what}: first frame {first:.0} ms, worked out after {ready:.0} ms");
+    }
+}

@@ -1261,6 +1261,17 @@ impl GuidedJob {
         self.stages.iter().all(|s| matches!(s.status, StageStatus::Done | StageStatus::Skipped))
     }
 
+    /// The stage an error stopped the job at, when nothing is open (Q6600): the job has ended
+    /// there and runs no further on its own. Never done (nothing was built after it), never
+    /// waiting (no stage runs and no question is open); a correction or an answer that runs the
+    /// stage again goes on from it.
+    pub fn stopped_at(&self) -> Option<&StageState> {
+        if self.next_question().is_some() {
+            return None;
+        }
+        self.current_stage().filter(|st| st.status == StageStatus::Error)
+    }
+
     /// Fraction complete (0.0–1.0).
     pub fn progress(&self) -> f64 {
         let active: Vec<_> = self.stages.iter().filter(|s| s.status != StageStatus::Skipped).collect();
@@ -2707,6 +2718,11 @@ fn unread_sheets_question(job: &mut GuidedJob, stage: StageName, failed: &[Strin
 /// once, small fills merged ([`super::exchange::import_pdf_pages`]).
 fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     if job.sheets_loaded {
+        // Out of memory since the build read them (Q6577): back for a step that reads them,
+        // never for one of the stages after the build (they read the model).
+        if s.has_parked_sheets() && !s.sheets_stay_out {
+            s.load_all_sheets()?;
+        }
         return Ok(());
     }
     let sheets_val = match &job.sheets {
@@ -3795,6 +3811,10 @@ fn device_census(
     // Each symbol: its tag, where it is, its handle, and where its tag is printed (and how tall).
     type Symbol = (String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>);
     let mut symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups];
+    // A symbol block holding its lettering (and a leader to it) beside the symbol: the device is
+    // where its shape is drawn, not at the block's insert point (Q6604).
+    let mut shapes = super::symbolshape::BlockShapes::new(d);
+    let mut on_shape: BTreeSet<u64> = BTreeSet::new();
     for e in store.iter() {
         let g = group_of(e.handle.0);
         if let Some(v) = objects.get_mut(g)
@@ -3810,8 +3830,15 @@ fn device_census(
                 let tag_at = attr
                     .map(|a| (a.text.insert.xy(), a.text.height))
                     .filter(|(p, h)| p.x.is_finite() && p.y.is_finite() && (p.x != 0.0 || p.y != 0.0) && h.is_finite() && *h > 0.0);
+                let at = match shapes.spot(ins) {
+                    Some(p) => {
+                        on_shape.insert(e.handle.0);
+                        p
+                    }
+                    None => ins.insert.xy(),
+                };
                 if let Some(v) = symbols.get_mut(g) {
-                    v.push((tag, ins.insert.xy(), e.handle, tag_at));
+                    v.push((tag, at, e.handle, tag_at));
                 }
             }
             cadaddy_doc::EntityKind::Text(t) => {
@@ -4726,6 +4753,12 @@ fn device_census(
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
         *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
+    }
+    // A device on its symbol's drawn shape off the block's insert point says so (Q6604).
+    for dv in c.placed.iter_mut().filter(|dv| dv.spot.is_empty()) {
+        if cadaddy_doc::Handle::parse_hex(&dv.handle).is_some_and(|h| on_shape.contains(&h.0)) {
+            dv.spot = super::symbolshape::SHAPE_SPOT_BASIS.to_string();
+        }
     }
     // Replicate devices on typical-floor sheets: a sheet covering levels [2,3,4] places its
     // devices on each of those levels (the primary is already placed; clone for the rest).
@@ -7001,15 +7034,97 @@ fn buildings_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> R
     Ok(())
 }
 
+thread_local! {
+    /// The working sets the build on this thread holds for its later steps, by name (how many of
+    /// each): each step's progress names them beside the memory, so a step whose memory stays up
+    /// says what is still held (Q6578).
+    static BUILD_HELD: std::cell::RefCell<BTreeMap<&'static str, usize>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// One working set of the build, named among those held ([`build_held`]) until it is dropped.
+struct Held(&'static str);
+
+impl Held {
+    fn new(what: &'static str) -> Self {
+        BUILD_HELD.with(|h| *h.borrow_mut().entry(what).or_default() += 1);
+        Held(what)
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        BUILD_HELD.with(|h| {
+            let mut h = h.borrow_mut();
+            if let Some(n) = h.get_mut(self.0) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    h.remove(self.0);
+                }
+            }
+        });
+    }
+}
+
+/// The working sets the build holds now for its later steps.
+fn build_held() -> Vec<&'static str> {
+    BUILD_HELD.with(|h| h.borrow().keys().copied().collect())
+}
+
+/// A working set the build reads in several steps (sheet pages read off the drawing or the
+/// prints), named while it is held. Each is dropped once the last step that reads it has run:
+/// held to the end of the stage, they kept about 0.8 GB of a four-storey print set's pages and
+/// placer through the steps after their last reader, where the job's memory peaks (Q6578).
+struct Kept<T> {
+    value: T,
+    _held: Held,
+}
+
+impl<T> Kept<T> {
+    fn new(what: &'static str, value: T) -> Self {
+        Kept { value, _held: Held::new(what) }
+    }
+}
+
+impl<T> std::ops::Deref for Kept<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+/// Where a sheet point goes on its level's plan, as the build keeps it (its sheets' linework,
+/// grids and fits): named among the working sets held while it is ([`Held`]).
+type SheetPlacer = Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>;
+
+/// `place` as the build keeps it: named "sheet placer" among the held working sets while it is.
+fn held_placer(place: impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + 'static) -> SheetPlacer {
+    let held = Held::new("sheet placer");
+    Box::new(move |at: [f64; 2], level: &str| {
+        let _held = &held;
+        place(at, level)
+    })
+}
+
 fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Instant) {
     let secs = started.elapsed().as_secs_f64();
-    let line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
-    report_progress(s, json!({"stage": "bim_build", "step": step, "elapsed_s": secs}), &line);
     // What the step changed in the built model goes into its record (Q6403).
     super::buildrec::step(s, step);
     // The caches the step made for the drawing as it was go: the next step makes what it uses
     // again from the model as it is now (the build's footprint climbed step by step, Q6389).
     release_stage_caches();
+    // The memory the step left and the working sets still held for later steps (Q6578: the
+    // step whose memory stays up, and what it holds).
+    let held = build_held();
+    let mut data = json!({"stage": "bim_build", "step": step, "elapsed_s": secs, "held": held});
+    let mut line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
+    if let Some((now, _)) = super::memstat::process_mb() {
+        data["memory_mb"] = json!(now);
+        line.push_str(&format!(" (memory {now} MB)"));
+    }
+    if !held.is_empty() {
+        line.push_str(&format!(" (held for later steps: {})", held.join(", ")));
+    }
+    report_progress(s, data, &line);
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -7019,7 +7134,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut panel_top: Option<(f64, String)> = None;
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
-    let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
+    let mut placer: Option<SheetPlacer> = None;
     // How the placer put each sheet onto its level's plan (or why it couldn't), for the result.
     let mut placer_log: Option<PlacerLog> = None;
     // The building's shell first: each storey's outline from its exterior walls, before anything
@@ -7256,7 +7371,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     .clone();
                 let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference);
                 placer_log = Some(log);
-                let sim = placer.insert(Box::new(place));
+                let sim = placer.insert(held_placer(place));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
                 // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
@@ -7919,7 +8034,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         ));
     }
     // (A set with no devices read yet still has its plans searched for the symbol library's.)
-    let legend_pages = legend_pages(s.doc()?, job);
+    let legend_pages = Kept::new("legend pages", legend_pages(s.doc()?, job));
     let typical = typical_view_marks(s.doc()?, job, &legend_pages);
     if !typical.added.is_empty() {
         let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
@@ -8076,7 +8191,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let (place, log) =
                         arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
                     placer_log = Some(log);
-                    placer = Some(Box::new(place));
+                    placer = Some(held_placer(place));
                 }
                 let Some(sim_sheet) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
                 // A typical room's view is no part of a floor: its devices go into the rooms of its
@@ -8982,6 +9097,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // (bim.build wraps model.build but constructs its own result without those counts.)
     // Q6029 MUST 3: pass a configurable time budget (default 20 min).
     bim_step(s, job, "devices placed", t);
+    // The legend sheets were read for the devices: no later step reads them.
+    drop(legend_pages);
     let t = web_time::Instant::now();
     // The light fixture schedule into the spec before the model is built: the luminaires'
     // mounting heights can come from its rows.
@@ -9393,8 +9510,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "room volumes built", t);
     // The panel schedules (each circuit's breaker and its type), for the devices' props.
     let t = web_time::Instant::now();
-    let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
-    let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
+    let pages = Kept::new("electrical pages", s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default());
+    let sched_pages = Kept::new("panel schedule pages", s.doc().map(|d| panel_pages(d, job)).unwrap_or_default());
     // (the schedules the sheet-index answers gave, Q6517, and those an answer gave off a sheet
     // lettered in strokes, Q6516)
     let schedules = super::strokesheets::with_answered_panels(
@@ -9420,7 +9537,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The load summaries and demand calculations beside them (the load calculation's check).
         let lc = super::loadcalc::rules();
         let mut summaries: Vec<cadaddy_walk3d::LoadSummary> = Vec::new();
-        for (number, sub) in &sched_pages {
+        for (number, sub) in sched_pages.iter() {
             summaries.extend(super::loadcalc::read_summaries(&cadaddy_mepfix::sheet_facts::texts(sub), number, &lc));
         }
         if !summaries.is_empty() {
@@ -9450,6 +9567,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
         super::strokesheets::table_questions(job, &sched_pages, &sp.mep.panel_schedules, &sp.mep.fixture_schedule, &mut result);
     }
+    // The panel schedules are read: their sheets go.
+    drop(sched_pages);
     // The electrical gear the plans don't place, from the schedules, the one-line and the gear
     // submittals, in its rooms; the feeders between; the gear checked (entry, lugs) and reviewed.
     let t = web_time::Instant::now();
@@ -9500,6 +9619,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     bim_step(s, job, "dampers", t);
     site_then_documented_objects(s, job, &pages, placer.as_deref(), &mut result);
+    // Everything the sheets place is placed: the placer and the sheet linework it fits go.
+    drop(placer);
     // The feeders' conduit, gear to gear (proposed).
     let t = web_time::Instant::now();
     if let Err(e) = feeder_step(s, job, &mut result) {
@@ -9737,6 +9858,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["lighting_error"] = json!(e.to_string());
     }
     bim_step(s, job, "lighting", t);
+    // The electrical sheets were read for the gear, keynotes, dampers, site work, underground
+    // and lighting: none of the steps after reads them.
+    drop(pages);
     // Each wall device placed relative to its named wall face (Q6174 walllayout).
     let t_layout = web_time::Instant::now();
     match super::walllayout::rehost(s, 0.0, None) {
@@ -32554,6 +32678,40 @@ fn release_stage_caches() {
     cadaddy_io::pdf_read::clear_cache();
 }
 
+/// The stages that read the model the build made, never the print sheets' linework: they run with
+/// the sheets out of memory (Q6577).
+fn reads_the_model_only(stage: StageName) -> bool {
+    matches!(stage, StageName::Takeoff | StageName::Estimate | StageName::Clash)
+}
+
+/// Once the build has read the print sheets, they go out of memory, parked as the .cdy file stores
+/// them ([`Session::put_out_sheets`]), for the rest of the job's command: the stages after it read
+/// the model's elements, and the job held every sheet to its end (about 1.1 GB on a four-storey
+/// set, Q6577). The build's checkpoint writes them as stored (not encoded again); a step that
+/// reads them again loads them ([`ensure_sheets_loaded`]); and a headless session has them back
+/// when the command ends ([`Session::sheets_back_after_command`]).
+fn sheets_out_after_build(s: &mut Session, job: &mut GuidedJob) {
+    if !job.sheets_loaded || s.has_parked_sheets() {
+        return;
+    }
+    let started = web_time::Instant::now();
+    // The print set's sheets come from the job's state in the drawing.
+    let out = save_job(s, job).and_then(|()| s.put_out_sheets());
+    match out {
+        Ok(0) => {}
+        Ok(n) => {
+            // Nothing the job runs between its stages loads them again.
+            s.sheets_stay_out = true;
+            let secs = started.elapsed().as_secs_f64();
+            let memory = super::memstat::process_mb().map_or_else(String::new, |(now, peak)| format!(" (memory {now} MB, peak {peak} MB)"));
+            progress_line(&format!("  print sheets out of memory: {n} objects in {secs:.1} s{memory}"));
+            let stage = job.current_stage().map(|st| st.name);
+            job.audit("sheets_out", "pipeline", None, stage, Some(json!({"objects": n, "seconds": secs})));
+        }
+        Err(e) => progress_line(&format!("  the print sheets stay in memory: {e}")),
+    }
+}
+
 /// Stop the job at `stage` for a cancel: the stage waits (pending) and job.next runs it.
 fn stop_cancelled(s: &mut Session, job: &mut GuidedJob, stage: StageName) {
     JOB_CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -32626,6 +32784,13 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         // (Q6362). While it runs (again), they are traced.
         let settled = if stage_name == StageName::Rooms { None } else { settled_rooms_of(job) };
         super::perceive::geometry::settle_rooms(s, settled);
+        // A stage after the build runs with the sheets out of memory (a job resumed there from a
+        // checkpoint has them all in), and nothing it runs loads them (Q6577).
+        let model_only = reads_the_model_only(stage_name);
+        if model_only {
+            sheets_out_after_build(s, job);
+        }
+        s.sheets_stay_out = model_only;
         let result = match stage_name {
             StageName::Import => run_import(s, job),
             StageName::Classify => run_classify(s, job),
@@ -32638,8 +32803,17 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             StageName::Estimate => run_estimate(s, job),
             StageName::Clash => run_clash(s, job),
         };
+        // Held out until the next stage says otherwise (what the job runs between them).
+        if !model_only {
+            s.sheets_stay_out = false;
+        }
         super::perceive::geometry::settle_rooms(s, None);
         release_stage_caches();
+        // The build has read the sheets: out of memory before its checkpoint is written, for
+        // the rest of the job's command.
+        if stage_name == StageName::BimBuild && result.is_ok() {
+            sheets_out_after_build(s, job);
+        }
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(st) = job.stage_mut(stage_name) {
             st.elapsed_ms = Some(ms);
@@ -32866,6 +33040,17 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(existing) = load_job(s)?
         && !existing.is_done()
     {
+        // One an error stopped isn't running (Q6600): it says where it stopped and how to go on.
+        if let Some(st) = existing.stopped_at() {
+            let why: String = st.error.as_deref().unwrap_or("").chars().take(300).collect();
+            return Err(bad(
+                "job.start",
+                format!(
+                    "the job in this drawing stopped at {}: {why} — job.status says how to go on from it; another job starts in a new drawing (new)",
+                    st.name.label()
+                ),
+            ));
+        }
         let hint = if p.get("auto").and_then(Value::as_bool) == Some(true) && !existing.auto {
             "a job is already running — job.set_mode {auto: true} runs it on unattended (answers given are kept); job.status shows it"
         } else {
@@ -33183,8 +33368,9 @@ fn cmd_next_inner(s: &mut Session, _p: &Value) -> Result<Value> {
         save_job(s, &job)?;
         rerun = reset;
     }
-    // Try to advance if no questions pending.
-    if job.next_question().is_none() && !job.is_done() {
+    // Try to advance if no questions pending (a job an error stopped stays stopped: nothing
+    // runs until a correction or an answer runs its stage again).
+    if job.next_question().is_none() && !job.is_done() && job.stopped_at().is_none() {
         advance_pipeline(s, &mut job)?;
         save_job(s, &job)?;
     }
@@ -33197,8 +33383,48 @@ fn cmd_next_inner(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// What `job.next` says: the next question, done, or waiting.
+/// What a job an error stopped says (Q6600), in `job.next`, `job.answer` and `job.status`: it
+/// has ended at that stage, with the error and how to go on. Terminal: a client that asks again
+/// gets the same answer, never `waiting` (no stage runs, no question is open), and never `done`
+/// (nothing after the stage was built: Q6382).
+pub fn stopped_value(job: &GuidedJob) -> Option<Value> {
+    let st = job.stopped_at()?;
+    let message = st.error.clone().unwrap_or_default();
+    // How to go on: the actions of the stage's blocking findings, else the stage's own.
+    let mut actions: Vec<String> = Vec::new();
+    for f in job.findings.iter().filter(|f| f.stage == st.name && f.blocking) {
+        for a in &f.actions {
+            if !actions.contains(a) {
+                actions.push(a.clone());
+            }
+        }
+    }
+    if actions.is_empty() {
+        actions = stage_error_actions(st.name);
+    }
+    Some(json!({
+        "stage": st.name.label(),
+        "message": message,
+        "terminal": true,
+        "how_to_go_on": actions,
+        "note": "the job stopped here and runs no further on its own: job.next answers the same until a correction or an answer runs the stage again",
+    }))
+}
+
+/// What `job.next` says: the next question, done, stopped by an error, or waiting.
 fn cmd_next_value(s: &mut Session, job: &GuidedJob) -> Value {
+    if let Some(stopped) = stopped_value(job) {
+        return json!({
+            "done": false,
+            "waiting": false,
+            "status": "error",
+            "progress": job.progress(),
+            "stage": stopped["stage"],
+            // The message, as the error of a stage was said before (Q6382).
+            "error": stopped["message"],
+            "stopped": stopped,
+        });
+    }
     match job.next_question() {
         Some(q) => json!({
             "question": question_value(job, q),
@@ -33214,19 +33440,13 @@ fn cmd_next_value(s: &mut Session, job: &GuidedJob) -> Value {
                 "summary": job_summary(s, job, stats.as_ref()),
             })
         }
-        None => {
-            let mut v = json!({
-                "waiting": true,
-                "progress": job.progress(),
-                "stage": job.current_stage().map(|s| s.name.label()),
-                "status": job.current_stage().map(|s| format!("{:?}", s.status)),
-            });
-            // A stage stopped by an error says it (Q6382: none of the sheets could be read).
-            if let Some(e) = job.current_stage().filter(|st| st.status == StageStatus::Error).and_then(|st| st.error.as_ref()) {
-                v["error"] = json!(e);
-            }
-            v
-        }
+        // A stage still running (another caller's job.next, a job run off the UI thread).
+        None => json!({
+            "waiting": true,
+            "progress": job.progress(),
+            "stage": job.current_stage().map(|s| s.name.label()),
+            "status": job.current_stage().map(|s| format!("{:?}", s.status)),
+        }),
     }
 }
 
@@ -33655,11 +33875,23 @@ fn cmd_answer_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 "summary": job_summary(s, &job, stats.as_ref()),
             })
         }
-        None => json!({
-            "answered": answered,
-            "progress": job.progress(),
-            "stage": job.current_stage().map(|s| s.name.label()),
-        }),
+        None => match stopped_value(&job) {
+            // The answer's re-run ended on an error: the job stopped there (Q6600).
+            Some(stopped) => json!({
+                "answered": answered,
+                "done": false,
+                "status": "error",
+                "progress": job.progress(),
+                "stage": stopped["stage"],
+                "error": stopped["message"],
+                "stopped": stopped,
+            }),
+            None => json!({
+                "answered": answered,
+                "progress": job.progress(),
+                "stage": job.current_stage().map(|s| s.name.label()),
+            }),
+        },
     };
     let effects: Vec<&str> = applied.iter().map(|a| a.effect.as_str()).collect();
     out["effect"] = match (batch, effects.as_slice()) {
@@ -34150,6 +34382,10 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     // The stage that failed and why: the CLI exits non-zero on it.
     if let Some(st) = job.stages.iter().find(|st| st.status == StageStatus::Error) {
         v["error"] = json!({"stage": st.name.label(), "message": st.error.clone().unwrap_or_default()});
+    }
+    // Ended there, nothing open: terminal (Q6600).
+    if let Some(stopped) = stopped_value(job) {
+        v["stopped"] = stopped;
     }
     if let Some(at) = job.cancelled {
         v["cancelled"] = json!({"stage": at.label(), "note": "job.next goes on from there"});
@@ -36067,6 +36303,81 @@ mod tests {
         let hp = on("Q-1").into_iter().find(|d| d.tag == "HP").unwrap_or_else(|| panic!("the heat pump's connection: {:?}", job.devices));
         assert_eq!((hp.kind.as_str(), hp.equipment.as_str()), ("equipment connection", "HP-3"), "{hp:?}");
         assert_eq!(r["device_types"]["unlisted_repeated"]["A"], json!(3), "the mechanical As are a question: {:#}", r["device_types"]);
+    }
+
+    /// Q6604: a symbol block the import made with its lettering in it (a downlight's circle and
+    /// the circuit number drawn as strokes beside it, the insert point between them): the device
+    /// stands on the circle, never on the lettering, and says why; a block with no lettering
+    /// beside its shape keeps its insert point.
+    #[test]
+    fn a_symbol_block_holding_its_lettering_places_its_device_on_the_shape() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}]}));
+        job.sheets_loaded = true;
+        let texts = [
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[("A", 100.0, 300.0), ("A", 140.0, 300.0)]);
+        {
+            let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+            // The circle 6 left of the block's base point, two stroke letters to its right.
+            let mut b = Block::new("PDF-SYM-2");
+            let mut kinds = vec![EntityKind::Circle(Circle { center: Vec3::new(-6.0, 0.0, 0.0), radius: 4.0 })];
+            for x in [1.0, 3.7] {
+                kinds.push(EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x, -1.5, 0.0), b: Vec3::new(x + 0.9, 1.5, 0.0) }));
+                kinds.push(EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x + 0.9, 1.5, 0.0), b: Vec3::new(x + 1.8, -1.5, 0.0) }));
+            }
+            for k in kinds {
+                b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: Common::default(), kind: k });
+            }
+            d.blocks.insert("PDF-SYM-2".into(), std::sync::Arc::new(b));
+            for x in [300.0, 400.0] {
+                let ins = Insert {
+                    block: "PDF-SYM-2".into(),
+                    insert: Vec3::new(x, 300.0, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: vec![Attrib {
+                        tag: "TAG".into(),
+                        text: text("B", x - 6.0, 306.0, 2.0),
+                        invisible: false,
+                        constant: false,
+                        prompt: String::new(),
+                        props: AttribProps::default(),
+                        multiline: None,
+                        modes: AttribModes::default(),
+                    }],
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                    clip: None,
+                };
+                d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Insert(ins)).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 2000.0, 1000.0], ..region("Q-1", "1", "E", "plan", 0.0) });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let of = |tag: &str| job.devices.iter().filter(|d| d.sheet == "Q-1" && d.tag == tag).collect::<Vec<_>>();
+        let b = of("B");
+        assert_eq!(b.len(), 2, "{:?}", job.devices);
+        for (dv, x) in b.iter().zip([294.0, 394.0]) {
+            assert!((dv.at[0] - x).abs() < 1e-6 && (dv.at[1] - 300.0).abs() < 1e-6, "on the circle, not the lettering: {dv:?}");
+            assert_eq!(dv.spot, super::super::symbolshape::SHAPE_SPOT_BASIS, "{dv:?}");
+        }
+        let a = of("A");
+        assert_eq!(a.len(), 2, "{:?}", job.devices);
+        assert!(a.iter().any(|d| d.at == [100.0, 300.0]) && a.iter().all(|d| d.spot.is_empty()), "a plain symbol keeps its point: {a:?}");
     }
 
     /// fix-grid-bubble-as-fixture: an electrical plan showing one lettered grid, D, past the

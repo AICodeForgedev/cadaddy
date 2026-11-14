@@ -132,6 +132,25 @@ impl ModelRecords {
     fn index_of(&self, id: u64) -> Option<usize> {
         self.records.iter().position(|(i, _)| *i == id)
     }
+    /// The drawings the records keep as their builds left them: a print set's sheets go out of
+    /// memory in them too ([`crate::Session::put_out_sheets`]). `f` gives the drawing a build's
+    /// drawing becomes (none: unchanged); only a record whose drawing changes is copied (records
+    /// are shared with copies of the session), and the drawings replaced are returned.
+    pub(crate) fn replace_built(
+        &mut self,
+        mut f: impl FnMut(&std::sync::Arc<Drawing>) -> Option<std::sync::Arc<Drawing>>,
+    ) -> Vec<std::sync::Arc<Drawing>> {
+        let mut old = Vec::new();
+        for (_, r) in &mut self.records {
+            let Some(now) = r.built.as_ref().and_then(|b| f(&b.0)) else {
+                continue;
+            };
+            if let Some(b) = std::sync::Arc::make_mut(r).built.as_mut() {
+                old.push(std::mem::replace(&mut b.0, now));
+            }
+        }
+        old
+    }
     /// The record drawing state `d` comes from: none when it comes from no build (or its
     /// build's record is no longer kept); the last build's when the state was never followed
     /// (a drawing changed outside any command).

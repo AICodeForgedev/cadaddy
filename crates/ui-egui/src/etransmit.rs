@@ -20,6 +20,16 @@ fn id() -> egui::Id {
     egui::Id::new("cadaddy-etransmit-dialog")
 }
 
+/// The listing worked out for an opening of the dialog and its options.
+fn listing_id() -> egui::Id {
+    egui::Id::new("cadaddy-etransmit-listing")
+}
+
+/// Which opening of the dialog this is: each lists the drawing afresh.
+fn opening_id() -> egui::Id {
+    egui::Id::new("cadaddy-etransmit-opening")
+}
+
 fn params(st: &State) -> Value {
     json!({ "layout": if st.flat { "flat" } else { "folders" }, "report": !st.no_report })
 }
@@ -36,7 +46,17 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
     let mut st: State = ctx.data(|d| d.get_temp(id())).unwrap_or_default();
     if st.listing.is_none() {
-        st.listing = Some(app.session.execute("etransmit", &params(&st)).map_err(|e| e.user_message()));
+        // Listing what the package holds reads the whole set: on a worker thread, the dialog
+        // open meanwhile (Q6585). Each opening lists afresh.
+        let p = params(&st);
+        let opening: u64 = ctx.data(|d| d.get_temp(opening_id())).unwrap_or_default();
+        let key = {
+            let p = p.clone();
+            move |_: &CadApp| (opening, p.clone())
+        };
+        let listed =
+            crate::asked::worked_out(app, ctx, listing_id(), "etransmit", key, move |s| s.execute("etransmit", &p).map_err(|e| e.user_message()));
+        st.listing = listed.map(|l| (*l).clone());
     }
     let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
     let stem = std::path::Path::new(&title)
@@ -116,7 +136,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 Some(Err(e)) => {
                     ui.label(RichText::new(e).color(t.warn));
                 }
-                None => {}
+                None => crate::asked::working(ui),
             }
             ui.separator();
             ui.horizontal(|ui| {
@@ -163,7 +183,11 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if *open {
         ctx.data_mut(|d| d.insert_temp(id(), st));
     } else {
-        ctx.data_mut(|d| d.remove::<State>(id()));
+        ctx.data_mut(|d| {
+            d.remove::<State>(id());
+            let opening: u64 = d.get_temp(opening_id()).unwrap_or_default();
+            d.insert_temp(opening_id(), opening.wrapping_add(1));
+        });
     }
 }
 

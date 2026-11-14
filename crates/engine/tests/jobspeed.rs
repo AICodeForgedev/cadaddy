@@ -174,7 +174,9 @@ fn a_running_job_reports_each_stage_and_sheet() {
     }
     // A line per page the job imports: each sheet once (the discipline copies are dropped by
     // the sheet index or reported "not imported again").
-    let sheet_lines: Vec<&String> = lines.iter().filter(|l| l.contains(": sheet ")).collect();
+    // (": sheet " and a page number: a step's held working sets name the "sheet placer".)
+    let sheet_lines: Vec<&String> =
+        lines.iter().filter(|l| l.split(": sheet ").skip(1).any(|r| r.starts_with(|c: char| c.is_ascii_digit()))).collect();
     let total = sheet_lines.len();
     assert!(total >= sheets && total <= sheets + mech, "a line per page: {sheet_lines:?}");
     assert!(sheet_lines.iter().all(|l| l.contains(&format!("/{total} "))), "{sheet_lines:?}");

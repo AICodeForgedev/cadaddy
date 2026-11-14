@@ -239,6 +239,7 @@ pub mod spell;
 pub mod stairs;
 pub mod strokesheets;
 pub mod symbol;
+pub(crate) mod symbolshape;
 mod takeoff;
 pub(crate) mod throughwall;
 pub mod tours;

@@ -47,7 +47,7 @@ fn with_a_model_it_is_the_models_takeoff_per_level_trade_and_type() {
     assert_eq!(r["source"], "model", "{r}");
     assert_eq!(r["command"], "bim.takeoff");
     let cols: Vec<&str> = r["columns"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert_eq!(cols, ["Level", "Trade", "System", "Category", "Type", "Size", "Unit", "Qty", "Elements"]);
+    assert_eq!(cols, ["Level", "Trade", "System", "Category", "Type", "Size", "Unit", "Qty", "Elements", "Source"]);
     let rows = rows(&r);
     assert!(!rows.is_empty() && rows.len() == r["total_rows"].as_u64().unwrap() as usize, "{r}");
     assert!(rows.iter().all(|row| row.len() == cols.len()));
@@ -58,8 +58,13 @@ fn with_a_model_it_is_the_models_takeoff_per_level_trade_and_type() {
     for (l, row) in lines.iter().zip(&rows) {
         assert_eq!(l["level"].as_str().unwrap_or_default(), row[0]);
         assert_eq!(l["trade"].as_str().unwrap_or_default(), row[1]);
-        assert_eq!(l["item"].as_str().unwrap_or_default(), row[4]);
+        // The item, with the product that splits its lines (a type mark) beside it.
+        assert!(row[4].starts_with(l["item"].as_str().unwrap_or_default()), "{row:?}");
+        assert_eq!(l["made"].as_str().unwrap_or_default(), row[9]);
     }
+    // Every row is one line: no two read the same.
+    let distinct: std::collections::BTreeSet<&Vec<String>> = rows.iter().collect();
+    assert_eq!(distinct.len(), rows.len(), "{rows:?}");
     assert!(rows.iter().any(|row| row[3].contains("wall")), "walls are taken off: {rows:?}");
     assert!(r["by_trade"].as_object().is_some_and(|o| !o.is_empty()), "{r}");
     // It reports; it keeps nothing in the drawing.
@@ -91,7 +96,7 @@ fn it_exports_csv_and_xlsx_through_the_output_guard() {
     let r = s.execute("automation.takeoff", &json!({"path": csv.to_string_lossy()})).unwrap();
     assert_eq!(r["format"], "csv");
     let text = std::fs::read_to_string(&csv).unwrap();
-    assert!(text.starts_with("Level,Trade,System,Category,Type,Size,Unit,Qty,Elements\n"), "{text}");
+    assert!(text.starts_with("Level,Trade,System,Category,Type,Size,Unit,Qty,Elements,Source\n"), "{text}");
     assert_eq!(text.lines().count(), r["total_rows"].as_u64().unwrap() as usize + 1);
     // An existing file is refused without force, replaced with it.
     let e = s.execute("automation.takeoff", &json!({"path": csv.to_string_lossy()})).unwrap_err().to_string();

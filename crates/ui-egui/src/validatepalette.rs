@@ -100,10 +100,9 @@ impl Default for Choices {
 }
 
 /// What the panel shows, read from the engine once per drawing revision (kept shared, behind an
-/// `Arc`).
+/// `Arc`), on a worker thread (Q6585): the scores read the model against every print.
 #[derive(Clone, Debug, Default)]
 struct View {
-    key: (u64, u64, bool),
     /// (number or name, label) of each model room.
     rooms: Vec<(String, String)>,
     levels: Vec<String>,
@@ -136,10 +135,10 @@ fn doc_key(app: &CadApp) -> (u64, u64) {
 }
 
 /// Every page of a paged engine list (`items` under `key`), up to `max`.
-fn pages(app: &mut CadApp, cmd: &str, mut params: Value, key: &str, max: usize) -> Vec<Value> {
+fn pages(s: &mut cadaddy_engine::Session, cmd: &str, mut params: Value, key: &str, max: usize) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for _ in 0..64 {
-        let Ok(r) = app.session.execute(cmd, &params) else { break };
+        let Ok(r) = s.execute(cmd, &params) else { break };
         out.extend(r[key].as_array().into_iter().flatten().cloned());
         let next = r.get("next").or_else(|| r.get("next_cursor")).cloned().unwrap_or(Value::Null);
         let cursor = match &next {
@@ -156,9 +155,9 @@ fn pages(app: &mut CadApp, cmd: &str, mut params: Value, key: &str, max: usize) 
     out
 }
 
-fn read_view(app: &mut CadApp, key: (u64, u64, bool), all: bool) -> View {
-    let mut v = View { key, ..View::default() };
-    let areas = pages(app, "validate.areas", json!({"kind": "room", "limit": 500}), "areas", MAX_ROOMS);
+fn read_view(s: &mut cadaddy_engine::Session, all: bool) -> View {
+    let mut v = View::default();
+    let areas = pages(s, "validate.areas", json!({"kind": "room", "limit": 500}), "areas", MAX_ROOMS);
     for a in &areas {
         let number = a["number"].as_str().or_else(|| a["name"].as_str()).unwrap_or_default().to_string();
         if number.is_empty() || v.rooms.iter().any(|(n, _)| *n == number) {
@@ -178,10 +177,10 @@ fn read_view(app: &mut CadApp, key: (u64, u64, bool), all: bool) -> View {
             v.levels.push(l.to_string());
         }
     }
-    v.rules = pages(app, "validate.rules", json!({"detail": false, "limit": 50}), "rules", MAX_RULES);
-    v.status = app.session.execute("validate.status", &json!({})).ok();
+    v.rules = pages(s, "validate.rules", json!({"detail": false, "limit": 50}), "rules", MAX_RULES);
+    v.status = s.execute("validate.status", &json!({})).ok();
     let status = if all { "all" } else { "open" };
-    v.findings = pages(app, "review.list", json!({"kind": "validation", "status": status, "limit": 50}), "items", MAX_FINDINGS)
+    v.findings = pages(s, "review.list", json!({"kind": "validation", "status": status, "limit": 50}), "items", MAX_FINDINGS)
         .into_iter()
         // The judge's findings (the bim.validate pre-screen's own items are in the review queue).
         .filter(|i| i["id"].as_str().is_some_and(|id| id.starts_with("RV-J")))
@@ -244,16 +243,13 @@ enum Act {
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let mut c: Choices = ctx.data(|d| d.get_temp(choices_id())).unwrap_or_default();
-    let (uid, revision) = doc_key(app);
-    let key = (uid, revision, c.all);
-    // Shared: a frame reads it without copying every finding and rule (Q6482).
-    let view: std::sync::Arc<View> = match ctx.data(|d| d.get_temp::<std::sync::Arc<View>>(view_id())) {
-        Some(v) if v.key == key => v,
-        _ => {
-            let v = std::sync::Arc::new(read_view(app, key, c.all));
-            ctx.data_mut(|d| d.insert_temp(view_id(), std::sync::Arc::clone(&v)));
-            v
-        }
+    let all = c.all;
+    // Shared: a frame reads it without copying every finding and rule (Q6482). Worked out on a
+    // worker thread: it reads the whole set (Q6585).
+    let Some(view) = crate::asked::worked_out(app, &ctx, view_id(), "validate.status", move |app| (doc_key(app), all), move |s| read_view(s, all))
+    else {
+        crate::asked::working(ui);
+        return;
     };
     let t = Tokens::get();
     let mut act: Option<Act> = None;

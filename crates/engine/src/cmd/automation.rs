@@ -61,7 +61,7 @@ fn has_model(s: &Session) -> Result<bool> {
 fn model_table(s: &mut Session) -> Result<Table> {
     let r = s.execute("bim.takeoff", &json!({"group_by": "level", "keep": false}))?;
     let columns: Vec<String> =
-        ["Level", "Trade", "System", "Category", "Type", "Size", "Unit", "Qty", "Elements"].iter().map(|c| (*c).to_string()).collect();
+        ["Level", "Trade", "System", "Category", "Type", "Size", "Unit", "Qty", "Elements", "Source"].iter().map(|c| (*c).to_string()).collect();
     let mut by_trade: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let rows: Vec<Vec<String>> = r["lines"]
         .as_array()
@@ -71,16 +71,21 @@ fn model_table(s: &mut Session) -> Result<Table> {
         .map(|l| {
             let trade = text(&l["trade"]);
             *by_trade.entry(if trade.is_empty() { "other".into() } else { trade.clone() }).or_default() += 1;
+            // Every row one line: lines of one item split by their product (type mark) or by
+            // what they are by the documents (drawn, derived, inferred) say so.
+            let mark = crate::cmd::bimwork::takeoff::product_of(l);
+            let item = if mark.is_empty() { text(&l["item"]) } else { format!("{} ({mark})", text(&l["item"])) };
             vec![
                 text(&l["level"]),
                 trade,
                 text(&l["system"]),
                 text(&l["category"]),
-                text(&l["item"]),
+                item,
                 text(&l["size"]),
                 text(&l["unit"]),
                 num(&l["qty"]),
                 num(&l["element_count"]),
+                text(&l["made"]),
             ]
         })
         .collect();

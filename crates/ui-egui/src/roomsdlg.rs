@@ -15,21 +15,22 @@ fn list_id() -> egui::Id {
     egui::Id::new("rooms_palette_list")
 }
 
-fn read(app: &mut CadApp) -> Vec<Value> {
-    app.run("rooms.list", json!({ "outline": false })).ok().and_then(|r| r["rooms"].as_array().cloned()).unwrap_or_default()
+fn read(s: &mut cadaddy_engine::Session) -> Vec<Value> {
+    crate::execute_echoing(s, "rooms.list", &json!({ "outline": false })).ok().and_then(|r| r["rooms"].as_array().cloned()).unwrap_or_default()
+}
+
+/// Which reading of the rooms the palette shows: a new one each time it opens or Refresh is
+/// pressed.
+fn reading_id() -> egui::Id {
+    egui::Id::new("rooms_palette_reading")
 }
 
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = Tokens::get();
-    let cached: Option<Vec<Value>> = ctx.data(|d| d.get_temp(list_id()));
-    let rooms = match cached {
-        Some(r) => r,
-        None => {
-            let r = read(app);
-            ctx.data_mut(|d| d.insert_temp(list_id(), r.clone()));
-            r
-        }
-    };
+    // Tracing the rooms from the plans reads the whole set and can take long: worked out on a
+    // worker thread, the palette open meanwhile (Q6585).
+    let reading: u64 = ctx.data(|d| d.get_temp(reading_id())).unwrap_or_default();
+    let rooms = crate::asked::worked_out(app, ctx, list_id(), "rooms.list", move |_| reading, read);
     let metric = cadaddy_engine::sysvars::get(&app.session, "MEASUREMENT").and_then(|v| v.as_i64()) == Some(1);
     let mut action: Option<(&str, Value)> = None;
     let mut refresh = false;
@@ -40,6 +41,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .default_size(vec2(520.0, 360.0))
         .collapsible(false)
         .show(ctx, |ui| {
+            let Some(rooms) = &rooms else {
+                crate::asked::working(ui);
+                return;
+            };
             ui.horizontal(|ui| {
                 ui.label(crate::tf!("{n} rooms", n = rooms.len()));
                 if ui.button(crate::tl!("Refresh")).clicked() {
@@ -60,7 +65,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                         ui.label(RichText::new(crate::i18n::t(h)).strong());
                     }
                     ui.end_row();
-                    for r in &rooms {
+                    for r in rooms.iter() {
                         let name = r["name"].as_str().unwrap_or_default().to_string();
                         ui.label(&name);
                         ui.label(r["number"].as_str().unwrap_or("—"));
@@ -97,6 +102,6 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         app.session.echo(e);
     }
     if refresh || !*open {
-        ctx.data_mut(|d| d.remove::<Vec<Value>>(list_id()));
+        ctx.data_mut(|d| d.insert_temp(reading_id(), reading.wrapping_add(1)));
     }
 }
