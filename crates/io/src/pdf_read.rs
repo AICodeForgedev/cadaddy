@@ -5715,9 +5715,11 @@ fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<
 /// be drawn at every tag of its type, and lost where it is when its tag is not the first (Q6435).
 /// The symbol is what its instances share: a stroke drawn alike (same shape, wherever it stands)
 /// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
-/// of them, if more) and longer than the outline they share (the tag's hexagon, circle or box)
-/// is not the symbol's, and stays loose where printed. An instance sharing no outline keeps all
-/// its strokes (a symbol drawn turned).
+/// of them, if more) and more than [`FOREIGN_STROKE_OVER`] times the outline they share round
+/// the tag (its hexagon, circle or box: closed, about as wide as tall, no smaller than the tag's
+/// letters) is not the symbol's, and stays loose where printed. An instance sharing no such
+/// outline keeps all its strokes (a symbol drawn turned, a bare letter), and so does a stroke
+/// near the outline's size (a part of the symbol drawn its own way at one instance).
 fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     let need = SHARED_STROKE_MIN.max(group.len().div_ceil(SHARED_STROKE_SHARE));
     let keys: Vec<Vec<Option<StrokeKey>>> =
@@ -5733,6 +5735,7 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     }
     let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
     for (inst, of_inst) in group.iter_mut().zip(&keys) {
+        let Some(letters) = inst.nearby_text_at.map(|t| t.1).filter(|h| *h > 0.0) else { continue };
         let shared: Vec<bool> = of_inst.iter().map(|k| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need)).collect();
         let size = inst
             .stroke_indices
@@ -5741,7 +5744,12 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
             .filter(|(_, sh)| **sh)
             .filter_map(|(&si, _)| strokes.get(si))
             .filter(|s| is_outline(s))
-            .filter_map(|s| bbox(std::slice::from_ref(&s.pts)).map(extent))
+            .filter_map(|s| bbox(std::slice::from_ref(&s.pts)))
+            .filter(|b| {
+                let (w, h) = (b[2] - b[0], b[3] - b[1]);
+                w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))
+            })
+            .map(extent)
             .fold(0.0f64, f64::max);
         if size <= 0.0 {
             continue;
@@ -5750,7 +5758,9 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
             .stroke_indices
             .iter()
             .zip(&shared)
-            .filter(|(si, sh)| **sh || strokes.get(**si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= size))
+            .filter(|(si, sh)| {
+                **sh || strokes.get(**si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size)
+            })
             .map(|(&si, _)| si)
             .collect();
         // The symbol stays where it was found (its centre is where the readers place the device).
@@ -5762,6 +5772,10 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
 const SHARED_STROKE_MIN: usize = 2;
 /// … and in one in this many of them (rounded up), if more.
 const SHARED_STROKE_SHARE: usize = 4;
+/// A stroke more than this many times the shared outline round the tag is not the symbol's.
+const FOREIGN_STROKE_OVER: f64 = 2.0;
+/// The outline round a tag is at least this wide for its height (and the other way round).
+const OUTLINE_MIN_ASPECT: f64 = 0.5;
 /// Most points of a stroke its shape is told by.
 const MAX_KEY_POINTS: usize = 64;
 /// Strokes drawn alike match to this (points).

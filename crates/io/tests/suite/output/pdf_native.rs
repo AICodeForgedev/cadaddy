@@ -664,8 +664,8 @@ fn a_symbols_tag_stays_where_it_was_printed() {
 #[test]
 fn a_tag_drawn_beside_its_window_keeps_the_window_and_lends_it_to_no_other_tag() {
     // Six tagged crossed diamonds of one type (W); one of them also has the window it marks drawn
-    // just left of it (a frame rectangle across the wall and a pane line), close enough to fall
-    // in its symbol. That window is printed once: it is drawn once, where it is, as loose lines
+    // just left of it (a frame rectangle across the wall and a pane line, each well over twice
+    // the diamond's size), close enough to fall in its symbol. That window is printed once: it is drawn once, where it is, as loose lines
     // (the wall reader's), and the symbol is the diamond the tags share (before Q6435 every tag
     // drew the first one's strokes: six windows when the windowed tag came first, none when it
     // came later).
@@ -684,17 +684,17 @@ fn a_tag_drawn_beside_its_window_keeps_the_window_and_lends_it_to_no_other_tag()
                     format!(
                         "{} {} m {} {} l {} {} l {} {} l h S {} {} m {} {} l S ",
                         cx - 11,
-                        cy - 10,
+                        cy - 15,
                         cx - 7,
-                        cy - 10,
+                        cy - 15,
                         cx - 7,
-                        cy + 10,
+                        cy + 15,
                         cx - 11,
-                        cy + 10,
+                        cy + 15,
                         cx - 9,
-                        cy - 10,
+                        cy - 15,
                         cx - 9,
-                        cy + 10
+                        cy + 15
                     )
                     .as_bytes(),
                 );
@@ -745,6 +745,38 @@ fn a_tag_drawn_beside_its_window_keeps_the_window_and_lends_it_to_no_other_tag()
         let got = frames(windowed);
         assert!(got.len() == 1 && got.iter().all(|f| f.2), "the window tag at {windowed}: window frames drawn at {got:?}");
     }
+}
+
+#[test]
+fn a_tags_symbol_keeps_a_stroke_near_its_size_or_with_no_outline_round_the_tag() {
+    // Six tagged symbols of one type with one odd stroke at a single instance, beside the tag
+    // (a leader, a stub of wall). The odd stroke is the symbol's own as before Q6435 when it is
+    // under twice the outline round the tag (a crossed diamond) or when the instances share no
+    // outline at least as big as their letters (a dot and a stroke): only a stroke far bigger than
+    // the outline round its tag is foreign to the symbol.
+    let draw = |outline: bool, odd: i32| -> usize {
+        let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+        for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
+            let s = if outline { 6 } else { 1 };
+            for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+                content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+            }
+            if i == 0 {
+                content.extend_from_slice(format!("{} {} m {} {} l S ", cx - 9, cy - odd / 2, cx - 9, cy + odd / 2).as_bytes());
+            }
+            content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (P1) Tj ET ", cx + 10, cy).as_bytes());
+        }
+        content.extend_from_slice(b"Q");
+        let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+        let d = &r.drawing;
+        assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+        // the odd stroke as loose linework (an upright line as long as it, in points or inches)
+        let long = |dy: f64| [f64::from(odd), f64::from(odd) / 72.0].iter().any(|n| (dy / n - 1.0).abs() < 0.05);
+        d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - l.b.x).abs() < 1e-3 && long((l.a.y - l.b.y).abs()))).count()
+    };
+    assert_eq!(draw(true, 18), 0, "a stroke 1.5 times the diamond stays the symbol's");
+    assert_eq!(draw(false, 18), 0, "no outline round the tag: the cluster is the symbol");
+    assert_eq!(draw(true, 30), 1, "a stroke 2.5 times the diamond is foreign: loose where printed");
 }
 
 #[test]
