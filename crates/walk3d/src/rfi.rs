@@ -12,7 +12,13 @@
 //!   soffit uses.
 //!
 //! [`list`] puts both together (the readers' items first; a check item that says the same thing
-//! is dropped) and numbers them.
+//! is dropped) and numbers them. [`list_with`] does the same over the facts the model holds now
+//! (a wall a person typed on the built model, a later reading): an item those facts answer is
+//! closed, with the answer and where it came from ([`Rfi::answered_by`]), never dropped.
+//!
+//! The spec's own gaps ([`RfiKind::is_spec_gap`]: a guessed wall or ceiling type, a head of wall
+//! not given…) are filled by the build from trade practice and marked; they are counted apart
+//! from the questions for the design team.
 
 use crate::spec::{BuildingSpec, CeilingArea, HeightRule, WallMark};
 use serde::{Deserialize, Serialize};
@@ -156,6 +162,24 @@ impl RfiKind {
             RfiKind::RoomUnnumbered => "room_unnumbered",
             RfiKind::Requirement => "requirement",
         }
+    }
+
+    /// A gap in the documents the build fills itself from trade practice (a guessed wall or
+    /// ceiling type, a wall height rule against the ceiling it meets, a head of wall or soffit
+    /// detail not given): marked on what it built and listed, but not a question for the design
+    /// team unless a person sends it. Conflicts, unknown tags, rated walls stopping short and
+    /// the trades' items are questions.
+    pub fn is_spec_gap(self) -> bool {
+        matches!(
+            self,
+            RfiKind::UntaggedWall
+                | RfiKind::HeightVsCeiling
+                | RfiKind::DoubleCeilingShortWall
+                | RfiKind::HeadUnspecified
+                | RfiKind::CeilingUnspecified
+                | RfiKind::SoffitNoDetail
+                | RfiKind::DetailUnused
+        )
     }
 
     pub fn parse(s: &str) -> Option<RfiKind> {
@@ -316,6 +340,10 @@ pub struct Rfi {
     /// The design team's answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// Where the answer came from when the list closed the item itself because a later fact
+    /// answers it (a person's type on the built wall, the legend's head key, the RCP's reading).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub answered_by: String,
     /// Which check found it (`lighting: catalog`, `lighting: switch leg with no fixture`): a
     /// conflict's kind within its trade, for grouping.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -364,25 +392,72 @@ impl Rfi {
         self.kind.map_or("other", RfiKind::name)
     }
 
-    /// Whether two items say the same thing (same kind, and the same subject or place).
+    /// A spec gap the build filled itself ([`RfiKind::is_spec_gap`]), not one a person has sent.
+    pub fn is_spec_gap(&self) -> bool {
+        self.kind.is_some_and(RfiKind::is_spec_gap) && self.status != RfiStatus::Sent
+    }
+
+    /// Whether two items say the same thing (same kind, and the same subject or place; an item
+    /// about the whole set, with no level, has no place: two wall types' items are two items).
     pub fn same_as(&self, o: &Rfi, tol: f64) -> bool {
         self.kind == o.kind
             && self.level.eq_ignore_ascii_case(&o.level)
-            && ((!self.about.is_empty() && self.about == o.about) || ((self.at[0] - o.at[0]).hypot(self.at[1] - o.at[1]) <= tol))
+            && ((!self.about.is_empty() && self.about == o.about)
+                || (!self.level.is_empty() && (self.at[0] - o.at[0]).hypot(self.at[1] - o.at[1]) <= tol))
     }
 }
 
 /// Every item: the spec's own (from the readers), then [`check`]'s that don't repeat one,
-/// numbered `RFI-001`… in that order (an item that has an id keeps it).
+/// numbered `RFI-001`… in that order (an item that has an id keeps it). Items the spec's own
+/// facts answer by now are closed ([`list_with`]).
 pub fn list(spec: &BuildingSpec) -> Vec<Rfi> {
+    list_with(spec, spec)
+}
+
+/// [`list`] over `facts`, the spec as the model holds it now (the walls a person typed on the
+/// built model, …; `spec` itself when the model adds nothing): [`check`] runs on the facts, and
+/// an open item of the spec (a reader's, one tracked earlier) or of the spec's own check that the
+/// facts answer is closed with the answer and its source instead of staying open or vanishing.
+pub fn list_with(spec: &BuildingSpec, facts: &BuildingSpec) -> Vec<Rfi> {
     let tol = spec.units_per_foot.abs().max(1e-9);
     let mut out: Vec<Rfi> = spec.rfis.iter().take(MAX_RFIS).cloned().collect();
-    for r in check(spec) {
-        if out.len() >= MAX_RFIS {
-            break;
-        }
-        if !out.iter().any(|o| o.same_as(&r, tol)) {
+    let now = check(facts);
+    // The spec's own check in its order (so the items keep their numbers): as the facts say it
+    // now, or (raised by the spec alone and answered by the facts) to be listed closed; then
+    // what only the facts raise.
+    let same = std::ptr::eq(spec, facts);
+    let base = if same { Vec::new() } else { check(spec) };
+    let mut taken = vec![false; now.len()];
+    let add = |out: &mut Vec<Rfi>, r: Rfi| {
+        if out.len() < MAX_RFIS && !out.iter().any(|o| o.same_as(&r, tol)) {
             out.push(r);
+        }
+    };
+    for r in base {
+        match now.iter().position(|n| n.same_as(&r, tol)) {
+            Some(i) => {
+                if let (Some(t), Some(n)) = (taken.get_mut(i), now.get(i)) {
+                    *t = true;
+                    add(&mut out, n.clone());
+                }
+            }
+            None if answer_of(&r, facts).is_some() => add(&mut out, r),
+            None => {}
+        }
+    }
+    for (n, t) in now.iter().zip(&taken) {
+        if !*t {
+            add(&mut out, n.clone());
+        }
+    }
+    for r in out.iter_mut().filter(|r| r.status == RfiStatus::Open) {
+        if now.iter().any(|n| n.same_as(r, tol)) {
+            continue;
+        }
+        if let Some((answer, by)) = answer_of(r, facts) {
+            r.status = RfiStatus::Closed;
+            r.answer = Some(answer);
+            r.answered_by = by;
         }
     }
     let mut used: Vec<String> = out.iter().map(|r| r.id.clone()).filter(|i| !i.is_empty()).collect();
@@ -399,6 +474,132 @@ pub fn list(spec: &BuildingSpec) -> Vec<Rfi> {
         }
     }
     out
+}
+
+/// How far a point is from a segment.
+fn to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let l2 = d[0] * d[0] + d[1] * d[1];
+    let t = if l2 > 1e-18 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1])
+}
+
+/// The wall mark an item about a wall is at: on its level, the nearest within a foot (or half
+/// its type's thickness).
+fn mark_at<'a>(facts: &'a BuildingSpec, r: &Rfi) -> Option<&'a WallMark> {
+    let u = facts.units_per_foot.abs().max(1e-9);
+    if !r.at.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    facts
+        .walls
+        .iter()
+        .take(MAX_RFIS * 4)
+        .filter(|m| m.level.eq_ignore_ascii_case(&r.level))
+        .map(|m| (to_segment(r.at, m.a, m.b), m))
+        .filter(|(d, m)| {
+            let half = facts.wall_types.iter().find(|t| t.name == m.wall_type).map_or(0.0, |t| t.thickness_in / 24.0);
+            d.is_finite() && *d <= u * half.max(1.0)
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, m)| m)
+}
+
+/// Where a wall mark's type came from, said for an answer.
+fn mark_source(m: &WallMark) -> String {
+    if m.source.trim().is_empty() { "the wall's type tag on the plan".into() } else { m.source.clone() }
+}
+
+/// The wall type an item about one names (`wall type 1B`).
+fn type_about<'a>(facts: &'a BuildingSpec, r: &Rfi) -> Option<&'a crate::spec::WallType> {
+    let name = r.about.strip_prefix("wall type ")?.trim();
+    facts.wall_types.iter().find(|t| t.name == name)
+}
+
+fn polygon_area(outline: &[[f64; 2]]) -> f64 {
+    let n = outline.len();
+    let mut a = 0.0;
+    for i in 0..n {
+        let (Some(p), Some(q)) = (outline.get(i), outline.get((i + 1) % n)) else { continue };
+        a += p[0] * q[1] - q[0] * p[1];
+    }
+    (a / 2.0).abs()
+}
+
+/// The RCP's hatched area (a soffit read with its height) that covers a ceiling area: its centre
+/// inside, and at least half the ceiling's area. The ceiling is built as that area at its height.
+fn hatch_over<'a>(spec: &'a BuildingSpec, c: &CeilingArea) -> Option<&'a crate::spec::Soffit> {
+    let at = centre(&c.outline);
+    let area = polygon_area(&c.outline);
+    spec.rcp.soffits.iter().take(MAX_RFIS).find(|s| {
+        s.level == c.level && s.height_ft.is_finite() && s.height_ft > 0.0 && inside(at, &s.outline) && polygon_area(&s.outline) >= 0.5 * area
+    })
+}
+
+/// What answers an item by now, and where that came from (None: still open). Only a fact that
+/// settles the item's own question counts: a wall typed from a tag or by a person, the head key
+/// that takes a rated wall to a rated ceiling, a ceiling's type or the RCP's hatched area over it.
+fn answer_of(r: &Rfi, facts: &BuildingSpec) -> Option<(String, String)> {
+    match r.kind? {
+        RfiKind::UntaggedWall => {
+            let m = mark_at(facts, r)?;
+            let guessed = m.guess.is_some() || m.status == Some(crate::spec::MarkStatus::Guess);
+            (!guessed).then(|| (format!("Type {}.", m.wall_type), mark_source(m)))
+        }
+        RfiKind::HeightVsCeiling | RfiKind::DoubleCeilingShortWall => {
+            let m = mark_at(facts, r)?;
+            let wt = facts.wall_types.iter().find(|t| t.name == m.wall_type)?;
+            let a = wt.assembly.as_ref()?;
+            if a.external || !matches!(a.height, Some(HeightRule::Ceiling | HeightRule::AboveCeiling)) {
+                let rule = a.height.map_or_else(|| "its type's height".to_string(), |h| h.text(a.above_ceiling_in));
+                return Some((format!("The wall is type {}, which goes {rule}.", m.wall_type), mark_source(m)));
+            }
+            let sides = ceilings_beside(facts, m, wt.thickness_in / 12.0);
+            if r.kind == Some(RfiKind::HeightVsCeiling) && sides.iter().all(Option::is_some) {
+                return Some(("There is a ceiling either side of the wall.".into(), "the RCP's ceilings".into()));
+            }
+            let double = sides
+                .iter()
+                .flatten()
+                .any(|c| facts.ceiling_types.iter().find(|t| Some(&t.name) == c.ceiling_type.as_ref()).is_some_and(|t| boards(&t.layers) >= 2));
+            (r.kind == Some(RfiKind::DoubleCeilingShortWall) && !double)
+                .then(|| ("No two-layer ceiling meets the wall.".into(), "the RCP's ceilings".into()))
+        }
+        RfiKind::RatedToCeiling => {
+            let wt = type_about(facts, r)?;
+            let a = wt.assembly.as_ref()?;
+            let src = if a.source.trim().is_empty() { "the wall type legend".to_string() } else { a.source.clone() };
+            if a.to_rated_ceiling {
+                Some((format!("Type {} goes to a fire rated ceiling assembly, which carries the rating on.", wt.name), src))
+            } else if a.fire_rating.is_none() || !matches!(a.height, Some(HeightRule::Ceiling | HeightRule::AboveCeiling)) {
+                let rule = a.height.map_or_else(|| "its type's height".to_string(), |h| h.text(a.above_ceiling_in));
+                Some((format!("Type {} is {} and goes {rule}.", wt.name, a.fire_rating.as_deref().unwrap_or("not rated")), src))
+            } else {
+                None
+            }
+        }
+        RfiKind::HeadUnspecified => {
+            let wt = type_about(facts, r)?;
+            let h = wt.assembly.as_ref()?.head.as_ref()?;
+            Some((h.text(), h.detail.as_ref().map_or_else(|| "the head of wall details".to_string(), |d| format!("head of wall detail {d}"))))
+        }
+        RfiKind::CeilingUnspecified => {
+            if !r.at.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            let c = facts.rcp.ceilings.iter().take(MAX_RFIS).find(|c| c.level.eq_ignore_ascii_case(&r.level) && inside(r.at, &c.outline))?;
+            if let (Some(t), None) = (&c.ceiling_type, &c.guess) {
+                return Some((format!("Type {t}."), c.source.clone().unwrap_or_else(|| "the RCP".into())));
+            }
+            let s = hatch_over(facts, c)?;
+            let detail = s.soffit_type.as_ref().map(|t| format!(", detail {t}")).unwrap_or_default();
+            Some((
+                format!("The RCP hatches it as a dropped area at {}{detail}: built as that.", crate::spec::feet(s.height_ft.max(0.0))),
+                "the RCP's hatched area with its height".into(),
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn mid(m: &WallMark) -> [f64; 2] {
@@ -522,7 +723,7 @@ pub fn check(spec: &BuildingSpec) -> Vec<Rfi> {
         let Some(a) = &wt.assembly else { continue };
         let first = marks.iter().find(|m| m.wall_type == wt.name);
         let (level, at) = first.map_or((String::new(), [0.0, 0.0]), |m| (m.level.clone(), mid(m)));
-        if a.fire_rating.is_some() && matches!(a.height, Some(HeightRule::Ceiling | HeightRule::AboveCeiling)) {
+        if a.fire_rating.is_some() && matches!(a.height, Some(HeightRule::Ceiling | HeightRule::AboveCeiling)) && !a.to_rated_ceiling {
             let rating = a.fire_rating.clone().unwrap_or_default();
             let rule = a.height.map(|h| h.text(a.above_ceiling_in)).unwrap_or_default();
             let mut r = Rfi::new(
@@ -549,7 +750,8 @@ pub fn check(spec: &BuildingSpec) -> Vec<Rfi> {
     }
     for c in spec.rcp.ceilings.iter().take(MAX_RFIS) {
         let missing = c.ceiling_type.is_none() || c.guess.is_some();
-        if !missing {
+        // The RCP hatches the area with a height: that reading gives the ceiling.
+        if !missing || hatch_over(spec, c).is_some() {
             continue;
         }
         let what = c.room.clone().unwrap_or_default();
@@ -634,7 +836,10 @@ pub fn rows(items: &[Rfi]) -> Vec<Vec<String>> {
             r.assumed.clone(),
             r.proposed.clone().unwrap_or_default(),
             r.status.name().into(),
-            r.answer.clone().unwrap_or_default(),
+            match (r.answer.as_deref().unwrap_or_default(), r.answered_by.as_str()) {
+                (a, "") => a.to_string(),
+                (a, by) => format!("{a} (from {by})"),
+            },
         ]);
     }
     out
@@ -726,6 +931,144 @@ mod tests {
         let j = serde_json::to_string(&l2).unwrap_or_default();
         let back: Vec<Rfi> = serde_json::from_str(&j).unwrap_or_default();
         assert_eq!(back, l2);
+    }
+
+    /// Two-layer ceiling C2 over both sides of a guessed type-A wall (A stops at the ceiling; D
+    /// goes to the deck).
+    fn guessed_wall_spec() -> BuildingSpec {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        sp.wall_types.push(wall_type("A", 5.0, Assembly { height: Some(HeightRule::Ceiling), source: "legend A".into(), ..Assembly::default() }));
+        sp.wall_types.push(wall_type("D", 5.0, Assembly { height: Some(HeightRule::Deck), source: "legend D".into(), ..Assembly::default() }));
+        sp.walls.push(mark("A", [0.0, 120.0], [240.0, 120.0], Some("the thickness most walls have")));
+        sp.ceiling_types.push(CeilingType {
+            name: "C2".into(),
+            layers: vec![
+                crate::spec::AssemblyLayer { category: "board".into(), ..Default::default() },
+                crate::spec::AssemblyLayer { category: "board".into(), ..Default::default() },
+            ],
+            ..CeilingType::default()
+        });
+        sp.rcp.ceilings.push(area(vec![[0.0, 0.0], [240.0, 0.0], [240.0, 240.0], [0.0, 240.0]], Some("C2"), None));
+        sp
+    }
+
+    fn open_of(l: &[Rfi], k: RfiKind) -> usize {
+        l.iter().filter(|r| r.kind == Some(k) && r.status == RfiStatus::Open).count()
+    }
+
+    #[test]
+    fn a_wall_typed_later_closes_its_gaps_with_the_answers_source() {
+        let mut sp = guessed_wall_spec();
+        // A reader's item for the same wall, kept in the spec from an earlier read.
+        let mut read = Rfi::new(RfiKind::UntaggedWall, "1", [120.0, 121.0], "wall between rooms 1 and 2", "No wall type tag.", "Type A.");
+        read.id = "RFI-040".into();
+        sp.rfis.push(read);
+        let before = list(&sp);
+        assert_eq!(open_of(&before, RfiKind::UntaggedWall), 1, "the reader's item, the check's says the same");
+        assert_eq!(open_of(&before, RfiKind::DoubleCeilingShortWall), 1);
+        // A person types the built wall D (to the deck): the facts the model holds now.
+        let mut facts = sp.clone();
+        if let Some(m) = facts.walls.first_mut() {
+            m.wall_type = "D".into();
+            m.guess = None;
+            m.source = "the built wall's type, set by a person".into();
+        }
+        let after = list_with(&sp, &facts);
+        assert_eq!(open_of(&after, RfiKind::UntaggedWall), 0, "{after:#?}");
+        assert_eq!(open_of(&after, RfiKind::DoubleCeilingShortWall), 0, "D goes to the deck: {after:#?}");
+        let untagged = after.iter().find(|r| r.id == "RFI-040").unwrap_or_else(|| panic!("{after:#?}"));
+        assert_eq!(untagged.status, RfiStatus::Closed);
+        assert_eq!(untagged.answer.as_deref(), Some("Type D."));
+        assert_eq!(untagged.answered_by, "the built wall's type, set by a person");
+        // The check's own item for the two-layer ceiling is listed closed, not dropped.
+        let dbl = after.iter().find(|r| r.kind == Some(RfiKind::DoubleCeilingShortWall)).unwrap_or_else(|| panic!("{after:#?}"));
+        assert_eq!(dbl.status, RfiStatus::Closed);
+        let id_of = |l: &[Rfi], k: RfiKind| l.iter().find(|r| r.kind == Some(k)).map(|r| r.id.clone());
+        assert_eq!(id_of(&after, RfiKind::DoubleCeilingShortWall), id_of(&before, RfiKind::DoubleCeilingShortWall), "it keeps its number");
+        assert!(dbl.answer.as_deref().is_some_and(|a| a.contains("type D") && a.contains("deck")), "{dbl:?}");
+        // Typed A by a person instead: the tag question is answered, the ceiling one is still open.
+        if let Some(m) = facts.walls.first_mut() {
+            m.wall_type = "A".into();
+        }
+        let still = list_with(&sp, &facts);
+        assert_eq!(open_of(&still, RfiKind::UntaggedWall), 0);
+        assert_eq!(open_of(&still, RfiKind::DoubleCeilingShortWall), 1, "{still:#?}");
+        // A wall nobody typed stays open.
+        let mut far = sp.clone();
+        far.rfis.push(Rfi::new(RfiKind::UntaggedWall, "1", [900.0, 900.0], "", "No wall type tag.", "Type A."));
+        assert_eq!(open_of(&list_with(&far, &facts), RfiKind::UntaggedWall), 1, "no fact answers a wall that isn't there");
+        // An item a person sent stays as they left it.
+        let mut sent = sp.clone();
+        if let Some(r) = sent.rfis.first_mut() {
+            r.status = RfiStatus::Sent;
+        }
+        assert!(list_with(&sent, &facts).iter().any(|r| r.id == "RFI-040" && r.status == RfiStatus::Sent && r.answered_by.is_empty()));
+    }
+
+    #[test]
+    fn a_rated_wall_to_a_rated_ceiling_raises_nothing_and_closes_an_older_item() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        let rated = |to_rated: bool| Assembly {
+            fire_rating: Some("1 HR".into()),
+            height: Some(HeightRule::Ceiling),
+            to_rated_ceiling: to_rated,
+            source: "legend, head key B".into(),
+            ..Assembly::default()
+        };
+        sp.wall_types.push(wall_type("QB", 5.0, rated(true)));
+        sp.wall_types.push(wall_type("QC", 5.0, rated(false)));
+        let l = list(&sp);
+        let rated_items: Vec<&str> = l.iter().filter(|r| r.kind == Some(RfiKind::RatedToCeiling)).map(|r| r.about.as_str()).collect();
+        assert_eq!(rated_items, vec!["wall type QC"], "the legend's rated ceiling carries QB's rating");
+        // A reader's item from before the head key was read is closed with the legend as its source.
+        sp.rfis.push(Rfi::new(RfiKind::RatedToCeiling, "", [0.0, 0.0], "wall type QB", "Type QB is rated 1 HR but goes only to the ceiling.", ""));
+        let l = list(&sp);
+        let qb = l.iter().find(|r| r.about == "wall type QB").unwrap_or_else(|| panic!("{l:#?}"));
+        assert_eq!((qb.status, qb.answered_by.as_str()), (RfiStatus::Closed, "legend, head key B"));
+        assert_eq!(open_of(&l, RfiKind::RatedToCeiling), 1);
+    }
+
+    #[test]
+    fn a_ceiling_the_rcp_hatches_with_a_height_is_not_unspecified() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        let square = vec![[0.0, 0.0], [120.0, 0.0], [120.0, 120.0], [0.0, 120.0]];
+        sp.rcp.ceilings.push(area(square.clone(), None, None));
+        sp.rcp.ceilings.push(area(vec![[200.0, 0.0], [320.0, 0.0], [320.0, 120.0], [200.0, 120.0]], None, None));
+        assert_eq!(open_of(&list(&sp), RfiKind::CeilingUnspecified), 2);
+        sp.rfis.push(Rfi::new(RfiKind::CeilingUnspecified, "1", [60.0, 60.0], "room 9", "The prints give no ceiling type for room 9.", ""));
+        // The RCP hatches the first area (a little larger) with a height; a small hatch in the
+        // second doesn't cover it.
+        let soffit = |outline: Vec<[f64; 2]>| crate::spec::Soffit {
+            level: "1".into(),
+            outline,
+            height_ft: 8.5,
+            soffit_type: None,
+            top_ft: None,
+            sides_ft: None,
+            guess: None,
+        };
+        sp.rcp.soffits.push(soffit(vec![[-2.0, -2.0], [122.0, -2.0], [122.0, 122.0], [-2.0, 122.0]]));
+        sp.rcp.soffits.push(soffit(vec![[250.0, 50.0], [270.0, 50.0], [270.0, 70.0], [250.0, 70.0]]));
+        let l = list(&sp);
+        let open: Vec<[f64; 2]> =
+            l.iter().filter(|r| r.kind == Some(RfiKind::CeilingUnspecified) && r.status == RfiStatus::Open).map(|r| r.at).collect();
+        assert_eq!(open, vec![[260.0, 60.0]], "{l:#?}");
+        let old = l.iter().find(|r| r.about == "room 9").unwrap_or_else(|| panic!("{l:#?}"));
+        assert_eq!(old.status, RfiStatus::Closed);
+        assert!(old.answer.as_deref().is_some_and(|a| a.contains("8'-6\"")), "{old:?}");
+    }
+
+    #[test]
+    fn spec_gaps_are_told_apart_from_questions() {
+        let gaps: Vec<RfiKind> = RfiKind::ALL.into_iter().filter(|k| k.is_spec_gap()).collect();
+        assert!(gaps.contains(&RfiKind::UntaggedWall) && gaps.contains(&RfiKind::DoubleCeilingShortWall));
+        for q in [RfiKind::UnknownTag, RfiKind::SheetConflict, RfiKind::RatedToCeiling, RfiKind::Conflict, RfiKind::Requirement] {
+            assert!(!q.is_spec_gap(), "{q:?}");
+        }
+        let mut r = Rfi::new(RfiKind::UntaggedWall, "1", [0.0, 0.0], "", "", "");
+        assert!(r.is_spec_gap());
+        r.status = RfiStatus::Sent;
+        assert!(!r.is_spec_gap(), "sent to the design team: a question now");
     }
 
     #[test]

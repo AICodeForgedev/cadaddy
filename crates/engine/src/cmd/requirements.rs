@@ -773,9 +773,11 @@ pub(crate) fn documents_pass(devices: &[super::readers::ReadDevice]) -> Value {
 /// The inconsistencies the model carries, for a report: the headline (`N things to ask before
 /// you build: X high`), the open items by the build step they block, the first items in that
 /// order, and the requirements' measure.
-pub(crate) fn report(sp: &BuildingSpec, measured: Option<&Value>) -> Value {
+pub(crate) fn report(d: Option<&cadaddy_doc::Drawing>, sp: &BuildingSpec, measured: Option<&Value>) -> Value {
     let rules = rules();
-    let mut open: Vec<Rfi> = cadaddy_walk3d::rfi::list(sp).into_iter().filter(|r| r.status == RfiStatus::Open).collect();
+    let listed = super::rfi::listed(d, sp);
+    let (questions, high_questions, gaps) = super::rfi::open_counts(&listed);
+    let mut open: Vec<Rfi> = listed.into_iter().filter(|r| r.status == RfiStatus::Open).collect();
     sort_by_step(&mut open);
     let high = open.iter().filter(|r| r.severity == Severity::High).count();
     let mut by_step: Vec<Value> = Vec::new();
@@ -790,7 +792,8 @@ pub(crate) fn report(sp: &BuildingSpec, measured: Option<&Value>) -> Value {
     }
     let items: Vec<Value> = open.iter().take(MAX_LISTED).map(item_json).collect();
     let mut v = json!({
-        "headline": headline(open.len(), high),
+        "headline": headline_with_gaps(questions, high_questions, gaps),
+        "questions": questions, "spec_gaps": gaps,
         "open": open.len(), "high": high, "by_step": by_step, "by_kind": by_kind, "items": items,
         "export": "rfi.export {path: <file>.pdf|.xlsx|.csv} sends them, one numbered item each",
     });
@@ -803,6 +806,17 @@ pub(crate) fn report(sp: &BuildingSpec, measured: Option<&Value>) -> Value {
 /// The line a report leads with.
 pub(crate) fn headline(open: usize, high: usize) -> String {
     format!("{open} {} to ask before you build: {high} high", if open == 1 { "thing" } else { "things" })
+}
+
+/// The headline counting only the questions for the design team (Q6652); the spec's own gaps the
+/// build filled itself ([`cadaddy_walk3d::Rfi::is_spec_gap`]) are said apart after it.
+pub(crate) fn headline_with_gaps(questions: usize, high: usize, gaps: usize) -> String {
+    let h = headline(questions, high);
+    match gaps {
+        0 => h,
+        1 => format!("{h} (and 1 gap in the documents the build filled itself)"),
+        n => format!("{h} (and {n} gaps in the documents the build filled itself)"),
+    }
 }
 
 /// An item for a report or a list: its kind's name and title, and the step it blocks.

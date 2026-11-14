@@ -435,6 +435,7 @@ pub(crate) fn draft_rfis(
             )),
             status: prev.as_ref().map_or(RfiStatus::Open, |p| p.status),
             answer: prev.as_ref().and_then(|p| p.answer.clone()),
+            answered_by: String::new(),
             topic: String::new(),
             sides: Vec::new(),
             elements: Vec::new(),

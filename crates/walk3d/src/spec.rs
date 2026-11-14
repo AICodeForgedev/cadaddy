@@ -494,6 +494,11 @@ pub struct Assembly {
     /// How far past the ceiling an [`HeightRule::AboveCeiling`] wall goes, inches.
     #[serde(default = "six", skip_serializing_if = "is_six")]
     pub above_ceiling_in: f64,
+    /// The ceiling a [`HeightRule::Ceiling`] or [`HeightRule::AboveCeiling`] wall stops at is a
+    /// fire rated ceiling assembly (the head key says `TO UNDERSIDE OF FIRE RATED CEILING`): the
+    /// ceiling carries the rating on, so a rated wall stopping there is as designed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub to_rated_ceiling: bool,
     /// `1 HR`, `2 HR`; none = not rated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_rating: Option<String>,

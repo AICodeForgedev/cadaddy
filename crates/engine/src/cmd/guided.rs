@@ -34327,7 +34327,7 @@ fn inconsistencies(s: &Session, job: &GuidedJob) -> Value {
         .unwrap_or(Value::Null);
     let built = super::bspec::current(s, "job").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
     let mut v = match &built {
-        Some(sp) => super::requirements::report(sp, job.requirements.as_ref()),
+        Some(sp) => super::requirements::report(s.doc().ok(), sp, job.requirements.as_ref()),
         None => json!({"headline": "nothing built yet: the build raises what it can't complete from the documents", "open": Value::Null}),
     };
     let model_built = job.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
