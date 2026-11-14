@@ -90,6 +90,7 @@ mod progress_hotel;
 mod propuse;
 mod puttypads;
 mod racewaygeom;
+mod racewaysupports;
 mod readerwire;
 mod rebuild_hand_made;
 mod relevel;

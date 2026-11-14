@@ -185,6 +185,10 @@ pub struct Element {
     pub layer: String,
 }
 
+/// The atom parts of a bank's strut support (Q6353): its strut, rods, anchors and nuts, written
+/// as discrete accessories; the strut straps and riser clamps are their raceway's fittings.
+pub const RACEWAY_SUPPORT_PARTS: &[&str] = &["strut", "rod", "support_anchor", "strut_nut"];
+
 /// What a model-space object is as a 4D element: the IFC class IFC export writes it as (the
 /// same table as `cadaddy-io`'s IFC writer, checked against it there), its storey, its name (a
 /// run's system, a piece of equipment's tag, a room's name, else its layer) and its systems.
@@ -253,6 +257,9 @@ pub fn element_of(e: &Entity) -> Element {
                 "conduit" => "IfcCableCarrierSegment",
                 "box" | "ring" => "IfcJunctionBox",
                 "cable" | "wire" => "IfcCableSegment",
+                // A bank's strut, its rods, anchors and nuts (Q6353): the supports themselves,
+                // no fitting of any one raceway (its strut straps and riser clamps are).
+                p if RACEWAY_SUPPORT_PARTS.contains(&p) => "IfcDiscreteAccessory",
                 _ => "IfcCableCarrierFitting",
             },
             "mep" if mep_part.starts_with("terminal:sprinkler") => "IfcFireSuppressionTerminal",
