@@ -9,6 +9,7 @@
 #[path = "../helper.rs"]
 mod helper;
 
+mod accessreach;
 mod agentready_hotel;
 mod arch_read;
 mod archbuild;
