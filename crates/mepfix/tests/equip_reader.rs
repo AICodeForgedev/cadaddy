@@ -579,3 +579,28 @@ fn a_fixture_schedules_equipment_rows_are_equipment() {
         .collect();
     assert_eq!(got, want);
 }
+
+/// Q6579: two schedules each printing a bare `1` in their tag columns (an air handling unit's,
+/// an exhaust fan's) are two units, each of its own table's kind; a tag with letters printed
+/// twice is still one.
+#[test]
+fn a_bare_number_in_two_schedules_is_two_units_of_their_kinds() {
+    use cadaddy_mepfix::equip_reader::{Table, scheduled};
+    let table = |title: &str, rows: &[&[&str]]| Table {
+        sheet: "M-0".into(),
+        title: title.into(),
+        columns: vec!["TAG".to_string(), "MODEL".to_string()],
+        rows: rows.iter().map(|r| ["TAG", "MODEL"].iter().zip(r.iter()).map(|(c, v)| (c.to_string(), v.to_string())).collect()).collect(),
+    };
+    let tables = vec![
+        table("AIR HANDLING UNIT SCHEDULE", &[&["1", "MODEL-A"], &["RTU-1", "MODEL-R"]]),
+        table("EXHAUST FAN SCHEDULE", &[&["1", "MODEL-E"], &["RTU-1", "MODEL-S"]]),
+    ];
+    let got: Vec<(String, String, String)> =
+        scheduled(&tables).into_iter().map(|x| (x.tag, x.kind, x.properties.get("MODEL").cloned().unwrap_or_default())).collect();
+    let want: Vec<(String, String, String)> = [("1", "ahu", "MODEL-A"), ("RTU-1", "ahu", "MODEL-R"), ("1", "exhaust_fan", "MODEL-E")]
+        .iter()
+        .map(|(t, k, m)| (t.to_string(), k.to_string(), m.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}

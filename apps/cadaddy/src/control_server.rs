@@ -67,6 +67,24 @@ impl Default for Limits {
 }
 
 /// A new random token (32 hex digits); `None` when the system has no randomness to give.
+/// Wakes the window a request is for. A window made again after its graphics device was lost has
+/// another egui context, so the server's threads look the current one up each time.
+#[derive(Clone, Default)]
+pub struct Waker(Arc<std::sync::Mutex<Option<egui::Context>>>);
+
+impl Waker {
+    /// Wake `ctx` from now on.
+    pub fn set(&self, ctx: egui::Context) {
+        *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ctx);
+    }
+
+    fn wake(&self) {
+        if let Some(ctx) = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+            ctx.request_repaint();
+        }
+    }
+}
+
 pub fn new_token() -> Option<String> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b).ok()?;
@@ -77,12 +95,7 @@ pub fn new_token() -> Option<String> {
 /// explicit `--control` port and the agent port together. A port that can't be bound (another
 /// window has it) is logged and skipped, and returned so the window can say so. With `token`, clients must present it; it is written
 /// for each port bound to its file under the settings folder `config`.
-pub fn start_ports(
-    ports: &[u16],
-    ctx: egui::Context,
-    token: Option<String>,
-    config: Option<&std::path::Path>,
-) -> (Receiver<ControlRequest>, Vec<u16>) {
+pub fn start_ports(ports: &[u16], ctx: Waker, token: Option<String>, config: Option<&std::path::Path>) -> (Receiver<ControlRequest>, Vec<u16>) {
     let token: Option<Arc<str>> = token.map(Arc::from);
     let (tx, rx) = sync_channel::<ControlRequest>(Limits::default().queue.max(1));
     let mut seen = Vec::new();
@@ -126,7 +139,7 @@ fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: imp
 
 /// Accept connections on `listener` under `limits`; requests arrive on the returned receiver.
 #[cfg(test)]
-fn serve_listener(listener: TcpListener, limits: Limits, ctx: egui::Context) -> Receiver<ControlRequest> {
+fn serve_listener(listener: TcpListener, limits: Limits, ctx: Waker) -> Receiver<ControlRequest> {
     let (tx, rx) = sync_channel::<ControlRequest>(limits.queue.max(1));
     std::thread::spawn(move || accept_loop(listener, tx, ctx, limits));
     rx
@@ -142,7 +155,7 @@ impl Drop for Slot {
     }
 }
 
-fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: egui::Context, limits: Limits) {
+fn accept_loop(listener: TcpListener, tx: SyncSender<ControlRequest>, ctx: Waker, limits: Limits) {
     let open = Arc::new(AtomicUsize::new(0));
     for mut stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
         let _ = stream.set_write_timeout(Some(limits.write_timeout));
@@ -280,7 +293,7 @@ fn send_line(out: &mut impl Write, line: &str) -> std::io::Result<()> {
     out.flush()
 }
 
-fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context, limits: &Limits) {
+fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &Waker, limits: &Limits) {
     // Replies go out at once instead of waiting to be combined with more (Nagle).
     let _ = stream.set_nodelay(true);
     if stream.set_read_timeout(Some(limits.idle_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
@@ -345,10 +358,10 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
                     let (req, pending) = ControlRequest::new(method, params);
                     let mut r = match tx.try_send(req) {
                         Ok(()) => {
-                            ctx.request_repaint();
+                            ctx.wake();
                             // On timeout the request is cancelled if the app hasn't started it, and
                             // the reply's `state` says whether it can still have run.
-                            pending.wait_nudging(limits.reply_timeout, || ctx.request_repaint())
+                            pending.wait_nudging(limits.reply_timeout, || ctx.wake())
                         }
                         Err(TrySendError::Full(_)) => json!({"ok": false, "error": "busy: too many queued requests", "state": "not-run"}),
                         Err(TrySendError::Disconnected(_)) => break,
@@ -373,6 +386,21 @@ fn serve(stream: TcpStream, tx: &SyncSender<ControlRequest>, ctx: &egui::Context
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window made again after a lost graphics device has another egui context: requests wake
+    /// that one from then on, not the closed window's.
+    #[test]
+    fn requests_wake_the_current_window() {
+        let w = Waker::default();
+        w.wake();
+        let (first, second) = (egui::Context::default(), egui::Context::default());
+        w.set(first.clone());
+        w.clone().wake();
+        assert!(first.has_requested_repaint());
+        w.set(second.clone());
+        w.wake();
+        assert!(second.has_requested_repaint());
+    }
 
     /// A failed accept is followed by a wait before the next one, so a listener that keeps
     /// failing does not spin, and the connections around the failures still come through.
@@ -423,7 +451,7 @@ mod tests {
     fn serve_with(limits: Limits) -> (std::net::SocketAddr, Receiver<ControlRequest>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
-        (addr, serve_listener(listener, limits, egui::Context::default()))
+        (addr, serve_listener(listener, limits, Waker::default()))
     }
 
     /// The control server on a loopback port, with a stand-in UI that echoes each method.
@@ -593,8 +621,8 @@ mod tests {
         // folder): the first start's token doesn't open the second's port.
         let dir = std::env::temp_dir().join(format!("cadaddy-oldtoken-{}", std::process::id()));
         let (p1, p2) = (free_port(), free_port());
-        let (_rx1, _) = start_ports(&[p1], egui::Context::default(), new_token(), Some(&dir));
-        let (_rx2, _) = start_ports(&[p2], egui::Context::default(), new_token(), Some(&dir));
+        let (_rx1, _) = start_ports(&[p1], Waker::default(), new_token(), Some(&dir));
+        let (_rx2, _) = start_ports(&[p2], Waker::default(), new_token(), Some(&dir));
         let read = |p: u16| std::fs::read_to_string(cadaddy_engine::control_auth::token_path(&dir, p)).unwrap().trim().to_string();
         let (old, new) = (read(p1), read(p2));
         assert_ne!(old, new);
@@ -610,7 +638,7 @@ mod tests {
         // Listening on 127.0.0.1 only: this computer's own network address (what another computer
         // would connect to) gets no answer.
         let port = free_port();
-        let (_rx, _) = start_ports(&[port], egui::Context::default(), new_token(), None);
+        let (_rx, _) = start_ports(&[port], Waker::default(), new_token(), None);
         assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
         // The address this computer would send from; no packet is sent.
         let lan = std::net::UdpSocket::bind(("0.0.0.0", 0)).and_then(|u| u.connect(("192.0.2.1", 9)).and_then(|()| u.local_addr()));

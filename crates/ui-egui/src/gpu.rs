@@ -2763,9 +2763,11 @@ fn upload_parts_in<'a>(
 }
 
 /// GPU trouble wgpu reported: uncaptured errors (validation, out of memory) and the device being
-/// lost (a driver reset or a hung GPU). wgpu's default handler panics on the first uncaptured
-/// error, closing the app with any unsaved work (#602); the handlers [`install`] registers record
-/// them here instead, and the app autosaves and tells the user (see `CadApp::gpu_fault_tick`).
+/// lost (a driver reset, a hung GPU, or one out of memory). wgpu's default handler panics on the
+/// first uncaptured error, closing the app with any unsaved work (#602); the handlers [`install`]
+/// registers record them here instead, and the app autosaves and tells the user (see
+/// `CadApp::gpu_fault_tick`). After a loss the window is made again on a new device
+/// ([`crate::devicelost`]).
 #[derive(Debug, Default)]
 pub struct GpuFaults {
     state: Mutex<FaultState>,
@@ -2813,6 +2815,11 @@ impl GpuFaults {
         let Ok(mut s) = self.state.lock() else { return };
         s.lost = true;
         s.last = message;
+    }
+
+    /// The device was lost: nothing more may be drawn with it (see [`crate::devicelost`]).
+    pub fn is_lost(&self) -> bool {
+        self.state.lock().is_ok_and(|s| s.lost)
     }
 
     /// Faults reported since the last call, if any.

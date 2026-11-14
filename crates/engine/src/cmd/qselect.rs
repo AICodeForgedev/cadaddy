@@ -55,12 +55,15 @@ fn norm(k: &str) -> String {
     k.chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').flat_map(char::to_lowercase).collect()
 }
 
-/// Flattened scalar properties of an entity: (display name, value).
+/// Flattened scalar properties of an entity: (display name, value). (Not its bounds, which are
+/// no scalar: measuring them for every object was most of a large drawing's Quick Select.)
 pub fn properties(d: &Drawing, e: &Entity) -> Vec<(String, Value)> {
-    let v = super::props::entity_props(d, e);
+    let v = super::props::entity_props_with(d, e, false);
     let mut out: Vec<(String, Value)> = Vec::new();
+    // The names taken, normalised once each (comparing every pair afresh was most of the time).
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut push = |k: &str, val: &Value| {
-        if matches!(val, Value::String(_) | Value::Number(_) | Value::Bool(_)) && !out.iter().any(|(n, _)| norm(n) == norm(k)) {
+        if matches!(val, Value::String(_) | Value::Number(_) | Value::Bool(_)) && taken.insert(norm(k)) {
             out.push((k.to_string(), val.clone()));
         }
     };
@@ -344,24 +347,21 @@ fn run_info(s: &mut Session, p: &Value) -> Result<Value> {
     let cands = candidates(s, p)?;
     let ty = str_param(p, "type");
     let d = s.doc()?;
-    let mut types: Vec<(String, usize)> = Vec::new();
+    let mut types: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let mut props: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for h in &cands {
         let Some(e) = d.entity(*h) else { continue };
-        let tn = e.kind.type_name();
-        match types.iter_mut().find(|(n, _)| n == tn) {
-            Some((_, c)) => *c += 1,
-            None => types.push((tn.to_string(), 1)),
-        }
+        *types.entry(e.kind.type_name()).or_default() += 1;
         if type_matches(e, ty) && props.len() < 200 {
             for (k, _) in properties(d, e) {
-                if k != "handle" && !props.contains(&k) {
+                if k != "handle" && !seen.contains(&k) {
+                    seen.insert(k.clone());
                     props.push(k);
                 }
             }
         }
     }
-    types.sort();
     Ok(json!({
         "count": cands.len(),
         "types": types.iter().map(|(n, c)| json!({ "type": n, "count": c })).collect::<Vec<_>>(),

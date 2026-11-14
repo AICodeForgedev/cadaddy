@@ -550,6 +550,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "ui.gpu" => {
+            // `{"lose": true}`: lose the graphics device as a driver reset or a GPU out of memory
+            // would, to test the recovery (the window is made again on a new device).
+            if params.get("lose").and_then(Value::as_bool) == Some(true) {
+                return Some(Ok(crate::devicelost::lose_device(app)));
+            }
             // The 3D views' GPU limits; forced ones for tests and machines that misreport.
             if params.get("reset").and_then(Value::as_bool) == Some(true) {
                 app.gpu_caps = app.wgpu_rs.as_ref().map_or_else(crate::gpucaps::GpuCaps::default, crate::gpucaps::GpuCaps::detect);

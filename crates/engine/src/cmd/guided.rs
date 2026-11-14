@@ -2533,18 +2533,66 @@ fn no_plan_views(job: &GuidedJob) -> Option<String> {
 /// architectural floor plan covers less than the rules data's minimum (a scale misread, a sheet
 /// at its own units) is a high finding and asks for its plan's scale, or that it really is that
 /// small. Neither is ever taken by default, in auto mode too.
-fn scale_questions(job: &mut GuidedJob, stage: StageName, regions: &[SheetRegion], paper: &[String], sheets: &[&Value], k_in: f64) {
+///
+/// Q6582: a plan left at paper size that is no storey's floor plan (a cover, general, civil or
+/// structural sheet, a framing or truss plan, a sheet whose stroke-lettered number and title read
+/// unsure, a "title" that is an address: [`super::planscale::not_a_storey_plan`]) is not asked:
+/// it is left out of the building (`not_built`) and the sheets are one finding, so an auto job
+/// is never stopped by them.
+fn scale_questions(job: &mut GuidedJob, stage: StageName, regions: &mut [SheetRegion], paper: &[String], sheets: &[&Value], k_in: f64) {
     use super::planscale as ps;
     let base = |n: &str| n.split('/').next().unwrap_or(n).trim().to_string();
-    let title = |n: &str| {
+    let entry = |n: &str| -> Option<Value> {
         sheets
             .iter()
             .find(|sh| sh.get("number").and_then(Value::as_str).is_some_and(|x| base(x).eq_ignore_ascii_case(&base(n))))
-            .and_then(|sh| sh.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+            .map(|sh| (*sh).clone())
     };
+    let title = |n: &str| entry(n).and_then(|sh| sh.get("title").and_then(Value::as_str).map(str::to_string)).unwrap_or_default();
+    // How a sheet's lettering read: on its entry, else on the classify index's.
+    let lettering = |job: &GuidedJob, n: &str| -> Option<cadaddy_mepfix::printset::Lettering> {
+        let indexed = job.index.as_ref().and_then(|i| i.get("sheets")).and_then(Value::as_array).and_then(|a| {
+            a.iter().find(|x| x.get("number").and_then(Value::as_str).is_some_and(|x| base(x).eq_ignore_ascii_case(&base(n)))).cloned()
+        });
+        [entry(n), indexed].into_iter().flatten().find_map(|sh| serde_json::from_value(sh.get("lettering")?.clone()).ok())
+    };
+    let at_paper = |n: &str| paper.iter().any(|p| base(p).eq_ignore_ascii_case(&base(n)));
+    let mut left_out: BTreeMap<String, String> = BTreeMap::new();
+    for r in regions.iter_mut() {
+        if !at_paper(&r.number) || !matches!(r.kind.as_str(), "plan" | "enlarged_plan") || !r.not_built.is_empty() || r.all_levels().is_empty() {
+            continue;
+        }
+        let kind = entry(&r.number).map(|sh| sheet_kind(&sh).to_string()).unwrap_or_default();
+        let t = title(&r.number);
+        if let Some(why) = ps::not_a_storey_plan(&r.discipline, &kind, &t, lettering(job, &r.number).as_ref()) {
+            r.not_built = format!("{}: {why}", ps::NOT_STOREY_PLAN);
+            left_out.entry(r.number.to_ascii_uppercase()).or_insert_with(|| {
+                let t: String = t.trim().chars().take(80).collect();
+                if t.is_empty() { format!("{}: {why}", r.number) } else { format!("{} \"{t}\": {why}", r.number) }
+            });
+        }
+    }
+    if !left_out.is_empty() {
+        let list: Vec<String> = left_out.values().take(MAX_QUESTIONS_PER_STAGE).cloned().collect();
+        let more = left_out.len().saturating_sub(list.len());
+        progress_line(&format!("  sheets: {} plan sheet(s) with no scale left out, no storey's floor plan: {}", left_out.len(), list.join("; ")));
+        job.add_finding(
+            stage,
+            &format!(
+                "{} plan sheet(s) with no scale left out of the building, not asked: no storey's floor plan ({}{})",
+                left_out.len(),
+                list.join("; "),
+                if more > 0 { format!("; and {more} more") } else { String::new() }
+            ),
+            "No scale reads on them and no plan of their floor gives one; a cover, general, civil or structural sheet (a framing or truss plan is drawn over a floor plan), or a sheet whose number and title the stroke OCR read unsure, is not the plan a storey is built from, so the job goes on without it instead of stopping to ask its scale",
+            3,
+            vec!["Leave them out".into(), "Give the sheet's scale, level and type (job.sheets.set) to build it".into()],
+            None,
+            false,
+        );
+        job.audit("plan_sheets_left_out_no_scale", "pipeline", None, Some(stage), Some(json!(left_out)));
+    }
+    let regions: &[SheetRegion] = regions;
     let built = |n: &str| {
         regions.iter().any(|r| {
             r.number.eq_ignore_ascii_case(&base(n))
@@ -3092,7 +3140,8 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     let regions = answered_regions(job, regions, &all, &job.sheet_scales);
     // A plan nothing scaled is always asked for its scale, and a level too small to be a
     // building is a high finding, always asked (Q6360): never built at the sheet's units.
-    scale_questions(job, stage, &regions, &paper, &all, super::perceive::units_per_inch(s.doc()?));
+    let mut regions = regions;
+    scale_questions(job, stage, &mut regions, &paper, &all, super::perceive::units_per_inch(s.doc()?));
     clock.done("answers and scale questions");
     // Each plan sheet's view (Q6515): which one is the plan, its rectangle and scale; a sheet of
     // several views none of which is titled as its plan is a finding, never taken whole silently.
@@ -5092,6 +5141,63 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
     })
 }
 
+/// A room's floor area read by `rooms.list` (`areaSqFt`; `area_sqft` as older callers gave it),
+/// square feet; 0 when none is given or it isn't a number.
+fn room_sq_ft(room: &Value) -> f64 {
+    room.get("areaSqFt").or_else(|| room.get("area_sqft")).and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0)
+}
+
+/// Q6582: the room tags whose room traces to 0 sq ft (no enclosed outline around the tag), said
+/// once as one finding with each tag's sheet and place, never asked as "name and area right?".
+fn tags_with_no_room(job: &mut GuidedJob, rooms: &[Value]) {
+    let none: Vec<&Value> = rooms.iter().filter(|r| room_sq_ft(r) <= 0.0).collect();
+    if none.is_empty() {
+        return;
+    }
+    let said: Vec<String> = none
+        .iter()
+        .take(MAX_QUESTIONS_PER_STAGE)
+        .map(|r| {
+            let text = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().chars().take(40).collect::<String>();
+            let at = r.get("at").and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?]));
+            let sheet = text("sheet");
+            format!(
+                "{} '{}'{}{}",
+                text("number"),
+                text("name"),
+                if sheet.is_empty() { String::new() } else { format!(" on {sheet}") },
+                at.map_or_else(String::new, |[x, y]| format!(" at ({x:.0}, {y:.0})"))
+            )
+        })
+        .collect();
+    let more = none.len().saturating_sub(said.len());
+    let first = none.first().copied();
+    job.add_finding(
+        StageName::Rooms,
+        &format!(
+            "{} room tag(s) with no enclosed room: {}{}",
+            none.len(),
+            said.join("; "),
+            if more > 0 { format!("; and {more} more") } else { String::new() }
+        ),
+        "The tag is read but no closed outline of walls, doors and openings around it traces (a wall gap, a door drawn as a swing only, the tag outside its room): its room has no floor area, so its finishes, ceiling and devices have no room",
+        3,
+        vec!["Close the room's outline on the plan (or move the tag into its room) and run the rooms stage again".into(), "Not a room: leave the tag out".into()],
+        Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: first.and_then(|r| r.get("sheet").and_then(Value::as_str)).map(str::to_string),
+            at: first.and_then(|r| r.get("at")).and_then(|a| Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?])),
+            values: Some(json!({"tags": none.iter().take(MAX_QUESTIONS_PER_STAGE).map(|r| json!({
+                "number": r.get("number"), "name": r.get("name"), "sheet": r.get("sheet"), "at": r.get("at"), "level": r.get("level"),
+            })).collect::<Vec<_>>()})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        false,
+    );
+}
+
 /// A finish or material tag (GYP 01, CPT-1, VCT 2, ACT-1) traced in its room: a room read with a
 /// finish code for a name and a short number, or none.
 fn finish_tag(r: &Value) -> bool {
@@ -5389,12 +5495,13 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         }
 
-        // Verify samples.
-        let sample_count = rooms.len().min(MAX_VERIFY_SAMPLES);
-        for room in rooms.iter().take(sample_count) {
+        // Verify samples: the rooms read with an outline. A tag whose room traces to nothing
+        // (0 sq ft) is one finding, never a "name and area right?" sample (Q6582).
+        tags_with_no_room(job, rooms);
+        for room in rooms.iter().filter(|r| room_sq_ft(r) > 0.0).take(MAX_VERIFY_SAMPLES) {
             let name = room.get("name").and_then(Value::as_str).unwrap_or("?");
             let number = room.get("number").and_then(Value::as_str).unwrap_or("");
-            let area = room.get("area_sqft").and_then(Value::as_f64).unwrap_or(0.0);
+            let area = room_sq_ft(room);
             let qid = job.next_qid(StageName::Rooms);
             let q = Question {
                 id: qid,
@@ -7619,6 +7726,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if joined > 0 {
                     progress_line(&format!("  scheduled units joined to the drawn runs ending at them: {joined}"));
                 }
+                // One unit read twice by its tag with and without its number (`AHU` beside
+                // `AHU-1`): one, the fuller tag kept (Q6579).
+                let merged = super::schedequip::merge_tag_variants(&mut sp.mep.equipment, sp.units_per_foot);
+                if !merged.is_empty() {
+                    progress_line(&format!(
+                        "  equipment read twice by its tag with and without its number, now one: {} ({})",
+                        merged.len(),
+                        merged.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
                 // The equipment built some other way (a typical room's stamped fan) that a
                 // schedule row lists or whose kind's row serves its room: that row's type and
                 // data on it (Q6316).
@@ -7641,6 +7758,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             .unwrap_or_else(|| room.to_string())
                     };
                     let typed = super::schedequip::type_built(&found.rows, &mut sp.mep.equipment, &room_name);
+                    // A box far bigger than its schedule's (or its kind's usual) size is something
+                    // else's its tag was read by: that size at its centre (Q6579).
+                    let fitted = super::schedequip::fit_oversized(&found.rows, &mut sp.mep.equipment, sp.units_per_foot);
+                    if fitted > 0 {
+                        progress_line(&format!("  equipment boxes far bigger than the unit, set to its size: {fitted}"));
+                    }
                     if typed.by_tag + typed.by_room > 0 || !typed.untold.is_empty() {
                         progress_line(&format!(
                             "  built equipment given its schedule row: {} by its tag, {} by the row serving its room; {} with no one row ({:?})",
@@ -45365,6 +45488,112 @@ mod tests {
             let report = room_names_summary(&job);
             assert_eq!(&report, c, "the job's report gives the rooms stage's candidates");
         }
+    }
+
+    /// Q6582: a room spot check gives the room's area as `rooms.list` reads it (it said 0 sq ft
+    /// for every room, so auto mode's guard rejected them all and left them open).
+    #[test]
+    fn a_room_spot_check_gives_its_traced_area() {
+        let mut s = crate::Session::new();
+        s.execute("pline", &json!({"vertices": [[10.0, 10.0], [90.0, 10.0], [90.0, 70.0], [10.0, 70.0]], "closed": true})).unwrap();
+        s.execute("text", &json!({"at": [30.0, 40.0], "text": "OFFICE", "height": 3})).unwrap();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        job.auto = true;
+        job.sheets = Some(json!({"sheets": []}));
+        job.sheets_loaded = true;
+        job.sheet_regions = vec![region("A-101", "1", "A", "plan", 0.0)];
+        let r = run_rooms(&mut s, &mut job).expect("rooms");
+        let traced = r["rooms"].as_array().and_then(|a| a.iter().find(|x| x["name"] == "OFFICE")).and_then(|x| x["areaSqFt"].as_f64());
+        let traced = traced.unwrap_or_else(|| panic!("OFFICE traced: {r}"));
+        assert!(traced > 10.0, "{r}");
+        auto_answer(&mut job, StageName::Rooms);
+        let samples: Vec<Question> = job.stage(StageName::Rooms).map(|st| st.verify.clone()).unwrap_or_default();
+        let q = samples.iter().find(|q| q.question.contains("OFFICE")).unwrap_or_else(|| panic!("a spot check of OFFICE: {samples:#?}"));
+        assert!(q.question.contains(&format!("{traced:.0} sq ft")), "{}", q.question);
+        assert!(!q.question.contains(": 0 sq ft"), "{}", q.question);
+        assert_eq!((q.answered_by.as_deref(), q.answer.clone()), (Some("default"), Some(json!("Correct"))), "a real room's default is taken: {q:#?}");
+    }
+
+    /// Q6582: a room tag whose room traces to nothing (0 sq ft) is one finding with its sheet and
+    /// place, never a "name and area right?" spot check.
+    #[test]
+    fn a_tag_with_no_enclosed_room_is_one_finding_not_a_spot_check() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        let rooms = vec![
+            json!({"name": "OFFICE", "number": "101", "areaSqFt": 120.0, "at": [10.0, 10.0], "sheet": "A-101"}),
+            json!({"name": "STORAGE", "number": "102", "areaSqFt": 0.0, "at": [50.0, 40.0], "sheet": "A-101", "level": "1"}),
+            json!({"name": "CLOSET", "number": "103", "at": [70.0, 40.0], "sheet": "A-101"}),
+        ];
+        tags_with_no_room(&mut job, &rooms);
+        let said: Vec<&JobFinding> = job.findings.iter().filter(|f| f.description.contains("with no enclosed room")).collect();
+        assert_eq!(said.len(), 1, "{:#?}", job.findings);
+        let d = &said[0].description;
+        assert!(d.starts_with("2 room tag(s) with no enclosed room: 102 'STORAGE' on A-101 at (50, 40); 103 'CLOSET' on A-101"), "{d}");
+        assert!(!d.contains("OFFICE"), "{d}");
+        assert_eq!(room_sq_ft(&rooms[0]), 120.0);
+        assert_eq!(room_sq_ft(&json!({"area_sqft": 80.0})), 80.0);
+        assert_eq!(room_sq_ft(&rooms[2]), 0.0);
+    }
+
+    /// Q6582: a plan left at paper size that is no storey's floor plan (a general sheet, a
+    /// structural framing plan, a sheet whose stroke-lettered number and title read unsure, a
+    /// "title" that is an address) is left out with one finding and never asked for its scale;
+    /// a floor plan and a trade's plan read sure are asked, always.
+    #[test]
+    fn a_plan_with_no_scale_that_is_no_storeys_floor_plan_is_left_out_not_asked() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        job.auto = true;
+        let mut regions = vec![
+            region("A-101", "1", "A", "plan", 0.0),
+            region("G-002", "1", "G", "plan", 200.0),
+            region("S-201", "R", "S", "plan", 400.0),
+            region("E-9", "R", "E", "plan", 600.0),
+            region("A-102", "2", "A", "plan", 800.0),
+            region("E-102", "2", "E", "plan", 1000.0),
+            region("A-301", "R", "A", "plan", 1200.0),
+        ];
+        let strokes = |c: f64| json!({"stroke_share": 1.0, "ocr_share": 1.0, "words": 60, "confidence": c});
+        let sheets = [
+            json!({"number": "A-101", "title": "FIRST FLOOR PLAN", "type": "plan", "discipline": "A"}),
+            json!({"number": "G-002", "title": "FIRST FLOOR CODE PLAN", "type": "plan", "discipline": "G"}),
+            json!({"number": "S-201", "title": "ROOF FRAMING PLAN", "type": "plan", "discipline": "S"}),
+            json!({"number": "E-9", "title": "ROOF TRUSS=QXK FRZVNO PLAN", "type": "plan", "discipline": "E", "lettering": strokes(0.58)}),
+            json!({"number": "A-102", "title": "4500 Sample Avenue, Suite 200", "type": "plan", "discipline": "A"}),
+            json!({"number": "E-102", "title": "SECOND FLOOR POWER PLAN", "type": "plan", "discipline": "E", "lettering": strokes(0.95)}),
+            json!({"number": "A-301", "title": "ROOF FRAMING AND TRUSS LAYOUT PLAN", "type": "plan", "discipline": "A"}),
+        ];
+        let all: Vec<&Value> = sheets.iter().collect();
+        let paper: Vec<String> = sheets.iter().filter_map(|sh| sh["number"].as_str().map(str::to_string)).collect();
+        scale_questions(&mut job, StageName::Rooms, &mut regions, &paper, &all, 1.0);
+        let asked: Vec<String> = job
+            .stage(StageName::Rooms)
+            .map(|st| {
+                st.completeness.iter().map(|q| q.question.clone()).filter(|q| q.starts_with(super::super::planscale::NO_SCALE_QUESTION)).collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(asked.len(), 2, "only the floor plan and the trade's plan read sure are asked: {asked:#?}");
+        assert!(asked.iter().any(|q| q.contains("A-101")) && asked.iter().any(|q| q.contains("E-102")), "{asked:#?}");
+        for n in ["G-002", "S-201", "E-9", "A-102", "A-301"] {
+            let r = regions.iter().find(|r| r.number == n).expect("region");
+            assert!(r.not_built.starts_with(super::super::planscale::NOT_STOREY_PLAN), "{n} left out: {r:?}");
+        }
+        for n in ["A-101", "E-102"] {
+            assert!(regions.iter().any(|r| r.number == n && r.not_built.is_empty()), "{n} kept");
+        }
+        let said: Vec<&JobFinding> = job.findings.iter().filter(|f| f.description.contains("left out of the building, not asked")).collect();
+        assert_eq!(said.len(), 1, "{:#?}", job.findings);
+        let d = &said[0].description;
+        assert!(d.starts_with("5 plan sheet(s) with no scale"), "{d}");
+        assert!(d.contains("E-9 \"ROOF TRUSS=QXK FRZVNO PLAN\": its number and title were read off strokes by the OCR alone, 58% sure"), "{d}");
+        assert!(
+            d.contains("G-002 \"FIRST FLOOR CODE PLAN\": a general sheet") && d.contains("S-201 \"ROOF FRAMING PLAN\": a structural sheet"),
+            "{d}"
+        );
+        assert!(
+            d.contains("A-102") && d.contains("address or phone line") && d.contains("A-301") && d.contains("structural plan by its title"),
+            "{d}"
+        );
+        assert!(!said[0].blocking, "a finding, never a stop");
     }
 
     /// A stage run again asks its questions again: the same ones keep their id and answer; an

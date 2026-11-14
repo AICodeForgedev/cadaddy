@@ -65,13 +65,19 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let mut st: QsState = ctx.data_mut(|d| d.get_temp(sid)).unwrap_or_default();
     let key = app.session.state().map(|s| std::sync::Arc::as_ptr(&s.doc) as usize).unwrap_or(0);
     let want = (key, st.apply_selection, st.ty.clone());
+    // The object types and properties are worked out off the UI thread (a large drawing took
+    // seconds): the dialog is there at once, usable, and fills in when they come (Q6574).
+    let mut reading = false;
     if st.info_key.as_ref() != Some(&want) {
         let ty = if st.ty == "Multiple" { Value::Null } else { json!(st.ty) };
-        st.info = app
-            .session
-            .execute("qselect.info", &json!({ "applyTo": if st.apply_selection { "selection" } else { "drawing" }, "type": ty }))
-            .unwrap_or(Value::Null);
-        st.info_key = Some(want);
+        let params = json!({ "applyTo": if st.apply_selection { "selection" } else { "drawing" }, "type": ty });
+        match crate::bgread::read(app, ctx, sid, &want, "qselect.info", &params) {
+            Some(info) => {
+                st.info = info.unwrap_or(Value::Null);
+                st.info_key = Some(want);
+            }
+            None => reading = true,
+        }
     }
     let has_sel = !app.session.selection().is_empty();
     let mut run: Option<Value> = None;
@@ -130,8 +136,14 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     egui::ScrollArea::vertical().max_height(150.0).min_scrolled_height(150.0).show(ui, |ui| {
                         ui.set_width(212.0);
                         ui.vertical(|ui| {
+                            if reading {
+                                let r = ui.label(RichText::new(crate::i18n::t(crate::bgread::READING)).color(t.text_dim));
+                                crate::control::record_widget(ui, &r, crate::bgread::READING, "text", None);
+                            }
                             for p in &props {
-                                if ui.selectable_label(st.property == *p, crate::i18n::t(&pretty(p))).clicked() {
+                                let r = ui.selectable_label(st.property == *p, crate::i18n::t(&pretty(p)));
+                                crate::control::record_widget(ui, &r, p, "option", Some(st.property == *p));
+                                if r.clicked() {
                                     st.property = p.clone();
                                 }
                             }

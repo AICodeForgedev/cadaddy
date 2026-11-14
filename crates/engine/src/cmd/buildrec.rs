@@ -85,14 +85,18 @@ pub(crate) struct BuildRecord {
 }
 
 /// FNV-1a over formatted text (no copy of it is made).
-struct Fnv(u64);
+pub(crate) struct Fnv(u64);
 
 impl Fnv {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Fnv(0xcbf2_9ce4_8422_2325)
     }
     fn hex(&self) -> String {
         format!("{:016x}", self.0)
+    }
+    /// The hash of the text written so far.
+    pub(crate) fn value(&self) -> u64 {
+        self.0
     }
 }
 
