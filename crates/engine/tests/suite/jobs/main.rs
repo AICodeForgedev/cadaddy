@@ -114,6 +114,7 @@ mod specrooms;
 mod spectag;
 mod stair_treads_walls;
 mod stairs;
+mod stud_boxes;
 mod swing_joined;
 mod symbol_walls;
 mod tagidentity;
