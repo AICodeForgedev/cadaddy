@@ -514,10 +514,25 @@ pub(crate) fn equipment_receptacle(text: &str) -> Option<EquipmentReceptacle> {
     let (kind, named) = tags.iter().find(|(t, _)| has_phrase(&text, t)).map(|(t, k)| (k.to_string(), t.to_string())).or_else(|| {
         loads.iter().find_map(|(value, words)| words.iter().find(|w| has_phrase(&text, w)).map(|w| (value.to_string(), w.to_string())))
     })?;
+    Some(receptacle_asked(&text, kind, named))
+}
+
+/// A note calling for a receptacle for an object the note names (`PROVIDE 30A 120V RECEPTACLE FOR
+/// RANGE`; the object's kind and words `kind`, `named`, read elsewhere): what it asks of that
+/// receptacle (its rating, orientation and place). None: the note names no receptacle.
+pub(crate) fn object_receptacle(text: &str, kind: &str, named: &str) -> Option<EquipmentReceptacle> {
+    let r = receptacle_rules();
+    let text: String = text.chars().take(MAX_NOTE_CHARS).collect();
+    r.receptacle_words.iter().any(|w| has_phrase(&text, w)).then(|| receptacle_asked(&text, kind.to_string(), named.to_string()))
+}
+
+/// What a receptacle note (`text`, capped) asks of its receptacle, for the object `kind`, `named`.
+fn receptacle_asked(text: &str, kind: String, named: String) -> EquipmentReceptacle {
+    let r = receptacle_rules();
     let up = text.to_ascii_uppercase();
     let (amps, poles) = amps_poles(&up);
-    let has = |words: &[String]| words.iter().any(|w| has_phrase(&text, w));
-    Some(EquipmentReceptacle {
+    let has = |words: &[String]| words.iter().any(|w| has_phrase(text, w));
+    EquipmentReceptacle {
         kind,
         named,
         amps,
@@ -527,7 +542,7 @@ pub(crate) fn equipment_receptacle(text: &str) -> Option<EquipmentReceptacle> {
         horizontal: has(&r.horizontal_words),
         under_unit: has(&r.under_unit_words),
         sub_base: has(&r.sub_base_words),
-    })
+    }
 }
 
 /// A note's characters read at most (hostile text).
@@ -1409,6 +1424,12 @@ mod tests {
         // No rating: the unit's receptacle all the same, its rating the documents' elsewhere.
         let r = equipment_receptacle("RECEPTACLE FOR EF-3").unwrap();
         assert_eq!((r.kind.as_str(), r.rating()), ("exhaust_fan", None));
+        // Q6547: a receptacle for an object the note names elsewhere (an appliance): its rating;
+        // no receptacle in the note, none.
+        let r = object_receptacle("MOUNT RANGE RECEPTACLE ABOVE CABINET. PROVIDE 30A 120V RECEPTACLE FOR RANGE.", "range", "range").unwrap();
+        assert_eq!((r.kind.as_str(), r.amps, r.volts, r.rating().as_deref()), ("range", Some(30), Some(120), Some("30 A, 120 V")));
+        assert!(object_receptacle("PROVIDE POWER FOR RANGE", "range", "range").is_none());
+        assert!(object_receptacle(&"RECEPTACLE FOR RANGE 9999A ".repeat(500), "range", "range").is_some());
         // Not one: no receptacle; a rule over all receptacles; a tag's letters inside a word; no
         // unit the data knows.
         for t in [

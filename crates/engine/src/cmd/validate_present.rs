@@ -593,9 +593,11 @@ impl<'a> Symbols<'a> {
                 Some((sheet, title, r))
             })
             .collect();
-        // The fitted view first.
+        // The governing views first (Q6563: a sheet whose notes make its spots reference only
+        // comes after the plans they send them to, so a symbol both show is the governing one's),
+        // then the fitted view.
         let is_fit = |s: &str, t: &str| fit_view.as_deref().is_some_and(|f| f == format!("{s} {t}").to_ascii_uppercase());
-        views.sort_by_key(|(s, t, _)| !is_fit(s, t));
+        views.sort_by_key(|(s, t, _)| (self.reference_note(s).is_some(), !is_fit(s, t)));
         let mut out = RoomSet { basis: "enlarged_plan", compared: self.placed(&first.level), ..RoomSet::default() };
         let mut used: BTreeSet<usize> = BTreeSet::new();
         for (sheet, title, r) in &views {

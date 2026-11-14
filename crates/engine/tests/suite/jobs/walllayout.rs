@@ -207,6 +207,16 @@ fn a_device_is_placed_from_its_faces_and_follows_its_wall() {
     assert!(a["offset_along"]["note"].as_str().is_some_and(|n| n.contains("derived: measured from the plan")), "{a:#}");
     assert!(num(&a, "offset_depth").abs() <= 0.25, "flush: {a:#}");
     assert_eq!(a["layout_solve"]["value"], "pending framing", "no studs yet: {a:#}");
+    // Q6563: a target measured from the device's own place (no document dimension or height
+    // gives it) is no measure: G-LAYOUT never passes against it.
+    let fa = layout_findings(&mut s, "A");
+    let along = fa.iter().find(|f| f["check"] == "along").unwrap_or_else(|| panic!("{fa:#?}"));
+    assert_eq!(along["verdict"], "unsure", "{along:#}");
+    assert_eq!(along["measured"]["target"], "model", "{along:#}");
+    assert!(along["issue"].as_str().unwrap().contains("its own position"), "{along:#}");
+    for f in fa.iter().filter(|f| f["check"] == "along" || f["check"] == "height") {
+        assert!(f["verdict"] != "pass" || f["measured"]["target"] == "document", "{f:#}");
+    }
     // B: in the partition's west face (1001/E).
     let b = props(&mut s, "B");
     assert_eq!(b["host_face"]["value"], "1001/E", "{b:#}");

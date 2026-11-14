@@ -259,6 +259,29 @@ pub(crate) struct BoxFill {
     pub bigger: Vec<(String, String, f64)>,
     /// Where the next box (and past the largest, the extension ring) comes from.
     pub bigger_source: String,
+    /// Past the largest box and ring, and for conductors #4 and larger (Q6557).
+    pub pull: PullBoxes,
+}
+
+/// The boxes past the device boxes' ladder (Q6557): NEC 314.28's lengths for conductors #4 and
+/// larger, and the stock pull and junction boxes the field sets.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct PullBoxes {
+    pub source: String,
+    /// The smallest conductor 314.28 sizes the box for (`4`).
+    pub from_size: String,
+    /// A straight pull's length per inch of the largest raceway's trade size.
+    pub straight: f64,
+    /// An angle or U pull's length per inch of the largest raceway (plus the others).
+    pub angle: f64,
+    /// Stock boxes, smallest first: (name, inside length in, volume cu in).
+    pub boxes: Vec<(String, f64, f64)>,
+    /// Where their volumes come from.
+    pub boxes_source: String,
+    /// A device's box overfilled past the ladder: what the field does (the device kept in its own
+    /// box, fed from a junction box where the raceways meet).
+    pub device_source: String,
 }
 
 /// What a device's terminals take (Q6243): the largest conductor, and the pigtail a larger
@@ -405,10 +428,23 @@ pub(crate) struct FramingRules {
     pub truss_chord_in: f64,
     pub bored_item: String,
     pub truss_item: String,
+    /// The bored hole through a rim board and through a sawn joist (Q6622).
+    pub rim_bored_item: String,
+    pub sawn_bored_item: String,
     pub source: String,
 }
 
 impl FramingRules {
+    /// The takeoff item of a hole of `dia_in` through a member of `kind` (0: a pass through a
+    /// truss's web).
+    pub(crate) fn item(&self, kind: FrameKind, dia_in: f64) -> String {
+        match kind {
+            _ if dia_in <= 0.0 => self.truss_item.clone(),
+            FrameKind::Rim if !self.rim_bored_item.is_empty() => self.rim_bored_item.clone(),
+            FrameKind::SawnJoist if !self.sawn_bored_item.is_empty() => self.sawn_bored_item.clone(),
+            _ => self.bored_item.clone(),
+        }
+    }
     /// The least distance from a joist's end a hole of `dia_in` is bored at (ft); none: too big.
     pub(crate) fn min_end(&self, dia_in: f64) -> Option<f64> {
         self.min_end_ft.iter().find(|r| dia_in <= r[0] + 1e-9).map(|r| r[1].max(0.0))
@@ -616,13 +652,41 @@ pub(crate) struct Obs {
 /// The category the framing's members (joists, trusses) are among a level's obstacles as.
 pub(crate) const FRAMING: &str = "framing";
 
-/// A framing member over a level: its centreline, width and whether it is a truss (never bored).
+/// A framing member over a level: its centreline, width and what it is for its hole rules.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Frame {
     pub a: Vec2,
     pub b: Vec2,
     pub t: f64,
-    pub truss: bool,
+    pub kind: FrameKind,
+}
+
+/// What a framing member is for the router's hole rules (as `bim.clash` judges it, Q6622).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameKind {
+    /// An engineered I-joist: a hole in its web's hole zone, far enough from the bearing.
+    IJoist,
+    /// A sawn lumber joist: a hole up to a part of its depth, kept off its edges.
+    SawnJoist,
+    /// A truss: through its open web between the chords, never bored.
+    Truss,
+    /// A rim board round the floor's edge: a hole up to a part of its depth, kept off its edges;
+    /// a run along it is inside it.
+    Rim,
+}
+
+impl FrameKind {
+    /// The kind of the trades' framing piece `piece` (`joist`, `truss`, `rim`) of item `item`,
+    /// by the words `bim.clash` reads it by.
+    pub(crate) fn of(piece: &str, item: &str) -> FrameKind {
+        use super::bimwork::framing::Kind;
+        match super::bimwork::framing::kind_of(piece, item) {
+            Kind::Truss => FrameKind::Truss,
+            Kind::SawnJoist => FrameKind::SawnJoist,
+            Kind::Rim => FrameKind::Rim,
+            _ => FrameKind::IJoist,
+        }
+    }
 }
 
 /// A raceway's way through a framing member: a hole bored in a joist's web, or a pass between a
@@ -638,6 +702,7 @@ pub(crate) struct Hole {
     /// Along the member from its start (sheet units), and to its nearer end (ft).
     pub along: f64,
     pub end_ft: f64,
+    pub kind: FrameKind,
 }
 
 /// Why the framing stops a piece.
@@ -646,9 +711,10 @@ pub(crate) const FLANGE: &str = "the hole would cut a flange (outside the web's 
 pub(crate) const NEAR_END: &str = "the hole is too near the member's bearing";
 pub(crate) const TOO_BIG: &str = "the hole is bigger than the web takes";
 pub(crate) const CHORD: &str = "it would bore a truss chord";
+pub(crate) const EDGE: &str = "the hole would be too near the member's top or bottom edge";
 
 /// The distance from `p` to the segment `a`–`b`.
-fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+pub(crate) fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p.x - a.x) * dx + (p.y - a.y) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
@@ -759,6 +825,35 @@ impl Field {
     /// The first obstacle a vertical piece at `p` from `z0` to `z1` (radius `r`) comes within
     /// its clearance of, skipping `skip`: a drop, a riser, a change of tier.
     #[allow(clippy::too_many_arguments)]
+    /// The framing member a vertical piece at `p` from `z0` to `z1` (radius `r`) stands in: it
+    /// would go through the member's depth (Q6631: a change of tier at a corner over a joist).
+    pub(crate) fn framing_column(&self, p: Vec2, z0: f64, z1: f64, r: f64) -> Option<usize> {
+        if self.frames.is_empty()
+            || (z1 - z0).abs() < 1e-9
+            || !(p.is_finite() && z0.is_finite() && z1.is_finite() && r.is_finite())
+            || self.cell <= 0.0
+        {
+            return None;
+        }
+        let (zlo, zhi) = (z0.min(z1), z0.max(z1));
+        let reach = r.max(0.0) + self.cell;
+        let (x0, y0, x1, y1) =
+            (Self::c(p.x - reach, self.cell), Self::c(p.y - reach, self.cell), Self::c(p.x + reach, self.cell), Self::c(p.y + reach, self.cell));
+        if x1.saturating_sub(x0) > 64 || y1.saturating_sub(y0) > 64 {
+            return None;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for &i in self.grid.get(&(x, y)).into_iter().flatten() {
+                    let (Some(f), Some(o)) = (self.frames.get(&i), self.obs.get(i)) else { continue };
+                    if zhi + r > o.lo.z && zlo - r < o.hi.z && seg_dist(p, f.a, f.b) < f.t / 2.0 + r {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
+    }
     pub(crate) fn hit_column(&self, p: Vec2, z0: f64, z1: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
         if (z1 - z0).abs() < 1e-9 {
             return None;
@@ -1082,12 +1177,31 @@ impl Field {
                         continue;
                     }
                     let end_ft = along.min(mlen - along) / upf;
-                    if f.truss {
+                    let kind = f.kind;
+                    if kind == FrameKind::Truss {
                         let chord = fr.truss_chord_in.max(0.0) / 12.0 * upf;
                         if z - r < o.lo.z + chord || z + r > o.hi.z - chord {
                             halt(t, i, CHORD);
                         } else {
-                            holes.push((t, Hole { obstacle: i, at: p, z, dia_in: 0.0, along, end_ft }));
+                            holes.push((t, Hole { obstacle: i, at: p, z, dia_in: 0.0, along, end_ft, kind }));
+                        }
+                        continue;
+                    }
+                    // A rim board or a sawn joist: a hole up to its part of the depth, kept off
+                    // its edges (the rules `bim.clash` judges it by, framing.json).
+                    if matches!(kind, FrameKind::Rim | FrameKind::SawnJoist) {
+                        let hr = super::bimwork::framing::rules();
+                        let b = if kind == FrameKind::Rim { &hr.rim } else { &hr.sawn_joist };
+                        let dia_in = size_in + b.hole_over_in.max(0.0);
+                        let half = dia_in / 24.0 * upf;
+                        let edge = b.edge_in.max(0.0) / 12.0 * upf;
+                        let depth_in = (o.hi.z - o.lo.z).max(0.0) / upf * 12.0;
+                        if dia_in > depth_in * b.max_frac.max(0.0) + 1e-6 {
+                            halt(t, i, TOO_BIG);
+                        } else if z - half < o.lo.z + edge - 1e-9 || z + half > o.hi.z - edge + 1e-9 {
+                            halt(t, i, EDGE);
+                        } else {
+                            holes.push((t, Hole { obstacle: i, at: p, z, dia_in, along, end_ft, kind }));
                         }
                         continue;
                     }
@@ -1098,7 +1212,7 @@ impl Field {
                         None => halt(t, i, TOO_BIG),
                         Some(_) if z - half < o.lo.z + keep || z + half > o.hi.z - keep => halt(t, i, FLANGE),
                         Some(need) if end_ft < need => halt(t, i, NEAR_END),
-                        Some(_) => holes.push((t, Hole { obstacle: i, at: p, z, dia_in, along, end_ft })),
+                        Some(_) => holes.push((t, Hole { obstacle: i, at: p, z, dia_in, along, end_ft, kind })),
                     }
                 }
             }
@@ -1125,7 +1239,9 @@ impl Field {
         for x in x0..=x1 {
             for y in y0..=y1 {
                 for &i in self.grid.get(&(x, y)).into_iter().flatten() {
+                    // The bays are between the joists or trusses (a rim board edges the floor).
                     if let Some(f) = self.frames.get(&i)
+                        && f.kind != FrameKind::Rim
                         && seen.insert(i)
                         && seg_dist(p, f.a, f.b) <= reach
                     {
@@ -1230,6 +1346,9 @@ pub(crate) struct Leg {
     /// The raceways laid before it that a piece crosses at every tier it is otherwise clear at
     /// (Q6552): what the field must still offset.
     pub crossings: Vec<Crossing>,
+    /// Its changes of tier (and its end's drop) that go through a framing member's depth where
+    /// no tier of the piece avoids it (Q6631): a shape without one is taken first.
+    pub through: usize,
 }
 
 /// Each piece of `path` at the lowest of `tiers` it is clear at, of the raceways laid before it
@@ -1243,10 +1362,19 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
     // Its end boxes, where raceways meet.
     let ends: Vec<Vec2> = path.first().into_iter().chain(path.last()).copied().collect();
     let meet = rl.route.box_meet(upf);
+    // The height the path stands at before each piece: its rise from the lowest tier at its
+    // start, then the piece before's.
+    let mut prev = first;
     for (k, w) in path.windows(2).enumerate() {
         let [a, b] = w else { continue };
         // Clear of the obstacles, and through the framing only where its web may be bored.
         let clear = |z: &f64| field.hit(*a, *b, *z, r, upf, skip, rl).is_none() && field.framing(*a, *b, *z, r, upf, rl).is_ok();
+        // Its change of tier at its start (and its drop to the lowest tier at the path's end)
+        // never through a framing member's depth (Q6631): a tier that needs one is taken only
+        // where no other is clear.
+        let from = prev;
+        let steps =
+            |z: &f64| field.framing_column(*a, from, *z, r).is_none() && (k + 2 != path.len() || field.framing_column(*b, *z, first, r).is_none());
         // Its rise from the lowest tier at its first box and its drop into its last: never
         // through a raceway running over the box.
         let column = |q: Option<&Vec2>, z: f64| q.and_then(|q| field.column_crosses_laid(*q, first, z, r, meet, true, own, upf, rl));
@@ -1258,8 +1386,21 @@ fn seat(path: &[Vec2], tiers: &[f64], r: f64, field: &Field, upf: f64, skip: &[H
         };
         let apart = |z: &f64| crosses(*z).is_none();
         let crossing = || tiers.iter().copied().find(clear).map(|z| (z, crosses(z)));
-        match tiers.iter().copied().find(|z| clear(z) && apart(z)).map(|z| (z, None)).or_else(crossing) {
+        // The framing's rules before another raceway's crossing (a crossing is listed for the
+        // field to offset; a member is never bored through its depth).
+        let stepped = || {
+            tiers
+                .iter()
+                .copied()
+                .find(|z| clear(z) && apart(z) && steps(z))
+                .map(|z| (z, None))
+                .or_else(|| tiers.iter().copied().find(|z| clear(z) && steps(z)).map(|z| (z, crosses(z))))
+        };
+        let seated = stepped().or_else(|| tiers.iter().copied().find(|z| clear(z) && apart(z)).map(|z| (z, None))).or_else(crossing);
+        prev = seated.as_ref().map_or(first, |(z, _)| *z);
+        match seated {
             Some((z, crossed)) => {
+                leg.through += usize::from(!steps(&z));
                 leg.crossings.extend(crossed.map(|c| Crossing { piece: k, ..c }));
                 // A pass through a truss's open web bores nothing: only bored holes are labor
                 // (Q6314: counted, a top floor's runs went round the trusses' ends, past the walls).
@@ -1324,9 +1465,10 @@ pub(crate) fn route_leg_of(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Fiel
     let bore = rl.framing.hole_penalty_ft.max(0.0) * upf;
     let score = |l: &Leg| {
         let tiers_changed = l.z.windows(2).filter(|w| matches!(w, [p, q] if (p - q).abs() > 1e-9)).count() as f64;
-        // Blocked pieces first, then crossings of the raceways laid before (Q6552).
+        // Blocked pieces (and changes of tier through a framing member, Q6631) first, then
+        // crossings of the raceways laid before (Q6552).
         (
-            (l.blocked.len(), l.crossings.len()),
+            (l.blocked.len() + l.through, l.crossings.len()),
             poly_len(&l.pts) + bend * (l.pts.len().saturating_sub(2) as f64 + tiers_changed) + bore * l.holes as f64,
         )
     };
@@ -1983,6 +2125,104 @@ pub(crate) fn stud_path(
     pts.push([pb.x, pb.y]);
     bot.push((tb - floor) / upf);
     Some((pts, bot))
+}
+
+/// The middle of the built wall a wall box at `p` (its face's outward direction `f`) is set in,
+/// at height `z`, on the line through the box square to the wall: where a run along the wall
+/// bores the studs, the hole rules' edge distance kept on both sides (framing.json `wood_stud`;
+/// Q6622: runs along the wall at the box's line bored the studs at their face). None: no built
+/// wall of `level` there, or one thicker than a few feet.
+pub(crate) fn wall_middle(walls: &[super::propfill::WallPiece], level: &str, p: Vec2, f: Vec2, z: f64, upf: f64) -> Option<Vec2> {
+    let fl = f.len();
+    if !(p.is_finite() && fl.is_finite() && fl > 1e-9 && z.is_finite()) {
+        return None;
+    }
+    let f = f * (1.0 / fl);
+    let reach = 3.0 * upf;
+    for (lv, _, hull, zr) in walls {
+        if !lv.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(level)) || z < zr[0] - 1e-6 || z > zr[1] + 1e-6 || hull.len() < 3 {
+            continue;
+        }
+        let (lo, hi) = hull.iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), q| {
+            (Vec2::new(lo.x.min(q.x), lo.y.min(q.y)), Vec2::new(hi.x.max(q.x), hi.y.max(q.y)))
+        });
+        if p.x < lo.x - 1e-6 || p.x > hi.x + 1e-6 || p.y < lo.y - 1e-6 || p.y > hi.y + 1e-6 || !cadaddy_geom::point_in_polygon(hull, p) {
+            continue;
+        }
+        // Where the line through the box square to the wall leaves it, each side.
+        let (mut ahead, mut behind) = (f64::INFINITY, f64::NEG_INFINITY);
+        for (k, q0) in hull.iter().enumerate() {
+            let Some(q1) = hull.get((k + 1) % hull.len()) else { continue };
+            let e = *q1 - *q0;
+            let den = f.x * e.y - f.y * e.x;
+            if den.abs() < 1e-12 {
+                continue;
+            }
+            let w = *q0 - p;
+            let s = (w.x * e.y - w.y * e.x) / den;
+            let t = (w.x * f.y - w.y * f.x) / den;
+            if (-1e-9..=1.0 + 1e-9).contains(&t) && s.is_finite() {
+                if s >= 0.0 {
+                    ahead = ahead.min(s);
+                } else {
+                    behind = behind.max(s);
+                }
+            }
+        }
+        if ahead.is_finite() && behind.is_finite() && ahead - behind <= reach {
+            return Some(p + f * ((ahead + behind) / 2.0));
+        }
+    }
+    None
+}
+
+/// An in-wall leg (`pts` from box `a` to box `b`: its first and last points the boxes', each
+/// twice, its pieces between them along the walls at their heights `bot`) moved to its walls'
+/// middle (`ma`, `mb`: the boxes' points there, square to their faces `fa`, `fb`): out of each
+/// box straight up, across into the middle at the run's height, along the middle and back across
+/// into the other box. Unchanged where either box has no wall middle, or the leg is no in-wall
+/// leg of that shape.
+pub(crate) fn through_wall_middle(
+    pts: &[[f64; 2]],
+    bot: &[f64],
+    (ma, fa): (Option<Vec2>, Option<Vec2>),
+    (mb, fb): (Option<Vec2>, Option<Vec2>),
+    upf: f64,
+) -> Option<(Vec<[f64; 2]>, Vec<f64>)> {
+    let (ma, mb, fa, fb) = (ma?, mb?, fa?, fb?);
+    let n = pts.len();
+    if n < 4 || bot.len() + 1 != n {
+        return None;
+    }
+    let pt = |i: usize| pts.get(i).map(|p| Vec2::new(p[0], p[1]));
+    let (a, a2, b2, b) = (pt(0)?, pt(1)?, pt(n - 2)?, pt(n - 1)?);
+    let tol = upf / 96.0;
+    if a.dist(a2) > tol || b.dist(b2) > tol {
+        return None;
+    }
+    let (ta, z, tb) = (*bot.first()?, *bot.get(1)?, *bot.last()?);
+    if ma.dist(a) <= tol && mb.dist(b) <= tol {
+        return None;
+    }
+    // Along each wall's middle; where they meet (two walls), or the jog across between two
+    // parallel middles a little apart.
+    let (ua, ub) = (Vec2::new(-fa.y, fa.x), Vec2::new(-fb.y, fb.x));
+    let cross = ua.x * ub.y - ua.y * ub.x;
+    let corner = if cross.abs() > 0.1 {
+        let w = mb - ma;
+        let s = (w.x * ub.y - w.y * ub.x) / cross;
+        Some(ma + ua * s)
+    } else {
+        let c = ma + ua * (mb - ma).dot(ua);
+        (c.dist(mb) > tol).then_some(c)
+    };
+    let mut out = vec![a, a, ma];
+    out.extend(corner.filter(|c| c.is_finite() && c.dist(ma) > tol && c.dist(mb) > tol));
+    out.extend([mb, b, b]);
+    let mut zs = vec![ta];
+    zs.extend(std::iter::repeat_n(z, out.len() - 3));
+    zs.push(tb);
+    Some((out.iter().map(|p| [p.x, p.y]).collect(), zs))
 }
 
 /// A cable's leg between two boxes of a circuit fed from below (its panel on a lower storey,
@@ -2925,6 +3165,50 @@ fn leg_columns(leg: &Leg, z0: f64, r: f64, field: &Field, upf: f64, skip: &[Hand
     check(leg.pts.last(), z0, leg.z.last().copied().unwrap_or(z0));
 }
 
+/// The framing over each level (by its lowercased name): the members of `members` (the floor
+/// joists above it, the roof's trusses, the rim boards) over the level's space, on its plan
+/// (from their own floor's stacked plan by the levels' `moves`), each as an obstacle and a frame.
+/// Shared by the router and the pieces' knockouts (Q6631: a drop never stands in a member).
+pub(crate) fn framing_over_levels(
+    d: &Drawing,
+    sp: &BuildingSpec,
+    members: &[super::tradeatoms::Member],
+    moves: &HashMap<String, Vec2>,
+    upf: f64,
+) -> BTreeMap<String, Vec<(Obs, Frame)>> {
+    let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+    let mut framing: BTreeMap<String, Vec<(Obs, Frame)>> = BTreeMap::new();
+    if members.is_empty() {
+        return framing;
+    }
+    let mut storeys: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
+    storeys.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+    for (li, l) in storeys.iter().enumerate() {
+        let floor = l.elevation_ft * upf;
+        let top = storeys.get(li + 1).map_or((l.elevation_ft + l.height_ft.max(1.0)) * upf, |n| n.elevation_ft * upf);
+        let list = framing.entry(l.name.to_ascii_lowercase()).or_default();
+        for m in members.iter().filter(|m| m.z1 > floor && m.z0 < top + upf / 12.0) {
+            // From its floor's own plan onto this level's.
+            let own = d.model.get(m.host).map_or(Vec2::new(0.0, 0.0), |e| super::bspec::stacked_by(e));
+            let o = own - move_of(&m.level) + move_of(&l.name);
+            let (a, b) = (m.a - o, m.b - o);
+            let n = {
+                let d = b - a;
+                let len = d.len().max(1e-9);
+                Vec2::new(-d.y / len, d.x / len) * (m.t / 2.0)
+            };
+            let (pa, pb, pc, pd) = (a + n, a - n, b + n, b - n);
+            let lo = Vec3::new(pa.x.min(pb.x).min(pc.x).min(pd.x), pa.y.min(pb.y).min(pc.y).min(pd.y), m.z0);
+            let hi = Vec3::new(pa.x.max(pb.x).max(pc.x).max(pd.x), pa.y.max(pb.y).max(pc.y).max(pd.y), m.z1);
+            list.push((
+                Obs { handle: m.host, lo, hi, category: FRAMING.into(), system: m.item.clone(), trade: "framing" },
+                Frame { a, b, t: m.t, kind: FrameKind::of(m.kind, &m.item) },
+            ));
+        }
+    }
+    framing
+}
+
 pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let rl = rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -2956,6 +3240,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut devs: Vec<Dev> = Vec::new();
     let mut gear: Vec<GearEl> = Vec::new();
     let rated = rated_walls(d, sp, MAX_DEVICES);
+    // The built walls on their plans: an in-wall leg runs in its wall's middle (Q6622).
+    let wall_pieces = super::propfill::wall_footprints_on_plans(d);
     for e in d.model.iter() {
         if super::wallgen::made_as(e).as_deref() == Some("device") && devs.len() < MAX_DEVICES {
             let ps = props::read(&e.common.xdata);
@@ -3086,34 +3372,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // layout makes them from the joist and truss documents: each member over the level's space,
     // on its plan.
     let members = super::tradeatoms::framing_members(d, sp);
-    let mut framing: BTreeMap<String, Vec<(Obs, Frame)>> = BTreeMap::new();
-    if !members.is_empty() {
-        let mut storeys: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
-        storeys.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-        for (li, l) in storeys.iter().enumerate() {
-            let floor = l.elevation_ft * upf;
-            let top = storeys.get(li + 1).map_or((l.elevation_ft + l.height_ft.max(1.0)) * upf, |n| n.elevation_ft * upf);
-            let list = framing.entry(l.name.to_ascii_lowercase()).or_default();
-            for m in members.iter().filter(|m| m.z1 > floor && m.z0 < top + upf / 12.0) {
-                // From its floor's own plan onto this level's.
-                let own = d.model.get(m.host).map_or(Vec2::new(0.0, 0.0), |e| super::bspec::stacked_by(e));
-                let o = own - move_of(&m.level) + move_of(&l.name);
-                let (a, b) = (m.a - o, m.b - o);
-                let n = {
-                    let d = b - a;
-                    let len = d.len().max(1e-9);
-                    Vec2::new(-d.y / len, d.x / len) * (m.t / 2.0)
-                };
-                let (pa, pb, pc, pd) = (a + n, a - n, b + n, b - n);
-                let lo = Vec3::new(pa.x.min(pb.x).min(pc.x).min(pd.x), pa.y.min(pb.y).min(pc.y).min(pd.y), m.z0);
-                let hi = Vec3::new(pa.x.max(pb.x).max(pc.x).max(pd.x), pa.y.max(pb.y).max(pc.y).max(pd.y), m.z1);
-                list.push((
-                    Obs { handle: m.host, lo, hi, category: FRAMING.into(), system: m.item.clone(), trade: "framing" },
-                    Frame { a, b, t: m.t, truss: m.kind == "truss" },
-                ));
-            }
-        }
-    }
+    let mut framing = framing_over_levels(d, sp, &members, &moves, upf);
     let mut fields: BTreeMap<String, Field> = BTreeMap::new();
     for (k, v) in obstacles {
         let fr = framing.remove(&k).unwrap_or_default();
@@ -4185,6 +4444,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             // Through the studs where both boxes are in the room's walls; else, fed from below,
             // through the floor framing (Q6206).
             let in_studs = stud_path((a.at, a.top, a.face, &a.room), (b.at, b.top, b.face, &b.room), floor, upf, rl);
+            // The studs are bored in their middle: the leg along the wall runs in the wall's
+            // middle, not at the boxes' line (Q6622).
+            let middle = |dv: &Dev, z: f64| dv.face.and_then(|f| wall_middle(&wall_pieces, &dv.level, dv.at, f, z, upf));
+            let to_middle = |pts: Vec<[f64; 2]>, bot: Vec<f64>| -> (Vec<[f64; 2]>, Vec<f64>) {
+                let z = bot.get(1).map_or(floor, |z| floor + z * upf);
+                through_wall_middle(&pts, &bot, (middle(a, z), a.face), (middle(b, z), b.face), upf).unwrap_or((pts, bot))
+            };
+            let in_studs = in_studs.map(|(p, b)| to_middle(p, b));
             let by_floor = in_studs.is_none() && fed_below;
             floor_legs += usize::from(by_floor);
             let stud = in_studs.or_else(|| by_floor.then(|| floor_path((a.at, a.top), (b.at, b.top), floor, upf, rl)));
@@ -4211,6 +4478,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 }
                 plan.extend([[b.at.x, b.at.y], [b.at.x, b.at.y]]);
                 bot.push((b.top - floor) / upf);
+                let (plan, bot) = to_middle(plan, bot);
                 r.points = plan;
                 r.source_sheet = IN_WALL.into();
                 r.bottoms_ft = bot;
@@ -5576,6 +5844,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let framing_report = json!({
         "levels_framed": framed_levels,
         "members": members.len(),
+        "members_by_kind": members.iter().fold(BTreeMap::<&str, usize>::new(), |mut m, x| {
+            *m.entry(x.kind).or_default() += 1;
+            m
+        }),
         "members_source": member_source,
         "bored_holes": bored.iter().filter(|h| h.dia_in > 0.0).count(),
         "truss_passes": bored.iter().filter(|h| h.dia_in <= 0.0).count(),
@@ -5595,7 +5867,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 "level": h.level, "circuit": h.circuit, "member": h.member, "floor": h.host.hex(),
                 "hole_in": r3(h.dia_in), "raceway_in": h.raceway_in, "end_ft": r2(h.end_ft),
                 "at": [r2(h.at.x), r2(h.at.y), r2((h.z - floor) / upf)],
-                "item": if h.dia_in > 0.0 { rl.framing.bored_item.clone() } else { rl.framing.truss_item.clone() },
+                "item": rl.framing.item(h.kind, h.dia_in),
                 "design": if h.design.is_empty() { Value::Null } else { json!(h.design) },
             })
         })
@@ -5956,6 +6228,7 @@ struct Bored {
     end_ft: f64,
     /// A hole bored for two raceways (Q6216): the design's two holes it stands for.
     design: String,
+    kind: FrameKind,
 }
 
 /// Two holes of one member closer than the hole rule allows (edge to edge, in the web's plane).
@@ -6057,6 +6330,7 @@ fn bore(out: &mut Vec<Bored>, field: &Field, leg: &Leg, circuit: &str, level: &s
                         raceway_in: size_in,
                         design: String::new(),
                         end_ft: h.end_ft,
+                        kind: h.kind,
                     });
                 }
             }
@@ -6100,90 +6374,197 @@ fn r3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
 
-/// Box fill (NEC 314.16) at each device box the routing put conductors in, against the box its
-/// pieces gave it (its `cubic_in`): the report's `box_fill` filled in.
+/// A box's stick ends this close (inches) land in it (Validate's touch default).
+const BOX_TOUCH_IN: f64 = 1.0;
+
+/// A box the field installs bigger: what it was and becomes, and why.
+struct BoxFix {
+    h: Handle,
+    from: String,
+    to: String,
+    cu: f64,
+    v: f64,
+    /// Its inside length when a pull box (NEC 314.28), and the design box's.
+    length_in: Option<f64>,
+    design_len: Option<f64>,
+    why: String,
+}
+
+/// The box that holds what `fill` asks of a box of `size` (`cu` cu in), the device of `kind`
+/// in it if any: the next box or ring of the rules' ladder; past it, or for conductors #4 and
+/// larger (NEC 314.28), a stock pull or junction box (beside a device's box, the device fed from
+/// it). None when nothing in the rules holds it.
+fn box_fix(
+    h: Handle,
+    size: &str,
+    cu: f64,
+    design_len: Option<f64>,
+    kind: Option<&str>,
+    fill: &super::validate_conduit::FillNeed,
+    rl: &RouteRules,
+) -> Option<BoxFix> {
+    let bf = &rl.box_fill;
+    let need = fill.need_cu_in;
+    let mut why = format!("{need:.1} cu in of conductors and devices in a {size} of {cu} cu in");
+    if fill.pull_len_in.is_none()
+        && let Some((to, v)) =
+            bf.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v))
+    {
+        if to.contains("ring") && !bf.bigger_source.is_empty() {
+            why = format!("{why}: {}", bf.bigger_source);
+        }
+        return Some(BoxFix { h, from: size.to_string(), to, cu, v, length_in: None, design_len: None, why });
+    }
+    // A pull or junction box: long enough for 314.28, holding the rest by 314.16.
+    let len = fill.pull_len_in.unwrap_or(0.0);
+    let (name, l, v) = bf.pull.boxes.iter().find(|(_, l, v)| *l + 1e-9 >= len && *v + 1e-9 >= need)?.clone();
+    if let (Some(l_need), Some(big)) = (fill.pull_len_in, fill.large.as_deref()) {
+        why = format!("#{big} in it: {l_need:.1} in long ({}); {why}", bf.pull.source);
+    }
+    why = format!("{why}: {}", bf.pull.boxes_source);
+    let (to, v) = match kind {
+        Some(k) => {
+            why = format!("{why}; {}", bf.pull.device_source);
+            (
+                format!("{name} beside the {}'s {size}, the raceways landing in it and the {} fed from it", k.replace('_', " "), k.replace('_', " ")),
+                v + cu,
+            )
+        }
+        None => (name, v),
+    };
+    Some(BoxFix { h, from: size.to_string(), to, cu, v, length_in: Some(l), design_len, why })
+}
+
+/// Box fill (NEC 314.16, and 314.28 with conductors #4 and larger) at each box, against the box
+/// its pieces gave it (its `cubic_in`): the report's `box_fill` filled in, and each box the field
+/// would install bigger corrected (the design box kept beside it).
+///
+/// What a box holds is counted from the built pieces (Q6557), as Validate recounts it: every run
+/// whose stick ends land in the box, whatever device or circuit it serves (a raceway dropping
+/// through the box of a device above the one it feeds, a gang box, a junction where runs meet),
+/// each of its conductors once. A box the pieces don't measure (no body yet) takes what the
+/// routing put in its device's box.
 pub(crate) fn check_box_fill(d: &mut Drawing, report: &mut Value) {
     let rl = rules();
     let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
-    let mut boxes: HashMap<String, (String, f64, Handle)> = HashMap::new();
+    // The routing's view: what it brought into each device's box.
+    let routed: HashMap<String, &Value> = pending.iter().filter_map(|p| Some((p["device"].as_str()?.to_ascii_uppercase(), p))).collect();
+    // The pieces' view: what enters each box as built.
+    let sp = d.building_spec.as_deref().and_then(|t| BuildingSpec::from_json(t).ok()).unwrap_or_default();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let net = super::validate_conduit::Net::raceways(d, &sp);
+    let entering = super::validate_conduit::boxes_in(&net, BOX_TOUCH_IN / 12.0 * upf);
+    let built: HashMap<Handle, (&super::validate_conduit::BoxEl, &super::validate_conduit::BoxIn)> =
+        net.boxes.iter().zip(&entering).map(|(b, i)| (b.handle, (b, i))).collect();
+    let dev_kind: HashMap<Handle, &str> = net.devs.iter().map(|v| (v.handle, v.kind.as_str())).collect();
+    // Every box: its device, and the box as designed (a box corrected before is checked as
+    // designed, so a second check finds and corrects it the same way).
+    struct DesignBox {
+        h: Handle,
+        of: Option<String>,
+        size: String,
+        cu: f64,
+        len: Option<f64>,
+    }
+    let mut boxes: Vec<DesignBox> = Vec::new();
     for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
         if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
             continue;
         }
-        let (Some(of), Some(cu)) = (ps.get("box_of").map(Prop::text), ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok())) else {
-            continue;
-        };
-        // A box corrected before is checked as designed (its design volume), so a second check
-        // finds and corrects it the same way.
+        let Some(cu) = ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok()) else { continue };
+        let of = ps.get("box_of").map(Prop::text).filter(|t| !t.is_empty());
         let (size, cu) = match (ps.get("design:size"), ps.get("design:cubic_in").and_then(|p| p.text().parse::<f64>().ok())) {
             (Some(s), Some(c)) => (s.text(), c),
             _ => (ps.get("size").map(Prop::text).unwrap_or_default(), cu),
         };
-        boxes.insert(of.to_ascii_uppercase(), (size, cu, e.handle));
+        let len = ps.get("design:length_in").and_then(|p| p.text().parse::<f64>().ok());
+        if boxes.len() < MAX_DEVICES {
+            boxes.push(DesignBox { h: e.handle, of, size, cu, len });
+        }
     }
     let (mut checked, mut over) = (0usize, Vec::new());
-    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, the next box that holds
-    // what enters it, and why.
-    let mut fixes: Vec<(Handle, String, String, f64, f64, f64)> = Vec::new();
-    for p in &pending {
-        let Some((size, cu, bh)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
-        checked += 1;
-        let conds: Vec<(u32, String)> = p["conductors"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
-            .collect();
-        let need = box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl);
-        if need > *cu + 1e-9 && over.len() < MAX_ITEMS {
-            let bigger =
-                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v));
-            if let Some((to, v)) = &bigger {
-                fixes.push((*bh, size.clone(), to.clone(), *cu, *v, need));
+    let mut from_pieces = 0usize;
+    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, what it becomes, why.
+    let mut fixes: Vec<BoxFix> = Vec::new();
+    for b in &boxes {
+        let p = b.of.as_deref().and_then(|h| routed.get(&h.to_ascii_uppercase()).copied());
+        let piece = built.get(&b.h).filter(|(_, i)| !i.conds.is_empty() || i.unknown_cable > 0);
+        let yoke = match b.of.as_deref().and_then(Handle::parse_hex).and_then(|h| dev_kind.get(&h)) {
+            Some(k) => super::validate_conduit::yoke_kind(k),
+            None => p.is_some_and(|p| p["yoke"].as_bool().unwrap_or(false)),
+        };
+        let (fill, runs, box_len) = match (piece, p) {
+            (Some((be, bin)), _) => {
+                let len = b.len.unwrap_or_else(|| {
+                    super::validate_conduit::box_length_in(&super::validate_conduit::BoxEl { length_in: None, ..(*be).clone() }, upf)
+                });
+                (super::validate_conduit::fill_need(&bin.conds, bin.unknown_cable, yoke, &bin.raceways_in, rl), bin.runs, Some(len))
             }
-            over.push(json!({
-                "kind": "box_fill", "device": p["device"], "device_kind": p["kind"], "level": p["level"], "circuit": p["circuit"],
-                "box": size, "cubic_in": cu, "needed_cu_in": r2(need),
-                "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
-                "fix": bigger.as_ref().map_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".to_string(), |b| b.0.clone()),
-                "corrected": bigger.is_some(),
-                "source": rl.box_fill.source,
-            }));
+            (None, Some(p)) => {
+                // Each conductor the routing brought in, the grounds as one of the largest.
+                let mut conds: Vec<(String, bool)> = Vec::new();
+                for c in p["conductors"].as_array().into_iter().flatten().take(200) {
+                    let (Some(n), Some(sz)) = (c.get(0).and_then(Value::as_u64), c.get(1).and_then(Value::as_str)) else { continue };
+                    conds.extend(std::iter::repeat_n((sz.to_string(), false), n.min(200) as usize));
+                }
+                let vol = |s: &str| rl.box_fill.cu_in.get(s).copied().unwrap_or(0.0);
+                if let Some(g) = conds.iter().map(|c| c.0.clone()).max_by(|a, b| vol(a).total_cmp(&vol(b))) {
+                    conds.push((g, true));
+                }
+                (super::validate_conduit::fill_need(&conds, 0, yoke, &[], rl), 0, None)
+            }
+            (None, None) => continue,
+        };
+        checked += 1;
+        from_pieces += usize::from(piece.is_some());
+        let fits = fill.need_cu_in <= b.cu + 1e-9;
+        let long = match (fill.pull_len_in, box_len) {
+            (Some(l), Some(have)) => have + 1e-6 >= l,
+            _ => true,
+        };
+        if fits && long || over.len() >= MAX_ITEMS {
+            continue;
         }
+        let kind = p
+            .and_then(|p| p["kind"].as_str())
+            .map(str::to_string)
+            .or_else(|| b.of.as_deref().and_then(Handle::parse_hex).and_then(|h| dev_kind.get(&h)).map(|k| (*k).to_string()));
+        let fix = box_fix(b.h, &b.size, b.cu, box_len, kind.as_deref().filter(|_| b.of.is_some()), &fill, rl);
+        let level = p.map(|p| p["level"].clone()).or_else(|| piece.map(|(be, _)| json!(be.level))).unwrap_or(Value::Null);
+        over.push(json!({
+            "kind": "box_fill", "box": b.h.hex(), "device": b.of, "device_kind": kind,
+            "level": level, "circuit": p.map_or(Value::Null, |p| p["circuit"].clone()),
+            "size": b.size, "cubic_in": b.cu, "needed_cu_in": r2(fill.need_cu_in),
+            "conductors": fill.list, "runs": runs, "counted_from": if piece.is_some() { "pieces" } else { "routing" },
+            "pull_length_in": fill.pull_len_in.map(r2), "box_length_in": box_len.map(r2),
+            "fix": fix.as_ref().map_or_else(|| "a bigger box, or fewer raceways into it (a junction box beside it)".to_string(), |f| f.to.clone()),
+            "corrected": fix.is_some(),
+            "source": if fill.pull_len_in.is_some() && !long { rl.box_fill.pull.source.clone() } else { rl.box_fill.source.clone() },
+        }));
+        fixes.extend(fix);
     }
-    // Each one the next box holds: built with it, the design box kept beside it.
+    // Each one a bigger box holds: built with it, the design box kept beside it.
     let rule = super::provenance::rule("E-BOX-FILL");
     let mut corrected = 0usize;
-    for (h, from, to, cu, v, need) in &fixes {
-        let mut why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
-        if to.contains("ring") && !rl.box_fill.bigger_source.is_empty() {
-            why = format!("{why}: {}", rl.box_fill.bigger_source);
+    for f in &fixes {
+        let mut changes = vec![("size", f.from.clone(), f.to.clone()), ("cubic_in", format!("{}", f.cu), format!("{}", f.v))];
+        if let Some(l) = f.length_in {
+            changes.push(("length_in", f.design_len.map_or_else(String::new, |x| format!("{}", r2(x))), format!("{l}")));
         }
-        let size = super::provenance::Correction {
-            key: "size".into(),
-            design: from.clone(),
-            corrected: to.clone(),
-            reason: why.clone(),
-            rule: rule.id.clone(),
-        };
-        let vol = super::provenance::Correction {
-            key: "cubic_in".into(),
-            design: format!("{cu}"),
-            corrected: format!("{v}"),
-            reason: why,
-            rule: rule.id.clone(),
-        };
-        let a = super::provenance::correct_element(d, *h, &size);
-        let b = super::provenance::correct_element(d, *h, &vol);
-        corrected += usize::from(a || b);
+        let mut any = false;
+        for (key, design, now) in changes {
+            let c = super::provenance::Correction { key: key.into(), design, corrected: now, reason: f.why.clone(), rule: rule.id.clone() };
+            any |= super::provenance::correct_element(d, f.h, &c);
+        }
+        corrected += usize::from(any);
     }
     // The raceway pieces the clash offsets moved (Q6216): each keeps its design height.
     let marked = mark_offsets(d, report);
     if corrected > 0 || marked > 0 {
         super::mepatoms::reindex(d);
     }
-    report["box_fill"] = json!({"checked": checked, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
+    report["box_fill"] = json!({"checked": checked, "from_pieces": from_pieces, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
     report["clash_pieces_corrected"] = json!(marked);
 }
 

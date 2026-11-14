@@ -1794,18 +1794,36 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
         let aff = (z_ref - floor) / inch;
         if let Some(h) = prop_num(&dv.store, "height_aff") {
             let off = aff - h;
-            let v = if off.abs() <= tol_h + 1e-6 { "pass" } else { "fail" };
+            // A target no document gives (the model's own height, or a default) is no measure
+            // (Q6563): never a pass.
+            let documented = dv.store.get("height_aff").is_some_and(|p| !p.source.kind.is_assumed() && p.source.kind != SourceKind::Computed);
+            let v = if !documented {
+                "unsure"
+            } else if off.abs() <= tol_h + 1e-6 {
+                "pass"
+            } else {
+                "fail"
+            };
             list.push(check(
                 "height",
                 v,
-                if v == "pass" {
-                    format!("{} AFF to its {} (hard)", in_text(h), datum.name())
-                } else {
-                    format!("{} AFF to its {} in the model; the documents say {} (hard, ±{tol_h} in)", in_text(aff), datum.name(), in_text(h))
+                match v {
+                    "pass" => format!("{} AFF to its {} (hard)", in_text(h), datum.name()),
+                    "fail" => format!(
+                        "{} AFF to its {} in the model; the documents say {} (hard, ±{tol_h} in)",
+                        in_text(aff),
+                        datum.name(),
+                        in_text(h)
+                    ),
+                    _ => format!(
+                        "{} AFF to its {}: no document gives its height (its target is the model's own or a default): not measured",
+                        in_text(aff),
+                        datum.name()
+                    ),
                 },
                 format!("{} AFF ±{tol_h} in", in_text(h)),
                 in_text(aff),
-                json!({"aff_in": r2(aff), "expected_in": r2(h), "off_in": r2(off), "to": datum.name()}),
+                json!({"aff_in": r2(aff), "expected_in": r2(h), "off_in": r2(off), "to": datum.name(), "target": if documented { "document" } else { "model" }}),
             ));
         }
         // Along: soft.
@@ -1818,8 +1836,23 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
         let documented = dv.store.get("offset_along").is_some_and(|p| p.source.kind == SourceKind::Print);
         if let (Some(t), Some(act)) = (target, actual) {
             let drift = act - t;
-            let m = json!({"target_in": r2(t), "actual_in": r2(act), "drift_in": r2(drift), "band_in": r2(band), "from": from, "solve": solve_state, "documented": documented});
-            if drift.abs() > band + 1e-6 {
+            let m = json!({"target_in": r2(t), "actual_in": r2(act), "drift_in": r2(drift), "band_in": r2(band), "from": from, "solve": solve_state, "documented": documented, "target": if documented { "document" } else { "model" }});
+            if !documented {
+                // Its target was measured from its own place on the plan (Q6563): a misplaced
+                // device would pass against it, so it is never a pass. The governing plan's spot,
+                // where a sheet sends its locations there, is checked as `governing`.
+                list.push(check(
+                    "along",
+                    "unsure",
+                    format!(
+                        "{} from {from}: no document dimension gives its place (its target is its own position, measured from the plan): not measured",
+                        ft_in(act)
+                    ),
+                    format!("a document's dimension from {from}"),
+                    ft_in(act),
+                    m,
+                ));
+            } else if drift.abs() > band + 1e-6 {
                 let what = if documented { "the document's dimension" } else { "its target" };
                 list.push(check(
                     "along",

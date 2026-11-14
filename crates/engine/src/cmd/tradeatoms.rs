@@ -724,7 +724,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
 /// router (Q6152): the raceways keep to its bays and bore its web only where the hole rules allow.
 #[derive(Clone, Debug)]
 pub(crate) struct Member {
-    /// `joist` or `truss`.
+    /// `joist`, `truss` or `rim`.
     pub kind: &'static str,
     pub item: String,
     /// The level whose floor it frames (a truss: the top storey's), and that floor's element.
@@ -753,7 +753,8 @@ pub(crate) fn framing_members(d: &Drawing, sp: &BuildingSpec) -> Vec<Member> {
     let mut batch = Batch::default();
     floors::lay_out(d, sp, &rules, &ctx, &mut batch, &|t: &str| t == "framing");
     let mut out = Vec::new();
-    for p in batch.pieces.iter().filter(|p| matches!(p.kind, "joist" | "truss")) {
+    // The rim boards too (Q6622): a run across the floor's edge bores them by their own rule.
+    for p in batch.pieces.iter().filter(|p| matches!(p.kind, "joist" | "truss" | "rim")) {
         let source = match (&p.source.doc, p.source.kind) {
             (Some(doc), k) => format!("{}: {doc}", k.as_str()),
             (None, k) => k.as_str().to_string(),

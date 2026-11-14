@@ -142,9 +142,13 @@ fn circuits_are_routed_square_around_the_ducts_and_into_every_box() {
     let d = s.doc().expect("doc");
     let gaps = d.model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count();
     assert_eq!(gaps, 0, "every drop reaches its box");
-    // Box fill checked at every box a raceway enters, against the box it has: none over here
-    // (boxes chained in and out).
-    assert_eq!(r["box_fill"]["checked"], json!(6), "{r}");
+    // Box fill checked at every box a raceway enters, against the box it has, counted from the
+    // pieces in it (Q6557): the six devices' boxes and the junction box where the homeruns
+    // meet. None over here (boxes chained in and out).
+    let boxes =
+        d.model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("atom").map(|x| x.text()).as_deref() == Some("box")).count();
+    assert_eq!(boxes, 7, "six device boxes and a junction box");
+    assert_eq!((r["box_fill"]["checked"].clone(), r["box_fill"]["from_pieces"].clone()), (json!(boxes), json!(boxes)), "{r}");
     assert_eq!(r["box_fill"]["over"], json!([]), "{r}");
     // Over the shallow supply duct: no clash there. The deep return duct can't be passed by
     // LP1-3's homerun tap: one clash, with both objects, the clearance and a fix.
@@ -1073,7 +1077,11 @@ fn the_branches_keep_to_the_joist_bays_and_bore_the_web_only_in_its_hole_zone() 
     );
     // The joists the trades lay out are the ones routed through.
     let joists = s.execute("bim.count", &json!({"trade": "framing", "kind": "joist"})).expect("count");
-    assert_eq!(joists["count"].as_f64().unwrap_or(0.0) as u64, fr["members"].as_u64().unwrap(), "{joists} {fr}");
+    assert_eq!(joists["count"].as_f64().unwrap_or(0.0) as u64, fr["members_by_kind"]["joist"].as_u64().unwrap(), "{joists} {fr}");
+    // … and their rim boards round the floor (Q6622).
+    let rims = s.execute("bim.count", &json!({"trade": "framing", "kind": "rim"})).expect("count");
+    assert_eq!(rims["count"].as_f64().unwrap_or(0.0) as u64, fr["members_by_kind"]["rim"].as_u64().unwrap(), "{rims} {fr}");
+    assert_eq!(fr["members"].as_u64().unwrap(), fr["members_by_kind"]["joist"].as_u64().unwrap() + fr["members_by_kind"]["rim"].as_u64().unwrap());
     // Rerouting with the trades' pieces built (studs, sheets, joists) is the same routing: the
     // pieces are not obstacles.
     let pieces = |s: &mut Session| s.execute("bim.count", &json!({"group_by": "trade"})).expect("count")["rows"].clone();

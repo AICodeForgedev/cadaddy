@@ -269,6 +269,39 @@ fn deck_over(sp: &BuildingSpec, level: &str) -> Option<f64> {
     (a.framed && read).then(|| a.thickness_in()).filter(|t| t.is_finite() && *t > 0.0)
 }
 
+/// The underside of the structure over a level (feet, the building's datum) and why, where its
+/// documents frame it: the next storey's floor framing (its members and the deck over them, as
+/// the floor's notes give it) or the roof's framing over it (its members' bearing, else their
+/// depth and deck). None where nothing frames it (a slab, or framing no document gives): the
+/// caller's usual depth applies. Nothing hung under the floor above (a duct) rises past it: the
+/// joist space is the structure's.
+pub(crate) fn structure_over(sp: &BuildingSpec, level: &str, rule: &Rule) -> Option<(f64, String)> {
+    let lv = sp.level(level)?;
+    if !(lv.elevation_ft.is_finite() && lv.height_ft.is_finite() && lv.height_ft > 0.0) {
+        return None;
+    }
+    let top = lv.elevation_ft + lv.height_ft;
+    // The storey over it: the one at its top.
+    let above = sp.storeys().into_iter().filter(|(_, e)| (*e - top).abs() < 0.5 && *e > lv.elevation_ft).map(|(n, _)| n).next()?;
+    let a = above.as_str();
+    if let Some(f) = sp.floor_framing_of(a).map(|f| f.depth_in).filter(|f| f.is_finite() && *f > 0.0) {
+        // The deck over the joists as the floor's notes give it, with its topping (Q6408).
+        let deck = deck_over(sp, a).unwrap_or(rule.deck_in);
+        return Some((top - (f + deck) / 12.0, format!("{a}'s floor framing {}\" deep and {}\" deck over it", f, deck)));
+    }
+    let f = sp.exterior.level_framing(a)?;
+    match f.bearing_ft {
+        Some(b) if b.is_finite() && b > lv.elevation_ft && b <= top => {
+            Some((b, format!("the {} of {a} bearing at {}", f.member, ft_in(b - lv.elevation_ft))))
+        }
+        _ if f.depth_in.is_finite() && f.depth_in > 0.0 => {
+            let deck = super::exterior::deck_in(f);
+            Some((top - (f.depth_in + deck) / 12.0, format!("{a}'s {} {}\" deep and {}\" deck", f.member, f.depth_in, deck)))
+        }
+        _ => None,
+    }
+}
+
 /// The height under the assembly over a level's rooms, feet above its floor, and why: the next
 /// storey's floor (its framing's members, deck and the ceiling membrane under them) or roof (its
 /// members' bearing, else their depth and deck) over the floor to floor, else the rule's usual
@@ -282,31 +315,15 @@ pub(crate) fn derived_height(sp: &BuildingSpec, level: &str, rule: &Rule) -> Opt
     // The storey over it: the one at its top.
     let above = sp.storeys().into_iter().filter(|(_, e)| (*e - top).abs() < 0.5 && *e > lv.elevation_ft).map(|(n, _)| n).next();
     let m = rule.membrane_in / 12.0;
-    let (underside, why) = match above.as_deref() {
-        Some(a) if sp.floor_framing_of(a).is_some_and(|f| f.depth_in.is_finite() && f.depth_in > 0.0) => {
-            let f = sp.floor_framing_of(a).map_or(0.0, |f| f.depth_in);
-            // The deck over the joists as the floor's notes give it, with its topping (Q6408).
-            let deck = deck_over(sp, a).unwrap_or(rule.deck_in);
-            let d = (f + deck) / 12.0;
-            (top - d - m, format!("{a}'s floor framing {}\" deep and {}\" deck over it", f, deck))
+    let (underside, why) = match (structure_over(sp, level, rule), above.as_deref()) {
+        (Some((s, why)), _) => (s - m, why),
+        (None, Some(a)) if sp.exterior.level_framing(a).is_some() => {
+            (top - rule.default_depth_in / 12.0, format!("{a}'s framing depth not read: the usual {}\"", rule.default_depth_in))
         }
-        Some(a) if sp.exterior.level_framing(a).is_some() => {
-            let f = sp.exterior.level_framing(a).cloned();
-            match f {
-                Some(f) if f.bearing_ft.is_some_and(|b| b.is_finite() && b > lv.elevation_ft && b <= top) => {
-                    let b = f.bearing_ft.unwrap_or(top);
-                    (b - m, format!("the {} of {a} bearing at {}", f.member, ft_in(b - lv.elevation_ft)))
-                }
-                Some(f) if f.depth_in.is_finite() && f.depth_in > 0.0 => {
-                    let deck = super::exterior::deck_in(&f);
-                    let d = (f.depth_in + deck) / 12.0;
-                    (top - d - m, format!("{a}'s {} {}\" deep and {}\" deck", f.member, f.depth_in, deck))
-                }
-                _ => (top - rule.default_depth_in / 12.0, format!("{a}'s framing depth not read: the usual {}\"", rule.default_depth_in)),
-            }
+        (None, Some(a)) => {
+            (top - rule.default_depth_in / 12.0, format!("{a}'s floor framing not read: the usual {}\" assembly", rule.default_depth_in))
         }
-        Some(a) => (top - rule.default_depth_in / 12.0, format!("{a}'s floor framing not read: the usual {}\" assembly", rule.default_depth_in)),
-        None => (top - rule.default_depth_in / 12.0, format!("nothing read over it: the usual {}\" assembly", rule.default_depth_in)),
+        (None, None) => (top - rule.default_depth_in / 12.0, format!("nothing read over it: the usual {}\" assembly", rule.default_depth_in)),
     };
     let h = underside - lv.elevation_ft;
     let most = lv.height_ft - 0.5;
