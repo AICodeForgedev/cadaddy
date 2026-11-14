@@ -388,10 +388,40 @@
       "skip_from": ["equipment", "site_work", "ceiling", "floor", "hoistway"]
     },
     {
+      "id": "E-SENSOR-POWER-PACK",
+      "trade": "electrical",
+      "fills": "the power pack each low-voltage occupancy or vacancy sensor zone needs, which the plans rarely draw: one per zone (a room, or each switched or dimmed leg in it when its sensors carry leg letters), a dimming pack when the zone's sensor dims 0-10V, mounted on a box beside the controlled luminaire nearest its sensors, the zone's sensors wired to it with low-voltage cable; a wall-box sensor that switches line voltage itself takes none; a pack the documents draw in a room is that room's (numbers and words: low_voltage_words and line_voltage_words, what a sensor's legend, type or product says of its voltage, read first; remote_words and wallbox_words, what they say of where it mounts; then what the specification's lighting control section says (a separate power pack, recorded on each sensor as control_power; spec_context_lines, how many lines after one naming a sensor still speak of sensors); remote_mountings, the mountings (the built element's) of a sensor that is never in a wall box; wallbox_max_height_in, the highest a wall-box sensor (a switch's replacement, at switch height) is mounted: one on a wall higher is a high-wall sensor; dimming_words, a sensor that dims; pack_words, a drawn pack; switching_item, dimming_item, box_item and box_size, cable_item and cable_size, what is bought; cable_slack_ft, the drops and makeup each sensor's cable adds to the plan run; default_cable_ft, one sensor's cable when no location is known; zone_reach_ft, how far from its sensors a luminaire the sensor does not name may be and still take the pack)",
+      "basis": "trade practice: a low-voltage occupancy sensor (ceiling, corner or high-wall) switches nothing itself; a power pack (a relay with its own low-voltage supply, set through a knockout of a box beside the load) switches the zone's line-voltage leg, one pack per zone with the zone's sensors wired to it in parallel by low-voltage cable (Class 2, NEC 725), a 0-10V dimming sensor's pack passing the dimming leads (the sensor's cut sheet and the control narrative govern); a wall-box sensor switches the line voltage itself and needs none; alternative: a networked lighting control system's room controller, where the specification calls for one, or a second pack where a zone's load exceeds one pack's rating",
+      "low_voltage_words": ["LOW VOLTAGE", "LOW-VOLTAGE", "LV", "24V", "24 V", "24VDC", "24 VDC", "CLASS 2", "POWER PACK"],
+      "line_voltage_words": ["LINE VOLTAGE", "LINE-VOLTAGE", "120V", "120 V", "277V", "277 V", "120/277V", "120/277"],
+      "remote_words": ["CEILING", "CLG", "CORNER", "HIGH WALL", "HIGH-WALL", "WALL CORNER", "FIXTURE MOUNTED", "FIXTURE-MOUNTED"],
+      "wallbox_words": ["WALL SWITCH", "WALLSWITCH", "WALLBOX", "WALL BOX", "WALL-BOX", "SWITCH BOX", "SWITCH", "WALL MOUNTED", "WALL-MOUNTED", "WALL MOUNT"],
+      "wallbox_max_height_in": 60.0,
+      "spec_context_lines": 40,
+      "remote_mountings": ["ceiling"],
+      "dimming_words": ["0-10V", "0-10 V", "0-10", "DIMMING", "DIMMER", "DIM"],
+      "pack_words": ["POWER PACK", "POWERPACK", "RELAY PACK", "PWR PACK"],
+      "switching_item": "Power pack, switching (occupancy sensor)",
+      "dimming_item": "Power pack, 0-10V dimming (occupancy sensor)",
+      "box_item": "Box, 4\" square",
+      "box_size": "2-1/8\" deep",
+      "cable_item": "Sensor cable, low voltage",
+      "cable_size": "3-conductor #18 AWG",
+      "cable_slack_ft": 10.0,
+      "default_cable_ft": 25.0,
+      "zone_reach_ft": 40.0
+    },
+    {
       "id": "E-SPLICES",
       "trade": "electrical",
       "fills": "the splice connectors in each box: no drawing shows them",
       "basis": "trade practice: at every box the circuit's conductors are spliced where it continues (a pigtail to each device), each luminaire's leads spliced to its circuit, the grounds bundled with pigtails to the device and a metal box (NEC 250.148), each splice in a connector listed for its conductors (UL 486C)"
+    },
+    {
+      "id": "E-RACEWAY-SUPPORTS",
+      "trade": "electrical",
+      "fills": "how the raceways are held up beyond their own straps: no drawing shows the strut, trapezes, rods, anchors or riser clamps",
+      "basis": "trade practice: two or more raceways run side by side (feeder banks, homerun groups, riser stacks) go on strut, a trapeze on two threaded rods from the structure overhead or a wall strut on a riser stack, a strut strap per raceway at each support, at the closest code spacing of the raceways it carries (NEC 358.30, 344.30, 352.30) and at each end of the stretch they share; a raceway run alone stays on its own straps (alternative: a rod hanger where no surface is near); a raceway rising through a floor gets a riser clamp at each floor"
     },
     {
       "id": "E-CONN-AT-UNIT",

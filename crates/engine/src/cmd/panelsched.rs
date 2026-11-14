@@ -299,7 +299,16 @@ const MAX_MENTION_TEXTS: usize = 400_000;
 /// Most panel names taken from a set's notes.
 const MAX_MENTIONS: usize = 500;
 
-/// The schedules on one sheet's texts (its PDF page re-read, or the drawing's). A schedule whose
+/// The lettering a sheet's panel schedules are read from: its texts and the visible attribute
+/// lettering of its block references. A PDF import can keep a cell's text (a breaker's type
+/// code, a column heading, a `SPARE`) as the tag of a shape it found repeated, such as a
+/// table's rules at the same corner of two schedules side by side: it is still printed in its
+/// cell, where the attribute stands.
+pub(crate) fn sheet_texts(d: &cadaddy_doc::Drawing) -> Vec<TextItem> {
+    cadaddy_mepfix::sheet_facts::texts_with_tags(d)
+}
+
+/// The schedules on one sheet's texts (its PDF page re-read, or the drawing's; [`sheet_texts`]). A schedule whose
 /// panel's name the sheet doesn't print as text is named from the panels its other texts name
 /// (see [`read_set`]).
 pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
@@ -2743,5 +2752,191 @@ mod tests {
         assert_eq!(rank("G", "unknown", "ELECTRICAL ONE-LINE DIAGRAM"), Some(4));
         assert_eq!(rank("A", "elevation", "METAL PANEL ELEVATIONS"), None);
         assert_eq!(rank("A", "plan", "FLOOR PLAN"), None);
+    }
+    /// A sheet's lettering as a drawing: each text a TEXT, except those at `tagged` points, which
+    /// the PDF import kept as the visible tag of a shape it found repeated (its block reference
+    /// standing off the cell, the attribute where the text is printed). Each such reference also
+    /// carries a hidden attribute (`AF`), which isn't printed.
+    fn sheet_with_tags(v: &[TextItem], tagged: &[(f64, f64)]) -> cadaddy_doc::Drawing {
+        use cadaddy_doc::{Attrib, Common, Drawing, EntityKind, HAlign, Insert, Space, Text, VAlign};
+        use cadaddy_geom::Vec3;
+        let lettering = |t: &TextItem| Text {
+            insert: Vec3::new(t.at.x, t.at.y, 0.0),
+            align_pt: None,
+            height: t.height,
+            value: t.value.clone(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: HAlign::Left,
+            valign: VAlign::Baseline,
+        };
+        let attrib = |t: &TextItem, invisible: bool| Attrib {
+            tag: "TAG".into(),
+            text: lettering(t),
+            invisible,
+            constant: false,
+            prompt: String::new(),
+            props: Default::default(),
+            multiline: None,
+            modes: Default::default(),
+        };
+        let mut d = Drawing::default();
+        for t in v {
+            let kind = if tagged.iter().any(|(x, y)| (t.at.x - x).abs() < 1e-9 && (t.at.y - y).abs() < 1e-9) {
+                let hidden = TextItem { value: "AF".into(), ..t.clone() };
+                EntityKind::Insert(Insert {
+                    block: "PDF-SYM-1".into(),
+                    insert: Vec3::new(t.at.x + 3.0 * t.height, t.at.y + 2.0 * t.height, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: vec![attrib(t, false), attrib(&hidden, true)],
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                    clip: None,
+                })
+            } else {
+                EntityKind::Text(lettering(t))
+            };
+            let _ = d.add(&Space::Model, Common { layer: "0".into(), ..Common::default() }, kind);
+        }
+        d
+    }
+
+    /// (number, breaker, poles, description, codes) of each circuit read.
+    fn rows_of(p: &PanelSchedule) -> Vec<(String, String, u32, String, Vec<String>)> {
+        p.circuits.iter().map(|c| (c.number.clone(), c.breaker.clone(), c.poles, c.description.clone(), c.protection.clone())).collect()
+    }
+
+    /// Q6300: a two-sided schedule whose first row's breaker type codes, its left `NO` heading
+    /// and a `SPARE` the PDF import kept as a repeated shape's tags (the table's rules at the
+    /// same corner of two schedules side by side) reads them where they are printed: every
+    /// circuit keeps its code, on the job's sheets and on a drawing alike.
+    #[test]
+    fn lettering_a_pdf_import_kept_as_a_shapes_tag_is_read_in_its_cell() {
+        let h = 7.2;
+        let mut v = vec![
+            t(557.0, 880.0, "PANEL: \"Q9\"", 26.0),
+            t(291.0, 812.0, "OCP", h),
+            t(621.0, 812.0, "PHASE LOAD", h),
+            t(234.0, 810.0, "CKT", h),
+            t(1067.0, 810.0, "CKT", h),
+            t(236.0, 796.0, "NO", h),
+            t(262.0, 796.0, "AMP POLE BKR", h),
+            t(349.0, 796.0, "LTG PWR CO", h),
+            t(470.0, 796.0, "DESCRIPTION", h),
+            t(602.0, 796.0, "A", h),
+            t(649.0, 796.0, "B", h),
+            t(695.0, 796.0, "C", h),
+            t(777.0, 796.0, "DESCRIPTION", h),
+            t(904.0, 796.0, "CO PWR LTG", h),
+            t(985.0, 796.0, "BKR POLE AMP", h),
+            t(1069.0, 796.0, "NO", h),
+            t(300.0, 700.0, "AMPS PER PHASE = 90", h),
+        ];
+        let rows: [(f64, &[(f64, &str)]); 3] = [
+            (
+                782.0,
+                &[
+                    (241.0, "1"),
+                    (267.0, "20"),
+                    (298.0, "1"),
+                    (322.0, "GF"),
+                    (349.0, "0.4"),
+                    (488.0, "COFFEE BREWER"),
+                    (796.0, "BREAD WARMER"),
+                    (929.0, "0.8"),
+                    (990.0, "GF"),
+                    (1016.0, "1"),
+                    (1042.0, "20"),
+                    (1074.0, "2"),
+                ],
+            ),
+            (
+                768.0,
+                &[
+                    (241.0, "3"),
+                    (267.0, "20"),
+                    (298.0, "1"),
+                    (322.0, "GF"),
+                    (488.0, "FRYER"),
+                    (796.0, "SPARE"),
+                    (990.0, "GF"),
+                    (1016.0, "1"),
+                    (1042.0, "20"),
+                    (1074.0, "4"),
+                ],
+            ),
+            (
+                754.0,
+                &[
+                    (241.0, "5"),
+                    (267.0, "20"),
+                    (298.0, "1"),
+                    (322.0, "GF"),
+                    (488.0, "LIGHTS"),
+                    (796.0, "TOASTER"),
+                    (990.0, "GF"),
+                    (1016.0, "1"),
+                    (1042.0, "20"),
+                    (1074.0, "6"),
+                ],
+            ),
+        ];
+        for (y, cells) in rows {
+            v.extend(cells.iter().map(|(x, c)| t(*x, y, c, h)));
+        }
+        let gf = || vec!["GF".to_string()];
+        let want: Vec<(String, String, u32, String, Vec<String>)> = vec![
+            ("1".into(), "20".into(), 1, "COFFEE BREWER".into(), gf()),
+            ("2".into(), "20".into(), 1, "BREAD WARMER".into(), gf()),
+            ("3".into(), "20".into(), 1, "FRYER".into(), gf()),
+            ("4".into(), "20".into(), 1, "SPARE".into(), gf()),
+            ("5".into(), "20".into(), 1, "LIGHTS".into(), gf()),
+            ("6".into(), "20".into(), 1, "TOASTER".into(), gf()),
+        ];
+        // All of it printed as text reads in full.
+        let plain = read(&v, "E-905");
+        assert_eq!(plain.len(), 1, "{plain:#?}");
+        assert_eq!(rows_of(&plain[0]), want);
+        // The same sheet with those kept as tags.
+        let d = sheet_with_tags(&v, &[(322.0, 782.0), (990.0, 782.0), (236.0, 796.0), (796.0, 768.0)]);
+        let job = super::super::guided::panel_schedules(&[("E-905".to_string(), d.clone())]);
+        assert_eq!(job.len(), 1, "{job:#?}");
+        assert_eq!(job[0].panel, "Q9");
+        assert_eq!(rows_of(&job[0]), want, "the job's sheets");
+        let drawing = read(&sheet_texts(&d), "the drawing");
+        assert_eq!(drawing.first().map(rows_of), Some(want), "a drawing read as it is");
+    }
+
+    /// Q6300, another layout: a one-sided schedule (its amps under `BKR`, its types under `TYPE`)
+    /// whose first row's type a shape's tag holds.
+    #[test]
+    fn a_one_sided_schedules_first_type_kept_as_a_tag_is_read() {
+        let (h, row) = (0.09, 0.24);
+        let mut v = vec![t(1.8, 10.1, "PANEL LP-7 SCHEDULE", 0.13)];
+        let rows = [
+            ["CKT", "DESCRIPTION", "BKR", "POLES", "TYPE"],
+            ["1", "LIGHTING - CORRIDOR", "20", "1", "AF"],
+            ["2", "LIGHTING - MECH", "20", "1", "AF"],
+            ["3", "RECEP/DATA - BREAK ROOM", "30", "2", "GF"],
+        ];
+        let xs = [1.9, 2.75, 4.53, 5.39, 6.2];
+        for (i, r) in rows.iter().enumerate() {
+            let y = 10.0 - (i + 1) as f64 * row + 0.075;
+            for (x, cell) in xs.iter().zip(r) {
+                v.push(t(*x, y, cell, h));
+            }
+        }
+        let first_type = (6.2, 10.0 - 2.0 * row + 0.075);
+        let d = sheet_with_tags(&v, &[first_type]);
+        let job = super::super::guided::panel_schedules(&[("E-905".to_string(), d)]);
+        let got: Vec<(String, Vec<String>)> =
+            job.first().map(|p| p.circuits.iter().map(|c| (c.number.clone(), c.protection.clone())).collect()).unwrap_or_default();
+        let one = |k: &str| vec![k.to_string()];
+        assert_eq!(got, [("1".into(), one("AF")), ("2".into(), one("AF")), ("3".into(), one("GF"))], "{job:#?}");
     }
 }

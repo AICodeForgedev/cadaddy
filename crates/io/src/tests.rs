@@ -3504,11 +3504,19 @@ thread_local! {
     pub(super) static REOPEN_COUNTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// The fewest group codes the DXF a `version` DWG of `d` converts back to can hold, as the save
+/// works it out before converting (Q6364).
+fn reopen_floor(d: &Drawing, version: Version) -> usize {
+    let views = dxf_write::Views::of(d);
+    crate::dxf_post::Plan::new(&views, dxf_write::bridge_job(version)).reopen_floor()
+}
+
 /// Q6280: a DWG save is held to what opening the DWG reads, the group codes of the DXF it
 /// converts back to, which are more than the bridge DXF's (the reader writes a polyline vertex's
 /// widths and bulge): a DWG passed on the bridge's count could fail to reopen. Within the limit
 /// the file reopens under the same limits; over it the save is refused, naming the count opening
-/// would read; small saves aren't converted back at all.
+/// would read; small saves aren't converted back at all. Between the least the save works out
+/// before converting (Q6364) and the real count, the file is converted and counted.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_dwg_save_is_held_to_the_group_codes_reopening_reads() {
@@ -3516,16 +3524,17 @@ fn a_dwg_save_is_held_to_the_group_codes_reopening_reads() {
     let save = || write_dwg(&d, Version::R2004, DwgEngine::Bridge);
     let (_, _, bridge) = dxf_write::dwg_bridge(&d, Version::R2004);
     let reopened = cadaddy_dxf::count_tags(&dwg_rendition(&save().unwrap()).unwrap().0).unwrap();
-    assert!(reopened > bridge, "{reopened} reopening, {bridge} in the bridge DXF");
+    let floor = reopen_floor(&d, Version::R2004);
+    assert!(reopened > floor && floor > bridge, "{reopened} reopening, at least {floor}, {bridge} in the bridge DXF");
     // Small saves: not converted back.
     let before = REOPEN_COUNTS.get();
     assert!(save().is_ok());
     assert_eq!(REOPEN_COUNTS.get(), before);
-    // The bridge's count is within the limit, but what reopening reads isn't: refused.
-    let e = with_tag_caps(bridge, bridge, save).unwrap_err().to_string();
+    // The least is within the limit, but what reopening reads isn't: converted, counted, refused.
+    let e = with_tag_caps(floor, floor, save).unwrap_err().to_string();
     assert_eq!(REOPEN_COUNTS.get(), before + 1);
     assert!(e.contains(&format!("would hold {reopened} group codes")) && e.contains(".cdy") && e.contains("force:true"), "{e}");
-    assert!(cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(bridge, bridge, save)).is_ok());
+    assert!(cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(floor, floor, save)).is_ok());
     // At exactly what reopening reads it saves, and reopens under the same limits.
     let dwg = with_tag_caps(reopened, reopened, save).unwrap();
     assert_eq!(with_tag_caps(reopened, reopened, || read(&dwg, "a.dwg")).unwrap().entity_count(), 500);
@@ -3707,4 +3716,100 @@ fn solid_hatch_keeps_angle_scale_and_double_flag() {
     assert!(f("52").is_some_and(|a| (a - 30.0).abs() < 1e-9), "{h:?}");
     assert!(f("41").is_some_and(|s| (s - 2.0).abs() < 1e-12), "{h:?}");
     assert_eq!(group(h, "77"), Some("0"), "{h:?}");
+}
+
+/// Lightweight polylines of `vertices` vertices each, no widths or bulges: the DXF the DWG bridge
+/// writes has two groups a vertex, the DXF the DWG converts back to five.
+fn plain_polylines(n: usize, vertices: usize) -> Drawing {
+    let mut d = Drawing::new_imperial();
+    for i in 0..n {
+        let y = i as f64 * 2.0;
+        let vertices = (0..vertices).map(|k| PolyVertex::new(Vec2::new(k as f64, y + (k % 2) as f64))).collect();
+        let pl = LwPolyline { vertices, closed: false, const_width: 0.0, elevation: 0.0, plinegen: false };
+        d.add(&Space::Model, Common::default(), EntityKind::LwPolyline(pl)).unwrap();
+    }
+    d
+}
+
+/// Q6364: a DWG save opening couldn't read is refused before the conversion (the costly step)
+/// when the bridge's own count is within the limit but the DXF the DWG converts back to is over
+/// it: a built model of 117.7 M bridge groups that converts back to 128.8 M was refused after
+/// 78-100 s instead of in the time the DXF check takes. With force it is written as before, and
+/// at what reopening reads it saves and reopens.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dwg_save_over_the_reopen_limit_is_refused_before_converting() {
+    let d = plain_polylines(200, 20);
+    let save = || write_dwg(&d, Version::R2018, DwgEngine::Bridge);
+    let (_, _, bridge) = dxf_write::dwg_bridge(&d, Version::R2018);
+    let reopened = cadaddy_dxf::count_tags(&dwg_rendition(&save().unwrap()).unwrap().0).unwrap();
+    assert!(reopened > bridge + 200 * 20 * 3, "{reopened} reopening, {bridge} in the bridge DXF");
+    let before = BRIDGE_CONVERSIONS.get();
+    let e = with_tag_caps(bridge, bridge, save).unwrap_err().to_string();
+    assert_eq!(BRIDGE_CONVERSIONS.get(), before, "refused before converting: {e}");
+    assert!(e.contains("too large to save as DWG") && e.contains("at least") && e.contains(".cdy") && e.contains("force:true"), "{e}");
+    let least: usize = e.split("at least ").nth(1).and_then(|r| r.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
+    assert!(least > bridge && least <= reopened, "{bridge} < {least} <= {reopened}");
+    assert!(cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(bridge, bridge, save)).is_ok());
+    let dwg = with_tag_caps(reopened, reopened, save).unwrap();
+    assert_eq!(with_tag_caps(reopened, reopened, || read(&dwg, "a.dwg")).unwrap().entity_count(), 200);
+}
+
+/// Q6364: the least the save works out is never more than what opening the DWG reads, for every
+/// kind of record CADaddy writes (lightweight polylines with and without widths, bulges, a constant
+/// width or an elevation; extended data; another program's object) and every DWG version: a save
+/// that would reopen is never refused on it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_least_a_dwg_reopens_with_is_never_over_what_it_reads() {
+    let src: String = include_str!("cdy/every_kind.dxf.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let (c, v) = l.split_once(' ').unwrap_or((l, ""));
+            format!("{c}\n{v}\n")
+        })
+        .collect();
+    let mut d = read_dxf(src.as_bytes()).unwrap();
+    for (width, bulge, cw, elevation) in [(0.0, 0.0, 0.0, 0.0), (0.5, 0.0, 0.0, 1.0), (0.0, 0.3, 0.2, 0.0), (0.2, 0.4, 0.0, 2.5)] {
+        let mut vertices: Vec<PolyVertex> = (0..10).map(|k| PolyVertex::new(Vec2::new(f64::from(k), 0.0))).collect();
+        for v in vertices.iter_mut().step_by(2) {
+            (v.start_width, v.end_width, v.bulge) = (width, width, bulge);
+        }
+        let pl = LwPolyline { vertices, closed: cw > 0.0, const_width: cw, elevation, plinegen: cw > 0.0 };
+        d.add(&Space::Model, Common::default(), EntityKind::LwPolyline(pl)).unwrap();
+    }
+    for (i, e) in many_entities(30).model.iter().enumerate() {
+        let mut common = e.common.clone();
+        if i % 2 == 0 {
+            let tag = |code: i32, value: &str| cadaddy_doc::RawTag { code, value: value.into() };
+            common.xdata = vec![tag(1001, "ACME"), tag(1000, "note"), tag(1040, "2.5")].into();
+        }
+        d.add(&Space::Model, common, e.kind.clone()).unwrap();
+    }
+    for version in [Version::R2004, Version::R2007, Version::R2010, Version::R2013, Version::R2018] {
+        let reopened = cadaddy_dxf::count_tags(&dwg_rendition(&write_dwg(&d, version, DwgEngine::Bridge).unwrap()).unwrap().0).unwrap();
+        let floor = reopen_floor(&d, version);
+        assert!(floor <= reopened, "{version:?}: at least {floor}, reopening reads {reopened}");
+    }
+}
+
+/// Q6364: opening a DWG whose DXF form is over the group limit stops the conversion at the limit
+/// (the converter is given it) instead of refusing after the whole file is converted; the error
+/// names the limit, and a file within it opens whole.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn opening_a_dwg_over_the_group_limit_stops_at_the_limit() {
+    let dwg = ac1024_dwg(3000);
+    let tags = cadaddy_dxf::count_tags(&dwg_rendition(&dwg).unwrap().0).unwrap();
+    let e = with_tag_caps(tags / 4, tags / 4, || read(&dwg, "big.dwg")).unwrap_err().to_string();
+    assert!(
+        e.contains("drawing too large")
+            && e.contains(&format!("more than {} DXF group codes", tags / 4))
+            && e.contains("DXF converted from this DWG"),
+        "{e}"
+    );
+    assert!(!e.contains(&tags.to_string()), "the whole file wasn't counted: {e}");
+    assert_eq!(with_tag_caps(tags, tags, || read(&dwg, "big.dwg")).unwrap().entity_count(), 3000);
 }
