@@ -3571,30 +3571,84 @@ fn path_leaf(p: &str) -> &str {
 /// a stop.
 fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
     let Some(path) = job.checkpoint.clone() else { return };
-    let Some(hooks) = super::file::io() else { return };
+    if super::file::io().is_none() {
+        return;
+    }
     let started = web_time::Instant::now();
     if save_job(s, job).is_err() {
         return;
     }
-    let Ok(d) = s.doc() else { return };
-    // A .cdy file without its preview (`ckpt`), else as the path says.
-    let written = (hooks.write)(d, "checkpoint.ckpt").or_else(|_| (hooks.write)(d, &path)).and_then(|bytes| {
-        let p = std::path::Path::new(&path);
-        if let Some(dir) = p.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        // Written aside, then moved over the last one: a crash mid-write keeps the last checkpoint.
-        let part = p.with_extension("cdy.part");
-        crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
-        crate::writefile::rename(&part, p).map_err(|e| e.to_string())
-    });
+    let written = store_checkpoint(s, &path);
     // How long it took, and the peak memory after it (a checkpoint per stage must not be the
     // job's peak: compare with the stage's line).
     let peak = super::memstat::process_mb().map_or_else(String::new, |(_, p)| format!(" (peak memory {p} MB)"));
-    progress_line(&format!("  checkpoint written in {:.1} s{peak}", started.elapsed().as_secs_f64()));
+    let how = match &written {
+        Ok(Stored::Appended(n)) => format!("appended ({:.1} MB)", *n as f64 / 1e6),
+        Ok(Stored::Whole(n)) => format!("written ({:.1} MB)", *n as f64 / 1e6),
+        Err(_) => "not written".to_string(),
+    };
+    progress_line(&format!("  checkpoint {how} in {:.1} s{peak}", started.elapsed().as_secs_f64()));
     if let Err(e) = written {
         s.echo(format!("guided: the job's checkpoint couldn't be written to {path}: {e}"));
     }
+}
+
+/// How a checkpoint was stored, and the bytes written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored {
+    /// The parts that changed, appended to the last checkpoint.
+    Appended(u64),
+    /// The whole file.
+    Whole(u64),
+}
+
+/// Store the job's drawing as its checkpoint at `path` (Q6576). When the file there is still the
+/// checkpoint this drawing last wrote (or was resumed from), only the parts that changed since are
+/// encoded and appended, with a new index: the model's unchanged chunks are neither encoded nor
+/// held twice. A checkpoint cut short while appending reads as the one before it (the last complete
+/// index). Otherwise, and when the superseded parts would be too much of the file, the whole file
+/// is written aside and moved over the last one, so a crash mid-write keeps the last checkpoint.
+/// The file has no preview: it is written again and again, and the preview renders all of model
+/// space.
+fn store_checkpoint(s: &mut Session, path: &str) -> std::result::Result<Stored, String> {
+    use cadaddy_io::cdy::{Output, SaveState};
+    let prev = s.state().ok().and_then(|st| st.job_checkpoint.clone()).filter(|c| c.holds(path));
+    let held = prev.as_ref().and_then(|c| c.state().downcast_ref::<SaveState>()).filter(|h| prev.as_ref().is_some_and(|c| c.file_len() == h.len));
+    let (stored, state) = {
+        let d = s.doc().map_err(|e| e.to_string())?;
+        let (out, state) = cadaddy_io::cdy::save(d, held, &|| None)?;
+        match out {
+            Output::Append { from, bytes, index_at } => match super::file::append_cdy(path, from, &bytes, index_at) {
+                Ok(()) => (Stored::Appended(bytes.len() as u64), state),
+                // The file was cut back to the last checkpoint: write it whole.
+                Err(_) => {
+                    drop(bytes);
+                    let (Output::Full(bytes), state) = cadaddy_io::cdy::save(d, None, &|| None)? else {
+                        return Err("the .cdy saver didn't write the whole file".into());
+                    };
+                    (Stored::Whole(replace_checkpoint(path, &bytes)?), state)
+                }
+            },
+            Output::Full(bytes) => (Stored::Whole(replace_checkpoint(path, &bytes)?), state),
+        }
+    };
+    if let Ok(st) = s.state_mut() {
+        st.job_checkpoint = super::file::CdySaved::new(path, std::sync::Arc::new(state));
+    }
+    Ok(stored)
+}
+
+/// Write a whole checkpoint aside, then move it over the last one: a crash mid-write keeps the
+/// last checkpoint. The bytes written.
+fn replace_checkpoint(path: &str, bytes: &[u8]) -> std::result::Result<u64, String> {
+    let p = std::path::Path::new(path);
+    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let part = p.with_extension("cdy.part");
+    crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
+    crate::writefile::rename(&part, p).map_err(|e| e.to_string())?;
+    Ok(bytes.len() as u64)
 }
 
 /// Whether the file at `path` is a job's checkpoint (a drawing holding a job's state): one the
@@ -3622,10 +3676,14 @@ fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<GuidedJob> {
 }
 
 /// A checkpoint's drawing (its job state inside).
-fn checkpoint_drawing(path: &str) -> Result<cadaddy_doc::Drawing> {
+/// With what the file holds matched to the drawing read from it, when it can be: the job's next
+/// checkpoint then appends only what changed ([`store_checkpoint`]).
+fn checkpoint_drawing(path: &str) -> Result<(cadaddy_doc::Drawing, Option<cadaddy_io::cdy::SaveState>)> {
     let hooks = super::file::io().ok_or_else(|| bad("job.start", "no file reader to read the checkpoint with"))?;
     let bytes = std::fs::read(path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
-    (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))
+    let d = (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
+    let seed = cadaddy_io::cdy::is_cdy(&bytes).then(|| cadaddy_io::cdy::seed(&d, &bytes)).flatten();
+    Ok((d, seed))
 }
 
 /// The stages' names.
@@ -33687,7 +33745,10 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             job.audit("job_refreshed", "pipeline", None, Some(from), Some(json!({"checkpoint": path, "other_build": labels(&other), "why": why})));
             started_over = Some(json!({"from": from.label(), "other_build": labels(&other), "started_over": true, "why": why, "prints_note": note}));
         } else {
-            *s.doc_mut()? = checkpoint_drawing(&path)?;
+            let (d, seed) = checkpoint_drawing(&path)?;
+            *s.doc_mut()? = d;
+            let held = seed.and_then(|seed| super::file::CdySaved::new(&path, std::sync::Arc::new(seed)));
+            s.state_mut()?.job_checkpoint = held;
             // The print set's project lives in the session, not the drawing.
             s.execute("printset.open", &json!({"path": pdfs}))?;
             for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
@@ -48416,6 +48477,143 @@ mod tests {
 #[cfg(test)]
 #[path = "guided_symbols_tests.rs"]
 mod symbols_tests;
+
+#[cfg(test)]
+mod checkpoint_append_tests {
+    //! fix-job-checkpoint-full-rewrite (Q6576): a job's checkpoints after the first append only the
+    //! parts of the drawing that changed. Each used to encode the whole .cdy again; on a four-storey
+    //! print set the one after the 3D build added 1.06 GB on top of the build's 4.4 GB, the job's
+    //! peak, and cost 3-4 s a stage.
+    use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, Space};
+    use cadaddy_geom::Vec3;
+
+    fn hooks() {
+        crate::cmd::file::set_io(crate::cmd::file::IoHooks {
+            read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+            write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+            plot: None,
+            read_pdf: None,
+            read_dwf: None,
+            write_dwfx: None,
+        });
+    }
+
+    /// `n` made-up lines in model space, from `at` on.
+    fn lines(d: &mut cadaddy_doc::Drawing, at: usize, n: usize) {
+        for i in at..at + n {
+            let (x, y) = ((i % 997) as f64 * 3.7, (i / 997) as f64 * 2.9);
+            d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 1.5, y + 0.5, 0.0) })).unwrap();
+        }
+    }
+
+    fn scratch(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6576-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("job checkpoint.cdy").to_string_lossy().into_owned()
+    }
+
+    /// A session holding a 60,000-line drawing and a job checkpointing to `path`.
+    fn job_session(path: &str) -> (Session, GuidedJob) {
+        let mut s = crate::Session::new();
+        lines(s.doc_mut().unwrap(), 0, 60_000);
+        let mut job = GuidedJob::new("/made-up/prints", JobGoal::Takeoff);
+        job.checkpoint = Some(path.to_string());
+        (s, job)
+    }
+
+    fn len(path: &str) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    /// The job id of the checkpoint at `path`, read as the job reads it (without its drawing).
+    fn job_id(path: &str) -> Option<String> {
+        checkpoint_agent(path)?.get("guided_job")?.get("id")?.as_str().map(str::to_string)
+    }
+
+    #[test]
+    fn a_jobs_next_checkpoint_appends_only_what_changed() {
+        hooks();
+        let path = scratch("append");
+        let (mut s, mut job) = job_session(&path);
+        write_checkpoint(&mut s, &job);
+        let first = std::fs::read(&path).unwrap();
+        // A stage adds a few objects and moves the job on.
+        lines(s.doc_mut().unwrap(), 60_000, 25);
+        job.id = "second".into();
+        write_checkpoint(&mut s, &job);
+        let now = std::fs::read(&path).unwrap();
+        // The first checkpoint is kept byte for byte and the change is appended after it: a
+        // small part of the file, not the whole drawing encoded again.
+        assert!(
+            now.len() > first.len() && now.starts_with(&first),
+            "the second checkpoint was written whole ({} bytes, first {})",
+            now.len(),
+            first.len()
+        );
+        let appended = now.len() - first.len();
+        assert!(appended * 10 < first.len(), "{appended} bytes appended to a {}-byte checkpoint", first.len());
+        // It reads as the drawing and job it was written from.
+        let d = cadaddy_io::cdy::read_cdy(&now).unwrap();
+        assert_eq!(d.model.len(), 60_025);
+        assert_eq!(job_id(&path).as_deref(), Some("second"));
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_checkpoint_cut_short_while_appending_reads_as_the_one_before() {
+        hooks();
+        let path = scratch("cut");
+        let (mut s, mut job) = job_session(&path);
+        job.id = "first".into();
+        write_checkpoint(&mut s, &job);
+        let first = len(&path);
+        lines(s.doc_mut().unwrap(), 60_000, 2_000);
+        job.id = "second".into();
+        write_checkpoint(&mut s, &job);
+        let second = len(&path);
+        assert!(second > first);
+        // The machine stopped halfway through appending the second one.
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_len(first + (second - first) / 2).unwrap();
+        drop(f);
+        // A resume finds the first: its job (read without the drawing) and its drawing.
+        assert_eq!(job_id(&path).as_deref(), Some("first"));
+        assert!(is_job_checkpoint(&path));
+        let d = cadaddy_io::cdy::read_cdy(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(d.model.len(), 60_000);
+        // The job's next checkpoint isn't appended to the cut file: it is written whole.
+        job.id = "third".into();
+        write_checkpoint(&mut s, &job);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(cadaddy_io::cdy::verify(&bytes).unwrap()["ok"], serde_json::json!(true));
+        assert_eq!(cadaddy_io::cdy::read_cdy(&bytes).unwrap().model.len(), 62_000);
+        assert_eq!(job_id(&path).as_deref(), Some("third"));
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_job_resumed_from_its_checkpoint_appends_to_it() {
+        hooks();
+        let path = scratch("resume");
+        let (mut s, job) = job_session(&path);
+        write_checkpoint(&mut s, &job);
+        let first = std::fs::read(&path).unwrap();
+        // Another run reads the checkpoint (as `job.start` resuming does) and goes on.
+        let (d, seed) = checkpoint_drawing(&path).unwrap();
+        assert!(seed.is_some(), "a checkpoint this build wrote matches the drawing read from it");
+        let mut s = crate::Session::new();
+        *s.doc_mut().unwrap() = d;
+        s.state_mut().unwrap().job_checkpoint = seed.and_then(|seed| crate::cmd::file::CdySaved::new(&path, std::sync::Arc::new(seed)));
+        lines(s.doc_mut().unwrap(), 60_000, 25);
+        assert!(matches!(store_checkpoint(&mut s, &path), Ok(Stored::Appended(_))));
+        let now = std::fs::read(&path).unwrap();
+        assert!(now.starts_with(&first) && (now.len() - first.len()) * 10 < first.len());
+        assert_eq!(cadaddy_io::cdy::read_cdy(&now).unwrap().model.len(), 60_025);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

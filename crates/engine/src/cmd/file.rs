@@ -224,12 +224,20 @@ fn on_disk(path: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
 }
 
 impl CdySaved {
-    fn new(path: &str, state: CdyState) -> Option<Self> {
+    /// What the file holds, as the saver that wrote it keeps it.
+    pub(crate) fn state(&self) -> &CdyState {
+        &self.state
+    }
+    /// The file's length when it was written or read.
+    pub(crate) fn file_len(&self) -> u64 {
+        self.len
+    }
+    pub(crate) fn new(path: &str, state: CdyState) -> Option<Self> {
         let (len, modified) = on_disk(path)?;
         Some(CdySaved { path: path.to_string(), len, modified, state })
     }
     /// Whether the file at `path` is still exactly what this describes.
-    fn holds(&self, path: &str) -> bool {
+    pub(crate) fn holds(&self, path: &str) -> bool {
         same_file(&self.path, path) && on_disk(path) == Some((self.len, self.modified))
     }
 }
