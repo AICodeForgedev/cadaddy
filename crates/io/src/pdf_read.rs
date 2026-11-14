@@ -5695,32 +5695,35 @@ fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
 }
 
 /// Group symbol instances by device type (in tag order); each type with ≥2 instances becomes
-/// a block.  Within a group, instances keep their order (the first one draws the block), each
-/// rid of the drawing round it its cluster took ([`release_unshared_strokes`]).
-fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<SymbolInstance>> {
+/// one block per way it is drawn ([`split_by_shared_drawing`]): a block holds only what all its
+/// copies share, so no copy's own strokes are erased and none are invented at another copy.
+/// Each instance is first rid of the drawing round it its cluster took
+/// ([`release_foreign_strokes`]).
+fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke], fills: &[Fill]) -> Vec<Vec<SymbolInstance>> {
     let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
     for inst in instances {
         let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
         groups.entry(key).or_default().push(inst);
     }
-    let mut out: Vec<Vec<SymbolInstance>> = groups.into_values().filter(|g| g.len() >= 2).collect();
-    for group in &mut out {
-        release_unshared_strokes(group, strokes);
+    let mut out = Vec::new();
+    for mut group in groups.into_values().filter(|g| g.len() >= 2) {
+        release_foreign_strokes(&mut group, strokes);
+        out.extend(split_by_shared_drawing(group, strokes, fills));
     }
     out
 }
 
 /// A tag's cluster can take the drawing round it: the frame and glazing of the window a window
-/// tag marks. A block draws its first instance's strokes at every instance, so that window would
-/// be drawn at every tag of its type, and lost where it is when its tag is not the first (Q6435).
-/// The symbol is what its instances share: a stroke drawn alike (same shape, wherever it stands)
-/// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
-/// of them, if more) and more than [`FOREIGN_STROKE_OVER`] times the outline they share round
-/// the tag (its hexagon, circle or box: closed, about as wide as tall, no smaller than the tag's
-/// letters) is not the symbol's, and stays loose where printed. An instance sharing no such
-/// outline keeps all its strokes (a symbol drawn turned, a bare letter), and so does a stroke
-/// near the outline's size (a part of the symbol drawn its own way at one instance).
-fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
+/// tag marks, a leader or a wire leaving the symbol (Q6435, Q6636). The symbol is the outline its
+/// instances share round the tag (its hexagon, circle or box: closed, about as wide as tall, no
+/// smaller than the tag's letters, drawn alike in at least [`SHARED_STROKE_MIN`] of its type's
+/// instances, or one in [`SHARED_STROKE_SHARE`] of them if more) and what lies inside its reach: a
+/// stroke more than [`FOREIGN_STROKE_OVER`] times that outline reaches beyond the symbol and is
+/// never the symbol's, however many instances draw it alike (a leader drawn the same at every
+/// copy of a typical view), and stays loose where printed. An instance sharing no such outline
+/// keeps its cluster (a symbol drawn turned, a bare letter): [`split_by_shared_drawing`] still
+/// keeps only what its copies share.
+fn release_foreign_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     let need = SHARED_STROKE_MIN.max(group.len().div_ceil(SHARED_STROKE_SHARE));
     let keys: Vec<Vec<Option<StrokeKey>>> =
         group.iter().map(|inst| inst.stroke_indices.iter().map(|&si| strokes.get(si).map(stroke_key)).collect()).collect();
@@ -5736,12 +5739,11 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
     for (inst, of_inst) in group.iter_mut().zip(&keys) {
         let Some(letters) = inst.nearby_text_at.map(|t| t.1).filter(|h| *h > 0.0) else { continue };
-        let shared: Vec<bool> = of_inst.iter().map(|k| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need)).collect();
         let size = inst
             .stroke_indices
             .iter()
-            .zip(&shared)
-            .filter(|(_, sh)| **sh)
+            .zip(of_inst)
+            .filter(|(_, k)| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need))
             .filter_map(|(&si, _)| strokes.get(si))
             .filter(|s| is_outline(s))
             .filter_map(|s| bbox(std::slice::from_ref(&s.pts)))
@@ -5754,18 +5756,227 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
         if size <= 0.0 {
             continue;
         }
-        let kept: Vec<usize> = inst
-            .stroke_indices
-            .iter()
-            .zip(&shared)
-            .filter(|(si, sh)| {
-                **sh || strokes.get(**si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size)
-            })
-            .map(|(&si, _)| si)
-            .collect();
-        // The symbol stays where it was found (its centre is where the readers place the device).
-        inst.stroke_indices = kept;
+        inst.stroke_indices
+            .retain(|&si| strokes.get(si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size));
     }
+}
+
+/// One piece of a symbol's drawing: a stroke or a fill, its shape wherever it stands
+/// ([`StrokeKey`]) and where it stands (the low corner of its box, points).
+struct Piece {
+    fill: bool,
+    idx: usize,
+    key: StrokeKey,
+    at: (f64, f64),
+}
+
+fn pieces_of(inst: &SymbolInstance, strokes: &[Stroke], fills: &[Fill]) -> Vec<Piece> {
+    let low = |b: [f64; 4]| (b[0], b[1]);
+    let of_strokes = inst.stroke_indices.iter().filter_map(|&idx| {
+        let s = strokes.get(idx)?;
+        Some(Piece { fill: false, idx, key: stroke_key(s), at: low(bbox(std::slice::from_ref(&s.pts))?) })
+    });
+    let of_fills = inst.fill_indices.iter().filter_map(|&idx| {
+        let f = fills.get(idx)?;
+        Some(Piece { fill: true, idx, key: fill_key(f), at: low(bbox(&f.loops)?) })
+    });
+    of_strokes.chain(of_fills).collect()
+}
+
+/// A fill's shape wherever it stands, as [`stroke_key`] tells a stroke's: its loops' points in
+/// order, each as an offset from the first.
+fn fill_key(f: &Fill) -> StrokeKey {
+    let mut first: Option<(f64, f64)> = None;
+    let offsets: Vec<(i64, i64)> = f
+        .loops
+        .iter()
+        .flatten()
+        .take(MAX_KEY_POINTS)
+        .map(|p| {
+            let o = *first.get_or_insert(*p);
+            (((p.0 - o.0) / KEY_TOL_PT).round() as i64, ((p.1 - o.1) / KEY_TOL_PT).round() as i64)
+        })
+        .collect();
+    (true, f.loops.iter().map(Vec::len).sum(), offsets)
+}
+
+/// How `other` draws the pieces of `reference`: the move that lays the most of them on pieces
+/// of the same shape (voted to [`KEY_TOL_PT`]), and for each piece of `reference` the piece of
+/// `other` it lands on there (one each), if any. `None` when they share no shape.
+fn match_pieces(reference: &[Piece], other: &[Piece]) -> Option<((f64, f64), Vec<Option<usize>>)> {
+    let mut by_key: HashMap<(bool, &StrokeKey), Vec<usize>> = HashMap::new();
+    for (k, p) in other.iter().enumerate() {
+        by_key.entry((p.fill, &p.key)).or_default().push(k);
+    }
+    let cell = |d: (f64, f64)| ((d.0 / KEY_TOL_PT).round() as i64, (d.1 / KEY_TOL_PT).round() as i64);
+    let mut votes: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut cast = 0usize;
+    for r in reference {
+        for &k in by_key.get(&(r.fill, &r.key)).into_iter().flatten().take(MAX_ALIKE_PIECES) {
+            if let Some(o) = other.get(k) {
+                *votes.entry(cell((o.at.0 - r.at.0, o.at.1 - r.at.1))).or_default() += 1;
+                cast += 1;
+            }
+        }
+        if cast >= MAX_PIECE_VOTES {
+            break;
+        }
+    }
+    // the move most pieces agree on; a tie goes to the smaller move (then the lower cell)
+    let best =
+        votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| (b.0.0.abs() + b.0.1.abs(), b.0).cmp(&(a.0.0.abs() + a.0.1.abs(), a.0))))?.0;
+    let mv = (best.0 as f64 * KEY_TOL_PT, best.1 as f64 * KEY_TOL_PT);
+    let mut used = vec![false; other.len()];
+    let lands: Vec<Option<usize>> = reference
+        .iter()
+        .map(|r| {
+            let k = by_key.get(&(r.fill, &r.key)).into_iter().flatten().copied().find(|&k| {
+                !used.get(k).copied().unwrap_or(true)
+                    && other.get(k).is_some_and(|o| (o.at.0 - r.at.0 - mv.0).abs() <= PIECE_TOL_PT && (o.at.1 - r.at.1 - mv.1).abs() <= PIECE_TOL_PT)
+            })?;
+            if let Some(u) = used.get_mut(k) {
+                *u = true;
+            }
+            Some(k)
+        })
+        .collect();
+    Some((mv, lands))
+}
+
+/// Split one device type's instances into blocks of copies drawn alike, each holding only the
+/// pieces all its copies share (Q6636). A block drawn from one copy and stamped at every copy
+/// erased each copy's own strokes (a leader, a tick) and invented the first copy's extras at all
+/// the others. Here the reference copy is the one whose shapes most copies draw; a copy joins its
+/// block while they still share at least half the reference's pieces, laid the same way; each
+/// copy's pieces outside what the block's copies all share leave its cluster and stay loose where
+/// printed. Copies that join no block start the next, up to [`MAX_SYMBOL_VARIANTS`]; the rest
+/// are blocks of their own. Each copy's centre is the centre of the block's drawing where that
+/// copy draws it (a leader no longer pulls the device off its symbol).
+fn split_by_shared_drawing(group: Vec<SymbolInstance>, strokes: &[Stroke], fills: &[Fill]) -> Vec<Vec<SymbolInstance>> {
+    let mut out: Vec<Vec<SymbolInstance>> = Vec::new();
+    let mut left: Vec<(SymbolInstance, Vec<Piece>)> = group
+        .into_iter()
+        .map(|inst| {
+            let pieces = pieces_of(&inst, strokes, fills);
+            (inst, pieces)
+        })
+        .collect();
+    let mut rounds = 0usize;
+    while !left.is_empty() {
+        rounds += 1;
+        if rounds > MAX_SYMBOL_VARIANTS || left.len() == 1 {
+            for (inst, pieces) in left.drain(..) {
+                out.push(vec![keep_pieces(inst, &pieces, &[], (0.0, 0.0), strokes, fills)]);
+            }
+            break;
+        }
+        // the reference: the copy whose shapes the most copies draw (the first of equals)
+        let mut count: HashMap<(bool, &StrokeKey), usize> = HashMap::new();
+        for (_, pieces) in &left {
+            let mut seen: HashSet<(bool, &StrokeKey)> = HashSet::new();
+            for p in pieces {
+                if seen.insert((p.fill, &p.key)) {
+                    *count.entry((p.fill, &p.key)).or_default() += 1;
+                }
+            }
+        }
+        let score = |pieces: &[Piece]| -> usize {
+            let mut seen: HashSet<(bool, &StrokeKey)> = HashSet::new();
+            pieces.iter().filter(|p| seen.insert((p.fill, &p.key))).map(|p| count.get(&(p.fill, &p.key)).copied().unwrap_or(0)).sum()
+        };
+        let ri = left.iter().enumerate().fold((0usize, 0usize), |best, (i, (_, p))| {
+            let s = score(p);
+            if s > best.1 { (i, s) } else { best }
+        });
+        drop(count);
+        let (reference, ref_pieces) = left.remove(ri.0);
+        let need = ref_pieces.len().div_ceil(2).max(1);
+        // every other copy: how it lays the reference's pieces, most pieces first
+        let mut matched: Vec<(usize, (f64, f64), Vec<Option<usize>>)> =
+            left.iter().enumerate().filter_map(|(i, (_, p))| match_pieces(&ref_pieces, p).map(|(mv, lands)| (i, mv, lands))).collect();
+        matched.sort_by_key(|m| std::cmp::Reverse(m.2.iter().filter(|l| l.is_some()).count()));
+        let mut core: Vec<bool> = vec![true; ref_pieces.len()];
+        let mut members: Vec<(usize, (f64, f64), Vec<Option<usize>>)> = Vec::new();
+        for (i, mv, lands) in matched {
+            let trial: Vec<bool> = core.iter().zip(&lands).map(|(c, l)| *c && l.is_some()).collect();
+            if trial.iter().filter(|c| **c).count() >= need {
+                core = trial;
+                members.push((i, mv, lands));
+            }
+        }
+        // the reference's centre: the middle of the shared drawing
+        let shared_box = ref_pieces
+            .iter()
+            .zip(&core)
+            .filter(|(_, c)| **c)
+            .filter_map(|(p, _)| {
+                if p.fill {
+                    fills.get(p.idx).and_then(|f| bbox(&f.loops))
+                } else {
+                    strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts)))
+                }
+            })
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        let centre = shared_box.map_or(reference.center, |b| ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0));
+        let ref_keep: Vec<usize> = (0..ref_pieces.len()).filter(|&k| core.get(k).copied().unwrap_or(false)).collect();
+        let mut block = vec![keep_pieces(reference, &ref_pieces, &ref_keep, centre, strokes, fills)];
+        // members leave `left` (from the back, so the indices hold), then go in order
+        let mut taken: Vec<(usize, (f64, f64), Vec<usize>)> = members
+            .into_iter()
+            .map(|(i, _, lands)| {
+                let keep: Vec<usize> = lands.iter().zip(&core).filter(|(_, c)| **c).filter_map(|(l, _)| *l).collect();
+                // the move, measured on the pieces kept (not the vote's rounded cell)
+                let mut sum = (0.0, 0.0);
+                let mut n = 0.0;
+                for (r, l) in ref_pieces.iter().zip(&lands).zip(&core).filter(|(_, c)| **c).map(|(rl, _)| rl) {
+                    if let Some(o) = l.and_then(|k| left.get(i).and_then(|(_, p)| p.get(k))) {
+                        sum = (sum.0 + o.at.0 - r.at.0, sum.1 + o.at.1 - r.at.1);
+                        n += 1.0;
+                    }
+                }
+                let mv = if n > 0.0 { (sum.0 / n, sum.1 / n) } else { (0.0, 0.0) };
+                (i, mv, keep)
+            })
+            .collect();
+        taken.sort_by_key(|t| std::cmp::Reverse(t.0));
+        let mut joined: Vec<(usize, SymbolInstance)> = Vec::new();
+        for (i, mv, keep) in taken {
+            if i < left.len() {
+                let (inst, pieces) = left.remove(i);
+                joined.push((i, keep_pieces(inst, &pieces, &keep, (centre.0 + mv.0, centre.1 + mv.1), strokes, fills)));
+            }
+        }
+        joined.sort_by_key(|j| j.0);
+        block.extend(joined.into_iter().map(|j| j.1));
+        out.push(block);
+    }
+    out
+}
+
+/// `inst` keeping only the pieces at `keep` (positions in `pieces`) and centred at `centre`; with
+/// no `keep`, a block of its own: all its pieces, centred on their middle.
+fn keep_pieces(mut inst: SymbolInstance, pieces: &[Piece], keep: &[usize], centre: (f64, f64), strokes: &[Stroke], fills: &[Fill]) -> SymbolInstance {
+    if keep.is_empty() {
+        let all = pieces
+            .iter()
+            .filter_map(|p| {
+                if p.fill {
+                    fills.get(p.idx).and_then(|f| bbox(&f.loops))
+                } else {
+                    strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts)))
+                }
+            })
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        if let Some(b) = all {
+            inst.center = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        }
+        return inst;
+    }
+    let kept: Vec<&Piece> = keep.iter().filter_map(|&k| pieces.get(k)).collect();
+    inst.stroke_indices = kept.iter().filter(|p| !p.fill).map(|p| p.idx).collect();
+    inst.fill_indices = kept.iter().filter(|p| p.fill).map(|p| p.idx).collect();
+    inst.center = centre;
+    inst
 }
 
 /// A stroke kept in a symbol is drawn alike in at least this many of its type's instances …
@@ -5780,6 +5991,15 @@ const OUTLINE_MIN_ASPECT: f64 = 0.5;
 const MAX_KEY_POINTS: usize = 64;
 /// Strokes drawn alike match to this (points).
 const KEY_TOL_PT: f64 = 0.5;
+/// A copy's piece lies where the block draws it to this (points).
+const PIECE_TOL_PT: f64 = 1.0;
+/// Most pieces of one shape in a copy that vote on how it lies …
+const MAX_ALIKE_PIECES: usize = 16;
+/// … and most votes per copy.
+const MAX_PIECE_VOTES: usize = 4096;
+/// Most blocks one device type is split into by how its copies are drawn; copies past them are
+/// blocks of their own.
+const MAX_SYMBOL_VARIANTS: usize = 64;
 
 /// A stroke's shape wherever it stands: closed or not, its point count, and each point's offset
 /// from its first, to [`KEY_TOL_PT`] (whichever way round reads first).
@@ -6366,7 +6586,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             .filter(|(i, t)| is_device_tag(&t.value) && !is_annotation_word(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
-        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes);
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes, &fills);
         let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
         let mut taken: HashSet<usize> = shx_stroke_indices.clone();
         for inst in &instances {
@@ -6565,7 +6785,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
         }
 
-        let symbol_groups = group_symbols(instances, &strokes);
+        let symbol_groups = group_symbols(instances, &strokes, &fills);
         let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
         let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
         let mut symbol_text_indices: HashSet<usize> = HashSet::new();
@@ -7217,7 +7437,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             continue;
         }
         let block_name = format!("PDF-SYM-{}", gi + 1);
-        // use the first instance as the block definition
+        // The first instance draws the block: every instance holds the same pieces (only what
+        // the group's copies share), each at its own centre (Q6636).
         let Some(first) = group.first() else { continue };
         let base_x = first.center.0;
         let base_y = first.center.1;
@@ -7253,6 +7474,48 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     });
                 }
             }
+        }
+        // and its fills (a filled dot or arrowhead in the symbol), drawn by the block too
+        for &fi in &first.fill_indices {
+            let Some(f) = fills.get(fi) else { continue };
+            let loops: Vec<HatchLoop> = f
+                .loops
+                .iter()
+                .filter(|l| l.len() >= 3)
+                .enumerate()
+                .map(|(i, l)| HatchLoop {
+                    curves: Vec::new(),
+                    vertices: l
+                        .iter()
+                        .map(|(x, y)| {
+                            let p = sp(*x, *y);
+                            PolyVertex { p: Vec2::new(p.x - base.x, p.y - base.y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }
+                        })
+                        .collect(),
+                    outer: i == 0,
+                    sources: Vec::new(),
+                })
+                .collect();
+            if loops.is_empty() {
+                continue;
+            }
+            let hatch = Hatch {
+                pattern: "SOLID".into(),
+                solid: true,
+                loops,
+                scale: 1.0,
+                angle: 0.0,
+                associative: false,
+                style: 0,
+                elevation: 0.0,
+                gradient: None,
+                origin: Vec2::ZERO,
+                background: None,
+                pattern_lines: Vec::new(),
+            };
+            let common = Common { layer: "0".into(), color: color_of(f.pen.rgb), lineweight: Lineweight::Mm100(f.pen.lw), ..Common::default() };
+            let h = d.new_handle();
+            block.entities.push(Entity { handle: h, common, kind: EntityKind::Hatch(Box::new(hatch)) });
         }
         d.blocks.insert(block_name.clone(), std::sync::Arc::new(block));
         // insert all instances of this symbol
