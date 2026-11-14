@@ -4397,13 +4397,19 @@ fn device_census(
                         let k = if k.is_empty() { super::readers::device_kind(&t).to_string() } else { k };
                         c.fates.push((h.0, MarkFate::left_out(&k, super::inventory::OUT_OF_SCOPE, "on a sheet of no building level")));
                     }
+                    // A grid's bubble holds the symbol where it is printed: its tag or the block's
+                    // insert point, not only the spot its drawn shape gives the device (Q6604 moves
+                    // that off the bubble onto the linework beside it).
                     TagVerdict::Device(t)
                         if bubbles_here
                             .get_or_insert_with(|| {
                                 super::grids::grid_bubbles(d, objects.get(g).map_or(&[][..], Vec::as_slice), k_in, electrical(&sheet))
                             })
                             .iter()
-                            .any(|(o, r, label)| label.eq_ignore_ascii_case(&t) && o.dist(*at) <= 1.3 * r) =>
+                            .any(|(o, r, label)| {
+                                let printed = [Some(*at), tag_at.map(|(p, _)| p), symbol_insert(d, *h)];
+                                label.eq_ignore_ascii_case(&t) && printed.iter().flatten().any(|p| o.dist(*p) <= 1.3 * r)
+                            }) =>
                     {
                         *c.not_device.entry("a grid bubble").or_default() += 1;
                     }
@@ -12420,6 +12426,14 @@ const ROOM_SWING_FT: f64 = 1.0;
 
 /// A typical room's device this close to the room's outline (feet) is on its wall.
 const ROOM_WALL_FT: f64 = 1.5;
+
+/// Where a symbol's block reference is inserted (None: not a block reference).
+fn symbol_insert(d: &cadaddy_doc::Drawing, h: cadaddy_doc::Handle) -> Option<cadaddy_geom::Vec2> {
+    match d.model.get(h).map(|e| &e.kind) {
+        Some(cadaddy_doc::EntityKind::Insert(ins)) => Some(ins.insert.xy()),
+        _ => None,
+    }
+}
 
 /// Whether a read "receptacle" is a circuit or panel name in a keynote's box (its number drawn in
 /// it): its symbol block is a plain box ([`plain_box`]; `shapes` caches each block's answer).
@@ -36857,6 +36871,90 @@ mod tests {
         let d: Vec<_> = job.devices.iter().filter(|d| d.tag == "D").collect();
         assert!(!d.iter().any(|d| d.at == [300.0, 100.0]), "the grid bubble: {d:?}");
         assert_eq!(d.iter().map(|d| (d.at, d.kind.as_str())).collect::<Vec<_>>(), [([450.0, 350.0], "luminaire")], "{:?}", job.devices);
+        assert_eq!(r["device_types"]["not_devices"]["a grid bubble"], json!(1), "{:#}", r["device_types"]);
+    }
+
+    /// fix-gate-regress-99b7e9788: a grid bubble the PDF import folded into a symbol with the
+    /// drawing beside it (the bubble left of the block's point, its grid line's stub, a cabinet's
+    /// outline bigger than the bubble, two stroke letters), its schedule listing a type D
+    /// luminaire. The block's drawn shape is the cabinet, so the device spot (Q6604) is off the
+    /// bubble; the bubble still holds the symbol's tag and point: a grid's, never a luminaire
+    /// (before the fix it was one, and typical rooms copied it into every room of their type).
+    #[test]
+    fn a_grid_bubble_whose_symbol_holds_the_drawing_beside_it_is_no_luminaire() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}]}));
+        job.sheets_loaded = true;
+        let texts = [
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("D", 1000.0, 772.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 772.0, 5.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        for (tag, y) in [("1", 200.0), ("2", 300.0), ("3", 400.0)] {
+            add_bubble(&mut s, tag, (100.0, y), Some(0.0));
+        }
+        {
+            let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+            let mut b = Block::new("PDF-SYM-78");
+            let line =
+                |a: (f64, f64), z: (f64, f64)| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(z.0, z.1, 0.0) });
+            let cabinet = [(18.0, -12.0), (42.0, -12.0), (42.0, 12.0), (18.0, 12.0)];
+            let kinds = vec![
+                EntityKind::Circle(Circle { center: Vec3::new(-12.0, 0.0, 0.0), radius: 10.0 }),
+                line((-2.0, 0.0), (18.0, 0.0)),
+                EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                    vertices: cabinet.iter().map(|p| cadaddy_geom::PolyVertex::new(cadaddy_geom::Vec2::new(p.0, p.1))).collect(),
+                    closed: true,
+                    const_width: 0.0,
+                    elevation: 0.0,
+                    plinegen: false,
+                }),
+                line((-15.0, -2.0), (-13.0, 2.0)),
+                line((-13.0, 2.0), (-11.0, -2.0)),
+            ];
+            for k in kinds {
+                b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: Common::default(), kind: k });
+            }
+            assert!(
+                super::super::symbolshape::lettered_shape(&b).is_some_and(|p| p.dist(cadaddy_geom::Vec2::new(-12.0, 0.0)) > 13.0),
+                "the shape spot is off the bubble"
+            );
+            d.blocks.insert("PDF-SYM-78".into(), std::sync::Arc::new(b));
+            let ins = Insert {
+                block: "PDF-SYM-78".into(),
+                insert: Vec3::new(312.0, 100.0, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: vec![Attrib {
+                    tag: "TAG".into(),
+                    text: text("D", 300.0, 100.0, 2.0),
+                    invisible: false,
+                    constant: false,
+                    prompt: String::new(),
+                    props: AttribProps::default(),
+                    multiline: None,
+                    modes: AttribModes::default(),
+                }],
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Insert(ins)).ok();
+            let grid = cadaddy_doc::Line { a: Vec3::new(300.0, 110.0, 0.0), b: Vec3::new(300.0, 500.0, 0.0) };
+            d.add(&Space::Model, Common::default(), EntityKind::Line(grid)).ok();
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 2000.0, 1000.0], ..region("Q-1", "1", "E", "plan", 0.0) });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!job.devices.iter().any(|d| d.tag == "D"), "the grid bubble: {:?}", job.devices);
         assert_eq!(r["device_types"]["not_devices"]["a grid bubble"], json!(1), "{:#}", r["device_types"]);
     }
 
