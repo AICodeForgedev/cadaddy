@@ -2846,7 +2846,7 @@ mod tests {
                     (298.0, "1"),
                     (322.0, "GF"),
                     (349.0, "0.4"),
-                    (488.0, "WATER HEATER"),
+                    (488.0, "COFFEE BREWER"),
                     (796.0, "BREAD WARMER"),
                     (929.0, "0.8"),
                     (990.0, "GF"),
@@ -2891,7 +2891,7 @@ mod tests {
         }
         let gf = || vec!["GF".to_string()];
         let want: Vec<(String, String, u32, String, Vec<String>)> = vec![
-            ("1".into(), "20".into(), 1, "WATER HEATER".into(), gf()),
+            ("1".into(), "20".into(), 1, "COFFEE BREWER".into(), gf()),
             ("2".into(), "20".into(), 1, "BREAD WARMER".into(), gf()),
             ("3".into(), "20".into(), 1, "FRYER".into(), gf()),
             ("4".into(), "20".into(), 1, "SPARE".into(), gf()),
@@ -2899,12 +2899,12 @@ mod tests {
             ("6".into(), "20".into(), 1, "TOASTER".into(), gf()),
         ];
         // All of it printed as text reads in full.
-        let plain = read(&v, "E-9");
+        let plain = read(&v, "E-905");
         assert_eq!(plain.len(), 1, "{plain:#?}");
         assert_eq!(rows_of(&plain[0]), want);
         // The same sheet with those kept as tags.
         let d = sheet_with_tags(&v, &[(322.0, 782.0), (990.0, 782.0), (236.0, 796.0), (796.0, 768.0)]);
-        let job = super::super::guided::panel_schedules(&[("E-9".to_string(), d.clone())]);
+        let job = super::super::guided::panel_schedules(&[("E-905".to_string(), d.clone())]);
         assert_eq!(job.len(), 1, "{job:#?}");
         assert_eq!(job[0].panel, "Q9");
         assert_eq!(rows_of(&job[0]), want, "the job's sheets");
@@ -2917,7 +2917,7 @@ mod tests {
     #[test]
     fn a_one_sided_schedules_first_type_kept_as_a_tag_is_read() {
         let (h, row) = (0.09, 0.24);
-        let mut v = vec![t(1.8, 10.1, "PANEL L1 SCHEDULE", 0.13)];
+        let mut v = vec![t(1.8, 10.1, "PANEL LP-7 SCHEDULE", 0.13)];
         let rows = [
             ["CKT", "DESCRIPTION", "BKR", "POLES", "TYPE"],
             ["1", "LIGHTING - CORRIDOR", "20", "1", "AF"],
@@ -2933,7 +2933,7 @@ mod tests {
         }
         let first_type = (6.2, 10.0 - 2.0 * row + 0.075);
         let d = sheet_with_tags(&v, &[first_type]);
-        let job = super::super::guided::panel_schedules(&[("E-9".to_string(), d)]);
+        let job = super::super::guided::panel_schedules(&[("E-905".to_string(), d)]);
         let got: Vec<(String, Vec<String>)> =
             job.first().map(|p| p.circuits.iter().map(|c| (c.number.clone(), c.protection.clone())).collect()).unwrap_or_default();
         let one = |k: &str| vec![k.to_string()];
