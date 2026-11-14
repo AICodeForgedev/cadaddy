@@ -589,6 +589,10 @@ pub fn names_item(subject: &str, kind: &str, name: Option<&str>, mark: Option<&s
     if have.contains("data") && !word_line(&own).contains("_RECEPTACLE_") {
         have.remove("receptacle");
     }
+    // A pull box (a raceway's box) is no fire alarm pull station, though it says pull.
+    if word_line(&own).contains("_BOX_") {
+        have.remove("pull_station");
+    }
     !want.is_disjoint(&have)
 }
 
@@ -738,5 +742,7 @@ mod tests {
         assert!(names_item("SWITCHES AND CARD READERS", "low_voltage_outlet", None, Some("CR")));
         assert!(names_item("FIRE ALARM PULL STATIONS", "pull_station", None, Some("P")));
         assert!(!names_item("PANELBOARDS", "receptacle", None, Some("REC")));
+        assert!(!names_item("FIRE ALARM PULL STATIONS", "pull_box", None, None), "a pull box is no pull station");
+        assert!(names_item("FIRE ALARM PULL STATIONS", "pull_station", None, None));
     }
 }
