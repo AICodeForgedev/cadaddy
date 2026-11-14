@@ -1262,7 +1262,7 @@ impl ScheduleDocs {
                 out.sheets = pages.into_iter().map(|(n, _)| n).collect();
             }
             None => {
-                let texts = cadaddy_mepfix::sheet_facts::texts(d);
+                let texts = super::panelsched::sheet_texts(d);
                 for p in super::panelsched::read(&texts, "the drawing") {
                     if !out.reread.iter().any(|o| o.panel.eq_ignore_ascii_case(&p.panel)) && out.reread.len() < 2_000 {
                         out.reread.push(p);

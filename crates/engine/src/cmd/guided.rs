@@ -27813,7 +27813,7 @@ pub(crate) fn job_panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> 
 /// notes and one-line, [`super::panelsched::read_set`]).
 pub(crate) fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
     let texts: Vec<(&str, Vec<cadaddy_mepfix::sheet_facts::TextItem>)> =
-        pages.iter().map(|(number, sub)| (number.as_str(), cadaddy_mepfix::sheet_facts::texts(sub))).collect();
+        pages.iter().map(|(number, sub)| (number.as_str(), super::panelsched::sheet_texts(sub))).collect();
     let set: Vec<(&str, &[cadaddy_mepfix::sheet_facts::TextItem])> = texts.iter().map(|(n, t)| (*n, t.as_slice())).collect();
     super::panelsched::read_set(&set)
 }
