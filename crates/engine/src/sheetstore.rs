@@ -74,9 +74,9 @@ pub const CACHE: usize = 3;
 const MAX_SHEET_MOVES: usize = 64;
 
 /// Chunks encoded at once when sheets go out of memory ([`park`]). Encoding one takes several times
-/// its objects' bytes for a moment (a hotel-sized set's largest, 15 MB of objects, about 100 MB):
+/// its objects' bytes for a moment (a four-storey set's largest, 15 MB of objects, about 100 MB):
 /// on every core at once it added about 0.8 GB at the moment a guided job is at its largest, its
-/// build just done (Q6577). On two, the hotel's million objects go out in about the same time
+/// build just done (Q6577). On two, that set's million objects go out in about the same time
 /// the job's other steps take.
 const ENCODE_THREADS: usize = 2;
 

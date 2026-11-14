@@ -1,6 +1,6 @@
 //! Q6577: a print set's sheet stored to go out of memory (`cdy::encode_stored`) keeps only its
 //! bytes. The compressor's buffer is sized for the worst case (half the input), and a stored chunk
-//! is held as long as its sheet is out: the hotel-sized job's parked sheets held more spare buffer
+//! is held as long as its sheet is out: a four-storey job's parked sheets held more spare buffer
 //! than their objects took in memory.
 
 use std::sync::Arc;
