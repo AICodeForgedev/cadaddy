@@ -1553,8 +1553,8 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     // follows takes them for no build's.
     super::overrides::after_command(s, before);
     behind_after_command(s, before);
-    // The outermost command is over: the sheet changes it made are forgotten (they hold
-    // drawing states, the sheets put out among them).
+    // The outermost command is over: the sheet changes it made are forgotten (they hold the
+    // objects they loaded).
     if s.journal.at_top() && s.running.is_none() && s.suspended.is_none() {
         for st in &mut s.docs {
             st.sheet_moves.clear();
