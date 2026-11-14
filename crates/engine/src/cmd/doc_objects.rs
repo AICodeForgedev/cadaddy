@@ -139,6 +139,18 @@ pub(crate) struct Rules {
     pub existing_reach_ft: f64,
     pub max_sheets: usize,
     pub max_elements: usize,
+    /// The receptacle built for an object whose note calls for one (`PROVIDE 30A 120V RECEPTACLE
+    /// FOR RANGE`) where no drawn receptacle stands at its marker.
+    pub receptacle_box: BoxRule,
+    /// How far from a typical room's keynote marker (feet) a drawn receptacle is the one its note
+    /// speaks of.
+    pub receptacle_reach_ft: f64,
+    /// Words of a note's sentence that say where its receptacle is mounted.
+    pub mount_words: Vec<String>,
+    /// The words after a load's `<n>VA/` (or `<n> VA PER`) that make a load calculation's line one
+    /// unit's (`RANGE CONNECTION (2,400VA/SUITE)`).
+    pub per_unit_words: Vec<String>,
+    pub load_calc_source: String,
 }
 
 pub(crate) fn rules() -> &'static Rules {
@@ -695,6 +707,44 @@ pub(crate) struct Found {
     /// Its type mark, from the object the model already has beside it that the same keynote
     /// describes (the schedule's exit sign type); empty when nothing gives one.
     pub type_mark: String,
+    /// The typical room's view whose keynote marker it was read at (`E-7 ENLARGED STUDIO`): it is
+    /// laid into every room of the view's type, one a room; empty otherwise.
+    pub typical: String,
+    /// The room it was laid into (its number, else its name), for a typical room's object.
+    pub room: String,
+}
+
+/// How many of `class` one load calculation line counts (`RANGE CONNECTION (2,400VA/SUITE):
+/// 153.60 KVA`: 64): a line whose label names the class and a load per unit (`<n>VA/<unit>`, `<n>
+/// VA PER <unit>`, a unit the rules' `per_unit_words` name), its total its first number (kVA where
+/// its text says so): the total over the per-unit load, when that is a whole number. None
+/// otherwise.
+pub(crate) fn per_unit_count(label: &str, text: &str, values: &[f64], class: &Class) -> Option<u32> {
+    let r = rules();
+    if class_of(label).is_none_or(|c| c.kind != class.kind) {
+        return None;
+    }
+    // (`2,400VA` is one number)
+    let w = words(&label.replace(',', ""));
+    let unit = |x: Option<&String>| x.is_some_and(|u| r.per_unit_words.iter().any(|p| p.eq_ignore_ascii_case(u)));
+    let is = |i: usize, v: &str| w.get(i).is_some_and(|x| x == v);
+    let per = w.iter().enumerate().find_map(|(i, x)| {
+        // `2400VA/SUITE`, `2400 VA PER SUITE`
+        let (n, next) = match x.strip_suffix("VA") {
+            Some(n) if !n.is_empty() => (n, i + 1),
+            _ if is(i + 1, "VA") => (x.as_str(), i + 2),
+            _ => return None,
+        };
+        let va = n.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+        let after = if is(next, "PER") { w.get(next + 1) } else { w.get(next) };
+        unit(after).then_some(va)
+    })?;
+    let first = values.first().copied().filter(|v| v.is_finite() && *v > 0.0)?;
+    let total = if words(text).iter().any(|x| x == "KVA") { first * 1000.0 } else { first };
+    let n = total / per;
+    let whole = n.round();
+    // (A total printed to its last digit or two: within a twentieth of a unit.)
+    ((n - whole).abs() <= 0.05 && (1.0..=100_000.0).contains(&whole)).then_some(whole as u32)
 }
 
 /// One object per place: the same kind on the same level within `reach` (plan units), read on
@@ -1059,5 +1109,24 @@ mod tests {
         // An exit sign luminaire is the class by its schedule row's words, whatever its kind.
         assert!(is_class(class("exit_sign"), "light_fixture", "X1 EDGE-LIT EXIT SIGN, UNIVERSAL MOUNT"));
         assert!(!is_class(class("exit_sign"), "light_fixture", "A 2X4 RECESSED TROFFER"));
+    }
+
+    /// Q6547: a load calculation's per-unit line counts the units that have the class's object.
+    #[test]
+    fn a_load_calculations_per_unit_line_counts_the_units() {
+        let range = class_by_kind("range").unwrap();
+        let count = |label: &str, text: &str, values: &[f64]| per_unit_count(label, text, values, range);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "153.60 KVA", &[153.6]), Some(64));
+        assert_eq!(count("RANGES (8000 VA PER UNIT)", "96,000", &[96_000.0]), Some(12));
+        assert_eq!(count("COOKTOP 3500VA/APARTMENT", "17.5 kVA", &[17.5]), Some(5));
+        // Not a count: another class's line, no unit after the load, no whole number, no total,
+        // hostile numbers.
+        assert_eq!(count("MICROWAVE RECEPTACLE (1,200VA/SUITE):", "76.80 KVA", &[76.8]), None);
+        assert_eq!(count("RANGE CONNECTION 2,400VA", "153.60 KVA", &[153.6]), None);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "100.00 KVA", &[100.0]), None);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "", &[]), None);
+        assert_eq!(count("RANGE CONNECTION (2,400VA/SUITE):", "KVA", &[f64::NAN]), None);
+        assert_eq!(count("RANGE CONNECTION (0VA/SUITE):", "KVA", &[10.0]), None);
+        assert_eq!(count("RANGE HOOD (300VA/SUITE):", "KVA", &[3.0]), None, "a hood is no range");
     }
 }

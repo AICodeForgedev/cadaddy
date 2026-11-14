@@ -119,6 +119,8 @@ pub(crate) struct Rules {
     pub terminal_size_basis: String,
     pub sprinkler_size_in: [f64; 2],
     pub sprinkler_size_basis: String,
+    pub join_part_kinds: Vec<String>,
+    pub join_basis: String,
 }
 
 pub(crate) fn rules() -> Rules {
@@ -180,8 +182,102 @@ fn added_by_terminal(t: &MepTerminal) -> Option<&str> {
     t.objects.iter().find_map(|o| o.strip_prefix("edit:"))
 }
 
+/// The source key a documents' unit carries for each add edit joined to it ([`join_unit`]).
+const JOINED: &str = "joined:";
+
+/// The edit that added a piece of equipment, or the first add edit joined to the documents' unit.
 fn added_by_equipment(e: &MepEquipment) -> Option<&str> {
-    e.sources.get("edit").map(String::as_str)
+    e.sources.get("edit").map(String::as_str).or_else(|| e.sources.keys().find_map(|k| k.strip_prefix(JOINED)))
+}
+
+/// Whether the add edit `id` put this piece of equipment in, or was joined to it.
+fn by_edit(e: &MepEquipment, id: &str) -> bool {
+    !id.is_empty() && (e.sources.get("edit").is_some_and(|x| x == id) || e.sources.contains_key(&format!("{JOINED}{id}")))
+}
+
+/// The documents' own unit an added piece of equipment `q` is (Q6630): one tag, one unit. Of the
+/// equipment on its level that no edit added, carrying its tag (a curb or stand under a unit
+/// is a part, not the unit: rules data `join_part_kinds`), the only one; or, where the documents
+/// repeat the tag on the level (a typical room's units), the one the added piece overlaps.
+/// `None`: the documents don't build it, the added piece is its own.
+fn documents_unit(sp: &BuildingSpec, q: &MepEquipment, parts: &[String]) -> Option<usize> {
+    let tag = q.tag.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    let same: Vec<usize> = sp
+        .mep
+        .equipment
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| {
+            !x.sources.contains_key("edit")
+                && x.tag.trim().eq_ignore_ascii_case(tag)
+                && same_level(sp, &x.level, &q.level)
+                && !parts.iter().any(|k| k.eq_ignore_ascii_case(x.kind.trim()))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match same.as_slice() {
+        [one] => Some(*one),
+        _ => {
+            let (lo, hi) = (q.min, q.max);
+            same.into_iter().find(|&i| {
+                sp.mep.equipment.get(i).is_some_and(|x| {
+                    x.min[0].min(x.max[0]) <= lo[0].max(hi[0])
+                        && x.max[0].max(x.min[0]) >= lo[0].min(hi[0])
+                        && x.min[1].min(x.max[1]) <= lo[1].max(hi[1])
+                        && x.max[1].max(x.min[1]) >= lo[1].min(hi[1])
+                })
+            })
+        }
+    }
+}
+
+/// The added piece `q` joined to the documents' unit `x` (Q6630): the unit keeps its place, size,
+/// kind and height (the trade that places it); the added piece's data go on it: a property the
+/// unit lacks is set, one it has with another value is the person's (the documents' value kept
+/// beside it as a correction), its circuits, terminations, enclosure and type mark where the unit
+/// has none, its systems added. The unit names the edit (`joined:<id>`) and why. What happened.
+fn join_unit(x: &mut MepEquipment, q: &MepEquipment, e: &MepEdit, upf: f64, reason: &str, rule: &str, basis: &str) -> String {
+    for (k, v) in q.properties.iter().filter(|(_, v)| !v.trim().is_empty()) {
+        match x.properties.get(k).filter(|w| !w.trim().is_empty()) {
+            None => {
+                x.properties.insert(k.clone(), v.clone());
+            }
+            Some(w) if w.trim() != v.trim() => {
+                let design = w.clone();
+                push_correction(&mut x.corrections, k, design, v.clone(), reason, rule);
+                x.properties.insert(k.clone(), v.clone());
+            }
+            Some(_) => {}
+        }
+    }
+    if x.circuits.is_empty() {
+        x.circuits.clone_from(&q.circuits);
+    }
+    if x.terminations.is_empty() {
+        x.terminations.clone_from(&q.terminations);
+    }
+    if x.enclosure.is_none() {
+        x.enclosure.clone_from(&q.enclosure);
+    }
+    if x.type_mark.trim().is_empty() {
+        x.type_mark.clone_from(&q.type_mark);
+    }
+    for sy in &q.systems {
+        if !x.systems.iter().any(|s| s.eq_ignore_ascii_case(sy)) {
+            x.systems.push(sy.clone());
+        }
+    }
+    let ft = dist(centre(x), centre(q)) / upf.max(1e-9);
+    let placed = x.sources.get("position").cloned().unwrap_or_else(|| "the documents".into());
+    let note = format!(
+        "{} added {} by hand; the documents build {} on {} ({placed}): the added piece is that unit, not a second box, its data on it; the spot the edit gave is {ft:.1} ft from it (mep.move moves the unit). {basis}",
+        e.id, q.tag, x.tag, x.level
+    );
+    x.sources.insert(format!("{JOINED}{}", e.id), note.clone());
+    note
 }
 
 fn centre(e: &MepEquipment) -> [f64; 2] {
@@ -218,7 +314,7 @@ fn find(sp: &BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Result<At, Str
         let hit = match el {
             El::Run => sp.mep.runs.iter().position(|r| added_by_run(r) == Some(e.added_by.as_str())).map(At::Run),
             El::Terminal => sp.mep.terminals.iter().position(|t| added_by_terminal(t) == Some(e.added_by.as_str())).map(At::Terminal),
-            El::Equipment => sp.mep.equipment.iter().position(|q| added_by_equipment(q) == Some(e.added_by.as_str())).map(At::Equipment),
+            El::Equipment => sp.mep.equipment.iter().position(|q| by_edit(q, &e.added_by)).map(At::Equipment),
         };
         return hit
             .ok_or_else(|| format!("the {} edit {} added is gone (reverted, or deleted by a later edit): not applied", el.as_str(), e.added_by));
@@ -344,7 +440,7 @@ pub(crate) fn apply(sp: &mut BuildingSpec) -> Vec<Outcome> {
         .iter()
         .take(MAX_EDITS)
         .map(|e| match apply_one(sp, e, tol) {
-            Ok(()) => Outcome { id: e.id.clone(), applied: true, why: String::new() },
+            Ok(note) => Outcome { id: e.id.clone(), applied: true, why: note },
             Err(why) => Outcome { id: e.id.clone(), applied: false, why },
         })
         .collect();
@@ -355,10 +451,12 @@ pub(crate) fn apply(sp: &mut BuildingSpec) -> Vec<Outcome> {
 /// The build's report of the edits it applied.
 pub(crate) fn report(out: &[Outcome]) -> Value {
     let orphaned: Vec<Value> = out.iter().filter(|o| !o.applied).take(50).map(|o| json!({"id": o.id, "why": o.why})).collect();
-    json!({"edits": out.len(), "applied": out.iter().filter(|o| o.applied).count(), "orphaned": out.iter().filter(|o| !o.applied).count(), "orphaned_first": orphaned})
+    // Added pieces the documents now build, joined to their unit (Q6630).
+    let joined: Vec<Value> = out.iter().filter(|o| o.applied && !o.why.is_empty()).take(50).map(|o| json!({"id": o.id, "why": o.why})).collect();
+    json!({"edits": out.len(), "applied": out.iter().filter(|o| o.applied).count(), "orphaned": out.iter().filter(|o| !o.applied).count(), "orphaned_first": orphaned, "joined": joined})
 }
 
-fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Result<(), String> {
+fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Result<String, String> {
     let (rule, reason) = (rule_of(e), reason_of(e));
     let upf = upf(sp);
     let pt = |p: [f64; 2]| format!("{:.2},{:.2} ft", p[0] / upf, p[1] / upf);
@@ -387,15 +485,24 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                 }
             }
             (None, None, Some(q)) => {
-                if !sp.mep.equipment.iter().any(|x| added_by_equipment(x) == Some(e.id.as_str())) {
-                    let mut q = q.clone();
-                    q.sources.insert("edit".into(), e.id.clone());
-                    sp.mep.equipment.push(q);
+                if let Some(x) = sp.mep.equipment.iter().find(|x| by_edit(x, &e.id)) {
+                    // Applied before (a check run on a copy, a second pass): what it did then.
+                    return Ok(x.sources.get(&format!("{JOINED}{}", e.id)).cloned().unwrap_or_default());
                 }
+                // One tag, one unit (Q6630): a piece added while the documents had no such unit,
+                // which they now build (another trade's plan or schedule), is that unit.
+                let r = rules();
+                if let Some(i) = documents_unit(sp, q, &r.join_part_kinds) {
+                    let x = sp.mep.equipment.get_mut(i).ok_or("the equipment is gone")?;
+                    return Ok(join_unit(x, q, e, upf, &reason, &rule, &r.join_basis));
+                }
+                let mut q = q.clone();
+                q.sources.insert("edit".into(), e.id.clone());
+                sp.mep.equipment.push(q);
             }
             _ => return Err("an add edit carries exactly one run, terminal or piece of equipment".into()),
         }
-        return Ok(());
+        return Ok(String::new());
     }
     let at = find(sp, e, tol)?;
     match e.op.as_str() {
@@ -412,7 +519,7 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                 }
                 _ => return Err("the element is gone".into()),
             }
-            Ok(())
+            Ok(String::new())
         }
         "move" => {
             let d = e.delta.filter(|d| d.iter().all(|v| v.is_finite()));
@@ -489,7 +596,7 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                     }
                 }
             }
-            Ok(())
+            Ok(String::new())
         }
         "resize" => {
             let size = e.size_in.filter(|s| s[0].is_finite() && s[0] > 0.0 && s[1].is_finite() && s[1] >= 0.0);
@@ -524,7 +631,7 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                     }
                 }
             }
-            Ok(())
+            Ok(String::new())
         }
         "set" => {
             match at {
@@ -576,7 +683,7 @@ fn apply_one(sp: &mut BuildingSpec, e: &MepEdit, tol: f64) -> std::result::Resul
                     }
                 }
             }
-            Ok(())
+            Ok(String::new())
         }
         other => Err(format!("unknown edit {other:?}")),
     }
@@ -938,7 +1045,7 @@ fn target(cmd: &str, s: &Session, v: &BuildingSpec, p: &Value) -> Result<At> {
             .position(|r| added_by_run(r) == Some(id.as_str()))
             .map(At::Run)
             .or_else(|| v.mep.terminals.iter().position(|t| added_by_terminal(t) == Some(id.as_str())).map(At::Terminal))
-            .or_else(|| v.mep.equipment.iter().position(|q| added_by_equipment(q) == Some(id.as_str())).map(At::Equipment));
+            .or_else(|| v.mep.equipment.iter().position(|q| by_edit(q, &id)).map(At::Equipment));
         return hit.ok_or_else(|| bad(cmd, format!("no element added by edit {id} (mep.edits lists them)")));
     }
     if let Some(at) = pair(cmd, p, "at", 1e12)? {
@@ -1624,7 +1731,8 @@ fn run_edits(s: &mut Session, p: &Value) -> Result<Value> {
                 return None;
             }
             let mut j = json!({"id": e.id, "op": e.op, "element": e.element, "level": e.level, "system": e.system, "tag": e.tag, "at": e.points.first(), "reason": e.reason, "by": e.by, "status": st});
-            if let Some(o) = o.filter(|o| !o.applied) {
+            // Why it is orphaned, or what an applied one did besides (joined to the documents' unit).
+            if let Some(o) = o.filter(|o| !o.why.is_empty()) {
                 j["why"] = json!(o.why);
             }
             if !e.added_by.is_empty() {
@@ -1724,6 +1832,151 @@ mod tests {
         assert_eq!(sp.mep.equipment[0].corrections[0].design, "AHU-1");
         assert!(sp.mep.runs.is_empty());
         assert_eq!(sp.mep.edits.len(), 3, "the edits stay");
+    }
+
+    /// Q6630: a unit the electrical side added by hand (it is a breaker's load, its feeder lands on
+    /// it) while no plan placed it, which another trade's schedule and plan now build on the same
+    /// level, a few feet off: one tag, one unit. The added piece is the documents' unit, not a
+    /// second box; its circuit and properties go on that unit, which keeps its place, kind and
+    /// supply system; the edit stays applied and says so, and a later edit naming it still finds it.
+    #[test]
+    fn a_unit_added_by_hand_that_another_trades_documents_now_build_is_that_unit() {
+        let mut sp = spec();
+        sp.levels.push(
+            serde_json::from_value(json!({"name": "Roof", "elevation_ft": 12.0, "height_ft": 4.0, "ceiling_ft": 4.0}))
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        // The mechanical side's unit (its schedule row, its plan's place, its supply system) and the
+        // curb under it with its tag.
+        let unit: MepEquipment = serde_json::from_value(json!({
+            "tag": "RTU-7", "kind": "rooftop_unit", "level": "Roof", "min": [600, 600], "max": [690, 660], "bottom_ft": 1.2, "height_ft": 4.5,
+            "systems": ["SA"], "confidence": 0.9,
+            "sources": {"position": "its tag RTU-7 on a made-up roof plan", "schedule": "a made-up unit schedule"},
+            "properties": {"MODEL": "UNIT-A", "VOLTAGE": "460/3/60"}
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let curb = MepEquipment {
+            tag: "RTU-7".into(),
+            kind: "roof_curb".into(),
+            level: "Roof".into(),
+            min: [600.0, 600.0],
+            max: [690.0, 660.0],
+            height_ft: 1.2,
+            ..MepEquipment::default()
+        };
+        sp.mep.equipment.push(curb);
+        sp.mep.equipment.push(unit);
+        // The electrical side's piece, added before the plan placed the unit: 5 ft off.
+        let added: MepEquipment = serde_json::from_value(json!({
+            "tag": "RTU-7", "kind": "mechanical_unit", "level": "Roof", "min": [660, 600], "max": [750, 660], "bottom_ft": 0.0, "height_ft": 4.0,
+            "properties": {"PANEL": "SB9", "CIRCUIT": "4,6,8", "VOLTAGE": "480/3/60"},
+            "circuits": [{"number": "4", "description": "RTU-7", "breaker": "70", "poles": 3}],
+            "confidence": 1.0
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        sp.mep.edits = vec![
+            MepEdit {
+                id: "ME-1".into(),
+                op: "add".into(),
+                element: "equipment".into(),
+                level: "Roof".into(),
+                tag: "RTU-7".into(),
+                points: vec![[705.0, 630.0]],
+                equipment: Some(added),
+                by: "agent".into(),
+                ..MepEdit::default()
+            },
+            MepEdit {
+                id: "ME-2".into(),
+                op: "move".into(),
+                element: "equipment".into(),
+                added_by: "ME-1".into(),
+                bottom_ft: Some(1.5),
+                ..MepEdit::default()
+            },
+        ];
+        let out = apply(&mut sp);
+        assert!(out.iter().all(|o| o.applied), "{out:?}");
+        let units: Vec<&MepEquipment> = sp.mep.equipment.iter().filter(|e| e.tag == "RTU-7" && e.kind != "roof_curb").collect();
+        assert_eq!(units.len(), 1, "one tag, one unit: {units:#?}");
+        let u = units[0];
+        // The documents' place, kind and system; the electrical data on it.
+        assert_eq!((u.kind.as_str(), u.min, u.max, u.systems.clone()), ("rooftop_unit", [600.0, 600.0], [690.0, 660.0], vec!["SA".to_string()]));
+        assert_eq!(u.properties.get("PANEL").map(String::as_str), Some("SB9"));
+        assert_eq!(u.properties.get("MODEL").map(String::as_str), Some("UNIT-A"));
+        assert_eq!(u.circuits.len(), 1);
+        // A value both give differently: the person's, the documents' beside it.
+        assert_eq!(u.properties.get("VOLTAGE").map(String::as_str), Some("480/3/60"));
+        assert!(u.corrections.iter().any(|c| c.key == "VOLTAGE" && c.design == "460/3/60" && c.corrected == "480/3/60"), "{:?}", u.corrections);
+        // Said on it and in the build's report; the later edit found the unit.
+        assert!(u.sources.get("joined:ME-1").is_some_and(|w| w.contains("not a second box") && w.contains("5.0 ft")), "{:?}", u.sources);
+        assert!(out[0].why.contains("not a second box"), "{out:?}");
+        assert_eq!(report(&out)["joined"][0]["id"], json!("ME-1"));
+        assert!((u.bottom_ft - 1.5).abs() < 1e-9, "{}", u.bottom_ft);
+        // Applied again (the next build): still one.
+        let again = apply(&mut sp);
+        assert!(again.iter().all(|o| o.applied));
+        assert_eq!(sp.mep.equipment.iter().filter(|e| e.tag == "RTU-7" && e.kind != "roof_curb").count(), 1);
+    }
+
+    /// Q6630: where the documents repeat a tag on a level (each typical room's unit), an added
+    /// piece is the one it stands on, and one standing on none of them is its own; an added piece
+    /// the documents don't build at all stays added; a tag on another level is another unit.
+    #[test]
+    fn an_added_piece_joins_only_the_documents_unit_it_is() {
+        let room_unit = |x: f64| MepEquipment {
+            tag: "FCU-2".into(),
+            kind: "fan_coil".into(),
+            level: "Level 1".into(),
+            min: [x, 0.0],
+            max: [x + 36.0, 24.0],
+            height_ft: 2.0,
+            ..MepEquipment::default()
+        };
+        let add = |id: &str, tag: &str, level: &str, x: f64| {
+            let q = MepEquipment {
+                tag: tag.into(),
+                kind: "fan_coil".into(),
+                level: level.into(),
+                min: [x, 0.0],
+                max: [x + 36.0, 24.0],
+                height_ft: 2.0,
+                ..MepEquipment::default()
+            };
+            MepEdit {
+                id: id.into(),
+                op: "add".into(),
+                element: "equipment".into(),
+                level: level.into(),
+                tag: tag.into(),
+                points: vec![[x + 18.0, 12.0]],
+                equipment: Some(q),
+                ..MepEdit::default()
+            }
+        };
+        let mut sp = spec();
+        sp.levels.push(
+            serde_json::from_value(json!({"name": "Level 2", "elevation_ft": 12.0, "height_ft": 12.0, "ceiling_ft": 9.0}))
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        sp.mep.equipment.extend([room_unit(1000.0), room_unit(2000.0), room_unit(3000.0)]);
+        sp.mep.edits = vec![
+            add("ME-1", "FCU-2", "Level 1", 2010.0),
+            add("ME-2", "FCU-2", "Level 1", 4000.0),
+            add("ME-3", "FCU-9", "Level 1", 5000.0),
+            add("ME-4", "AHU-1", "Level 2", 0.0),
+        ];
+        let out = apply(&mut sp);
+        assert!(out.iter().all(|o| o.applied), "{out:?}");
+        let fcu2: Vec<[f64; 2]> = sp.mep.equipment.iter().filter(|e| e.tag == "FCU-2").map(|e| e.min).collect();
+        // ME-1 on the second room's unit: joined; ME-2 in a room with none: its own.
+        assert_eq!(fcu2, [[1000.0, 0.0], [2000.0, 0.0], [3000.0, 0.0], [4000.0, 0.0]], "{fcu2:?}");
+        assert!(sp.mep.equipment.iter().any(|e| e.min == [2000.0, 0.0] && e.sources.contains_key("joined:ME-1")));
+        assert!(out[0].why.contains("not a second box") && out[1].why.is_empty(), "{out:?}");
+        // Nothing builds FCU-9: added. AHU-1 is on Level 1 in the documents, added on Level 2: its own.
+        assert_eq!(sp.mep.equipment.iter().filter(|e| e.tag == "FCU-9" && by_edit(e, "ME-3")).count(), 1);
+        assert_eq!(sp.mep.equipment.iter().filter(|e| e.tag == "AHU-1").count(), 2);
+        assert!(out[2].why.is_empty() && out[3].why.is_empty(), "{out:?}");
     }
 
     #[test]

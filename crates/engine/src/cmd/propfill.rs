@@ -2207,6 +2207,13 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             if !basis.is_empty() {
                 store.set("basis", Prop::new(basis.clone(), Source::from_doc(SourceKind::Rule, &basis)));
             }
+            // A device a check made (only another trade's sheet draws it): how sure, and what is
+            // proposed for it (Q6612).
+            for k in super::readers::CHECK_FIELDS {
+                if let Some(v) = field(t, k) {
+                    store.set(k, Prop::new(v, Source::from_doc(SourceKind::Rule, &basis)));
+                }
+            }
         }
         let mut loc = location_prop(x, y, zc, upf);
         if registered {

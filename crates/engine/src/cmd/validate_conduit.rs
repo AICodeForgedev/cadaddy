@@ -376,6 +376,8 @@ pub(crate) struct BoxEl {
     /// A gang box's other devices (it holds them all).
     pub ganged: Vec<Handle>,
     pub cubic_in: Option<f64>,
+    /// Its inside length (inches) where the build records it (a pull box, NEC 314.28).
+    pub length_in: Option<f64>,
     pub size: String,
     pub level: String,
     pub lo: Vec3,
@@ -559,6 +561,13 @@ fn plan_box(e: &Entity) -> Option<(Vec3, Vec3)> {
 
 impl Net {
     pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Net {
+        let mut n = Net::raceways(d, sp);
+        n.read_obstacles(d);
+        n
+    }
+
+    /// The raceway pieces, devices and gear only (no obstacles): what box fill needs.
+    pub(crate) fn raceways(d: &Drawing, sp: &BuildingSpec) -> Net {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
         let mut n = Net { upf, moves: super::conduitroute::level_moves(d, sp), ..Net::default() };
         let rl = super::conduitroute::rules();
@@ -608,8 +617,13 @@ impl Net {
                 n.gear.push(GearEl { handle: e.handle, tag, level: super::bspec::made_level(e).unwrap_or_default(), lo, hi, electrical });
             }
         }
-        // What a conduit keeps clear of: the other trades' elements, the equipment and the drawn
-        // conduit (as the model's elements classify them).
+        n
+    }
+
+    /// What a conduit keeps clear of: the other trades' elements, the equipment and the drawn
+    /// conduit (as the model's elements classify them).
+    fn read_obstacles(&mut self, d: &Drawing) {
+        let n = self;
         for el in super::bimwork::elements(d) {
             if n.obstacles.len() >= MAX_OBSTACLES {
                 break;
@@ -640,7 +654,6 @@ impl Net {
                 hi,
             });
         }
-        n
     }
 
     /// A point of `level`'s plan where the stacked building has it: a riser between storeys
@@ -743,6 +756,7 @@ impl Net {
                         of: Handle::parse_hex(&text(&ps, "box_of")),
                         ganged: text(&ps, "devices").split(',').filter_map(|h| Handle::parse_hex(h.trim())).take(64).collect(),
                         cubic_in: num(&ps, "cubic_in").filter(|v| *v > 0.0),
+                        length_in: num(&ps, "length_in").filter(|v| *v > 0.0),
                         size: text(&ps, "size"),
                         level: level.clone(),
                         lo,
@@ -790,6 +804,158 @@ impl Net {
             self.counted.push(Counted { kind, item: text(&ps, "item"), size: text(&ps, "size"), level, qty });
         }
     }
+}
+
+// ---------------------------------------------------------------- what is in a box
+
+/// What enters a box (NEC 314.16(B)(1)): each conductor of every run whose stick ends touch it
+/// (a run once, however many of its sticks end there: a conductor passing through is counted
+/// once) and of each cable landing in it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BoxIn {
+    /// Each conductor entering: (size, ground).
+    pub conds: Vec<(String, bool)>,
+    /// The cables landing in it whose type doesn't give their conductors.
+    pub unknown_cable: usize,
+    pub runs: usize,
+    pub cables: usize,
+    /// Each raceway run entering: its trade size (inches, its largest stick ending there).
+    pub raceways_in: Vec<f64>,
+}
+
+/// What enters each of `net`'s boxes (by index), the stick ends within `touch` (drawing units)
+/// of a box landing in it: the build's own pieces, whatever circuit or device they serve.
+pub(crate) fn boxes_in(net: &Net, touch: f64) -> Vec<BoxIn> {
+    let grid = BoxGrid::of(net);
+    // The runs whose ends touch each box, each with its largest trade size there.
+    let mut box_runs: HashMap<usize, BTreeMap<&str, f64>> = HashMap::new();
+    for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
+        for p in [s.a, s.b] {
+            for bi in grid.near(p, touch, net) {
+                let e = box_runs.entry(bi).or_default().entry(s.run.as_str()).or_insert(0.0);
+                *e = e.max(s.size_in.filter(|v| v.is_finite()).unwrap_or(0.0));
+            }
+        }
+    }
+    let mut run_wires: HashMap<&str, Vec<&Wire>> = HashMap::new();
+    for w in net.wires.iter().filter(|w| !w.run.is_empty()) {
+        run_wires.entry(w.run.as_str()).or_default().push(w);
+    }
+    let cables: HashMap<Handle, &Cable> = net.cables.iter().map(|c| (c.handle, c)).collect();
+    // A cable lands in the boxes either side's links name.
+    let mut cable_in: HashMap<Handle, BTreeSet<Handle>> = HashMap::new();
+    for c in &net.cables {
+        for h in &c.links {
+            cable_in.entry(*h).or_default().insert(c.handle);
+        }
+    }
+    net.boxes
+        .iter()
+        .enumerate()
+        .map(|(bi, b)| {
+            let runs = box_runs.get(&bi);
+            // Directly, or through the connector at its end.
+            let mut in_set: BTreeSet<Handle> = b.links.iter().copied().filter(|h| cables.contains_key(h)).collect();
+            for h in b.links.iter().filter(|h| net.what.get(h).is_some_and(|k| k == "connector")) {
+                in_set.extend(net.links.get(h).into_iter().flatten().copied().filter(|x| cables.contains_key(x)));
+            }
+            in_set.extend(cable_in.get(&b.handle).into_iter().flatten().copied());
+            let mut out = BoxIn { runs: runs.map_or(0, BTreeMap::len), cables: in_set.len(), ..BoxIn::default() };
+            for (run, size_in) in runs.into_iter().flatten() {
+                out.raceways_in.push(*size_in);
+                for w in run_wires.get(run).into_iter().flatten() {
+                    out.conds.push((w.size.clone(), w.ground()));
+                }
+            }
+            for cb in in_set.iter().filter_map(|h| cables.get(h)) {
+                match cb.conductors() {
+                    Some((n, size, g)) => {
+                        out.conds.extend(std::iter::repeat_n((size.clone(), false), n as usize));
+                        if g {
+                            out.conds.push((size, true));
+                        }
+                    }
+                    None => out.unknown_cable += 1,
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+/// Does a device of `kind` (lower case) put a yoke in its box (NEC 314.16(B)(4))?
+pub(crate) fn yoke_kind(kind: &str) -> bool {
+    let k = kind.replace('_', " ").to_ascii_lowercase();
+    YOKE_KINDS.iter().any(|w| k.contains(w))
+}
+
+/// What a box's conductors ask of it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FillNeed {
+    /// NEC 314.16(B): the volume its conductors #6 and smaller, its grounds (all as one) and a
+    /// yoke (two of the largest) need.
+    pub need_cu_in: f64,
+    /// NEC 314.28(A): with conductors #4 and larger, the inside length a pull or junction box
+    /// needs (eight times the largest raceway; six times it plus the others for an angle pull).
+    pub pull_len_in: Option<f64>,
+    /// The largest conductor #4 or larger in it.
+    pub large: Option<String>,
+    /// Every conductor's size known (the table's, or #4 and larger with a raceway size).
+    pub known: bool,
+    /// The conductors as a list (`12#12 + 4#12G`).
+    pub list: String,
+}
+
+/// What `conds` (size, ground) need of a box with a yoke or not, the raceways entering it
+/// `raceways_in` (trade sizes, inches); `unknown_cable` cables of no known makeup.
+pub(crate) fn fill_need(
+    conds: &[(String, bool)],
+    unknown_cable: usize,
+    yoke: bool,
+    raceways_in: &[f64],
+    rl: &super::conduitroute::RouteRules,
+) -> FillNeed {
+    let bf = &rl.box_fill;
+    let vol = |s: &str| bf.cu_in.get(s).copied();
+    let rank = |s: &str| rl.vdrop.size_order.iter().position(|x| x == s);
+    let from = rank(&bf.pull.from_size);
+    let large = |s: &str| vol(s).is_none() && matches!((rank(s), from), (Some(a), Some(b)) if a >= b);
+    let hots: Vec<&String> = conds.iter().filter(|c| !c.1).map(|c| &c.0).collect();
+    let bigger = |a: &&String, b: &&String| vol(a).unwrap_or(0.0).total_cmp(&vol(b).unwrap_or(0.0));
+    let largest_hot = hots.iter().copied().max_by(|a, b| bigger(a, b));
+    let largest_g = conds.iter().filter(|c| c.1).map(|c| &c.0).max_by(|a, b| bigger(a, b));
+    let need_cu_in = hots.iter().filter_map(|s| vol(s)).sum::<f64>()
+        + largest_g.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.grounds)
+        + if yoke { largest_hot.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.yoke) } else { 0.0 };
+    let big = conds.iter().map(|c| &c.0).filter(|s| large(s)).max_by_key(|s| rank(s));
+    let raceways: Vec<f64> = raceways_in.iter().copied().filter(|v| v.is_finite() && *v > 0.0).collect();
+    let pull_len_in = big.filter(|_| !raceways.is_empty()).map(|_| pull_length_in(&raceways, bf));
+    let known = unknown_cable == 0 && conds.iter().all(|c| vol(&c.0).is_some() || large(&c.0)) && (big.is_none() || pull_len_in.is_some());
+    let list = {
+        let mut by: BTreeMap<(bool, &str), u32> = BTreeMap::new();
+        for c in conds {
+            *by.entry((c.1, c.0.as_str())).or_default() += 1;
+        }
+        by.iter().map(|((g, s), n)| format!("{n}#{s}{}", if *g { "G" } else { "" })).collect::<Vec<_>>().join(" + ")
+    };
+    FillNeed { need_cu_in, pull_len_in, large: big.cloned(), known, list }
+}
+
+/// NEC 314.28(A): the inside length a box needs for raceways of `raceways_in` (trade sizes):
+/// a straight pull eight times the largest, an angle or U pull six times it plus the others (all
+/// of them taken as one row: the box's walls aren't known).
+pub(crate) fn pull_length_in(raceways_in: &[f64], bf: &super::conduitroute::BoxFill) -> f64 {
+    let mut v: Vec<f64> = raceways_in.iter().copied().filter(|x| x.is_finite() && *x > 0.0).take(MAX_LINKS).collect();
+    v.sort_by(|a, b| b.total_cmp(a));
+    let largest = v.first().copied().unwrap_or(0.0);
+    let others: f64 = v.iter().skip(1).sum();
+    (bf.pull.straight * largest).max(bf.pull.angle * largest + others)
+}
+
+/// A box's inside length (inches): the one the build recorded, else its body's longer side in
+/// plan.
+pub(crate) fn box_length_in(b: &BoxEl, upf: f64) -> f64 {
+    b.length_in.unwrap_or_else(|| ((b.hi.x - b.lo.x).abs().max((b.hi.y - b.lo.y).abs())) / upf.max(1e-9) * 12.0)
 }
 
 // ---------------------------------------------------------------- the end-to-end graph
@@ -2485,93 +2651,59 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
         }
     }
 
-    // ---- E-BOX-FILL: each box's conductors against its volume.
+    // ---- E-BOX-FILL: each box's conductors against its volume (NEC 314.16) and, with
+    // conductors #4 and larger, its length (NEC 314.28).
     if let Some(r) = on.box_fill {
         let touch = tol(r, "touch_in", DEFAULT_TOUCH_IN) / 12.0 * upf;
         let bf = &rl.box_fill;
-        // The runs whose ends touch each box.
-        let mut box_runs: HashMap<usize, BTreeSet<&str>> = HashMap::new();
-        for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
-            for p in [s.a, s.b] {
-                for bi in boxes_near.near(p, touch, net) {
-                    box_runs.entry(bi).or_default().insert(s.run.as_str());
-                }
-            }
-        }
-        let cables: HashMap<Handle, &Cable> = net.cables.iter().map(|c| (c.handle, c)).collect();
-        // A cable lands in the boxes either side's links name.
-        let mut cable_in: HashMap<Handle, BTreeSet<Handle>> = HashMap::new();
-        for c in &net.cables {
-            for h in &c.links {
-                cable_in.entry(*h).or_default().insert(c.handle);
-            }
-        }
+        let entering = boxes_in(net, touch);
         let devs: HashMap<Handle, &Dev> = net.devs.iter().map(|d| (d.handle, d)).collect();
-        let vol = |s: &str| bf.cu_in.get(s).copied();
-        for (bi, b) in net.boxes.iter().enumerate() {
+        for (b, bin) in net.boxes.iter().zip(&entering) {
             let c = (b.lo + b.hi) * 0.5;
             let Some(place) = in_scope(&b.level, c) else { continue };
-            let runs = box_runs.get(&bi);
-            // Directly, or through the connector at its end.
-            let mut in_set: BTreeSet<Handle> = b.links.iter().copied().filter(|h| cables.contains_key(h)).collect();
-            for h in b.links.iter().filter(|h| net.what.get(h).is_some_and(|k| k == "connector")) {
-                in_set.extend(net.links.get(h).into_iter().flatten().copied().filter(|x| cables.contains_key(x)));
-            }
-            in_set.extend(cable_in.get(&b.handle).into_iter().flatten().copied());
-            let in_cables: Vec<&Cable> = in_set.iter().filter_map(|h| cables.get(h).copied()).collect();
-            // Each conductor entering: (size, ground).
-            let mut conds: Vec<(String, bool)> = Vec::new();
-            for run in runs.into_iter().flatten() {
-                for w in run_wires.get(run).into_iter().flatten() {
-                    conds.push((w.size.clone(), w.ground()));
-                }
-            }
-            let mut unknown_cable = 0;
-            for cb in &in_cables {
-                match cb.conductors() {
-                    Some((n, size, g)) => {
-                        conds.extend(std::iter::repeat_n((size.clone(), false), n as usize));
-                        if g {
-                            conds.push((size, true));
-                        }
-                    }
-                    None => unknown_cable += 1,
-                }
-            }
-            if conds.is_empty() && unknown_cable == 0 {
+            if bin.conds.is_empty() && bin.unknown_cable == 0 {
                 out.unmeasured(BOX_FILL, "a box no raceway or cable of the model enters", 1);
                 continue;
             }
             let dev = b.of.and_then(|h| devs.get(&h).copied());
-            let yoke = dev.is_some_and(|d| YOKE_KINDS.iter().any(|k| d.kind.contains(k)));
-            let hots: Vec<&String> = conds.iter().filter(|c| !c.1).map(|c| &c.0).collect();
-            let grounds: Vec<&String> = conds.iter().filter(|c| c.1).map(|c| &c.0).collect();
-            let bigger = |a: &&String, b: &&String| vol(a).unwrap_or(0.0).total_cmp(&vol(b).unwrap_or(0.0));
-            let largest_hot = hots.iter().copied().max_by(|a, b| bigger(a, b));
-            let largest_g = grounds.iter().copied().max_by(|a, b| bigger(a, b));
-            let known = unknown_cable == 0 && conds.iter().all(|c| vol(&c.0).is_some());
-            let need: f64 = hots.iter().filter_map(|s| vol(s)).sum::<f64>()
-                + largest_g.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.grounds)
-                + if yoke { largest_hot.and_then(|s| vol(s)).map_or(0.0, |v| v * bf.yoke) } else { 0.0 };
+            let yoke = dev.is_some_and(|d| yoke_kind(&d.kind));
+            let fill = fill_need(&bin.conds, bin.unknown_cable, yoke, &bin.raceways_in, rl);
+            let box_len = box_length_in(b, upf);
             let what = match dev {
                 Some(d) => format!("{} box", d.kind),
                 None => "junction box".to_string(),
             };
-            let list = {
-                let mut by: BTreeMap<(bool, &str), u32> = BTreeMap::new();
-                for c in &conds {
-                    *by.entry((c.1, c.0.as_str())).or_default() += 1;
-                }
-                by.iter().map(|((g, s), n)| format!("{n}#{s}{}", if *g { "G" } else { "" })).collect::<Vec<_>>().join(" + ")
-            };
-            let m = json!({
+            let list = &fill.list;
+            let mut m = json!({
                 "check": "box_fill", "box": b.handle.hex(), "size": b.size, "device": b.of.map(|h| h.hex()), "cubic_in": b.cubic_in,
-                "conductors": list, "yoke": yoke, "needed_cu_in": r2(need), "runs": runs.map_or(0, BTreeSet::len), "cables": in_cables.len(),
+                "conductors": list, "yoke": yoke, "needed_cu_in": r2(fill.need_cu_in), "runs": bin.runs, "cables": bin.cables,
             });
+            if let Some(l) = fill.pull_len_in {
+                m["pull_length_in"] = json!(r2(l));
+                m["box_length_in"] = json!(r2(box_len));
+            }
             let expected = format!("the box holds what enters it ({})", bf.source);
-            match (b.cubic_in, known) {
+            let pull_words = |l: f64| format!("{l:.1} in long by NEC 314.28 for #{}", fill.large.as_deref().unwrap_or_default());
+            match (b.cubic_in, fill.known) {
                 (Some(cu), true) => {
-                    let ok = need <= cu + 1e-9;
+                    let fits = fill.need_cu_in <= cu + 1e-9;
+                    let long = fill.pull_len_in.is_none_or(|l| box_len + 1e-6 >= l);
+                    let ok = fits && long;
+                    let issue = if ok {
+                        format!("{what}: {} cu in needed, {cu} cu in", r2(fill.need_cu_in))
+                    } else if !fits {
+                        format!("{what} is overfilled: {} cu in of conductors and yoke in a {cu} cu in box", r2(fill.need_cu_in))
+                    } else {
+                        format!(
+                            "{what} is too short for its conductors: {}, the box is {:.1} in",
+                            pull_words(fill.pull_len_in.unwrap_or(0.0)),
+                            box_len
+                        )
+                    };
+                    let expected = match fill.pull_len_in {
+                        Some(l) => format!("at most {cu} cu in ({}), at least {}", b.size, pull_words(l)),
+                        None => format!("at most {cu} cu in ({})", b.size),
+                    };
                     push(
                         BOX_FILL,
                         r,
@@ -2579,13 +2711,9 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                         "box",
                         &b.handle.hex(),
                         if ok { "pass" } else { "fail" },
-                        if ok {
-                            format!("{what}: {} cu in needed, {cu} cu in", r2(need))
-                        } else {
-                            format!("{what} is overfilled: {} cu in of conductors and yoke in a {cu} cu in box", r2(need))
-                        },
-                        format!("at most {cu} cu in ({})", b.size),
-                        format!("{list}{}: {} cu in", if yoke { " + a yoke" } else { "" }, r2(need)),
+                        issue,
+                        expected,
+                        format!("{list}{}: {} cu in", if yoke { " + a yoke" } else { "" }, r2(fill.need_cu_in)),
                         m,
                         &b.level,
                         place,
@@ -2601,7 +2729,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                     "unsure",
                     format!("{what}: its volume isn't recorded"),
                     expected,
-                    list,
+                    list.clone(),
                     m,
                     &b.level,
                     place,
@@ -2616,7 +2744,7 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                     "unsure",
                     format!("{what}: a conductor whose size the volume table doesn't list"),
                     expected,
-                    list,
+                    list.clone(),
                     m,
                     &b.level,
                     place,
@@ -3430,5 +3558,27 @@ mod tests {
         assert!(matches!(table_need(&t, 200.0, None, &both, &sizes), Need::NotCovered(_)));
         // Neither voltage has a row: the table's own reason.
         assert!(matches!(table_need(&t, 50.0, None, &[277.0, 480.0], &sizes), Need::NotCovered(w) if w.contains("no row")));
+    }
+
+    #[test]
+    fn a_box_with_conductors_4_and_larger_is_judged_by_its_length() {
+        // Q6557: 2#3 + 2#6 + a #6 ground in a 1-1/4" raceway and 2#12 + G in a 1/2": the #6 and
+        // #12 by volume (314.16), the #3 by the box's length (314.28): 8 x 1-1/4 = 10".
+        let rl = super::super::conduitroute::rules();
+        let c = |s: &str, g: bool| (s.to_string(), g);
+        let conds = vec![c("3", false), c("3", false), c("6", false), c("6", false), c("6", true), c("12", false), c("12", false), c("12", true)];
+        let f = fill_need(&conds, 0, true, &[1.25, 0.5], rl);
+        assert!(f.known, "{f:?}");
+        assert_eq!((f.large.as_deref(), f.pull_len_in), (Some("3"), Some(10.0)), "{f:?}");
+        // 2 x 5 + 2 x 2.25 + one ground of #6 (5) + a yoke of the largest #6 (10).
+        assert!((f.need_cu_in - 29.5).abs() < 1e-9, "{f:?}");
+        assert_eq!(f.list, "2#12 + 2#3 + 2#6 + 1#12G + 1#6G");
+        // An angle pull with many raceways: 6 x the largest plus the others.
+        assert!((pull_length_in(&[1.0, 1.0, 1.0, 1.0], &rl.box_fill) - 9.0).abs() < 1e-9);
+        // With no raceway size the length can't be measured: not known (unsure, never a pass).
+        assert!(!fill_need(&conds, 0, true, &[], rl).known);
+        // Only the table's sizes: no length asked.
+        let small = fill_need(&[c("12", false), c("12", false), c("12", true)], 0, true, &[0.5], rl);
+        assert_eq!((small.known, small.pull_len_in), (true, None));
     }
 }
