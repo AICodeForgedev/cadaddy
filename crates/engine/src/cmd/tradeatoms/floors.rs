@@ -891,7 +891,12 @@ fn slab_on_grade(
                 let mut v = Piece::new("concrete", "vapor_barrier", format!("{} mil vapor barrier", num_text(mil)), level, v_src.clone());
                 v.host = Some(host);
                 v.size = format!("{} mil", num_text(mil));
-                v.area_sf = len * wide / (upf * upf);
+                // What it covers of the slab (its laps over the strip before included): the
+                // strip's run past a notch in the outline is offcut, not cover.
+                let (p, q) = (across * b0 + dir * at.dot(dir), across * b1 + dir * end.dot(dir));
+                let (lo, hi) = (Vec2::new(p.x.min(q.x), p.y.min(q.y)), Vec2::new(p.x.max(q.x), p.y.max(q.y)));
+                let covers = polys.iter().map(|poly| cadaddy_geom::shoelace(&clip_box(poly, lo, hi)).abs()).sum::<f64>().min(len * wide);
+                v.area_sf = covers / (upf * upf);
                 v.length_ft = len / upf;
                 v = v.with("roll_ft", format!("{}x{}", num_text(rw), num_text(rl)), r.source("concrete.vapor_roll_ft"));
                 if wide < rw * upf * 0.999 {
@@ -1592,6 +1597,20 @@ fn trusses(level: &str, host: Handle, polys: &[Vec<Vec2>], z: f64, r: &Rules, up
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_cover_the_whole_width_lapped_the_last_cut() {
+        // 19' across, 12' strips lapped 6": two, the second cut to 7.5'.
+        assert_eq!(strip_bands(0.0, 19.0, 12.0, 0.5), vec![(0.0, 12.0), (11.5, 19.0)]);
+        // Narrower than a strip: one, cut to it.
+        assert_eq!(strip_bands(0.0, 8.0, 12.0, 0.5), vec![(0.0, 8.0)]);
+        // Exactly two strips' cover.
+        assert_eq!(strip_bands(0.0, 23.5, 12.0, 0.5), vec![(0.0, 12.0), (11.5, 23.5)]);
+        // Hostile: nothing, never a hang.
+        for (a0, a1, w, lap) in [(0.0, f64::INFINITY, 12.0, 0.5), (0.0, 10.0, 12.0, 12.0), (5.0, 1.0, 12.0, 0.5), (0.0, 1e12, 1.0, 0.0)] {
+            assert!(strip_bands(a0, a1, w, lap).is_empty(), "{a0} {a1} {w} {lap}");
+        }
+    }
 
     /// A wall from `a` to `b` (12 units a foot) of type `ty` on level 1.
     fn wall(a: Vec2, b: Vec2, ty: &str) -> super::super::walls::Wall {
