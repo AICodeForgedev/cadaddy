@@ -6864,15 +6864,97 @@ fn buildings_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> R
     Ok(())
 }
 
+thread_local! {
+    /// The working sets the build on this thread holds for its later steps, by name (how many of
+    /// each): each step's progress names them beside the memory, so a step whose memory stays up
+    /// says what is still held (Q6578).
+    static BUILD_HELD: std::cell::RefCell<BTreeMap<&'static str, usize>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// One working set of the build, named among those held ([`build_held`]) until it is dropped.
+struct Held(&'static str);
+
+impl Held {
+    fn new(what: &'static str) -> Self {
+        BUILD_HELD.with(|h| *h.borrow_mut().entry(what).or_default() += 1);
+        Held(what)
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        BUILD_HELD.with(|h| {
+            let mut h = h.borrow_mut();
+            if let Some(n) = h.get_mut(self.0) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    h.remove(self.0);
+                }
+            }
+        });
+    }
+}
+
+/// The working sets the build holds now for its later steps.
+fn build_held() -> Vec<&'static str> {
+    BUILD_HELD.with(|h| h.borrow().keys().copied().collect())
+}
+
+/// A working set the build reads in several steps (sheet pages read off the drawing or the
+/// prints), named while it is held. Each is dropped once the last step that reads it has run:
+/// held to the end of the stage, they kept about 0.8 GB of a four-storey print set's pages and
+/// placer through the steps after their last reader, where the job's memory peaks (Q6578).
+struct Kept<T> {
+    value: T,
+    _held: Held,
+}
+
+impl<T> Kept<T> {
+    fn new(what: &'static str, value: T) -> Self {
+        Kept { value, _held: Held::new(what) }
+    }
+}
+
+impl<T> std::ops::Deref for Kept<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+/// Where a sheet point goes on its level's plan, as the build keeps it (its sheets' linework,
+/// grids and fits): named among the working sets held while it is ([`Held`]).
+type SheetPlacer = Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>;
+
+/// `place` as the build keeps it: named "sheet placer" among the held working sets while it is.
+fn held_placer(place: impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + 'static) -> SheetPlacer {
+    let held = Held::new("sheet placer");
+    Box::new(move |at: [f64; 2], level: &str| {
+        let _held = &held;
+        place(at, level)
+    })
+}
+
 fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Instant) {
     let secs = started.elapsed().as_secs_f64();
-    let line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
-    report_progress(s, json!({"stage": "bim_build", "step": step, "elapsed_s": secs}), &line);
     // What the step changed in the built model goes into its record (Q6403).
     super::buildrec::step(s, step);
     // The caches the step made for the drawing as it was go: the next step makes what it uses
     // again from the model as it is now (the build's footprint climbed step by step, Q6389).
     release_stage_caches();
+    // The memory the step left and the working sets still held for later steps (Q6578: the
+    // step whose memory stays up, and what it holds).
+    let held = build_held();
+    let mut data = json!({"stage": "bim_build", "step": step, "elapsed_s": secs, "held": held});
+    let mut line = format!("{}: {step} done in {secs:.1} s", progress_tag(job, StageName::BimBuild));
+    if let Some((now, _)) = super::memstat::process_mb() {
+        data["memory_mb"] = json!(now);
+        line.push_str(&format!(" (memory {now} MB)"));
+    }
+    if !held.is_empty() {
+        line.push_str(&format!(" (held for later steps: {})", held.join(", ")));
+    }
+    report_progress(s, data, &line);
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -6882,7 +6964,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut panel_top: Option<(f64, String)> = None;
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
-    let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
+    let mut placer: Option<SheetPlacer> = None;
     // How the placer put each sheet onto its level's plan (or why it couldn't), for the result.
     let mut placer_log: Option<PlacerLog> = None;
     // The building's shell first: each storey's outline from its exterior walls, before anything
@@ -7119,7 +7201,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     .clone();
                 let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference);
                 placer_log = Some(log);
-                let sim = placer.insert(Box::new(place));
+                let sim = placer.insert(held_placer(place));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
                 let before = (sp.mep.runs.len(), sp.mep.terminals.len(), sp.mep.equipment.len());
                 // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
@@ -7766,7 +7848,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         ));
     }
     // (A set with no devices read yet still has its plans searched for the symbol library's.)
-    let legend_pages = legend_pages(s.doc()?, job);
+    let legend_pages = Kept::new("legend pages", legend_pages(s.doc()?, job));
     let typical = typical_view_marks(s.doc()?, job, &legend_pages);
     if !typical.added.is_empty() {
         let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
@@ -7921,7 +8003,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let (place, log) =
                         arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
                     placer_log = Some(log);
-                    placer = Some(Box::new(place));
+                    placer = Some(held_placer(place));
                 }
                 let Some(sim_sheet) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
                 // A typical room's view is no part of a floor: its devices go into the rooms of its
@@ -8808,6 +8890,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // (bim.build wraps model.build but constructs its own result without those counts.)
     // Q6029 MUST 3: pass a configurable time budget (default 20 min).
     bim_step(s, job, "devices placed", t);
+    // The legend sheets were read for the devices: no later step reads them.
+    drop(legend_pages);
     let t = web_time::Instant::now();
     // The light fixture schedule into the spec before the model is built: the luminaires'
     // mounting heights can come from its rows.
@@ -9218,8 +9302,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "room volumes built", t);
     // The panel schedules (each circuit's breaker and its type), for the devices' props.
     let t = web_time::Instant::now();
-    let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
-    let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
+    let pages = Kept::new("electrical pages", s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default());
+    let sched_pages = Kept::new("panel schedule pages", s.doc().map(|d| panel_pages(d, job)).unwrap_or_default());
     // (the schedules the sheet-index answers gave, Q6517, and those an answer gave off a sheet
     // lettered in strokes, Q6516)
     let schedules = super::strokesheets::with_answered_panels(
@@ -9245,7 +9329,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The load summaries and demand calculations beside them (the load calculation's check).
         let lc = super::loadcalc::rules();
         let mut summaries: Vec<cadaddy_walk3d::LoadSummary> = Vec::new();
-        for (number, sub) in &sched_pages {
+        for (number, sub) in sched_pages.iter() {
             summaries.extend(super::loadcalc::read_summaries(&cadaddy_mepfix::sheet_facts::texts(sub), number, &lc));
         }
         if !summaries.is_empty() {
@@ -9275,6 +9359,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
         super::strokesheets::table_questions(job, &sched_pages, &sp.mep.panel_schedules, &sp.mep.fixture_schedule, &mut result);
     }
+    // The panel schedules are read: their sheets go.
+    drop(sched_pages);
     // The electrical gear the plans don't place, from the schedules, the one-line and the gear
     // submittals, in its rooms; the feeders between; the gear checked (entry, lugs) and reviewed.
     let t = web_time::Instant::now();
@@ -9325,6 +9411,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     bim_step(s, job, "dampers", t);
     site_then_documented_objects(s, job, &pages, placer.as_deref(), &mut result);
+    // Everything the sheets place is placed: the placer and the sheet linework it fits go.
+    drop(placer);
     // The feeders' conduit, gear to gear (proposed).
     let t = web_time::Instant::now();
     if let Err(e) = feeder_step(s, job, &mut result) {
@@ -9537,6 +9625,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["lighting_error"] = json!(e.to_string());
     }
     bim_step(s, job, "lighting", t);
+    // The electrical sheets were read for the gear, keynotes, dampers, site work, underground
+    // and lighting: none of the steps after reads them.
+    drop(pages);
     // Each wall device placed relative to its named wall face (Q6174 walllayout).
     let t_layout = web_time::Instant::now();
     match super::walllayout::rehost(s, 0.0, None) {
