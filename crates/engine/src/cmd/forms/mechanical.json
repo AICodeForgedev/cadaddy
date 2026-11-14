@@ -96,7 +96,7 @@
         {"key": "material", "type": "text", "required": true},
         {"key": "gauge", "type": "text", "required": false},
         {"key": "insulation", "type": "text", "required": true},
-        {"key": "elevation", "type": "number", "unit": "ft", "required": true, "aliases": ["bottom_height"], "note": "bottom of duct"},
+        {"key": "elevation", "type": "number", "signed": true, "unit": "ft", "required": true, "aliases": ["bottom_height"], "note": "bottom of duct"},
         {"key": "connections", "type": "text", "required": false},
         {"key": "level", "type": "text", "required": true}
       ]

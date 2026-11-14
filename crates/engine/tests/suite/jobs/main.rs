@@ -67,6 +67,7 @@ mod hoistway_build;
 mod imagetrace;
 mod imagetrace_accuracy;
 mod import_check;
+mod inputs_checked;
 mod joberrorstop;
 mod jobjunk_doors;
 mod levelsread;
