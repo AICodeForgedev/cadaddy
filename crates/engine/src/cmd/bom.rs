@@ -198,8 +198,17 @@ fn made_of(m: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many line keys this thread has worked out (a test counter: grouping works out each
+    /// line's key once).
+    static KEYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl Line {
     fn key(&self, by_level: bool, by_circuit: bool) -> String {
+        #[cfg(test)]
+        KEYS.with(|n| n.set(n.get().saturating_add(1)));
         format!(
             "{}|{}|{}|{}|{}|{}|{}",
             self.trade,
@@ -487,6 +496,33 @@ fn add(lines: &mut Vec<Line>, l: Line) {
 }
 
 /// `l`'s quantities and elements into `x`.
+/// `lines` merged by their key (trade, category, item, size, product, and the level and circuit
+/// when grouped by them), status, rule and provenance, in the order each group first comes.
+/// Each group by its key (Q6568): finding a line's group is one lookup, so grouping costs the
+/// lines, not the lines times the groups (a line's key never changes as lines merge into it: its
+/// level and circuit are in the key only when they are the same on every line merged).
+fn group_lines(lines: Vec<Line>, by_level: bool, by_circuit: bool) -> Vec<Line> {
+    let mut grouped: Vec<Line> = Vec::new();
+    let mut group_of: std::collections::HashMap<(String, &'static str, Option<String>, &'static str), usize> = std::collections::HashMap::new();
+    for l in lines {
+        let key = (l.key(by_level, by_circuit), l.status, l.rule.clone(), l.made);
+        match group_of.get(&key).copied().and_then(|i| grouped.get_mut(i)) {
+            Some(x) => {
+                // When merging, keep the existing level (first wins); mark mixed if they differ.
+                if !by_level && !l.level.is_empty() && x.level.is_empty() {
+                    x.level = l.level.clone();
+                }
+                merge(x, l);
+            }
+            None => {
+                group_of.insert(key, grouped.len());
+                grouped.push(l);
+            }
+        }
+    }
+    grouped
+}
+
 fn merge(x: &mut Line, l: Line) {
     // Lines of different circuits merged (not grouped by circuit) are on none in particular.
     if x.circuit != l.circuit {
@@ -2916,8 +2952,8 @@ fn board_material(item: &str) -> &str {
 fn board_pieces(d: &cadaddy_doc::Drawing) -> Option<BoardPieces> {
     let mut out = BoardPieces::default();
     for e in d.model.iter().filter(|e| super::tradeatoms::is_trade_piece(e)) {
-        let Some((k, m)) = super::mepatoms::counted(e).filter(|(k, _)| k.trade == "drywall" && k.kind == "sheet") else { continue };
         let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let Some((k, m)) = super::mepatoms::counted_with(e, &ps).filter(|(k, _)| k.trade == "drywall" && k.kind == "sheet") else { continue };
         let ceiling = ps.get("face").map(cadaddy_doc::props::Prop::text).as_deref() == Some("ceiling");
         if !ceiling && let Some(h) = ps.get("host").and_then(|h| cadaddy_doc::Handle::parse_hex(&h.text())) {
             out.walls.insert(h);
@@ -3405,8 +3441,8 @@ fn trade_pieces(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpec) -> 
     // Each room's floor finish as it stands now (a person's edit since its flooring was laid).
     let mut finishes: Option<BTreeMap<Handle, String>> = None;
     for e in d.model.iter().filter(|e| super::tradeatoms::is_trade_piece(e)).take(MAX_TRADE_PIECES) {
-        let Some((mut k, m)) = super::mepatoms::counted(e) else { continue };
         let ps = cadaddy_doc::props::read(&e.common.xdata);
+        let Some((mut k, m)) = super::mepatoms::counted_with(e, &ps) else { continue };
         let text = |key: &str| ps.get(key).map(Prop::text).unwrap_or_default();
         let host = Handle::parse_hex(&text("host"));
         // A room's flooring is bought as the room's finish is now.
@@ -3671,22 +3707,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // Group.  Level is always kept on each line (Q5243 MUST 5) even when group_by != "level";
     // lines from different levels merge into one and the level stays (first encountered, or the
     // common one when all lines share a level).
-    let mut grouped: Vec<Line> = Vec::new();
-    for l in lines {
-        match grouped
-            .iter_mut()
-            .find(|x| x.key(by_level, by_circuit) == l.key(by_level, by_circuit) && x.status == l.status && x.rule == l.rule && x.made == l.made)
-        {
-            Some(x) => {
-                // When merging, keep the existing level (first wins); mark mixed if they differ.
-                if !by_level && !l.level.is_empty() && x.level.is_empty() {
-                    x.level = l.level.clone();
-                }
-                merge(x, l);
-            }
-            None => grouped.push(l),
-        }
-    }
+    let mut grouped = group_lines(lines, by_level, by_circuit);
     grouped.sort_by(|a, b| {
         a.trade
             .cmp(b.trade)
@@ -3951,6 +3972,81 @@ mod tests {
 
     fn line<'a>(r: &'a Value, item: &str) -> &'a Value {
         r["lines"].as_array().unwrap().iter().find(|l| l["item"] == json!(item)).unwrap_or(&Value::Null)
+    }
+
+    /// Grouping works out each line's key once (Q6568): its cost follows the lines, however many
+    /// groups there are (it looked every line up against every group so far, so a takeoff's
+    /// time grew with the square of its lines).
+    #[test]
+    fn grouping_works_out_each_lines_key_once_and_merges_the_same() {
+        let line = |i: usize, level: &str, circuit: &str, net: f64| Line {
+            trade: "electrical",
+            category: "devices".into(),
+            item: format!("Item {}", i % 1_000),
+            size: String::new(),
+            unit: "each",
+            net,
+            status: if i.is_multiple_of(7) { "rule" } else { "firm" },
+            level: level.into(),
+            circuit: circuit.into(),
+            elements: vec![format!("{i:X}")],
+            ..Line::default()
+        };
+        let lines: Vec<Line> =
+            (0..6_000).map(|i| line(i, if i.is_multiple_of(2) { "1" } else { "2" }, if i.is_multiple_of(3) { "A-1" } else { "A-2" }, 1.0)).collect();
+        let before = KEYS.with(std::cell::Cell::get);
+        let by_job = group_lines(lines.clone(), false, false);
+        let keys = KEYS.with(std::cell::Cell::get) - before;
+        assert_eq!(keys, 6_000, "one key per line");
+        // Item i%1000 with the status of i%7: the groups as the old lookup made them.
+        let distinct: BTreeSet<(usize, bool)> = (0..6_000usize).map(|i| (i % 1_000, i.is_multiple_of(7))).collect();
+        assert_eq!(by_job.len(), distinct.len());
+        assert_eq!(by_job.iter().map(|l| l.net).sum::<f64>(), 6_000.0);
+        assert_eq!(by_job.iter().map(|l| l.elements.len()).sum::<usize>(), 6_000);
+        // In the order each group first comes; the first line's level kept, mixed circuits none.
+        assert_eq!((by_job[0].item.as_str(), by_job[0].status, by_job[0].level.as_str()), ("Item 0", "rule", "1"));
+        assert_eq!(by_job[1].item, "Item 1");
+        assert_eq!(by_job[0].circuit, "A-1", "one line: its circuit");
+        assert_eq!(by_job[1].circuit, "", "lines of two circuits: none in particular");
+        // By level and circuit: the same lines in more groups, each on one level and circuit.
+        let by_circuit = group_lines(lines, true, true);
+        let distinct: BTreeSet<(usize, bool, usize, bool)> =
+            (0..6_000usize).map(|i| (i % 1_000, i.is_multiple_of(7), i % 2, i.is_multiple_of(3))).collect();
+        assert_eq!(by_circuit.len(), distinct.len());
+        assert!(by_circuit.iter().all(|l| !l.circuit.is_empty() && !l.level.is_empty()));
+        assert_eq!(by_circuit.iter().map(|l| l.net).sum::<f64>(), 6_000.0);
+    }
+
+    /// A takeoff reads the drawing's stored spec once, however many of its passes ask for it
+    /// (Q6568: every pass parsed the whole spec again, megabytes on a large job); a changed spec
+    /// is read again and taken off as it is now. Between commands no parsed copy is kept.
+    #[test]
+    fn a_takeoff_reads_the_spec_once_and_again_only_when_it_changes() {
+        let mut s = Session::new();
+        job(&mut s);
+        let parses = super::super::bspec::spec_parses;
+        let n = parses();
+        let first = s.execute("bim.takeoff", &json!({ "keep": false })).unwrap();
+        assert!(parses() - n <= 1, "the first takeoff parses the spec {} times", parses() - n);
+        let n = parses();
+        let again = s.execute("bim.takeoff", &json!({ "keep": false })).unwrap();
+        assert!(parses() - n <= 1, "a takeoff reads the spec once: {}", parses() - n);
+        assert_eq!(first["lines"], again["lines"]);
+        assert_eq!(first["totals"], again["totals"]);
+        // Another luminaire in the spec: read again, and on the takeoff.
+        let mut spec = s.execute("bspec.get", &json!({})).unwrap()["spec"].clone();
+        let mut more = spec["tags"][0].clone();
+        more["id"] = json!("L3");
+        more["at_ft"] = json!([6, 1]);
+        spec["tags"].as_array_mut().unwrap().push(more);
+        s.execute("bspec.set", &json!({ "replace": true, "spec": spec })).unwrap();
+        let n = parses();
+        let changed = s.execute("bim.takeoff", &json!({ "keep": false })).unwrap();
+        assert!(parses() > n, "a changed spec is read again");
+        let count = |r: &Value| {
+            r["lines"].as_array().unwrap().iter().filter(|l| l["item"] == json!("Luminaire type A")).filter_map(|l| l["qty"].as_f64()).sum::<f64>()
+        };
+        assert_eq!((count(&first), count(&changed)), (2.0, 3.0), "{changed}");
     }
 
     #[test]

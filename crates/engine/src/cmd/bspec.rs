@@ -49,7 +49,73 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// The drawing's stored spec, if it has one.
 pub(crate) fn stored(d: &Drawing) -> std::result::Result<Option<BuildingSpec>, String> {
-    d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).map(BuildingSpec::from_json).transpose()
+    let text = &d.building_spec;
+    if text.as_deref().is_none_or(|t| t.trim().is_empty()) {
+        return Ok(None);
+    }
+    let kept = READ_SPEC.with(|c| c.try_borrow().ok().and_then(|r| r.as_ref().filter(|r| text.is(&r.text)).map(|r| Arc::clone(&r.spec))));
+    if let Some(spec) = kept {
+        return spec.as_ref().clone().map(Some);
+    }
+    SPEC_PARSES.with(|n| n.set(n.get().saturating_add(1)));
+    let spec = Arc::new(BuildingSpec::from_json(text.as_deref().unwrap_or_default()));
+    if SPEC_SCOPES.with(std::cell::Cell::get) > 0 {
+        READ_SPEC.with(|c| {
+            if let Ok(mut c) = c.try_borrow_mut() {
+                *c = Some(ReadSpec { text: text.downgrade(), spec: Arc::clone(&spec) });
+            }
+        });
+    }
+    spec.as_ref().clone().map(Some)
+}
+
+/// A drawing's stored spec as read, by the copy of the text it was read from.
+struct ReadSpec {
+    text: std::sync::Weak<Option<String>>,
+    spec: Arc<std::result::Result<BuildingSpec, String>>,
+}
+
+thread_local! {
+    /// The spec last read on this thread while a command runs ([`read_spec_scope`]): every
+    /// pass of a takeoff (and of many other commands) asks for the spec, and each was a whole
+    /// parse of text that runs to megabytes (Q6568). A changed spec is a new copy of the text,
+    /// so it never matches (`Shared::is`); it is let go when the outermost command ends, so a
+    /// large spec is never held twice between commands.
+    static READ_SPEC: std::cell::RefCell<Option<ReadSpec>> = const { std::cell::RefCell::new(None) };
+    static SPEC_SCOPES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static SPEC_PARSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// While the value lives (the outermost command running), [`stored`] reads each spec text on
+/// this thread once.
+pub(crate) struct ReadSpecScope(());
+
+pub(crate) fn read_spec_scope() -> ReadSpecScope {
+    SPEC_SCOPES.with(|n| n.set(n.get().saturating_add(1)));
+    ReadSpecScope(())
+}
+
+impl Drop for ReadSpecScope {
+    fn drop(&mut self) {
+        let left = SPEC_SCOPES.with(|n| {
+            n.set(n.get().saturating_sub(1));
+            n.get()
+        });
+        if left == 0 {
+            READ_SPEC.with(|c| {
+                if let Ok(mut c) = c.try_borrow_mut() {
+                    *c = None;
+                }
+            });
+        }
+    }
+}
+
+/// How many times this thread has parsed a drawing's stored spec in [`stored`] (a test counter:
+/// a command asking again for the spec of an unchanged drawing parses nothing).
+#[cfg(test)]
+pub(crate) fn spec_parses() -> u64 {
+    SPEC_PARSES.with(std::cell::Cell::get)
 }
 
 /// What to do about a stored spec that can't be read (a newer version, or the wrong shape).

@@ -691,7 +691,7 @@ pub fn display_summary(d: &Drawing, look: &Look, stack: bool, keep: &dyn Fn(&Ent
 /// point maps to the building origin (as the IFC export places storeys); the lowest level stays
 /// where it is. Levels whose plan is in another drawing don't move.
 pub fn stack_offsets(d: &Drawing) -> Vec<(String, cadaddy_geom::Vec2)> {
-    let Some(sp) = d.building_spec.as_deref().filter(|t| !t.trim().is_empty()).and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()) else {
+    let Some(sp) = super::bspec::stored(d).ok().flatten() else {
         return Vec::new();
     };
     let bases = cadaddy_walk3d::level_bases(d, &sp.to_rules());
