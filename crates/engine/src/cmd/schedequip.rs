@@ -717,9 +717,13 @@ pub(crate) fn type_built(rows: &[Scheduled], equipment: &mut [MepEquipment], roo
 
 /// Most units [`merge_tag_variants`] compares pairwise (hostile specs).
 const MAX_MERGE: usize = 5_000;
+/// How far apart two readings of one unit's tag may be, feet: a symbol's size, never the gap
+/// between two units back to back across a wall (two fans 2 ft apart are two).
+const MERGE_GAP_FT: f64 = 0.5;
 
-/// Whether two tags are one unit's read twice: the same mark (`AHU-1`, `AHU1`), or its letters
-/// alone beside its letters and number (`AHU`, `AHU-1`). The fuller one first.
+/// Whether two tags may be one unit's read twice: its letters alone beside its letters and number
+/// (`AHU`, `AHU-1`); `Some(true)` when the first is the fuller. The same tag twice is never one
+/// unit by its tag (`EF-1` is a type a dozen fans carry, back to back in two rooms).
 fn variant_pair(a: &str, b: &str) -> Option<bool> {
     let (sa, sb) = (squash(a), squash(b));
     let (la, lb) = (letters_of(a), letters_of(b));
@@ -731,8 +735,6 @@ fn variant_pair(a: &str, b: &str) -> Option<bool> {
         // `AHU` and `AHU-1`: the numbered one is fuller.
         (true, false) if numbered(&sb, &lb) => Some(false),
         (false, true) if numbered(&sa, &la) => Some(true),
-        // The same mark written two ways.
-        (false, false) if sa == sb => Some(true),
         _ => None,
     }
 }
@@ -744,9 +746,10 @@ fn fit_error(e: &MepEquipment, upf: f64) -> Option<f64> {
     size_error((e.max[0] - e.min[0]) / upf, (e.max[1] - e.min[1]) / upf, [want[0], want[1]])
 }
 
-/// One unit read twice (Q6579): two pieces of equipment of one kind on one level whose tags are
-/// the same mark with and without its number (`AHU` and `AHU-1`) or one mark written two ways,
-/// no farther apart than a unit of their kind is long (rules data, else 8 ft), are one. The
+/// One unit read twice (Q6579): two pieces of equipment of one kind on one level, read off one
+/// sheet, whose tags are the same mark with and without its number (`AHU` and `AHU-1`) and
+/// whose boxes touch or overlap (within [`MERGE_GAP_FT`]), are one, unless they stand in two
+/// rooms (each its own `room`). The
 /// fuller tag stays; its footprint is the box whose size agrees best with its kind's usual one
 /// (the unit's outline, not a room's box its letters were read by), else the smaller; what
 /// the other carried that it has not is added. Each merge said on it (`sources.merged`).
@@ -767,8 +770,15 @@ pub(crate) fn merge_tag_variants(equipment: &mut Vec<MepEquipment>, upf: f64) ->
                 continue;
             }
             let Some(a_fuller) = variant_pair(&a.tag, &b.tag) else { continue };
-            let kind = if blank(&a.kind) { &b.kind } else { &a.kind };
-            let reach = equip_reader::rule_size_of(kind).map_or(8.0, |s| s[0].max(s[1])) * upf;
+            // Off two sheets, or in two rooms: two readings of two units.
+            let differ = |x: Option<&String>, y: Option<&String>| match (x, y) {
+                (Some(x), Some(y)) => !x.trim().is_empty() && !y.trim().is_empty() && !x.trim().eq_ignore_ascii_case(y.trim()),
+                _ => false,
+            };
+            if differ(a.sources.get("sheet"), b.sources.get("sheet")) || differ(a.properties.get("room"), b.properties.get("room")) {
+                continue;
+            }
+            let reach = MERGE_GAP_FT * upf;
             let gap_x = (a.min[0] - b.max[0]).max(b.min[0] - a.max[0]).max(0.0);
             let gap_y = (a.min[1] - b.max[1]).max(b.min[1] - a.max[1]).max(0.0);
             let gap = gap_x.hypot(gap_y);
@@ -1518,10 +1528,12 @@ mod tests {
         MepEquipment { tag: tag.into(), kind: kind.into(), level: "Level 1".into(), min: lo, max: hi, sources, confidence: 0.7, ..Default::default() }
     }
 
-    /// Q6579: one air handler read twice, by a room-sized box its letters alone were read by
-    /// (`AHU`, 40 x 20 ft) and by its whole tag (`AHU-1`, its own 6 x 4 ft box, 5 in away), is
-    /// one unit `AHU-1` in its own box; the same mark written two ways is one; a numbered tag
-    /// and its letters alone 30 ft apart, another kind, another level or two numbers stay two.
+    /// Q6579: one air handler read twice off one sheet, by a room-sized box its letters alone
+    /// were read by (`AHU`, 40 x 20 ft) and by its whole tag (`AHU-1`, its own 6 x 4 ft box
+    /// inside it), is one unit `AHU-1` in its own box; a fan's `EF` touching `EF-1` is one. Two
+    /// units stay two: one type tag twice (back to back 2 ft apart), letters alone 2 ft from a
+    /// numbered tag, touching but off two sheets or in two rooms, another kind, another level,
+    /// two numbers.
     #[test]
     fn one_unit_read_by_its_tag_with_and_without_its_number_is_one() {
         let upf = 12.0;
@@ -1530,8 +1542,15 @@ mod tests {
             unit("AHU", "ahu", [ft(0.0), ft(0.0)], [ft(40.0), ft(20.0)], "A-1"),
             unit("AHU-1", "ahu", [ft(10.0), ft(5.0)], [ft(16.0), ft(9.0)], "A-1"),
             unit("EF-1", "exhaust_fan", [ft(100.0), ft(0.0)], [ft(102.0), ft(2.0)], "M-1"),
-            unit("EF1", "exhaust_fan", [ft(102.2), ft(0.0)], [ft(104.0), ft(2.0)], "M-1"),
-            unit("EF", "exhaust_fan", [ft(130.0), ft(0.0)], [ft(132.0), ft(2.0)], "M-1"),
+            unit("EF", "exhaust_fan", [ft(102.2), ft(0.0)], [ft(104.0), ft(2.0)], "M-1"),
+            // A type tag two fans share, back to back 2 ft apart; letters alone and the type
+            // 2 ft apart (a typical room's stamped fan beside its neighbour's).
+            unit("EF-2", "exhaust_fan", [ft(110.0), ft(0.0)], [ft(112.0), ft(2.0)], "M-1"),
+            unit("EF-2", "exhaust_fan", [ft(114.0), ft(0.0)], [ft(116.0), ft(2.0)], "M-1"),
+            unit("EF", "exhaust_fan", [ft(118.0), ft(0.0)], [ft(120.0), ft(2.0)], "M-1"),
+            // Touching but off another sheet.
+            unit("EF-3", "exhaust_fan", [ft(130.0), ft(0.0)], [ft(132.0), ft(2.0)], "M-1"),
+            unit("EF", "exhaust_fan", [ft(132.0), ft(0.0)], [ft(134.0), ft(2.0)], "M-2"),
             unit("RTU", "rtu", [ft(200.0), ft(0.0)], [ft(210.0), ft(6.0)], "M-1"),
             unit("AHU-2", "ahu", [ft(200.0), ft(0.0)], [ft(208.0), ft(5.0)], "M-1"),
             unit("VAV-1", "vav", [ft(300.0), ft(0.0)], [ft(302.0), ft(1.0)], "M-1"),
@@ -1540,29 +1559,24 @@ mod tests {
         let mut upper = unit("AHU", "ahu", [ft(10.0), ft(5.0)], [ft(16.0), ft(9.0)], "A-2");
         upper.level = "Level 2".into();
         eq.push(upper);
+        for (tag, x, room) in [("EF-4", 140.0, "103"), ("EF", 142.0, "105")] {
+            let mut e = unit(tag, "exhaust_fan", [ft(x), ft(50.0)], [ft(x + 2.0), ft(52.0)], "M-1");
+            e.properties.insert("room".into(), room.into());
+            eq.push(e);
+        }
         let merged = merge_tag_variants(&mut eq, upf);
-        assert_eq!(merged, vec!["AHU into AHU-1 (Level 1)".to_string(), "EF1 into EF-1 (Level 1)".to_string()]);
-        let tags: Vec<(&str, &str)> = eq.iter().map(|e| (e.tag.as_str(), e.level.as_str())).collect();
-        assert_eq!(
-            tags,
-            [
-                ("AHU-1", "Level 1"),
-                ("EF-1", "Level 1"),
-                ("EF", "Level 1"),
-                ("RTU", "Level 1"),
-                ("AHU-2", "Level 1"),
-                ("VAV-1", "Level 1"),
-                ("VAV-2", "Level 1"),
-                ("AHU", "Level 2")
-            ]
-        );
+        assert_eq!(merged, vec!["AHU into AHU-1 (Level 1)".to_string(), "EF into EF-1 (Level 1)".to_string()]);
+        let tags: Vec<&str> = eq.iter().map(|e| e.tag.as_str()).collect();
+        assert_eq!(tags, ["AHU-1", "EF-1", "EF-2", "EF-2", "EF", "EF-3", "EF", "RTU", "AHU-2", "VAV-1", "VAV-2", "AHU", "EF-4", "EF"]);
+        assert_eq!(eq.get(11).map(|e| e.level.as_str()), Some("Level 2"));
         let ahu = eq.first().expect("AHU-1");
         // Its own box, not the room-sized one.
         assert_eq!((ahu.min, ahu.max), ([ft(10.0), ft(5.0)], [ft(16.0), ft(9.0)]));
         assert!(ahu.sources.get("merged").is_some_and(|m| m.contains("AHU-1 and AHU")), "{:?}", ahu.sources);
         // Two kinds' tags never merge, whatever their letters.
         assert_eq!(variant_pair("AHU", "AHU-1"), Some(false));
-        assert_eq!(variant_pair("AHU-1", "AHU 1"), Some(true));
+        assert_eq!(variant_pair("AHU-1", "AHU-1"), None);
+        assert_eq!(variant_pair("AHU-1", "AHU 1"), None);
         assert_eq!(variant_pair("AHU-1", "AHU-2"), None);
         assert_eq!(variant_pair("EF", "EF"), None);
         assert_eq!(variant_pair("1", "1"), None);
