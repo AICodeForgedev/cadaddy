@@ -1488,12 +1488,50 @@ fn plan_of(s: &Session, cmd: &str) -> Result<Plan> {
     let d = s.doc()?;
     let pl = plan(d, &sp);
     if pl.runs.is_empty() {
-        return Err(crate::EngineError::Disabled(
-            cmd.into(),
-            "the model has no electrical runs cut into their pieces: build the model first (model.build)".into(),
-        ));
+        return Err(crate::EngineError::Disabled(cmd.into(), no_runs_reason(d, &sp)));
     }
     Ok(pl)
+}
+
+/// Why the model has no electrical runs cut into their pieces: the input it lacks and a step
+/// that gives it. Building helps only where nothing is built yet or the spec holds runs the
+/// built model doesn't; a built model whose documents give no electrical runs is told so.
+fn no_runs_reason(d: &Drawing, sp: &BuildingSpec) -> String {
+    use cadaddy_walk3d::MepKind;
+    if !super::bimlook::has_model(d) {
+        return "the model isn't built yet: build it first (model.build)".into();
+    }
+    // The spec's electrical runs, as the atoms build takes them: conduit or cable, the fire
+    // alarm circuits aside (cut on their own, in no pull).
+    let systems: Vec<(&str, bool)> = sp
+        .mep
+        .runs
+        .iter()
+        .take(MAX_SPEC_RUNS)
+        .filter(|r| !super::conduitroute::fa::is_system(&r.system))
+        .filter_map(|r| sp.mep.systems.iter().find(|y| y.name == r.system))
+        .filter(|y| matches!(y.kind, MepKind::Conduit | MepKind::Cable))
+        .map(|y| (y.name.as_str(), y.show))
+        .collect();
+    if systems.is_empty() {
+        let fa = sp.mep.runs.iter().any(|r| super::conduitroute::fa::is_system(&r.system));
+        return format!(
+            "the model is built, but its documents give it no electrical runs{}: no conduit or cable run was read from an electrical plan or drawn. Read them from the electrical plans (conduit.read with apply) or draw them, then rebuild (model.build)",
+            if fa { " (its only ones are fire alarm circuits, which pull lists don't cover)" } else { "" }
+        );
+    }
+    let hidden: BTreeSet<&str> = systems.iter().filter(|(_, show)| !show).map(|(n, _)| *n).collect();
+    if hidden.len() == systems.iter().map(|(n, _)| *n).collect::<BTreeSet<_>>().len() {
+        return format!(
+            "the building spec's {} electrical runs are on systems hidden from the model ({}): show them (bspec.set) and rebuild (model.build)",
+            systems.len(),
+            hidden.into_iter().take(10).collect::<Vec<_>>().join(", ")
+        );
+    }
+    format!(
+        "the building spec holds {} electrical runs the built model has not cut into pieces (it was built before they were read): rebuild it (model.build)",
+        systems.len()
+    )
 }
 
 // ─── pull.schedule ───────────────────────────────────────────────────────────
@@ -2397,6 +2435,65 @@ mod tests {
         assert_eq!(ft(f64::NAN), "0");
         assert_eq!(r2(-0.004), 0.0);
         assert!(r2(-0.004).is_sign_positive());
+    }
+
+    /// The refusal names what the model lacks and a step that gives it (S6-006): a built model
+    /// whose documents give no electrical runs is never told to build first, however its spec
+    /// is laid out (duct and pipe runs, no MEP at all, only fire alarm circuits, hidden systems).
+    #[test]
+    fn a_built_model_with_no_electrical_runs_is_not_told_to_build_first() {
+        let refusal = |s: &mut Session, cmd: &str| match s.execute(cmd, &json!({})) {
+            Ok(v) => panic!("{cmd} worked: {v}"),
+            Err(e) => e.to_string(),
+        };
+        let system = |name: &str, kind: &str, show: bool| json!({"name": name, "layer": name, "kind": kind, "size_in": [0.75, 0], "bottom_ft": 9, "show": show});
+        let run = |system: &str| json!({"system": system, "level": "Level 1", "id": format!("{system}#1"), "points": [[0, 0], [240, 0]], "size_in": [0.75, 0], "bottoms_ft": [9.0, 9.0]});
+        let spec = |systems: Vec<Value>, runs: Vec<Value>| json!({"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}], "mep": {"systems": systems, "runs": runs}});
+        let session = |sp: &Value, built: bool| {
+            let mut s = Session::new();
+            s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap_or_else(|e| panic!("{e}"));
+            if built {
+                let mut m = super::super::wallgen::empty_mesh();
+                super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), 6.0, 0.0, 108.0);
+                let x = super::super::wallgen::tag(cadaddy_walk3d::Part::Wall, "Level 1", Handle(0));
+                let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+                d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap_or_else(|e| panic!("{e}"));
+            }
+            s
+        };
+        let electrical = spec(vec![system("E-BRANCH", "conduit", true)], vec![run("E-BRANCH")]);
+        // Nothing built: building is the step.
+        let mut s = session(&electrical, false);
+        let t = refusal(&mut s, CMD_CUTS);
+        assert!(t.contains("isn't built") && t.contains("model.build"), "{t}");
+        // Built from a duct-and-pipe set, from a set with no MEP, from one whose only electrical
+        // runs are fire alarm circuits: no electrical runs, and where they come from.
+        let fa = super::super::conduitroute::fa::NAC_SYSTEM;
+        for sp in [
+            spec(vec![system("M-SUPPLY", "duct", true), system("P-CW", "pipe", true)], vec![run("M-SUPPLY"), run("P-CW")]),
+            spec(vec![], vec![]),
+            spec(vec![system(fa, "cable", true)], vec![run(fa)]),
+        ] {
+            let mut s = session(&sp, true);
+            for cmd in [CMD_CUTS, CMD_PULLS, CMD_RELEASE, CMD_SHEETS] {
+                let t = refusal(&mut s, cmd);
+                assert!(!t.contains("build it first") && !t.contains("build the model first"), "{cmd}: {t}");
+                assert!(t.contains("no electrical runs") && t.contains("conduit.read"), "{cmd}: {t}");
+            }
+        }
+        // Built, its electrical runs on a hidden system: show it.
+        let mut s = session(&spec(vec![system("E-BRANCH", "conduit", false)], vec![run("E-BRANCH")]), true);
+        let t = refusal(&mut s, CMD_CUTS);
+        assert!(t.contains("hidden") && t.contains("E-BRANCH") && t.contains("bspec.set"), "{t}");
+        // Built before the spec's electrical runs were read: rebuilding cuts them.
+        let mut s = session(&electrical, true);
+        let t = refusal(&mut s, CMD_CUTS);
+        assert!(t.contains("1 electrical runs") && t.contains("rebuild it (model.build)"), "{t}");
+        // Cut into pieces, the lists are made.
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(&electrical.to_string()).unwrap_or_else(|e| panic!("{e}"));
+        let mut d = Drawing::default();
+        super::super::mepatoms::build::build(&mut d, &sp);
+        assert!(!plan(&d, &sp).runs.is_empty());
     }
 
     #[test]
