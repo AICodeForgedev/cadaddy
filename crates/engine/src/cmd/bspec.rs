@@ -1320,9 +1320,14 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     }
     // A number in a room numbered already: the closed outline drawn round it (its own walls, its
     // door) inside that room is a room of its own, carved out of it (Q6160).
-    let carved = carve_rooms(&mut out, &carve, &mut floors, sp, plan, &mut outline_cache, &number_tags);
-    if carved > 0 {
-        notes.push(format!("{carved} room(s) tagged with their own number inside another room's trace were traced on their own walls."));
+    let (carved, split) = carve_rooms(&mut out, &carve, &mut floors, sp, plan, &mut outline_cache, &number_tags);
+    if carved > split {
+        notes.push(format!("{} room(s) tagged with their own number inside another room's trace were traced on their own walls.", carved - split));
+    }
+    if split > 0 {
+        notes.push(format!(
+            "{split} room(s) tagged with their own number inside another room's trace, open to it on one side, were parted from it where their wall's line stops short of the next wall (a room separation line, up to {SPLIT_REACH_FT}' across)."
+        ));
     }
     // The floor no label traced: a pocket a room's own door or a narrow passage cut off (its bath,
     // its entry) joins the one room it opens onto (Q6160).
@@ -1425,13 +1430,19 @@ pub(crate) fn outline_round_label_within(
 
 /// The most a carved room may take of the room it is carved from.
 const CARVE_MAX_SHARE: f64 = 0.5;
+/// Widest open side (feet) a room parted from the room it opens onto may have: its wall's line run
+/// on across to the next wall. Only where the room holds another room's number (two rooms in one
+/// trace): wider than [`SEPARATION_REACH_FT`], since no room would be built otherwise.
+const SPLIT_REACH_FT: f64 = 16.0;
 /// How much of a carved outline must lie inside the room it is carved from.
 const CARVE_INSIDE: f64 = 0.9;
 
 /// Each number in `carve` (text, where) that no room on its level has yet: the closed outline the
 /// plan draws round it, when that is room-sized, at most [`CARVE_MAX_SHARE`] of the floor-traced
 /// room holding it, [`CARVE_INSIDE`] inside it and holding no other number tag, becomes a room of
-/// that number, its floor taken out of the room's. How many.
+/// that number, its floor taken out of the room's; with no such outline (a room open to it on one
+/// side), the room parted along a wall's line ([`wallgen::Floors::split_open`]). How many, and how
+/// many of them were parted.
 fn carve_rooms(
     out: &mut Vec<Traced>,
     carve: &[(String, Vec2)],
@@ -1440,7 +1451,8 @@ fn carve_rooms(
     plan: &Session,
     cache: &mut Option<super::hatch::Outlines>,
     number_tags: &[(String, Vec2)],
-) -> usize {
+) -> (usize, usize) {
+    let mut split = 0usize;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let min_area = MIN_ROOM_SF * upf * upf;
     let mut n = 0usize;
@@ -1462,15 +1474,32 @@ fn carve_rooms(
             continue;
         };
         let Some(fr) = out.get(host).and_then(|o| o.floor_room) else { continue };
-        let Some(poly) = outline_round_label(plan, *at, cache, min_area) else { continue };
-        let area = cadaddy_geom::shoelace(&poly).abs();
         let Some(h) = out.get(host) else { continue };
-        let others = number_tags.iter().any(|(m, p)| !m.eq_ignore_ascii_case(num) && cadaddy_geom::point_in_polygon(&poly, *p));
-        if poly.len() < 3 || area < min_area || area > CARVE_MAX_SHARE * h.cached_area || share_inside(&poly, &h.outline) < CARVE_INSIDE || others {
-            continue;
-        }
+        let drawn = outline_round_label(plan, *at, cache, min_area).filter(|poly| {
+            let area = cadaddy_geom::shoelace(poly).abs();
+            let others = number_tags.iter().any(|(m, p)| !m.eq_ignore_ascii_case(num) && cadaddy_geom::point_in_polygon(poly, *p));
+            poly.len() >= 3
+                && area >= min_area
+                && area <= CARVE_MAX_SHARE * h.cached_area
+                && share_inside(poly, &h.outline) >= CARVE_INSIDE
+                && !others
+        });
+        // The room's other labels: its own tag and the other numbers in it.
+        let others: Vec<Vec2> = number_tags
+            .iter()
+            .filter(|(m, p)| !m.eq_ignore_ascii_case(num) && cadaddy_geom::point_in_polygon(&h.outline, *p))
+            .map(|(_, p)| *p)
+            .chain(std::iter::once(h.at))
+            .collect();
         let Some(Some(f)) = floors.get_mut(&level.to_ascii_uppercase()) else { continue };
-        let Some(new) = f.carve(fr, &poly) else { continue };
+        // No closed outline drawn round it (an alcove or an open-plan room open on one side): the
+        // room parted along the line of a wall that stops short of the next one across (Q6487).
+        let parted = drawn.is_none();
+        let new = match drawn {
+            Some(poly) => f.carve(fr, &poly),
+            None => f.split_open(fr, *at, &others, SPLIT_REACH_FT * upf),
+        };
+        let Some(new) = new else { continue };
         let (Some(old_rects), Some(new_rects)) = (f.rects(fr).map(rects_outline), f.rects(new).map(rects_outline)) else { continue };
         if old_rects.len() < 3 || new_rects.len() < 3 {
             continue;
@@ -1496,8 +1525,9 @@ fn carve_rooms(
             floor_room: Some(new),
         });
         n += 1;
+        split += usize::from(parted);
     }
-    n
+    (n, split)
 }
 
 /// How far outside its outline a room's number tag may sit, feet (a tag set in the doorway).
@@ -2917,6 +2947,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // (Q6503), built now its devices stand, before its circuits are routed.
     let fa_equipment = super::conduitroute::fa::place_equipment(d, &mut sp);
     mark("fire alarm equipment");
+    // Each piece of equipment that carries its circuit gets its connection where no device of
+    // that circuit stands at it (Q6624): its drawn disconnect, else one beside it by rule.
+    let equipment_connections = super::equipdisc::place(d, &sp);
+    mark("equipment connections");
     // The circuits routed through the model now its devices stand (Q6152): around the ducts,
     // pipes and structure, by the corridors, into each box and the panel's entry window; the
     // drawn conduit as it is. The estimated routes give way to them for the pieces.
@@ -3041,6 +3075,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
     });
     r["deviceElements"] = json!(devices.built);
+    if equipment_connections["loads"].as_u64().unwrap_or(0) > 0 || equipment_connections["removed"].as_u64().unwrap_or(0) > 0 {
+        r["equipmentConnections"] = equipment_connections;
+    }
     if fa_equipment["devices"].as_u64().unwrap_or(0) > 0 {
         r["fireAlarmEquipment"] = fa_equipment;
     }

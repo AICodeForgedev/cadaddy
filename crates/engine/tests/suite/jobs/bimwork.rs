@@ -25,7 +25,8 @@ fn run(system: &str, level: &str, a: [f64; 2], b: [f64; 2], size: [f64; 2], bott
 ///   10'-0" to 10'-8") at its height: plumbing × mechanical = 2;
 /// - the conduit at x = 200" crosses D1: electrical × mechanical = 1 (the conduit at x = 400"
 ///   is past D1's end: no clash);
-/// - supply duct D2 runs out through the west wall: mechanical × architecture = 1.
+/// - supply duct D2 runs out through the west wall: a penetration (Q6621: listed with its sleeve
+///   and seal, a clash only with `hosted: true`).
 fn runs() -> Vec<Value> {
     vec![
         run("M-SUPPLY", "Level 1", [24.0, 60.0], [264.0, 60.0], [12.0, 8.0], 10.0),
@@ -92,16 +93,25 @@ fn planted_clashes_are_found_grouped_with_viewpoints_and_statuses() {
     assert_eq!(em["total"], 1, "{em}");
     assert_eq!(em["clashes"][0]["a"]["category"], "conduit");
     let ma = clash(&mut s, "mechanical", "architecture");
-    assert_eq!(ma["total"], 1, "only D2 runs through a wall: {ma}");
-    assert_eq!((ma["clashes"][0]["b"]["category"].as_str(), ma["clashes"][0]["kind"].as_str()), (Some("wall"), Some("hard")));
+    assert_eq!(ma["total"], 0, "a duct through a wall is a penetration, not a clash: {ma}");
+    let pens = ma["penetrations"].as_array().cloned().unwrap_or_default();
+    assert_eq!(pens.len(), 1, "only D2 runs through a wall: {ma}");
+    assert_eq!((pens[0]["b"]["category"].as_str(), pens[0]["kind"].as_str()), (Some("wall"), Some("through")), "{ma}");
+    assert_eq!(pens[0]["firestop"], json!(false), "the wall has no rated type: {ma}");
+    assert!(pens[0]["sleeve"].as_str().unwrap_or_default().contains("framed opening"), "{ma}");
+    let hosted = s.execute("bim.clash", &json!({"a": "mechanical", "b": "architecture", "hosted": true})).unwrap();
+    assert_eq!(hosted["total"], 1, "{hosted}");
+    assert_eq!((hosted["clashes"][0]["b"]["category"].as_str(), hosted["clashes"][0]["kind"].as_str()), (Some("wall"), Some("hard")));
     assert_eq!(clash(&mut s, "electrical", "architecture")["total"], 0, "the conduits stay inside the room");
     // A category and a system pick the same as the trade; `b` left out means everything else.
     assert_eq!(s.execute("bim.clash", &json!({"a": "conduit", "b": ["duct"]})).unwrap()["total"], 1);
     assert_eq!(s.execute("bim.clash", &json!({"a": "E-COND", "b": "M-*"})).unwrap()["total"], 1);
     assert_eq!(s.execute("bim.clash", &json!({"a": "plumbing"})).unwrap()["total"], 2);
-    // Nothing named: every trade against the others (2 + 1 + 1, never two parts of one trade).
+    // Nothing named: every trade against the others (2 + 1, never two parts of one trade; D2
+    // through the wall is a penetration).
     let all = s.execute("bim.clash", &json!({})).unwrap();
-    assert_eq!(all["total"], 4, "{}", all["groups"]);
+    assert_eq!(all["total"], 3, "{}", all["groups"]);
+    assert_eq!(all["normal"]["penetrations"], 1, "{}", all["normal"]);
     assert!(s.execute("bim.clash", &json!({"a": 7})).unwrap_err().to_string().contains("`a` is a trade"));
     // Every clash has a spot, a depth and a viewpoint looking at it.
     for c in pm["clashes"].as_array().unwrap() {
@@ -175,7 +185,7 @@ fn a_fix_moves_the_lower_priority_trade_on_approval_and_checks_again() {
     assert!(e.contains("no offset within 24\"") && e.contains("rerouting by hand") && !e.contains("sleeve"), "{e}");
     // A duct through a wall: no move of 2' or less clears a full-height wall it crosses at
     // right angles; the error says what it needs.
-    let ma = clash(&mut s, "mechanical", "architecture");
+    let ma = s.execute("bim.clash", &json!({"a": "mechanical", "b": "architecture", "hosted": true})).unwrap();
     let wall = ids(&ma)[0].clone();
     let e = s.execute("bim.clash.fix", &json!({"id": wall, "strategy": "raise"})).unwrap_err().to_string();
     assert!(e.contains("rerouting by hand") || e.contains("sleeve"), "{e}");
