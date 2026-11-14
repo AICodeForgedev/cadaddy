@@ -201,3 +201,44 @@ fn a_model_saved_before_its_state_was_kept_follows_its_plan() {
     assert_eq!(last["totals"]["added"], json!(0), "{last}");
     assert_eq!(last["totals"]["removed"], json!(0), "{last}");
 }
+
+/// The steps of the drawing's build record (`build_record` in its stored spec).
+fn record_steps(s: &Session) -> Vec<Value> {
+    let spec = (*s.doc().unwrap().building_spec).clone().expect("a stored spec");
+    let spec: Value = serde_json::from_str(&spec).unwrap();
+    spec["build_record"]["steps"].as_array().cloned().expect("the spec keeps its build record")
+}
+
+/// Q6569: opening a drawing, or coming back to it when another one is closed, is no edit of it.
+/// The commands after-steps compared the drawing open with the one open before (another tab):
+/// every built object looked added, so opening a built model wrote an `open` step into its build
+/// record with its counts doubled and marked it changed (and a large model spent seconds on it).
+#[test]
+fn opening_a_built_model_leaves_its_build_record_and_saved_state_alone() {
+    let _turn = serial();
+    let d = scratch("reopen-record");
+    let mut s = plan(json!({}));
+    let path = d.join("m.cdy").to_string_lossy().into_owned();
+    s.execute("saveas", &json!({ "path": path })).unwrap();
+    let steps = record_steps(&s);
+    let spec = (*s.doc().unwrap().building_spec).clone();
+    let walls_built = walls(&s);
+    drop(s);
+
+    // A session with a drawing of its own open, with something on it.
+    let mut s = Session::new();
+    line(&mut s, [0.0, 0.0], [100.0, 0.0]);
+    s.execute("open", &json!({ "path": path })).unwrap();
+    assert_eq!(walls(&s), walls_built);
+    assert_eq!(record_steps(&s), steps, "opening adds no step to the build record");
+    assert_eq!(*s.doc().unwrap().building_spec, spec, "the stored spec opens as saved");
+    assert!(!s.state().unwrap().is_dirty(), "an opened drawing has no unsaved change");
+
+    // Another drawing opened and closed: back on the model, still nothing changed in it.
+    s.execute("new", &json!({})).unwrap();
+    line(&mut s, [0.0, 0.0], [0.0, 50.0]);
+    s.execute("close", &json!({ "save": false })).unwrap();
+    assert_eq!(walls(&s), walls_built, "back on the model");
+    assert_eq!(record_steps(&s), steps, "closing another drawing adds no step");
+    assert!(!s.state().unwrap().is_dirty(), "closing another drawing is no change to this one");
+}
