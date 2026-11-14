@@ -70,6 +70,9 @@ pub struct Room3 {
     pub finish_detail: Vec<FinishDetail>,
     pub materials: Value,
     pub level: Option<String>,
+    /// Why its outline is not the loop traced round its tag, when it isn't (the trace's
+    /// `outline_basis`: cut from a loop two rooms' tags were in).
+    pub outline_basis: Option<String>,
 }
 
 impl Room3 {
@@ -196,6 +199,7 @@ fn rooms_traced_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool
             finish_detail,
             materials,
             level: level.map(|l| l.name.clone()),
+            outline_basis: r.outline_basis,
         });
     }
     Ok(out)
@@ -285,6 +289,7 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
                     materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
                     level: Some(r.level).filter(|l| !l.is_empty()),
                     outline: r.outline,
+                    outline_basis: None,
                 }
             })
             .collect();
@@ -382,6 +387,7 @@ fn built_rooms(s: &mut Session) -> Result<Option<Vec<Room3>>> {
             finish_detail,
             materials: spec_room.map(|x| serde_json::to_value(&x.materials).unwrap_or(Value::Null)).unwrap_or(Value::Null),
             level: Some(c.level.clone()).filter(|l| !l.is_empty()),
+            outline_basis: None,
         });
     }
     Ok(Some(out))
@@ -406,6 +412,9 @@ fn room_json(d: &cadaddy_doc::Drawing, r: &Room3, outline: bool) -> Value {
         "volume": round(r.volume()), "volumeCuFt": round(r.volume() / (ft * ft * ft)), "volumeM3": round(r.volume() / (m * m * m)),
         "finishes": r.finishes, "finishDetail": detail, "materials": r.materials,
     });
+    if let (Some(b), Some(o)) = (&r.outline_basis, v.as_object_mut()) {
+        o.insert("outlineBasis".into(), json!(b));
+    }
     if outline && let Some(o) = v.as_object_mut() {
         let step = (r.outline.len() / 64).max(1);
         o.insert("outline".into(), json!(r.outline.iter().step_by(step).map(|q| pt(*q)).collect::<Vec<_>>()));

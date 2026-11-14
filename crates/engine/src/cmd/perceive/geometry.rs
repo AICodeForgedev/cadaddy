@@ -2354,6 +2354,9 @@ pub(crate) struct FoundRoom {
     pub area: f64,
     pub perimeter: f64,
     pub confidence: f64,
+    /// Why its outline is not the traced loop as found (None: it is): cut from a loop two rooms'
+    /// tags were traced in ([`split_shared_outlines`]).
+    pub outline_basis: Option<String>,
 }
 
 /// A plan's room trace: the rooms found, and each name whose search stopped at its reach with no
@@ -3158,6 +3161,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
     };
     let mut beyond_reach: Vec<(String, Vec2, f64)> = Vec::new();
     let mut out: Vec<FoundRoom> = Vec::new();
+    // The names whose loop a room took already (its index in `out`): another room's tag in it,
+    // when each has its own number (cut apart after the trace), else its number or a note.
+    let mut shared: Vec<(usize, Label)> = Vec::new();
     // Rooms whose only number inside is another size than their name (taken when no tag is near).
     let mut any_size: Vec<(usize, String)> = Vec::new();
     // Whether each room in `out` was traced from round what its name is printed on.
@@ -3337,7 +3343,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
             continue;
         }
         let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
-        if out.iter().zip(&out_probed).any(|(q, q_probed)| {
+        if let Some(j) = out.iter().zip(&out_probed).position(|(q, q_probed)| {
             let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
             same_loop(&q.outline, &poly)
                 || ((probed || *q_probed)
@@ -3345,6 +3351,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
                     && qb.min.dist(b.min) <= tol
                     && qb.max.dist(b.max) <= tol)
         }) {
+            if shared.len() < MAX_SHARED_LOOPS && out.get(j).is_some_and(|q| q.label != h) {
+                shared.push((j, (h, name, at, height, tag)));
+            }
             continue;
         }
         // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
@@ -3391,13 +3400,21 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
         let confidence = (0.5 + 0.2 * f64::from(u8::from(number.is_some())) + if share < 0.5 { 0.3 } else { 0.0 }
             - if poly.len() > 200 { 0.1 } else { 0.0 })
         .clamp(0.0, 1.0);
-        out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence });
+        out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence, outline_basis: None });
         out_probed.push(probed);
     }
     let taken = number_from_nearest_tag(&mut out, &numbers, regions);
     for (i, t) in any_size {
         if let Some(r) = out.get_mut(i).filter(|r| r.number.is_none()) {
             r.number = Some(t);
+        }
+    }
+    if !shared.is_empty() {
+        let cut = split_shared_outlines(plan, &mut out, &shared, &numbers, k);
+        if cut > 0 {
+            crate::cmd::guided::progress_line(&format!(
+                "  room trace: {cut} loop(s) holding two rooms' tags (each its own number) cut along the wall between them"
+            ));
         }
     }
     let (made, shared) = outline_cache.as_ref().map_or((0, 0), crate::cmd::hatch::Outlines::searches_made);
@@ -3421,6 +3438,203 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>, numbered: bool)
         st.room_trace.put_inputs(space, regions, inputs, std::sync::Arc::new(trace.clone()));
     }
     Ok(trace)
+}
+
+/// Names found in a loop another room took, looked at to cut it apart (a hostile plan's are
+/// capped).
+const MAX_SHARED_LOOPS: usize = 2_000;
+/// A wall between two rooms' tags runs square to the line joining them: within this, degrees.
+const SPLIT_WALL_TURN_DEG: f64 = 12.0;
+/// A wall line is taken only between the tags: from this share of the way from one to the other.
+const SPLIT_WALL_BETWEEN: (f64, f64) = (0.1, 0.9);
+/// A wall line drawn along at least this share of the loop's depth across the tags' line (its
+/// faces' pieces either side of a door counted together).
+const SPLIT_WALL_SHARE: f64 = 0.35;
+/// A wall's two faces are at most this apart, inches: the cut is down its middle.
+const SPLIT_WALL_THICK_IN: f64 = 14.0;
+/// Pieces of a wall's face shorter than this, inches, are hatching or ticks, no face.
+const SPLIT_FACE_MIN_IN: f64 = 6.0;
+
+/// The part of `poly` on the side of the line through `o` that `side` points to (the polygon
+/// clipped by the half-plane: a concave loop may come back in pieces joined along the line, which
+/// add up to its area there).
+fn half_plane(poly: &[Vec2], o: Vec2, side: Vec2) -> Vec<Vec2> {
+    let f = |p: Vec2| (p - o).dot(side);
+    let mut out = Vec::new();
+    let n = poly.len();
+    for i in 0..n {
+        let (Some(&a), Some(&b)) = (poly.get(i), poly.get((i + 1) % n)) else { continue };
+        let (fa, fb) = (f(a), f(b));
+        if fa >= 0.0 {
+            out.push(a);
+        }
+        if (fa >= 0.0) != (fb >= 0.0) && (fa - fb).abs() > 1e-12 {
+            out.push(a + (b - a) * (fa / (fa - fb)));
+        }
+    }
+    out
+}
+
+/// Where the wall between two tags (their middles `a`, `b`) runs across `poly`, the loop both
+/// were traced in: the plan's line square to `a`→`b` between them drawn along most of the loop's
+/// depth (a face's pieces each side of a door together; both faces of a wall: down its middle).
+/// As how far from `a` along `a`→`b`, and whether a drawn line gave it (else midway).
+fn wall_between(segs: &[Seg], poly: &[Vec2], a: Vec2, b: Vec2, k: f64) -> (f64, bool) {
+    let gap = a.dist(b);
+    let u = (b - a) * (1.0 / gap.max(1e-12));
+    let across = Vec2::new(-u.y, u.x);
+    let (lo, hi) = poly.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+        let t = (*p - a).dot(across);
+        (lo.min(t), hi.max(t))
+    });
+    let depth = hi - lo;
+    let bounds = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+    let margin = SPLIT_WALL_THICK_IN * k;
+    let near = |p: Vec2| p.x >= bounds.min.x - margin && p.x <= bounds.max.x + margin && p.y >= bounds.min.y - margin && p.y <= bounds.max.y + margin;
+    let sin_turn = SPLIT_WALL_TURN_DEG.to_radians().sin();
+    // How much face is drawn at each offset from `a` (inch by inch).
+    let step = k.max(1e-9);
+    let mut drawn: std::collections::BTreeMap<i64, f64> = std::collections::BTreeMap::new();
+    for sg in segs {
+        let d = sg.b - sg.a;
+        let len = d.len();
+        if len < SPLIT_FACE_MIN_IN * k || !near(sg.a) || !near(sg.b) || d.dot(u).abs() > sin_turn * len {
+            continue;
+        }
+        let t = ((sg.a + sg.b) * 0.5 - a).dot(u);
+        if !(t > SPLIT_WALL_BETWEEN.0 * gap && t < SPLIT_WALL_BETWEEN.1 * gap) {
+            continue;
+        }
+        // Only what runs across the loop's depth.
+        let (ta, tb) = ((sg.a - a).dot(across), (sg.b - a).dot(across));
+        let along = (ta.max(tb).min(hi) - ta.min(tb).max(lo)).max(0.0);
+        let key = (t / step).round();
+        if along > 0.0 && key.is_finite() && key.abs() < 1e12 {
+            *drawn.entry(key as i64).or_default() += along;
+        }
+    }
+    // Each offset with its neighbours an inch either side (a face drawn a hair off square).
+    let total = |key: i64| (key - 1..=key + 1).filter_map(|q| drawn.get(&q)).sum::<f64>();
+    let best = drawn.keys().map(|&q| (q, total(q))).max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.cmp(&x.0)));
+    let Some((face, len)) = best.filter(|(_, len)| depth.is_finite() && depth > 0.0 && *len >= SPLIT_WALL_SHARE * depth) else {
+        return (gap / 2.0, false);
+    };
+    // Its other face, a wall's thickness off (strong as a face): the cut down the middle.
+    let other = drawn
+        .keys()
+        .filter(|&&q| (q - face).abs() > 2 && ((q - face).abs() as f64) * step <= SPLIT_WALL_THICK_IN * k)
+        .map(|&q| (q, total(q)))
+        .filter(|(_, l)| *l >= 0.5 * len)
+        .max_by(|x, y| x.1.total_cmp(&y.1));
+    let at = match other {
+        Some((q, _)) => (face + q) as f64 / 2.0 * step,
+        None => face as f64 * step,
+    };
+    (at, true)
+}
+
+/// Rooms' tags traced in one loop (`shared`: a name whose loop room `j` took, with its label),
+/// each with a room number of its own: two rooms whose shared wall the trace went through (a door
+/// between connecting rooms, a gap in the wall's linework). The loop is cut along that wall (the
+/// plan's line square to the tags between them; none drawn: midway) and each tag takes its side,
+/// its number the tag size's nearest it there; the cut is said on both (`outline_basis`). Two
+/// names with one number (a name and its qualifier, a unit type over a room name) are one room,
+/// and a number another room has is that room's tag printed again. How many loops were cut.
+fn split_shared_outlines(plan: &Session, out: &mut Vec<FoundRoom>, shared: &[(usize, Label)], numbers: &[Label], k: f64) -> usize {
+    let mut segs: Option<Vec<Seg>> = None;
+    let mut cut = 0usize;
+    let middle = |at: Vec2, name: &str, h: f64| {
+        let th = if h.is_finite() && h > 0.0 { h } else { 6.0 * k };
+        at + Vec2::new(name.chars().count() as f64 * th * LABEL_CHAR_WIDTH / 2.0, th / 2.0)
+    };
+    for (j, (h, name, at, height, _)) in shared {
+        if out.len() >= MAX_ROOMS_ALL_REGIONS {
+            break;
+        }
+        // The loop now holding the tag (an earlier cut may have given it to another room).
+        let Some(j) = out.iter().position(|r| r.label != *h && cadaddy_geom::point_in_polygon(&r.outline, *at)).or_else(|| out.get(*j).map(|_| *j))
+        else {
+            continue;
+        };
+        let Some(room) = out.get(j) else { continue };
+        let poly = room.outline.clone();
+        // The room numbers in it printed at both tags' size.
+        let sized = |qh: f64| [room.text_height, *height].iter().all(|th| qh >= TAG_SIZE_BAND.0 * th && qh <= TAG_SIZE_BAND.1 * th);
+        let mut inside: Vec<(String, Vec2)> = Vec::new();
+        for (_, t, q, _, _) in numbers.iter().filter(|(_, _, q, qh, _)| sized(*qh) && cadaddy_geom::point_in_polygon(&poly, *q)) {
+            let t = t.trim().to_string();
+            if !inside.iter().any(|(x, _)| *x == t) {
+                inside.push((t, *q));
+            }
+        }
+        if inside.len() < 2 {
+            continue;
+        }
+        // Each tag its own number: the pair of numbers nearest the two names together.
+        let (ma, mb) = (middle(room.at, &room.name, room.text_height), middle(*at, name, *height));
+        let mut pair: Option<(f64, usize, usize)> = None;
+        for (x, (_, qa)) in inside.iter().enumerate() {
+            for (y, (_, qb)) in inside.iter().enumerate() {
+                let d = qa.dist(ma) + qb.dist(mb);
+                if x != y && pair.is_none_or(|p| d < p.0) {
+                    pair = Some((d, x, y));
+                }
+            }
+        }
+        let Some((_, x, y)) = pair else { continue };
+        let (Some((na, qa)), Some((nb, qb))) = (inside.get(x).cloned(), inside.get(y).cloned()) else { continue };
+        // A number another room traced elsewhere has is that room's tag printed again (a
+        // corridor's, lettered along it, whose loop leaks through a door): no second room here.
+        let elsewhere =
+            |n: &str| out.iter().enumerate().any(|(o, r)| o != j && r.number.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case(n)));
+        if elsewhere(&na) || elsewhere(&nb) {
+            continue;
+        }
+        // Each tag's middle: between its name and its number.
+        let (ca, cb) = ((ma + qa) * 0.5, (mb + qb) * 0.5);
+        let gap = ca.dist(cb);
+        if !(gap.is_finite() && gap > MIN_ROOM_WIDTH_IN * k) {
+            continue;
+        }
+        let segs = segs.get_or_insert_with(|| plan.doc().map(|d| segments(&crate::cmd::bspec::plan_objects(d))).unwrap_or_default());
+        let (t, drawn) = wall_between(segs, &poly, ca, cb, k);
+        let u = (cb - ca) * (1.0 / gap);
+        let o = ca + u * t;
+        let (pa, pb) = (half_plane(&poly, o, u * -1.0), half_plane(&poly, o, u));
+        let area = |p: &[Vec2]| cadaddy_geom::shoelace(p).abs();
+        let least = 16.0 * 144.0 * k * k;
+        if pa.len() < 3 || pb.len() < 3 || area(&pa) < least || area(&pb) < least {
+            continue;
+        }
+        if !cadaddy_geom::point_in_polygon(&pa, ca) || !cadaddy_geom::point_in_polygon(&pb, cb) {
+            continue;
+        }
+        let how = if drawn { "along the wall drawn between their tags" } else { "midway between their tags (no wall line drawn between them)" };
+        let perimeter = |p: &[Vec2]| p.iter().zip(p.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum::<f64>();
+        let basis = |other: &str| format!("traced in one loop with room {other}'s tag (each its own number): cut {how}");
+        let new = FoundRoom {
+            name: name.clone(),
+            number: Some(nb.clone()),
+            at: *at,
+            label: *h,
+            text_height: *height,
+            area: area(&pb),
+            perimeter: perimeter(&pb),
+            outline: pb,
+            confidence: if drawn { 0.7 } else { 0.5 },
+            outline_basis: Some(basis(&na)),
+        };
+        if let Some(r) = out.get_mut(j) {
+            r.area = area(&pa);
+            r.perimeter = perimeter(&pa);
+            r.outline = pa;
+            r.number = Some(na);
+            r.outline_basis = Some(basis(&nb));
+        }
+        out.push(new);
+        cut += 1;
+    }
+    cut
 }
 
 /// Each room traced without a number takes the number tag nearest its name that no room has (in
@@ -4351,6 +4565,85 @@ mod tests {
         };
         assert_eq!(key(&again), key(&traced_afresh));
         assert_eq!(key(&again), key(&first));
+    }
+
+    /// Two units side by side (12' × 30' each, inches) whose shared wall (two faces 6" apart,
+    /// at `wall_x`) leaves a doorway between them with no leaf drawn (`door`: the gap's ends on the
+    /// wall, none: no wall at all), each tagged with its name over its number; and, `elsewhere`, a
+    /// room of its own off to the side tagged with the second unit's number too.
+    fn two_units(wall: bool, door: (f64, f64), elsewhere: bool) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("pline", &json!({"vertices": [[0, 0], [294, 0], [294, 360], [0, 360]], "closed": true})).unwrap();
+        if wall {
+            for x in [144.0, 150.0] {
+                s.execute("line", &json!({"points": [[x, 0.0], [x, door.0]]})).unwrap();
+                if door.1 < 360.0 {
+                    s.execute("line", &json!({"points": [[x, door.1], [x, 360.0]]})).unwrap();
+                }
+            }
+        }
+        for (t, x, y) in [("DOUBLE Q", 45.0, 180.0), ("201", 60.0, 170.0), ("DOUBLE Q", 195.0, 180.0), ("203", 210.0, 170.0)] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
+        }
+        if elsewhere {
+            s.execute("pline", &json!({"vertices": [[400, 0], [700, 0], [700, 360], [400, 360]], "closed": true})).unwrap();
+            for (t, x, y) in [("DOUBLE Q", 520.0, 180.0), ("203", 535.0, 170.0)] {
+                s.execute("text", &json!({"at": [x, y], "text": t, "height": 6})).unwrap();
+            }
+        }
+        s
+    }
+
+    /// Q6351: two units whose trace runs through a doorway in their shared wall (no leaf drawn
+    /// across it) were one loop, and the second tag in it was dropped: the unit had no room, so no
+    /// panel and no devices. Each tag with its own number is its own room now, the loop cut down
+    /// the middle of the wall between them, the cut said on both; with no wall drawn between
+    /// them, midway. Two names with one number (a name over its qualifier) stay one room, and a
+    /// tag of a room traced elsewhere cuts nothing.
+    #[test]
+    fn two_units_traced_as_one_loop_are_cut_apart_at_their_shared_wall() {
+        let mut s = two_units(true, (200.0, 236.0), false);
+        let mut rooms = rooms_found(&mut s).unwrap();
+        rooms.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        assert_eq!(rooms.len(), 2, "{rooms:?}");
+        assert_eq!(rooms.iter().map(|r| r.number.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["201", "203"]);
+        for (r, (lo, hi)) in rooms.iter().zip([(0.0, 147.0), (147.0, 294.0)]) {
+            let b = cadaddy_geom::Bounds2::from_points(r.outline.iter().copied());
+            assert!(
+                (b.min.x - lo).abs() < 1.5 && (b.max.x - hi).abs() < 1.5,
+                "{} cut down the wall's middle: {b:?}",
+                r.number.as_deref().unwrap_or("")
+            );
+            assert!((r.area - 147.0 * 360.0).abs() < 0.05 * 147.0 * 360.0, "{}: {}", r.number.as_deref().unwrap_or(""), r.area);
+            let basis = r.outline_basis.clone().unwrap_or_default();
+            assert!(basis.contains("along the wall drawn between their tags"), "{basis}");
+        }
+        assert!(
+            rooms[0].outline_basis.as_deref().is_some_and(|b| b.contains("203"))
+                && rooms[1].outline_basis.as_deref().is_some_and(|b| b.contains("201"))
+        );
+        // No wall between them (one open floor, two tags): cut midway, and said so.
+        let mut s = two_units(false, (0.0, 0.0), false);
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 2, "{rooms:?}");
+        assert!(rooms.iter().all(|r| r.outline_basis.as_deref().is_some_and(|b| b.contains("midway"))), "{rooms:?}");
+        // A closed wall: two loops, nothing cut.
+        let mut s = two_units(true, (360.0, 360.0), false);
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 2, "{rooms:?}");
+        assert!(rooms.iter().all(|r| r.outline_basis.is_none()), "{rooms:?}");
+        // A tag whose number a room traced elsewhere has is that room's printed again (a
+        // corridor's label where its loop leaks through a door): nothing cut.
+        let mut s = two_units(true, (200.0, 236.0), true);
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 2, "{rooms:?}");
+        assert!(rooms.iter().all(|r| r.outline_basis.is_none()), "{rooms:?}");
+        // One room's name and a second name by the same number (no number of its own): one room.
+        let mut s = plan_of(&[([0.0, 0.0, 294.0, 360.0], &[("OFFICE", 45.0, 180.0), ("101", 60.0, 170.0), ("RECEPTION", 195.0, 180.0)])]);
+        let rooms = rooms_found(&mut s).unwrap();
+        assert_eq!(rooms.len(), 1, "{rooms:?}");
+        assert!(rooms[0].outline_basis.is_none());
     }
 
     /// A room `w` × `h` inches from the origin with its name at the centre, inside a sheet's
