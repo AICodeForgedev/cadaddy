@@ -171,7 +171,6 @@ pub(crate) fn wall_bearing(sp: &cadaddy_walk3d::BuildingSpec) -> BTreeMap<String
 
 /// The member `e` is (its piece's type and item; a stud's wall's bearing from `bearing`).
 pub(crate) fn member(d: &Drawing, e: &El, bearing: &BTreeMap<String, Option<bool>>) -> Member {
-    let rl = rules();
     let (ty, item, wall_type) = d
         .entity(e.handle)
         .map(|x| {
@@ -180,20 +179,34 @@ pub(crate) fn member(d: &Drawing, e: &El, bearing: &BTreeMap<String, Option<bool
             (t("type"), t("item"), t("wall_type"))
         })
         .unwrap_or_default();
-    let text = format!(" {} {} ", ty, item).to_ascii_uppercase();
+    let kind = if no_holes(e) {
+        Kind::NoHoles
+    } else {
+        match kind_of(&e.category, &format!("{ty} {item}")) {
+            Kind::WoodStud(_) => Kind::WoodStud(bearing.get(&wall_type.to_ascii_uppercase()).copied().flatten()),
+            k => k,
+        }
+    };
+    Member { kind, piece: e.category.clone(), ty, item, wall_type }
+}
+
+/// What a framing piece of kind `piece` (`joist`, `truss`, `rim`, `stud`…) is for its hole rules,
+/// by the words of its type and item (`text`): the one reading `bim.clash` and the conduit router
+/// share (Q6622). A wood stud's wall's bearing is the caller's.
+pub(crate) fn kind_of(piece: &str, text: &str) -> Kind {
+    let rl = rules();
+    let text = format!(" {text} ").to_ascii_uppercase();
     let has = |ws: &[String]| ws.iter().any(|w| text.contains(w.to_ascii_uppercase().as_str()));
-    let kind = match e.category.as_str() {
-        _ if no_holes(e) => Kind::NoHoles,
+    match piece {
         "truss" => Kind::Truss,
         "joist" if has(&rl.truss_words) => Kind::Truss,
         "joist" if has(&rl.sawn_words) => Kind::SawnJoist,
         "joist" => Kind::IJoist,
         "rim" => Kind::Rim,
         "stud" if has(&rl.steel_words) => Kind::SteelStud,
-        "stud" => Kind::WoodStud(bearing.get(&wall_type.to_ascii_uppercase()).copied().flatten()),
+        "stud" => Kind::WoodStud(None),
         _ => Kind::NoHoles,
-    };
-    Member { kind, piece: e.category.clone(), ty, item, wall_type }
+    }
 }
 
 /// An element's own axes: `u` along its length, `d` across its deeper side, `t` across its thin
@@ -219,24 +232,105 @@ impl Axes {
 /// depth (a box: its sides, longest first).
 pub(crate) fn axes(d: &Drawing, e: &El) -> Axes {
     let mesh = d.entity(e.handle).and_then(|x| if let EntityKind::Mesh(m) = &x.kind { Some(m) } else { None });
-    let verts: Vec<Vec3> = mesh.map(|m| m.vertices.iter().take(MAX_VERTS).copied().collect()).unwrap_or_default();
+    let Some(m) = mesh else { return axes_of(&[], &[], &[], e.lo, e.hi) };
+    let idx: Vec<usize> = (0..m.vertices.len().min(MAX_VERTS)).collect();
+    let faces: Vec<&[u32]> = m.faces.iter().take(MAX_VERTS).map(|f| f.v.as_slice()).collect();
+    axes_of(&m.vertices, &idx, &faces, e.lo, e.hi)
+}
+
+/// Most straight parts an element is judged by, one by one.
+const MAX_PARTS: usize = 512;
+
+/// The straight parts of `e` with their boxes: a bent stick's legs, a wire's or a cable's
+/// segments, each its own closed part of the mesh (Q6622: a bent stick judged as one piece read
+/// its other leg as the hole's size, and a stick that crosses a joist with one leg and keeps to
+/// the bay with the other as running along the joist). One part (or a mesh too big to split):
+/// the whole element.
+pub(crate) fn parts(d: &Drawing, e: &El) -> Vec<(Axes, Vec3, Vec3)> {
+    let whole = || vec![(axes(d, e), e.lo, e.hi)];
+    let Some(m) = d.entity(e.handle).and_then(|x| if let EntityKind::Mesh(m) = &x.kind { Some(m) } else { None }) else { return whole() };
+    let n = m.vertices.len();
+    if n > MAX_VERTS || m.faces.len() > MAX_VERTS {
+        return whole();
+    }
+    // The mesh's connected parts: vertices joined by the faces they share.
+    let mut root: Vec<usize> = (0..n).collect();
+    fn find(root: &mut [usize], mut i: usize) -> usize {
+        let mut hops = 0;
+        while let Some(&p) = root.get(i) {
+            if p == i || hops > MAX_VERTS {
+                break;
+            }
+            let gp = root.get(p).copied().unwrap_or(p);
+            if let Some(r) = root.get_mut(i) {
+                *r = gp;
+            }
+            i = p;
+            hops += 1;
+        }
+        i
+    }
+    for f in &m.faces {
+        let Some(&a) = f.v.first() else { continue };
+        if (a as usize) >= n {
+            continue;
+        }
+        for &b in f.v.iter().skip(1).filter(|b| (**b as usize) < n) {
+            let (ra, rb) = (find(&mut root, a as usize), find(&mut root, b as usize));
+            if ra != rb
+                && let Some(r) = root.get_mut(ra.max(rb))
+            {
+                *r = ra.min(rb);
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, (Vec<usize>, Vec<&[u32]>)> = BTreeMap::new();
+    for f in &m.faces {
+        let Some(&a) = f.v.first().filter(|a| (**a as usize) < n) else { continue };
+        let r = find(&mut root, a as usize);
+        groups.entry(r).or_default().1.push(f.v.as_slice());
+    }
+    if groups.len() < 2 || groups.len() > MAX_PARTS {
+        return whole();
+    }
+    for i in 0..n {
+        let r = find(&mut root, i);
+        if let Some(g) = groups.get_mut(&r) {
+            g.0.push(i);
+        }
+    }
+    groups
+        .into_values()
+        .filter_map(|(idx, faces)| {
+            let pts: Vec<Vec3> = idx.iter().filter_map(|i| m.vertices.get(*i).copied()).filter(|v| v.is_finite()).collect();
+            let first = *pts.first()?;
+            let (lo, hi) = pts.iter().fold((first, first), |(lo, hi), p| {
+                (Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)), Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)))
+            });
+            Some((axes_of(&m.vertices, &idx, &faces, lo, hi), lo, hi))
+        })
+        .collect()
+}
+
+/// The axes of the mesh part made of the vertices `idx` of `all` and `faces` (its box `lo`–`hi`
+/// when it has too few vertices).
+fn axes_of(all: &[Vec3], idx: &[usize], faces: &[&[u32]], lo: Vec3, hi: Vec3) -> Axes {
+    let verts: Vec<Vec3> = idx.iter().take(MAX_VERTS).filter_map(|i| all.get(*i).copied()).collect();
     let mut edges: Vec<Vec3> = Vec::new();
-    if let Some(m) = mesh {
-        for f in m.faces.iter().take(MAX_VERTS) {
-            for (k, a) in f.v.iter().enumerate() {
-                let b = f.v.get((k + 1) % f.v.len().max(1)).copied().unwrap_or(*a);
-                if let (Some(p), Some(q)) = (verts.get(*a as usize), verts.get(b as usize)) {
-                    let v = *q - *p;
-                    if v.is_finite() && v.len() > 0.0 {
-                        edges.push(v);
-                    }
+    for f in faces.iter().take(MAX_VERTS) {
+        for (k, a) in f.iter().enumerate() {
+            let b = f.get((k + 1) % f.len().max(1)).copied().unwrap_or(*a);
+            if let (Some(p), Some(q)) = (all.get(*a as usize), all.get(b as usize)) {
+                let v = *q - *p;
+                if v.is_finite() && v.len() > 0.0 {
+                    edges.push(v);
                 }
             }
         }
     }
     let longest = |vs: &mut dyn Iterator<Item = Vec3>| vs.max_by(|a, b| a.len().total_cmp(&b.len()));
     let from_box = || {
-        let s = e.hi - e.lo;
+        let s = hi - lo;
         let mut ax = [(s.x, Vec3::new(1.0, 0.0, 0.0)), (s.y, Vec3::new(0.0, 1.0, 0.0)), (s.z, Vec3::Z)];
         ax.sort_by(|a, b| b.0.total_cmp(&a.0));
         (ax[0].1, ax[1].1)
@@ -259,13 +353,7 @@ pub(crate) fn axes(d: &Drawing, e: &El) -> Axes {
         verts
     } else {
         (0..8u8)
-            .map(|i| {
-                Vec3::new(
-                    if i & 1 == 0 { e.lo.x } else { e.hi.x },
-                    if i & 2 == 0 { e.lo.y } else { e.hi.y },
-                    if i & 4 == 0 { e.lo.z } else { e.hi.z },
-                )
-            })
+            .map(|i| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }))
             .collect()
     };
     let span = |a: Vec3| corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.dot(a)), hi.max(p.dot(a))));
@@ -614,6 +702,52 @@ mod tests {
         let header = member(Kind::NoHoles, "header", "header");
         let h = judge(&header, &joist(9.25), "conduit", &run_x(0.5, 120.0, 4.6), 1.0, &fr());
         assert!(!h.allowed && h.source.contains("engineer"), "{h:?}");
+    }
+
+    #[test]
+    fn a_bent_stick_is_judged_by_its_legs() {
+        // Two closed boxes (a stick's two legs, joined by its bend): one 1" square along x from
+        // 0 to 100, one along y from (100, 0) to (100, 30), both at z 5.5..6.5.
+        let cube = |lo: Vec3, hi: Vec3, base: u32| {
+            let v: Vec<Vec3> = (0..8u8)
+                .map(|i| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }))
+                .collect();
+            let f: Vec<cadaddy_doc::MeshFace> = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]]
+                .iter()
+                .map(|q| cadaddy_doc::MeshFace { v: q.iter().map(|k| base + k).collect(), hidden: 0 })
+                .collect();
+            (v, f)
+        };
+        let (mut v, mut f) = cube(Vec3::new(0.0, -0.5, 5.5), Vec3::new(100.0, 0.5, 6.5), 0);
+        let (v2, f2) = cube(Vec3::new(99.5, 0.0, 5.5), Vec3::new(100.5, 30.0, 6.5), 8);
+        v.extend(v2);
+        f.extend(f2);
+        let mut d = Drawing::new_imperial();
+        let mesh = cadaddy_doc::Mesh { vertices: v, faces: f, ..cadaddy_doc::Mesh::default() };
+        let h = d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), EntityKind::Mesh(mesh)).unwrap();
+        let e = El { handle: h, lo: Vec3::new(0.0, -0.5, 5.5), hi: Vec3::new(100.5, 30.0, 6.5), ..el("conduit") };
+        let whole = axes(&d, &e);
+        assert!(whole.depth > 20.0, "the whole stick's box reads its other leg as its size: {whole:?}");
+        let legs = parts(&d, &e);
+        assert_eq!(legs.len(), 2, "{legs:?}");
+        assert!(legs.iter().all(|(a, _, _)| a.depth <= 1.0 + 1e-9 && a.thick <= 1.0 + 1e-9), "{legs:?}");
+        // Through a joist along y at x = 48 (2.5" wide, 11 7/8" deep): the x leg bores its web.
+        let m = member(Kind::IJoist, "joist", "11 7/8\" I-joist");
+        let j = Axes {
+            c: Vec3::new(48.0, 0.0, 11.875 / 2.0),
+            u: Vec3::new(0.0, 1.0, 0.0),
+            d: Vec3::Z,
+            t: Vec3::new(1.0, 0.0, 0.0),
+            len: 240.0,
+            depth: 11.875,
+            thick: 2.5,
+        };
+        let j = Axes { c: Vec3::new(48.0, 60.0, 11.875 / 2.0), ..j };
+        let leg = legs.iter().find(|(_, lo, hi)| lo.x < 48.0 && hi.x > 48.0).map(|(a, _, _)| *a).unwrap();
+        assert!(judge(&m, &j, "conduit", &leg, 1.0, &fr()).allowed);
+        assert!(!judge(&m, &j, "conduit", &whole, 1.0, &fr()).allowed, "judged whole, the bend reads as a 30\" hole");
+        // One closed part: the whole element.
+        assert_eq!(parts(&d, &El { handle: cadaddy_doc::Handle(0xFFFF), ..e.clone() }).len(), 1);
     }
 
     #[test]

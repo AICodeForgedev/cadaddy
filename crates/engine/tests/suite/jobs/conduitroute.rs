@@ -1077,7 +1077,11 @@ fn the_branches_keep_to_the_joist_bays_and_bore_the_web_only_in_its_hole_zone() 
     );
     // The joists the trades lay out are the ones routed through.
     let joists = s.execute("bim.count", &json!({"trade": "framing", "kind": "joist"})).expect("count");
-    assert_eq!(joists["count"].as_f64().unwrap_or(0.0) as u64, fr["members"].as_u64().unwrap(), "{joists} {fr}");
+    assert_eq!(joists["count"].as_f64().unwrap_or(0.0) as u64, fr["members_by_kind"]["joist"].as_u64().unwrap(), "{joists} {fr}");
+    // … and their rim boards round the floor (Q6622).
+    let rims = s.execute("bim.count", &json!({"trade": "framing", "kind": "rim"})).expect("count");
+    assert_eq!(rims["count"].as_f64().unwrap_or(0.0) as u64, fr["members_by_kind"]["rim"].as_u64().unwrap(), "{rims} {fr}");
+    assert_eq!(fr["members"].as_u64().unwrap(), fr["members_by_kind"]["joist"].as_u64().unwrap() + fr["members_by_kind"]["rim"].as_u64().unwrap());
     // Rerouting with the trades' pieces built (studs, sheets, joists) is the same routing: the
     // pieces are not obstacles.
     let pieces = |s: &mut Session| s.execute("bim.count", &json!({"group_by": "trade"})).expect("count")["rows"].clone();
