@@ -988,8 +988,23 @@ fn frame(
             }
         }
     }
+    // The cripples over and under a wide thing clear the things above and below it too.
+    let in_wall = |c: f64| c >= lo - 1e-6 && c <= hi + 1e-6;
     for (s, za, zb, extra) in cripples {
-        mk_stud_with(batch, s, za, zb, "cripple", extra);
+        match clear_of(s, za, zb, f, spacing_in * k, &things, &in_wall) {
+            Clear::Here => {
+                mk_stud_with(batch, s, za, zb, "cripple", extra);
+            }
+            Clear::Moved { to, what } => {
+                let mut extra = extra;
+                extra.push(("moved_for", what.clone(), beside_src.clone()));
+                extra.push(("moved_in", num_text(((to - s) / k * 100.0).round() / 100.0), Source::computed()));
+                mk_stud_with(batch, to, za, zb, "cripple", extra);
+                *batch.tally.entry(format!("moved:{what}")).or_default() += 1;
+            }
+            // Another wide thing over or under it: the jambs round that one hold it.
+            Clear::Around { .. } | Clear::Stuck { .. } => {}
+        }
     }
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
     if !emit {
@@ -1314,8 +1329,13 @@ pub(super) fn clear_of(s: f64, za: f64, zb: f64, f: f64, spacing: f64, things: &
             break;
         }
     }
-    // A device and its box are one thing: named as the box the stud holds.
-    if things.iter().any(|t| in_height(t) && t.a < b && t.b > a && t.what == "box") {
+    // Named as the widest of them; a device and its box are one thing, named as the box the stud
+    // holds.
+    let members = || things.iter().filter(|t| in_height(t) && t.a < b && t.b > a);
+    if let Some(t) = members().max_by(|x, y| (x.b - x.a).total_cmp(&(y.b - y.a))) {
+        what = t.what.clone();
+    }
+    if what == "device" && members().any(|t| t.what == "box") {
         what = "box".into();
     }
     let (left, right) = (a - f / 2.0, b + f / 2.0);
@@ -1963,6 +1983,8 @@ mod tests {
         let face = -w.t / 2.0;
         let bx = thing("box", (15.0, 17.0), (face, face + 2.5), (16.5, 19.5));
         let panel = thing("panel", (40.0, 60.0), (face, face + 3.75), (48.0, 78.0));
+        // A box under the panel, in the layout's 4'-0 5/8" stud (the cripple under the panel).
+        let under = thing("box", (47.5, 49.5), (face, face + 2.5), (16.5, 19.5));
         let (bare, _) = lay_with(&w, steel_partition(), &Rules::default(), Vec::new());
         let hits = |p: &[Piece], s: (f64, f64), z: (f64, f64)| {
             studs(p).into_iter().filter(|(a, b, z0, z1, _)| *a < s.1 - 0.01 && *b > s.0 + 0.01 && *z0 < z.1 && *z1 > z.0).count()
@@ -1970,12 +1992,13 @@ mod tests {
         // Before: the layout alone stands a stud in the box and one in the panel.
         assert_eq!(hits(&bare, (15.0, 17.0), (16.5, 19.5)), 1);
         assert_eq!(hits(&bare, (40.0, 60.0), (48.0, 78.0)), 1);
-        let (p, batch) = lay_with(&w, steel_partition(), &Rules::default(), vec![bx, panel]);
+        let (p, batch) = lay_with(&w, steel_partition(), &Rules::default(), vec![bx, panel, under]);
+        assert_eq!(hits(&p, (47.5, 49.5), (16.5, 19.5)), 0);
         assert_eq!(hits(&p, (15.0, 17.0), (16.5, 19.5)), 0, "{:?}", studs(&p).iter().map(|s| (s.0, s.1, s.2, s.3)).collect::<Vec<_>>());
         assert_eq!(hits(&p, (40.0, 60.0), (48.0, 78.0)), 0);
         // The box's stud moved to its nearer side, 1" over: against the box's face, carrying
         // where the layout had it and why.
-        let moved: Vec<_> = studs(&p).into_iter().filter(|s| prop(s.4, "moved_for").is_some()).collect();
+        let moved: Vec<_> = studs(&p).into_iter().filter(|s| prop(s.4, "moved_for").is_some() && prop(s.4, "role") != Some("cripple")).collect();
         assert_eq!(moved.len(), 1, "{moved:?}");
         let (a, _, _, _, m) = moved[0];
         assert!((a - 17.0).abs() < 1e-9, "{a}");
@@ -1988,6 +2011,9 @@ mod tests {
         // The panel: a jamb stud each side, the layout's stud over and under it as cripples.
         let jambs: Vec<f64> = studs(&p).into_iter().filter(|s| prop(s.4, "role") == Some("jamb")).map(|s| s.0).collect();
         assert_eq!(jambs, vec![40.0 - 1.25, 60.0], "{jambs:?}");
+        // The cripple under the panel stands at the side of the box under it.
+        let under_cripple: Vec<f64> = studs(&p).into_iter().filter(|s| prop(s.4, "role") == Some("cripple") && s.3 <= 48.0).map(|s| s.0).collect();
+        assert_eq!(under_cripple, vec![49.5], "{under_cripple:?}");
         let cripples: Vec<(f64, f64)> = studs(&p)
             .into_iter()
             .filter(|s| prop(s.4, "frames") == Some("panel") && prop(s.4, "role") == Some("cripple"))
@@ -1999,7 +2025,7 @@ mod tests {
         let mut at: Vec<f64> = studs(&p).into_iter().filter(|s| prop(s.4, "role") != Some("cripple")).map(|s| s.0).collect();
         at.sort_by(f64::total_cmp);
         assert!(at.windows(2).all(|x| x[1] - x[0] >= 1.25 - 1e-9), "{at:?}");
-        assert!(batch.tally.get("moved:box") == Some(&1) && batch.tally.get("framed:panel") == Some(&1), "{:?}", batch.tally);
+        assert!(batch.tally.get("moved:box") == Some(&2) && batch.tally.get("framed:panel") == Some(&1), "{:?}", batch.tally);
     }
 
     #[test]

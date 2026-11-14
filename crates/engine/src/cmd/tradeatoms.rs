@@ -886,11 +886,19 @@ fn in_wall_thing(e: &cadaddy_doc::Entity) -> Option<InWall> {
         c => c.to_string(),
     };
     let EntityKind::Mesh(m) = &e.kind else { return None };
-    let pts: Vec<Vec3> = m.vertices.iter().filter(|v| v.is_finite()).take(MAX_IN_WALL_PTS).copied().collect();
+    let mut pts: Vec<Vec3> = m.vertices.iter().filter(|v| v.is_finite()).take(MAX_IN_WALL_PTS).copied().collect();
     let first = *pts.first()?;
-    let (lo, hi) = pts.iter().fold((first, first), |(lo, hi), p| {
+    // Its box from every point (a big body's points past the cap still count).
+    let (lo, hi) = m.vertices.iter().filter(|v| v.is_finite()).take(super::mepatoms::MAX_ELEMENTS).fold((first, first), |(lo, hi), p| {
         (Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)), Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)))
     });
+    // A body of more points than are kept is taken as its box's corners.
+    if m.vertices.len() > MAX_IN_WALL_PTS {
+        pts.clear();
+        for i in 0..8u8 {
+            pts.push(Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }));
+        }
+    }
     Some(InWall { what, pts, lo, hi })
 }
 
