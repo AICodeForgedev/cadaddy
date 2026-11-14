@@ -186,6 +186,13 @@ pub(crate) struct Measured {
     pub equipment: Option<String>,
     /// A person set its height: never moved by the rule.
     pub user: bool,
+    /// Its height as its properties give it, and what that is measured to.
+    pub mount: Option<(f64, Datum)>,
+    /// Its height carries a correction already (`design:mount_height`).
+    pub corrected: bool,
+    /// Why its spec record's bottom was corrected by this rule, when it was built from such a
+    /// record (re-made since the correction).
+    pub record_said: Option<String>,
 }
 
 impl Measured {
@@ -197,8 +204,17 @@ impl Measured {
             Datum::Centre => (self.top_in + self.bottom_in) / 2.0,
         }
     }
-    /// How far it must move (inches; up positive), 0 when it is within reach.
+    /// Whether it is out of reach and too tall to be brought within it: set at its limit, its
+    /// bottom would be under the least reach (a distribution panel's tall box).
+    pub(crate) fn too_tall(&self, rule: &Rule) -> bool {
+        let over = self.at_datum() - self.limit.inches;
+        over > SLACK_IN && self.bottom_in - over < rule.min_in.max(0.0) - SLACK_IN
+    }
+    /// How far it must move (inches; up positive), 0 when it is within reach or can't be.
     pub(crate) fn move_in(&self, rule: &Rule) -> f64 {
+        if self.too_tall(rule) {
+            return 0.0;
+        }
         let over = self.at_datum() - self.limit.inches;
         if over > SLACK_IN {
             return -over;
@@ -372,6 +388,13 @@ fn measure_with(d: &Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<Handle>>,
         let name = [text("type"), text("description")].into_iter().flatten().collect::<Vec<_>>().join(" ");
         let limit = limit_for(rule, &sp.mount_notes, &kind, Some(name.as_str()).filter(|n| !n.is_empty()), mark.as_deref());
         let user = ps.get("mount_height").is_some_and(|p| p.source.kind == SourceKind::User);
+        let mount = ps.get("mount_height").and_then(|p| p.value.as_f64().or_else(|| p.text().parse().ok())).filter(|h| h.is_finite()).map(|h| {
+            let datum = ps.get("mount_datum").map(Prop::text).map_or(Datum::Centre, |t| Datum::parse(&t));
+            (h, datum)
+        });
+        let corrected = ps.get(&format!("{}mount_height", provenance::DESIGN_PREFIX)).is_some_and(Prop::has_value);
+        let record_said =
+            super::bimlook::made_prop(e, "SOURCE bottom").filter(|w| w.starts_with(rule.id.as_str()) && !rule.id.is_empty()).map(str::to_string);
         out.push(Measured {
             handle: e.handle,
             level: level.name.clone(),
@@ -383,6 +406,9 @@ fn measure_with(d: &Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<Handle>>,
             limit,
             equipment: equipment.then(|| super::bimlook::made_tag(e, "tag").unwrap_or("").to_string()).filter(|t| !t.is_empty()),
             user,
+            mount,
+            corrected,
+            record_said,
         });
     }
     out
@@ -399,6 +425,12 @@ pub(crate) struct Kept {
     pub raised: usize,
     /// Out of reach but a person set their height: left, listed.
     pub user_kept: usize,
+    /// Out of reach and too tall to be brought within it (gear for service personnel): left,
+    /// said so on them, listed.
+    pub too_tall: usize,
+    /// Built from a spec record this rule corrected (re-made since): their height's correction
+    /// recorded, nothing moved.
+    pub recorded: usize,
     /// The equipment (a panel's tag, its level) moved, inches (up positive), and why: its spec
     /// record follows ([`follow_records`]).
     pub record_moves: Vec<(String, String, f64, String)>,
@@ -419,6 +451,8 @@ impl Kept {
             "lowered": self.lowered,
             "raised": self.raised,
             "user_kept": self.user_kept,
+            "too_tall": self.too_tall,
+            "recorded": self.recorded,
             "records": self.record_moves.len(),
             "by_kind": self.by_kind,
             "first": self.listed.iter().take(50).collect::<Vec<_>>(),
@@ -439,6 +473,25 @@ pub(crate) fn keep_within(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTre
     for m in &all {
         let dz_in = m.move_in(&rule);
         if dz_in.abs() <= SLACK_IN {
+            if m.user {
+                continue;
+            }
+            let note = if m.too_tall(&rule) {
+                out.too_tall += 1;
+                if out.listed.len() < MAX_LISTED {
+                    let mut j = m.to_json();
+                    j["too_tall"] = json!(true);
+                    out.listed.push(j);
+                }
+                too_tall_xdata(d, m, &rule)
+            } else {
+                let x = recorded_xdata(d, m);
+                out.recorded += usize::from(x.is_some());
+                x
+            };
+            if let Some(x) = note {
+                let _ = d.modify_entity(m.handle, |e| e.common.xdata = x.into());
+            }
             continue;
         }
         if m.user {
@@ -496,6 +549,71 @@ pub(crate) fn follow_records(sp: &mut BuildingSpec, kept: &Kept) -> usize {
     n
 }
 
+/// The key a control too tall to be brought within reach is said so in.
+pub(crate) const TOO_TALL_KEY: &str = "accessible_reach";
+
+/// A control out of reach and too tall to be brought within it, said so (once): left where it
+/// is, as gear only service personnel operate (outside the reach range), for review.
+fn too_tall_xdata(d: &Drawing, m: &Measured, rule: &Rule) -> Option<Vec<cadaddy_doc::RawTag>> {
+    let e = d.model.get(m.handle)?;
+    let mut ps = props::read(&e.common.xdata);
+    if ps.get(TOO_TALL_KEY).is_some_and(Prop::has_value) {
+        return None;
+    }
+    let why = format!(
+        "not moved: in an accessible room ({}), its box ({} tall) can't fit between the least reach ({}) and {} ({}); gear only service personnel operate is outside the reach range (ADA 205.1 exception 1): for review",
+        m.room,
+        ft_in(m.top_in - m.bottom_in),
+        ft_in(rule.min_in),
+        ft_in(m.limit.inches),
+        m.limit.from
+    );
+    let mut p = Prop::new(why, Source::from_doc(SourceKind::Rule, &rule.name()));
+    p.note = Some("the accessible reach rule's decision on it".into());
+    ps.set(TOO_TALL_KEY, p).then(|| props::write(&e.common.xdata, &ps))
+}
+
+/// A control built from a spec record this rule corrected (re-made since, its height filled
+/// from the documents again): its height's correction recorded, nothing moved. The documents'
+/// height is the design value, the height it stands at the installed one, and the record's rule
+/// and reason are kept beside them.
+fn recorded_xdata(d: &Drawing, m: &Measured) -> Option<Vec<cadaddy_doc::RawTag>> {
+    let said = m.record_said.as_ref().filter(|_| !m.corrected)?;
+    let (h, datum) = m.mount?;
+    let at = match datum {
+        Datum::Top => m.top_in,
+        Datum::Bottom => m.bottom_in,
+        Datum::Centre => (m.top_in + m.bottom_in) / 2.0,
+    };
+    if (at - h).abs() <= SLACK_IN {
+        return None;
+    }
+    let e = d.model.get(m.handle)?;
+    let mut ps = props::read(&e.common.xdata);
+    let old = ps.get("mount_height").cloned()?;
+    let (rule, reason) = said.split_once(": ").unwrap_or((said.as_str(), ""));
+    let new = r2(at);
+    ps.set("mount_height", Prop { value: json!(new), ..old.clone() });
+    let c = Correction {
+        key: "mount_height".into(),
+        design: old.text(),
+        corrected: format!("{new}"),
+        reason: reason.to_string(),
+        rule: rule.to_string(),
+    };
+    provenance::correct(&mut ps, &c, old.source.clone());
+    keep_design_number(&mut ps, &c, h, &old);
+    Some(props::write(&e.common.xdata, &ps))
+}
+
+/// The design height a first correction kept, as the number it was.
+fn keep_design_number(ps: &mut props::Props, c: &Correction, h: f64, old: &Prop) {
+    let dkey = format!("{}mount_height", provenance::DESIGN_PREFIX);
+    if let Some(kept) = ps.get(&dkey).cloned().filter(|p| p.value.is_string() && p.text().trim() == c.design.trim()) {
+        ps.set(&dkey, Prop { value: json!(h), unit: old.unit.clone(), ..kept });
+    }
+}
+
 /// Why a control moved, as its correction says it.
 fn reason(m: &Measured, dz_in: f64) -> String {
     let at = m.at_datum();
@@ -548,11 +666,7 @@ fn corrected_xdata(e: &Entity, m: &Measured, dz_in: f64, rule: &Rule) -> Vec<cad
     ps.set("mount_height", Prop { value: json!(new), ..old.clone() });
     let c = Correction { key: "mount_height".into(), design: old.text(), corrected: format!("{new}"), reason: why, rule: rule_name.clone() };
     provenance::correct(&mut ps, &c, old.source.clone());
-    // The design height kept as the number it was (a first correction's only).
-    let dkey = format!("{}mount_height", provenance::DESIGN_PREFIX);
-    if let Some(kept) = ps.get(&dkey).cloned().filter(|p| p.value.is_string() && p.text().trim() == c.design.trim()) {
-        ps.set(&dkey, Prop { value: json!(h), unit: old.unit.clone(), ..kept });
-    }
+    keep_design_number(&mut ps, &c, h, &old);
     let src = Source::from_doc(SourceKind::Rule, &rule_name);
     if let Some(off) = ps.get("offset").cloned()
         && let Some(o) = off.value.as_f64().or_else(|| off.text().parse().ok()).filter(|o| o.is_finite())
@@ -630,6 +744,9 @@ mod tests {
             limit: Limit { inches: 48.0, datum: Datum::Top, from: String::new() },
             equipment: None,
             user: false,
+            mount: None,
+            corrected: false,
+            record_said: None,
         };
         assert!((m.move_in(&r) + 30.0).abs() < 1e-9, "a panel topped at 6'-6\" comes down 30\"");
         let tstat = Measured { bottom_in: 46.0, top_in: 50.0, kind: "thermostat".into(), ..m.clone() };
@@ -638,7 +755,58 @@ mod tests {
         assert!(by_middle.move_in(&r).abs() < 1e-9, "a limit to its middle: 48\" is within it");
         let low = Measured { bottom_in: 10.0, top_in: 14.0, ..m.clone() };
         assert!((low.move_in(&r) - 5.0).abs() < 1e-9, "raised to the least reach");
-        let within = Measured { bottom_in: 40.0, top_in: 48.0, ..m };
+        let within = Measured { bottom_in: 40.0, top_in: 48.0, ..m.clone() };
         assert_eq!(within.move_in(&r), 0.0);
+        // A 50" box can't come down to a 48" top over the 15" least reach: left, for review.
+        let tall = Measured { bottom_in: 28.0, top_in: 78.0, ..m };
+        assert!(tall.too_tall(&r) && tall.move_in(&r) == 0.0);
+    }
+
+    /// An equipment element as the build makes it: a panel box from `z0` to `z1` (inches over an
+    /// L1 floor at 0), its tag, more build tags and its properties.
+    fn panel(d: &mut Drawing, tag: &str, z0: f64, z1: f64, extra: &[&str], ps: &props::Props) -> Handle {
+        let t = |v: &str| cadaddy_doc::RawTag { code: 1000, value: v.into() };
+        let mut x = vec![cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() }, t("mep"), t("L1"), t("0")];
+        x.extend(["kind:equipment".to_string(), "part:equipment:panel".to_string(), format!("tag:{tag}")].iter().map(|v| t(v)));
+        x.extend(extra.iter().map(|v| t(v)));
+        let x = props::write(&x, ps);
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 100.0), Vec2::new(14.0, 100.0), 4.0, z0, z1);
+        d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common { xdata: x.into(), ..Default::default() }, EntityKind::Mesh(m)).unwrap()
+    }
+
+    #[test]
+    fn a_panel_rebuilt_from_its_corrected_record_and_a_tall_one_are_said_so() {
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "L1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0}],
+            "rooms": [{"name": "STUDIO ADA", "number": "705", "level": "L1"}]
+        }))
+        .unwrap();
+        let mut d = Drawing::new_imperial();
+        // Re-made at 24"-48" from its record the rule corrected; its height filled again from a
+        // general note's 6'-6" to its top (66" to its middle).
+        let mut ps = props::Props::default();
+        ps.set("room", Prop::new("705", Source::computed()));
+        ps.set("mount_height", Prop::new(66.0, Source::from_doc(SourceKind::Note, "a general note: PANELS 6'-6\" TO TOP")).with_unit("in"));
+        let said = "prop:SOURCE bottom=A-REACH (a code): in an accessible room (705): measured to its top it would be at 6'-6\", over 4'-0\"";
+        let remade = panel(&mut d, "LP-7", 24.0, 48.0, &[said], &ps);
+        // A distribution panel 50" tall whose service face is in the room.
+        let tall = panel(&mut d, "DP-7", 28.0, 78.0, &[], &ps);
+        let k = keep_within(&mut d, &sp, None, &[]);
+        assert_eq!((k.checked, k.moved(), k.recorded, k.too_tall), (2, 0, 1, 1), "{:?}", k.to_json());
+        let read = |h: Handle| props::read(&d.model.get(h).unwrap().common.xdata);
+        let r = read(remade);
+        assert_eq!(r.get("mount_height").and_then(|p| p.value.as_f64()), Some(36.0), "its height as it stands: {r:?}");
+        assert_eq!(r.get("design:mount_height").and_then(|p| p.value.as_f64()), Some(66.0), "the note's kept beside: {r:?}");
+        assert!(r.get("correction:mount_height").is_some_and(|p| p.text().starts_with("A-REACH")), "{r:?}");
+        let t = read(tall);
+        assert!(t.get(TOO_TALL_KEY).is_some_and(|p| p.text().starts_with("not moved")), "{t:?}");
+        assert_eq!(t.get("mount_height").and_then(|p| p.value.as_f64()), Some(66.0), "left as it is: {t:?}");
+        let EntityKind::Mesh(m) = &d.model.get(tall).unwrap().kind else { panic!("mesh") };
+        assert!(m.vertices.iter().all(|v| v.z >= 28.0 - 1e-9), "not moved");
+        // Again: nothing more to do.
+        let again = keep_within(&mut d, &sp, None, &[]);
+        assert_eq!((again.moved(), again.recorded), (0, 0), "{:?}", again.to_json());
     }
 }
