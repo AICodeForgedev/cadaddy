@@ -51,6 +51,7 @@ mod edit;
 mod edit3d;
 pub mod elemprops;
 mod equipconn;
+mod equipdisc;
 pub mod equipsub;
 pub mod estimate;
 mod exact_ends;

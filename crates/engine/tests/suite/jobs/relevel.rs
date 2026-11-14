@@ -28,6 +28,12 @@ fn rect(s: &mut Session, a: [f64; 2], b: [f64; 2]) {
 /// level's plan drawn `east_ft` east of the one below (0: one over the other). On every level
 /// a supply duct under the ceiling and an exhaust fan at the ceiling.
 fn building(storeys: usize, floor_ft: f64, east_ft: f64) -> Session {
+    building_with(storeys, floor_ft, east_ft, Vec::new())
+}
+
+/// [`building`] with more equipment: `(level, bottom_ft above that level's floor)` each, a
+/// 1' cube at (20', 15') of that level's plan.
+fn building_with(storeys: usize, floor_ft: f64, east_ft: f64, extra: Vec<(&str, f64)>) -> Session {
     let mut s = Session::new();
     let mut levels = Vec::new();
     let mut runs = Vec::new();
@@ -60,7 +66,12 @@ fn building(storeys: usize, floor_ft: f64, east_ft: f64) -> Session {
         "mep": {
             "systems": [{"name": "SUPPLY AIR", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12.0, 8.0], "bottom_ft": floor_ft - 2.5, "duct_type": "supply"}],
             "runs": runs,
-            "equipment": equipment
+            "equipment": equipment.into_iter().chain(extra.iter().enumerate().map(|(i, (level, bottom))| {
+                let n: usize = level.trim_start_matches("Level ").parse().unwrap();
+                let x0 = east_ft * (n - 1) as f64;
+                json!({"tag": format!("XE-{}", i + 1), "kind": "exhaust_fan", "level": level,
+                    "min": ft([x0 + 20.0, 15.0]), "max": ft([x0 + 21.0, 16.0]), "bottom_ft": bottom, "height_ft": 1.0})
+            })).collect::<Vec<_>>()
         }
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
@@ -226,6 +237,8 @@ fn hostile_params_never_panic() {
         json!({"handles": "x", "level": "Level 1"}),
         json!({"handles": [1, null], "level": "Level 1"}),
         json!({"handle": "zz", "level": ""}),
+        json!({"level": "Level 2", "keep_height": "x"}),
+        json!({"level": "Level 2", "keep_height": true}),
     ] {
         let _ = s.execute("bim.level.move", &p);
     }
@@ -244,4 +257,111 @@ fn a_move_override_up_a_storey_is_filed_there_after_every_build() {
     // Rebuilt from the plan: the override is applied again and files it on level 2 again.
     s.execute("model.build", &json!({})).unwrap();
     assert_eq!((on_level(&s, "Equipment", "Level 1").len(), on(&s)), (0, 2), "after the rebuild");
+}
+
+/// The built equipment element whose bottom is `bottom_ft` above the datum.
+fn equipment_at(s: &mut Session, bottom_ft: f64) -> Handle {
+    let all: Vec<Handle> = {
+        let d = s.doc().unwrap();
+        d.model.iter().filter(|e| bimlook::classify(d, e).is_some_and(|c| c.category.contains("Equipment"))).map(|e| e.handle).collect()
+    };
+    let bottoms: Vec<(Handle, f64)> = all.into_iter().map(|h| (h, element(s, h)["bottom_ft"].as_f64().unwrap())).collect();
+    bottoms.iter().find(|(_, b)| (b - bottom_ft).abs() < 0.01).map(|(h, _)| *h).unwrap_or_else(|| panic!("no equipment at {bottom_ft}': {bottoms:?}"))
+}
+
+fn up(s: &mut Session, h: Handle, dz_ft: f64) {
+    s.execute("3dmove", &json!({"handles": [h.hex()], "delta": [0, 0, dz_ft * 12.0]})).unwrap();
+}
+
+/// The `level` property as `bim.props.get` gives it: (value, source kind).
+fn level_prop(s: &mut Session, h: Handle) -> (Value, Value) {
+    let r = s.execute("bim.props.get", &json!({"handle": h.hex()})).unwrap();
+    let p = &r["elements"][0]["props"]["level"];
+    (p["value"].clone(), p["source"]["kind"].clone())
+}
+
+#[test]
+fn an_element_below_the_lowest_floor_stays_on_the_lowest_level_after_moves() {
+    // Q6628: a pit device under the lowest floor, moved up or down inside the pit, was filed a
+    // storey up (its height was taken as if it stood on its floor before the move was added).
+    let mut s = building(2, 10.0, 0.0);
+    let fan = *on_level(&s, "Equipment", "Level 1").first().unwrap();
+    let b0 = element(&mut s, fan)["bottom_ft"].as_f64().unwrap();
+    up(&mut s, fan, -12.0 - b0);
+    assert_eq!(element(&mut s, fan)["level"], json!("Level 1"), "12' under the lowest floor");
+    up(&mut s, fan, 10.0);
+    let e = element(&mut s, fan);
+    assert!((e["bottom_ft"].as_f64().unwrap() + 2.0).abs() < 0.01, "{e}");
+    assert_eq!(e["level"], json!("Level 1"), "2' under the lowest floor, in the pit: still the lowest level: {e}");
+    up(&mut s, fan, 0.5);
+    assert_eq!(element(&mut s, fan)["level"], json!("Level 1"));
+    // Out of the pit, up a storey: on level 2.
+    up(&mut s, fan, 13.0);
+    assert_eq!(element(&mut s, fan)["level"], json!("Level 2"));
+}
+
+#[test]
+fn a_pit_element_filed_a_storey_up_moves_to_the_lowest_level_and_stays() {
+    // The reproduction: a device 2' under the lowest floor filed under level 2;
+    // bim.level.move to level 1; back at -2'; its level is level 1.
+    let mut s = building_with(2, 10.0, 0.0, vec![("Level 2", -12.0)]);
+    let pit = equipment_at(&mut s, -2.0);
+    assert_eq!(element(&mut s, pit)["level"], json!("Level 2"), "the build filed it under level 2");
+    let r = s.execute("bim.level.move", &json!({"handles": [pit.hex()], "level": "Level 1"})).unwrap();
+    assert_eq!((r["moved"].clone(), r["filed"].clone()), (json!(1), json!(1)), "standing in level 1's band: only filed there: {r}");
+    let bottom = element(&mut s, pit)["bottom_ft"].as_f64().unwrap();
+    if (bottom + 2.0).abs() > 0.01 {
+        up(&mut s, pit, -2.0 - bottom);
+    }
+    let e = element(&mut s, pit);
+    assert!((e["bottom_ft"].as_f64().unwrap() + 2.0).abs() < 0.01, "{e}");
+    assert_eq!(e["level"], json!("Level 1"), "{e}");
+    assert_eq!(level_prop(&mut s, pit), (json!("Level 1"), json!("user")), "the person's choice, kept as theirs");
+    assert!(e.get("level_conflict").is_none(), "{e}");
+    // Moved about in the pit, it stays on level 1.
+    up(&mut s, pit, 0.75);
+    up(&mut s, pit, -0.75);
+    assert_eq!(element(&mut s, pit)["level"], json!("Level 1"));
+    // keep_height files without moving, whatever the band.
+    let r = s.execute("bim.level.move", &json!({"handles": [pit.hex()], "level": "Level 2", "keep_height": true})).unwrap();
+    assert_eq!(r["moved"], json!(1), "{r}");
+    let e = element(&mut s, pit);
+    assert_eq!(e["level"], json!("Level 2"));
+    assert!((e["bottom_ft"].as_f64().unwrap() + 2.0).abs() < 0.01, "not moved: {e}");
+}
+
+#[test]
+fn an_overrun_element_above_the_top_floor_is_on_the_top_level_after_a_move() {
+    // A hoistway-top device 31' above the datum (top floor at 20', its band ending at 30'),
+    // filed by the build under level 2: lowered a foot it is on level 3, the top level whose
+    // floor is the highest one under it, not clamped into level 2's band.
+    let mut s = building_with(3, 10.0, 0.0, vec![("Level 2", 21.0)]);
+    let top = equipment_at(&mut s, 31.0);
+    assert_eq!(element(&mut s, top)["level"], json!("Level 2"));
+    up(&mut s, top, -1.0);
+    assert_eq!(element(&mut s, top)["level"], json!("Level 3"));
+    up(&mut s, top, 0.5);
+    assert_eq!(element(&mut s, top)["level"], json!("Level 3"));
+}
+
+#[test]
+fn a_level_a_person_chose_is_kept_when_the_element_moves() {
+    let mut s = building(3, 10.0, 0.0);
+    let duct = *on_level(&s, "Duct", "Level 1").first().unwrap();
+    let r = s.execute("bim.level.move", &json!({"handles": [duct.hex()], "level": "Level 2"})).unwrap();
+    assert_eq!((r["moved"].clone(), r["filed"].clone()), (json!(1), json!(0)), "raised a storey: {r}");
+    assert_eq!(level_prop(&mut s, duct), (json!("Level 2"), json!("user")));
+    // Lowered under level 2's floor by hand: the person's level stays.
+    up(&mut s, duct, -3.0);
+    assert_eq!(element(&mut s, duct)["level"], json!("Level 2"), "a chosen level is not recomputed");
+    // A copy of it moved up a storey is filed by where it stands; the choice was the original's.
+    let copy = copy_up(&mut s, duct, 10.0);
+    let c = element(&mut s, copy);
+    assert_eq!(c["level"], json!("Level 3"), "the copy stands at 24.5', in level 3's band: {c}");
+    assert!(c.get("level_conflict").is_none(), "{c}");
+    assert_eq!(level_prop(&mut s, copy).1, json!("computed"));
+    // An element not chosen still follows a storey move.
+    let fan = *on_level(&s, "Equipment", "Level 1").first().unwrap();
+    up(&mut s, fan, 10.0);
+    assert_eq!(element(&mut s, fan)["level"], json!("Level 2"));
 }

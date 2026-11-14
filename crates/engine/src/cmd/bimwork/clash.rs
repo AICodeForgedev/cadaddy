@@ -18,6 +18,7 @@ use cadaddy_doc::{Drawing, EntityKind, Handle};
 use cadaddy_geom::Vec3;
 use serde_json::{Value, json};
 
+use super::construction::{self, Normal};
 use super::framing;
 use super::{El, elements, frame, picks, r3, selector, set_state, state, units_per_foot, viewpoint};
 use crate::cmd::{CommandSpec, bad, bool_or, str_param};
@@ -58,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Clash Check", run)
             .alias(&["clash"])
-            .params("{a?: trade|category|system (or a list; e.g. electrical, duct, \"M-*\"; default every trade against the others), b?: same (default everything else), tolerance?: inches (overlaps up to it ignored, default 0.5), clearance?: inches (also report elements closer than it), group_by?: pair|area|level (default pair), hosted?: bool (devices/doors/windows in walls too; default false)} → {clashes: [{id, kind: hard|clearance, status: new|active|resolved, a, b, level, area, at, depth_in, viewpoint: {eye, target}, framing?: {verdict: conflict, why, rule, source, hole_in, max_hole_in, from_end_ft, member}}], groups: [{key, count, ids}], total, new, active, resolved: [ids gone since the last run], tested, run, framing: {members, tested, hits, allowed, conflicts, note?}, bores: [the MEP through framing members (studs, joists, I-joists, trusses: `framing`, `joists`, `structure`) by the member's hole rules: {verdict: allowed, why, rule, source, hole_in, max_hole_in, a, b, member, level, at}]}")
+            .params("{a?: trade|category|system (or a list; e.g. electrical, duct, \"M-*\"; default every trade against the others), b?: same (default everything else), tolerance?: inches (overlaps up to it ignored, default 0.5), clearance?: inches (also report elements closer than it), group_by?: pair|area|level (default pair), hosted?: bool (devices/doors/windows in walls and normal construction too; default false)} → {clashes: [{id, kind: hard|clearance, status: new|active|resolved, a, b, level, area, at, depth_in, viewpoint: {eye, target}, why?, framing?: {verdict: conflict, why, rule, source, hole_in, max_hole_in, from_end_ft, member}}], groups: [{key, count, ids}], total, new, active, resolved: [ids gone since the last run], tested, run, framing: {members, tested, hits, allowed, conflicts, note?}, bores: [the MEP through framing members (studs, joists, I-joists, trusses: `framing`, `joists`, `structure`) by the member's hole rules: {verdict: allowed, why, rule, source, hole_in, max_hole_in, a, b, member, level, at}], penetrations: [the runs through or into a wall, floor, roof or ceiling and the through-wall units, no clashes: {kind: through|into|unit, a, b, level, at, size_in, firestop, seal, sleeve, rating?, source}], normal: {in_cavity, recessed, in_gear, hosted, attached, penetrations, note} (normal construction left out: a run in its wall's or floor's cavity, gear recessed in its wall as its data says, breakers in their panel, supports, devices in casework)}")
             .noundo(),
         CommandSpec::new(CMD_STATUS, "Clash Status", run_status).params("{id, status: new|active|resolved, note?} → {id, status}").noundo(),
         CommandSpec::new(CMD_FIX, "Fix Clash", run_fix)
@@ -68,11 +69,11 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ---------------- geometry ----------------
 
-type Tri = [Vec3; 3];
+pub(super) type Tri = [Vec3; 3];
 
 /// An element's faces as triangles (its box's when it has too many), and whether they close a
 /// volume (every edge shared by two faces): only a closed mesh has an inside.
-fn triangles(d: &Drawing, h: Handle, lo: Vec3, hi: Vec3) -> (Vec<Tri>, bool) {
+pub(super) fn triangles(d: &Drawing, h: Handle, lo: Vec3, hi: Vec3) -> (Vec<Tri>, bool) {
     let mut out = Vec::new();
     let mut closed = false;
     if let Some(e) = d.entity(h)
@@ -124,7 +125,7 @@ fn boxes_meet(a: (Vec3, Vec3), b: (Vec3, Vec3), pad: f64) -> bool {
 }
 
 /// Does the segment `p`–`q` pass through the triangle's inside (Möller–Trumbore)?
-fn seg_tri(p: Vec3, q: Vec3, t: &Tri) -> bool {
+pub(super) fn seg_tri(p: Vec3, q: Vec3, t: &Tri) -> bool {
     let [a, b, c] = *t;
     let dir = q - p;
     let (e1, e2) = (b - a, c - a);
@@ -157,7 +158,7 @@ fn tri_tri(a: &Tri, b: &Tri) -> bool {
 }
 
 /// Is `p` inside the closed mesh `tris` (a ray's crossings, odd)?
-fn inside(p: Vec3, tris: &[Tri], far: f64) -> bool {
+pub(super) fn inside(p: Vec3, tris: &[Tri], far: f64) -> bool {
     // A slightly skewed ray, so it doesn't run along the edges of axis-aligned faces.
     let q = p + Vec3::new(far, far * 0.000_731, far * 0.000_377);
     tris.iter().filter(|t| seg_tri(p, q, t)).count() % 2 == 1
@@ -274,6 +275,27 @@ struct Found {
     b: El,
     at: Vec3,
     depth: f64,
+    /// Why it is a conflict, where the geometry alone doesn't say (a recessed can deeper than its
+    /// wall).
+    why: Option<String>,
+}
+
+/// A pair the geometry found that is normal construction (Q6621): the building's element, the
+/// other one, and where they meet.
+struct Kept {
+    kind: Normal,
+    host: El,
+    guest: El,
+    at: Vec3,
+}
+
+/// What [`detect`] found: the clashes, the normal construction left out, the pairs tested and
+/// of them those with a framing member.
+struct Detected {
+    found: Vec<Found>,
+    kept: Vec<Kept>,
+    tested: usize,
+    tested_framing: usize,
 }
 
 /// Whether each trade against the others leaves the pair alone as one trade's own: a pipe and a
@@ -284,9 +306,10 @@ fn same_trade(e: &El, o: &El) -> bool {
     e.trade == o.trade && !(run(e) && run(o) && e.category != o.category)
 }
 
-/// Every clash between the elements `a` picks and those `b` picks; the pairs tested, and of them
-/// those with a framing member.
-fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f64, clearance: f64, hosted: bool) -> (Vec<Found>, usize, usize) {
+/// Every clash between the elements `a` picks and those `b` picks, and the normal construction
+/// among the pairs (`hosted`: none, every pair a clash).
+fn detect(d: &Drawing, els: &[El], sel: (&[String], Option<&[String]>), tol: f64, clearance: f64, hosted: bool, ctx: &construction::Ctx) -> Detected {
+    let (sa, sb) = sel;
     // Everything with nothing named against it: each trade against the others.
     let cross = sb.is_none() && sa.iter().any(|x| matches!(x.trim(), "*" | "all" | "any"));
     let in_a: Vec<bool> = els.iter().map(|e| picks(sa, e)).collect();
@@ -299,6 +322,8 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
         x.total_cmp(&y)
     });
     let mut out = Vec::new();
+    let mut kept: Vec<Kept> = Vec::new();
+    let mut kept_keys: BTreeMap<(String, Handle, Normal), usize> = BTreeMap::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut run_pairs: BTreeMap<String, usize> = BTreeMap::new();
     let mut cache: BTreeMap<Handle, (Vec<Tri>, bool)> = BTreeMap::new();
@@ -345,7 +370,37 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
                 let hi = Vec3::new(x.hi.x.min(y.hi.x), x.hi.y.min(y.hi.y), x.hi.z.min(y.hi.z));
                 let depth = (hi.x - lo.x).min(hi.y - lo.y).min(hi.z - lo.z);
                 seen.insert(id.clone());
-                let f = Found { id, hard, a: x.clone(), b: y.clone(), at: (lo + hi) * 0.5, depth };
+                let at = (lo + hi) * 0.5;
+                // Normal construction is no clash (Q6621): kept once per run (or element) and
+                // assembly; the run's other pieces are still tested against it.
+                let verdict = if hosted { None } else { ctx.judge(d, x, y, Vec3::ZERO, &mut cache) };
+                let why = match verdict {
+                    Some(construction::Verdict::Normal { kind, host }) => {
+                        let (h, g) = if x.handle == host { (x, y) } else { (y, x) };
+                        let k = Kept { kind, host: h.clone(), guest: g.clone(), at };
+                        let key = (side(g), h.handle, kind);
+                        match kept_keys.get(&key).copied() {
+                            // Named by a stick of its run where one meets it (not its wire).
+                            Some(i) => {
+                                if let Some(old) = kept.get_mut(i)
+                                    && stick(g)
+                                    && !stick(&old.guest)
+                                {
+                                    *old = k;
+                                }
+                            }
+                            None if kept.len() < MAX_CLASHES => {
+                                kept_keys.insert(key, kept.len());
+                                kept.push(k);
+                            }
+                            None => {}
+                        }
+                        continue;
+                    }
+                    Some(construction::Verdict::Conflict(why)) => Some(why),
+                    None => None,
+                };
+                let f = Found { id, hard, a: x.clone(), b: y.clone(), at, depth, why };
                 match had.and_then(|k| out.get_mut(k)) {
                     Some(old) => *old = f,
                     None => {
@@ -359,7 +414,7 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
         }
         active.push(i);
     }
-    (out, tested, tested_framing)
+    Detected { found: out, kept, tested, tested_framing }
 }
 
 /// What the framing check needs: the members' hole rules, the router's I-joist and truss rules,
@@ -439,6 +494,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let hosted = bool_or(p, "hosted", false);
     let fctx = FramingCtx::of(s, inch);
+    let cctx = construction::Ctx::of(s, CMD, inch);
     let d = s.doc()?;
     let els = solid_elements(d);
     if els.is_empty() {
@@ -446,7 +502,17 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "bim.clash: the drawing has no built model to check: build it first (model.build or bim.build)".into(),
         ));
     }
-    let (found, tested, tested_framing) = detect(d, &els, &sa, sb.as_deref(), tol, clearance, hosted);
+    let Detected { found, kept, tested, tested_framing } = detect(d, &els, (&sa, sb.as_deref()), tol, clearance, hosted, &cctx);
+    // Normal construction (Q6621): counted by what it is, the penetrations listed with their
+    // sleeve and seal.
+    let mut normal: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut penetrations = Vec::new();
+    for k in &kept {
+        *normal.entry(if k.kind.is_penetration() { "penetrations" } else { k.kind.key() }).or_insert(0) += 1;
+        if k.kind.is_penetration() {
+            penetrations.push(cctx.penetration(d, k.kind, &k.host, &k.guest, k.at));
+        }
+    }
     // The framing hits, judged by the member's hole rules: an allowed bore is not a clash; a
     // member a run only comes near (hung from it, strapped to it) is no clash either.
     let members = els.iter().filter(|e| framing::is_member(e)).count();
@@ -514,6 +580,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if !note.is_empty() {
             c["note"] = json!(note);
         }
+        if let Some(why) = &f.why {
+            c["message"] = json!(format!("{} runs into {}: {why}", f.a.category, f.b.category));
+            c["why"] = json!(why);
+        }
         if let Some(v) = verdicts.get(&f.id) {
             c["message"] = json!(format!("{} {} {}: {}", f.a.category, "runs into", f.b.category, v["why"].as_str().unwrap_or_default()));
             c["framing"] = v.clone();
@@ -563,8 +633,22 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "clashes": clashes, "groups": groups, "total": found.len(), "new": n_new, "active": n_active, "resolved": resolved,
         "tested": tested, "elements": els.len(), "run": run_no, "a": sa, "b": sb.unwrap_or_else(|| vec!["everything else".into()]),
-        "framing": fr, "bores": bores,
+        "framing": fr, "bores": bores, "penetrations": penetrations, "normal": normal_summary(&normal, hosted),
     }))
+}
+
+/// The normal construction left out of the clashes, by what it is.
+fn normal_summary(n: &BTreeMap<&str, usize>, hosted: bool) -> Value {
+    let get = |k: &str| n.get(k).copied().unwrap_or(0);
+    json!({
+        "in_cavity": get("in_cavity"), "recessed": get("recessed"), "in_gear": get("in_gear"), "hosted": get("hosted"),
+        "attached": get("attached"), "penetrations": get("penetrations"),
+        "note": if hosted {
+            "hosted: every pair is reported as a clash, normal construction too"
+        } else {
+            "normal construction is not a clash: runs in their assembly's cavity, gear recessed in its wall as its data says, breakers in their panel, supports, devices in casework; penetrations are listed with their sleeve and seal (hosted: true reports them as clashes)"
+        },
+    })
 }
 
 /// The stored record of clash `id` (the last run that has it) and its run key.
@@ -633,6 +717,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
     let upf = units_per_foot(s);
     let inch = upf / 12.0;
     let fctx = FramingCtx::of(s, inch);
+    let cctx = construction::Ctx::of(s, CMD_FIX, inch);
     let clr = p.get("clearance_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(1.0).min(120.0) * inch;
     let max_move = p.get("max_move_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(24.0).min(1_200.0) * inch;
     let d = s.doc()?;
@@ -713,7 +798,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
         let new_clashes = others
             .iter()
             .filter(|o| boxes_meet((moved.lo, moved.hi), (o.lo, o.hi), 0.0) && !exempt(&moved, o, false))
-            .filter(|o| meet(d, &moved, o, 0.5 * inch, 0.0, &mut cache) == Some(true))
+            .filter(|o| meet(d, &moved, o, 0.5 * inch, 0.0, &mut cache) == Some(true) && !is_normal(&cctx, d, &moved, o, *mv, &mut cache))
             .filter(|o| framing_conflict(&fctx, d, o, &mover, *mv))
             .count();
         cache.remove(&mover.handle);
@@ -774,7 +859,7 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
             .iter()
             .filter(|o| o.handle != moved.handle && !(o.system == moved.system && !o.system.is_empty() && o.trade == moved.trade))
             .filter(|o| boxes_meet((moved.lo, moved.hi), (o.lo, o.hi), 0.0) && !exempt(&moved, o, false))
-            .filter(|o| meet(d, &moved, o, 0.5 * inch, 0.0, &mut cache) == Some(true))
+            .filter(|o| meet(d, &moved, o, 0.5 * inch, 0.0, &mut cache) == Some(true) && !is_normal(&cctx, d, &moved, o, Vec3::ZERO, &mut cache))
             .filter(|o| framing_conflict(&fctx, d, o, &moved, Vec3::ZERO))
             .map(|o| o.handle.hex())
             .collect::<Vec<_>>();
@@ -801,6 +886,11 @@ fn framing_conflict(fctx: &FramingCtx, d: &Drawing, o: &El, r: &El, shift: Vec3)
         Some((m, x)) if framing::is_member(m) => !fctx.judge(d, m, x, shift).1.allowed,
         _ => true,
     }
+}
+
+/// Is `r` (moved by `shift`) meeting `o` normal construction (Q6621), no clash?
+fn is_normal(cctx: &construction::Ctx, d: &Drawing, r: &El, o: &El, shift: Vec3, cache: &mut BTreeMap<Handle, (Vec<Tri>, bool)>) -> bool {
+    matches!(cctx.judge(d, r, o, shift, cache), Some(construction::Verdict::Normal { .. }))
 }
 
 fn feet_in(inches: f64) -> String {

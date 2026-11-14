@@ -8281,7 +8281,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 // The guest rooms the plumbing plans don't show take the fixture set of a room of
                 // their type that the plans do.
-                let (fixture_copies, fixture_report) = copy_room_fixtures(s.doc()?, job, &out);
+                let fixture_kinds: BTreeMap<String, String> =
+                    schedule.as_ref().map(|sch| sch.rows.iter().map(|r| (r.tag.trim().to_string(), r.fixture.clone())).collect()).unwrap_or_default();
+                let (fixture_copies, fixture_report) = copy_room_fixtures(s.doc()?, job, &out, &stamped, &fixture_kinds);
                 if !fixture_copies.is_empty() {
                     progress_line(&format!("  plumbing fixtures laid into the rooms of their type: {} ({fixture_report:?})", fixture_copies.len()));
                     stamped.extend(fixture_copies);
@@ -9841,8 +9843,47 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // A storey with more walls than it can hold is reading casework, equipment or repeated
     // linework as walls (Q6583): a high finding, always asked before the takeoff prices them.
     overbuilt_walls_check(s, job, &mut result)?;
+    // A storey whose rooms cover far less than its floor: rooms built to their casework, or left
+    // out (Q6487).
+    under_roomed_check(s, job, &mut result)?;
     bim_step(s, job, "wall plausibility", t);
     Ok(result)
+}
+
+/// The storeys whose built rooms cover far less than their floor
+/// ([`super::wallcheck::under_roomed_levels`]): each a finding, with the numbers.
+fn under_roomed_check(s: &Session, job: &mut GuidedJob, result: &mut Value) -> Result<()> {
+    use super::wallcheck as wc;
+    let d = s.doc()?;
+    let upf = super::elemprops::units_per_foot(d);
+    let rooms: Vec<(String, f64)> = super::bspec::room_elements(d).into_iter().map(|r| (r.level, r.area_sf)).collect();
+    let floors: Vec<(String, wc::PlanBox)> =
+        super::bimwork::elements(d).iter().filter(|e| e.category == "floor").map(|e| (e.level.clone(), [e.lo.x, e.lo.y, e.hi.x, e.hi.y])).collect();
+    let mut said = Vec::new();
+    for u in wc::under_roomed_levels(&rooms, &floors, upf).iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let what = format!(
+            "{}: its rooms cover {:.0} sq ft of its {:.0} sq ft floor ({:.0}%)",
+            u.level,
+            u.rooms_sq_ft,
+            u.floor_sq_ft,
+            100.0 * u.rooms_sq_ft / u.floor_sq_ft
+        );
+        progress_line(&format!("  rooms far short of their floor: {what}"));
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Rooms far short of the floor: {what}"),
+            "A building's rooms are most of its floor (rules data wallcheck.json min_room_share): rooms this much smaller were traced to casework or equipment read as walls, or rooms on the plan were not built",
+            3,
+            vec!["Check the level's walls (wallgen.plan) and room tags (rooms.list)".into()],
+            None,
+            false,
+        );
+        said.push(json!({"level": u.level, "rooms_sq_ft": u.rooms_sq_ft.round(), "floor_sq_ft": u.floor_sq_ft.round()}));
+    }
+    if !said.is_empty() {
+        result["levels_under_roomed"] = json!(said);
+    }
+    Ok(())
 }
 
 /// The storeys whose built walls total more than they can hold ([`super::wallcheck::overbuilt_levels`]):
@@ -17253,13 +17294,18 @@ fn typical_views(
 /// its rooms of the type), laid in the way a typical view of that type goes into each of the two
 /// (turned and mirrored as each room is). A floor whose plans letter no room of the type takes,
 /// room by room, the fixtures of the room it stacks with on another floor ([`room_stacking`]: the
-/// same type at the same place), marked derived with the basis; a room that stacks with none
-/// takes none. Another floor's set never goes into a room. `placed`: the devices put onto the
-/// plans. The copies, and per type how many rooms.
+/// same type and about its size at the same place), marked derived with the basis; a room that
+/// stacks with none takes none. Another floor's set never goes into a room. A room never takes a
+/// fixture of a kind it holds already ([`RoomFixtures`]: the plans' and `already`'s, the typical
+/// views' copies; by its schedule family in `names`, tag → fixture, else its tag), and a derived
+/// one never goes within the rules' clearance of one of its kind there. `placed`: the devices put
+/// onto the plans. The copies, and per type how many rooms.
 fn copy_room_fixtures(
     d: &cadaddy_doc::Drawing,
     job: &GuidedJob,
     placed: &[super::readers::ReadDevice],
+    already: &[super::readers::ReadDevice],
+    names: &BTreeMap<String, String>,
 ) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>) {
     let mut out = Vec::new();
     let mut report: BTreeMap<String, usize> = BTreeMap::new();
@@ -17297,13 +17343,17 @@ fn copy_room_fixtures(
         .collect();
     let views = typical_views(d, job, &types, &vocabulary, upf);
     let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let fill = super::waterfill::rules();
+    let plumbing = |dv: &&super::readers::ReadDevice| dv.kind == "plumbing fixture" || dv.kind == "plumbing stack";
+    let present: Vec<&super::readers::ReadDevice> = fixtures.iter().copied().chain(already.iter().filter(plumbing)).collect();
+    let held = RoomFixtures::new(&rooms, &room_boxes, &present, names, fill.room_own_reach_ft.max(0.0) * upf);
+    let clear = fill.stack_clear_ft.max(0.0) * upf;
     let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
     let fit = |vi: &([f64; 4], Vec<cadaddy_geom::Vec2>), ri: usize| {
         let b = room_boxes.get(ri)?;
         rigid_room_fit(&vi.1, vi.0, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
     };
     // The rooms each room stacks with on the other floors (rules data's order: below, then above).
-    let fill = super::waterfill::rules();
     let stacking = room_stacking(&rooms, upf, &fill.stack_on);
     for words in &types {
         let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
@@ -17364,8 +17414,8 @@ fn copy_room_fixtures(
             for (p, f) in set {
                 let Some(at) = place_in_room(*p, v.0, b, fit_t) else { continue };
                 // The set is one of each tag: a room with that tag already (where the plans put it,
-                // however its fit lays the set in) takes none.
-                if have.iter().any(|h| h.tag == f.tag) {
+                // however its fit lays the set in, or a typical view's copy) takes none.
+                if have.iter().any(|h| h.tag == f.tag) || held.has_tag(ri, &f.tag) {
                     continue;
                 }
                 mine.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
@@ -17381,6 +17431,7 @@ fn copy_room_fixtures(
         // and marked derived. A room that stacks with none takes none: another floor's room
         // elsewhere is not its.
         let mut stacked = 0usize;
+        let mut own_kept = 0usize;
         let mut alone: Vec<String> = Vec::new();
         for ri in of_type.iter().copied() {
             let Some((name, level, _, number)) = rooms.get(ri) else { continue };
@@ -17406,11 +17457,18 @@ fn copy_room_fixtures(
             );
             let mut added = false;
             for f in theirs {
-                if have.iter().any(|h| h.tag == f.tag) || out.len() >= MAX_STAMPED {
+                if out.len() >= MAX_STAMPED {
+                    break;
+                }
+                let at = [f.at[0] + off[0], f.at[1] + off[1]];
+                // A room holding one of its kind (its own plan's, its bath's beside its traced
+                // area, a typical view's) takes none, nor one beside one of its kind there.
+                if have.iter().any(|h| h.tag == f.tag) || held.has_kind(ri, &f.tag) || held.near(ri, level, &f.tag, at, clear) {
+                    own_kept += 1;
                     continue;
                 }
                 out.push(super::readers::ReadDevice {
-                    at: [f.at[0] + off[0], f.at[1] + off[1]],
+                    at,
                     level: level.clone(),
                     room: stamped_room(name, number, ri),
                     derived: basis.clone(),
@@ -17436,11 +17494,115 @@ fn copy_room_fixtures(
         if stacked > 0 {
             report.insert(format!("{label}: rooms derived from the room they stack with on another floor"), stacked);
         }
+        if own_kept > 0 {
+            report.insert(format!("{label}: fixtures not derived, the room holds one of their kind ({})", fill.stack_clear_basis), own_kept);
+        }
         if !alone.is_empty() {
             report.insert(format!("{label}: rooms no plan of their floor furnishes and that stack with none, left as drawn: {alone:?}"), 0);
         }
     }
     (out, report)
+}
+
+/// The plumbing fixtures already in each room, for [`copy_room_fixtures`]: each fixture is the
+/// room's it is booked to, else the one its outline holds, else the nearest room of its storey
+/// within `reach` (drawing units; its bath beside the area its tag traced); one in none within
+/// reach is no room's. Their kinds: the family its schedule row's fixture name is
+/// ([`super::fixturefit::family_of`]), else its tag written plain (`WC-1`, `WC 1`, `wc1` one).
+struct RoomFixtures {
+    /// Per room: the kinds and the plain tags it holds.
+    kinds: Vec<BTreeSet<String>>,
+    tags: Vec<BTreeSet<String>>,
+    /// Per storey and kind: where the fixtures are, and the room each is booked to or inside of
+    /// (one only nearest a room is no room's here: the clearance holds round it for every room).
+    spots: BTreeMap<(String, String), Vec<([f64; 2], Option<usize>)>>,
+    /// The schedule's fixture kinds by plain tag.
+    named: BTreeMap<String, String>,
+}
+
+impl RoomFixtures {
+    fn new(rooms: &[JobRoom], boxes: &[[f64; 4]], present: &[&super::readers::ReadDevice], names: &BTreeMap<String, String>, reach: f64) -> Self {
+        let rules = super::fixturefit::rules();
+        let named: BTreeMap<String, String> = names
+            .iter()
+            .filter_map(|(tag, fixture)| {
+                let (i, _) = super::fixturefit::family_of(rules, fixture)?;
+                Some((plain_tag(tag), format!("family {i}")))
+            })
+            .collect();
+        let mut out = Self { kinds: vec![BTreeSet::new(); rooms.len()], tags: vec![BTreeSet::new(); rooms.len()], spots: BTreeMap::new(), named };
+        let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+        let mut by_storey: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (i, (_, level, _, _)) in rooms.iter().enumerate() {
+            by_storey.entry(digits(level)).or_default().push(i);
+        }
+        for f in present {
+            let storey = digits(&f.level);
+            let on = by_storey.get(&storey).map_or(&[][..], Vec::as_slice);
+            let p = cadaddy_geom::Vec2::new(f.at[0], f.at[1]);
+            let firm = rooms_get(rooms, on, |i, (name, _, _, number)| !f.room.trim().is_empty() && stamped_room(name, number, i) == f.room)
+                .or_else(|| rooms_get(rooms, on, |_, (_, _, outline, _)| cadaddy_geom::point_in_polygon(outline, p)));
+            let room = firm.or_else(|| {
+                on.iter()
+                    .filter_map(|i| {
+                        let b = boxes.get(*i)?;
+                        let d = (b[0] - p.x).max(p.x - b[2]).max(0.0).hypot((b[1] - p.y).max(p.y - b[3]).max(0.0));
+                        (d <= reach).then_some((d, *i))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, i)| i)
+            });
+            let kind = out.kind(&f.tag);
+            if let Some(r) = room {
+                if let Some(k) = out.kinds.get_mut(r) {
+                    k.insert(kind.clone());
+                }
+                if let Some(t) = out.tags.get_mut(r) {
+                    t.insert(plain_tag(&f.tag));
+                }
+            }
+            let list = out.spots.entry((storey, kind)).or_default();
+            if list.len() < MAX_STAMPED {
+                list.push((f.at, firm));
+            }
+        }
+        out
+    }
+
+    /// A tag's kind: its schedule family, else the tag written plain.
+    fn kind(&self, tag: &str) -> String {
+        let plain = plain_tag(tag);
+        self.named.get(&plain).cloned().unwrap_or(plain)
+    }
+
+    /// Whether room `ri` holds a fixture of the tag (written plain).
+    fn has_tag(&self, ri: usize, tag: &str) -> bool {
+        self.tags.get(ri).is_some_and(|t| t.contains(&plain_tag(tag)))
+    }
+
+    /// Whether room `ri` holds a fixture of the tag's kind.
+    fn has_kind(&self, ri: usize, tag: &str) -> bool {
+        self.kinds.get(ri).is_some_and(|k| k.contains(&self.kind(tag)))
+    }
+
+    /// Whether a fixture of the tag's kind lies within `clear` of `at` on `level`'s storey, in
+    /// room `ri` or in no room.
+    fn near(&self, ri: usize, level: &str, tag: &str, at: [f64; 2], clear: f64) -> bool {
+        let storey: String = level.chars().filter(char::is_ascii_digit).collect();
+        self.spots
+            .get(&(storey, self.kind(tag)))
+            .is_some_and(|v| v.iter().any(|(p, room)| room.is_none_or(|r| r == ri) && (p[0] - at[0]).hypot(p[1] - at[1]) <= clear))
+    }
+}
+
+/// The first of the rooms `on` (places in `rooms`) that `hit` takes.
+fn rooms_get(rooms: &[JobRoom], on: &[usize], hit: impl Fn(usize, &JobRoom) -> bool) -> Option<usize> {
+    on.iter().copied().find(|i| rooms.get(*i).is_some_and(|r| hit(*i, r)))
+}
+
+/// A fixture tag written plain: its letters and digits, upper case (`wc-1`, `WC 1` are `WC1`).
+fn plain_tag(tag: &str) -> String {
+    tag.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect()
 }
 
 /// The pieces of a polyline inside a region (`inside`) that hold one of its ends, cut where it
@@ -41375,7 +41537,7 @@ mod tests {
             fixture("WC-1", "Level 4", [30_020.0, 40.0], "P-371/4"),
             fixture("SK-1", "Level 4", [30_100.0, 200.0], "P-371/4"),
         ];
-        let (copies, report) = copy_room_fixtures(s.doc().unwrap(), &job, &placed);
+        let (copies, report) = copy_room_fixtures(s.doc().unwrap(), &job, &placed, &[], &BTreeMap::new());
         let mut got: Vec<(String, String, bool)> = copies.iter().map(|c| (c.room.clone(), c.tag.clone(), !c.derived.is_empty())).collect();
         got.sort();
         let mut want: Vec<(String, String, bool)> = [
@@ -41406,6 +41568,99 @@ mod tests {
         assert!((w.at[0] - 50_100.0).abs() < 1e-6 && (w.at[1] - 200.0).abs() < 1e-6, "{:?}", w.at);
         assert_eq!((w.level.as_str(), w.sheet.as_str()), ("6", "P-371/4"));
         assert!(w.derived.starts_with("derived from 4: room 471") && w.derived.contains("trade practice"), "{}", w.derived);
+    }
+
+    /// Q6629: four stacked floors of one unit plan (TWIN SUITE, 144 x 288), every floor's
+    /// plumbing plan drawing its rooms' fixtures and no typical view of the type, so each room
+    /// goes by the room it stacks with. Floor 3's tag of one room is misread (`B12`). A room's
+    /// own fixtures, wherever the build has them, keep the stack's copies out: floor 2's baths
+    /// lie beside the area their tags traced (no room's outline holds them), floor 4's first
+    /// room has its set from a typical view's stamping, its second its plan's tags written
+    /// otherwise (`LAV 1`) or a water closet of another tag. Where floors 2 and 4 have their
+    /// third unit, floor 3 has a closet its plan tags with the unit's name: no unit is derived
+    /// from it. Those two units, no plan furnishing them, take the set of floor 5's unit they
+    /// stack with, never within 3 ft of one drawn.
+    #[test]
+    fn a_stacked_room_takes_no_fixture_of_a_kind_it_holds() {
+        let s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let fixture = |tag: &str, level: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            level: level.into(),
+            sheet: format!("P-10{level}"),
+            kind: "plumbing fixture".into(),
+            handle: format!("{tag}@{}", at[0]),
+            ..Default::default()
+        };
+        let room = |number: &str, level: &str, x: f64, y0: f64| json!({"name": "TWIN SUITE", "number": number, "level": level, "outline": [[x, y0], [x + 144.0, y0], [x + 144.0, 288], [x, 288]]});
+        let set = |level: &str, x: f64, bath_y: f64| {
+            vec![fixture("WC-1", level, [x + 20.0, bath_y]), fixture("LAV-1", level, [x + 100.0, bath_y]), fixture("SK-1", level, [x + 100.0, 200.0])]
+        };
+        let (two, three, four, five) = (0.0, 20_000.0, 40_000.0, 60_000.0);
+        let mut rooms = Vec::new();
+        let mut placed = Vec::new();
+        let mut already = Vec::new();
+        // Floor 3: the source, each unit's set inside its outline; its first room's tag misread.
+        for (n, k) in [("B12", 0.0), ("372", 200.0)] {
+            rooms.push(room(n, "3", three + 10_000.0 + k, 0.0));
+            placed.extend(set("Level 3", three + 10_000.0 + k, 40.0));
+        }
+        // ... and a closet its plan names like the unit (40 x 60), with a mop sink, where floor 2's
+        // and 4's third unit stands.
+        let c = [three + 10_472.0, 144.0];
+        rooms.push(json!({"name": "TWIN SUITE", "number": "3C", "level": "3",
+            "outline": [[c[0] - 20.0, c[1] - 30.0], [c[0] + 20.0, c[1] - 30.0], [c[0] + 20.0, c[1] + 30.0], [c[0] - 20.0, c[1] + 30.0]]}));
+        placed.push(fixture("MS-1", "Level 3", c));
+        // Floor 5: three units, each with its set.
+        for (n, k) in [("571", 0.0), ("572", 200.0), ("573", 400.0)] {
+            rooms.push(room(n, "5", five + 10_000.0 + k, 0.0));
+            placed.extend(set("Level 5", five + 10_000.0 + k, 40.0));
+        }
+        // Floor 2: the units traced short of their bath (y 36 up), the bath drawn below it.
+        for (n, k) in [("271", 0.0), ("272", 200.0), ("273", 400.0)] {
+            rooms.push(room(n, "2", two + 10_000.0 + k, 36.0));
+        }
+        placed.extend(set("Level 2", two + 10_000.0, 20.0));
+        placed.extend(set("Level 2", two + 10_200.0, 20.0));
+        // Floor 4: 471's set a typical view stamped; 472's tags written otherwise, its water
+        // closet another tag of the schedule's water closets.
+        for (n, k) in [("471", 0.0), ("472", 200.0), ("473", 400.0)] {
+            rooms.push(room(n, "4", four + 10_000.0 + k, 0.0));
+        }
+        already.extend(set("Level 4", four + 10_000.0, 40.0));
+        placed.push(fixture("WC-2", "Level 4", [four + 10_220.0, 40.0]));
+        placed.push(fixture("LAV 1", "Level 4", [four + 10_300.0, 40.0]));
+        placed.push(fixture("sk1", "Level 4", [four + 10_300.0, 200.0]));
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({ "rooms": rooms }));
+        }
+        let names: BTreeMap<String, String> =
+            [("WC-1", "WATER CLOSET"), ("WC-2", "WATER CLOSET, ADA"), ("LAV-1", "LAVATORY"), ("SK-1", "SINK"), ("MS-1", "MOP SINK")]
+                .iter()
+                .map(|(t, n)| (t.to_string(), n.to_string()))
+                .collect();
+        let (copies, report) = copy_room_fixtures(s.doc().unwrap(), &job, &placed, &already, &names);
+        let mut got: Vec<(String, String)> = copies.iter().map(|c| (c.room.clone(), c.tag.clone())).collect();
+        got.sort();
+        let mut want: Vec<(String, String)> =
+            [("273", "LAV-1"), ("273", "SK-1"), ("273", "WC-1"), ("473", "LAV-1"), ("473", "SK-1"), ("473", "WC-1")]
+                .iter()
+                .map(|(r, t)| (r.to_string(), t.to_string()))
+                .collect();
+        want.sort();
+        assert_eq!(got, want, "{report:?}");
+        // Each derived from the unit it stacks with, never the closet, and never within 3 ft of a
+        // fixture of its tag on its floor.
+        for c in &copies {
+            assert!(c.derived.starts_with("derived from 5: room 573 "), "{}", c.derived);
+            let near = placed.iter().chain(&already).any(|p| {
+                plain_tag(&p.tag) == plain_tag(&c.tag) && same_storey(&p.level, &c.level) && (p.at[0] - c.at[0]).hypot(p.at[1] - c.at[1]) <= 36.0
+            });
+            assert!(!near, "{c:?}");
+        }
+        // The rooms kept from a second set are counted in the report.
+        assert!(report.iter().any(|(k, n)| k.contains("the room holds one of their kind") && *n >= 12), "{report:?}");
     }
 
     /// Q6317: a one-room plan (a mechanical room's, its trace leaked and its area laid round its

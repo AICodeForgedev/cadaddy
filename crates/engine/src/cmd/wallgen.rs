@@ -3082,6 +3082,33 @@ fn plan_level_with(
     let mut it = frames.iter();
     found.retain(|_| !it.next().copied().unwrap_or(false));
     let mut frame_pairs = frames.iter().filter(|x| **x).count();
+    // A print the import sorted by what it draws (Q6487): where its leftover layers hold the
+    // building's casework they are no wall layers (`bspec.draft`), but a stretch of the outside
+    // wall drawn lighter (round a service window) is on them too. A pair of their lines along the
+    // building's outside, in line from a wall's end, is that wall run on; its windows' frames
+    // across its gaps are left out as below.
+    let sorted = found.iter().any(|p| p.layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::content_wall_layer()));
+    let leftover_ents: Vec<&Arc<Entity>> = if sorted {
+        ents.iter().copied().filter(|e| cadaddy_io::pdf_read::is_content_leftover_layer(&e.common.layer) && !on_walls(&e.common.layer)).collect()
+    } else {
+        Vec::new()
+    };
+    if !leftover_ents.is_empty() {
+        let leftover_segs = segments(&leftover_ents);
+        let mut runs = outside_runs(pairs(d, &leftover_segs, &lim), &found, k);
+        let frames = frames_in_gaps(&runs, &leftover_segs, &found, false, &all_segs, range, k);
+        let mut it = frames.iter();
+        runs.retain(|_| !it.next().copied().unwrap_or(false));
+        frame_pairs += frames.iter().filter(|x| **x).count();
+        if !runs.is_empty() {
+            notes.push(format!(
+                "{}: {} stretches of outside wall drawn lighter (on an imported print's leftover layers, in line from a wall's end) taken for walls.",
+                level.name,
+                runs.len()
+            ));
+        }
+        found.extend(runs);
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // storefront's glazing drawn lighter): it is wall too, unless it is a window's across the gap.
     if !screened_ents.is_empty() && !found.is_empty() {
@@ -5203,8 +5230,8 @@ struct Swing {
 }
 
 /// The door swings among `ents`: arcs and open polylines (a swing flattened, as prints arrive,
-/// alone or joined to its leaf and the wall's lines) on one circle through 60–100°, a door's
-/// radius (16"–54" at `k` units per inch).
+/// alone or joined to its leaf and the wall's lines, or printed dash by dash) on one circle
+/// through 60–100°, a door's radius (16"–54" at `k` units per inch).
 fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     let mut out = Vec::new();
@@ -5235,6 +5262,14 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
             out.push(Swing { c, r, ends, handle: e.handle });
         }
     }
+    // A swing printed dashed, dash by dash (Q6487).
+    for (handle, _, pts) in super::perceive::geometry::dash_runs(ents, k) {
+        for (c, r, _, ends) in super::perceive::geometry::flat_swings(&pts) {
+            if c.is_finite() && (rmin..=rmax).contains(&r) && out.len() < MAX_OBJECTS {
+                out.push(Swing { c, r, ends, handle });
+            }
+        }
+    }
     out
 }
 
@@ -5245,6 +5280,63 @@ pub(crate) fn swing_hinges(ents: &[&Arc<Entity>], k: f64) -> Vec<Vec2> {
 
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
 const MAX_CLUSTERED: usize = 20_000;
+
+/// Most passes [`outside_runs`] makes taking in a run of pairs from a wall's end.
+const MAX_RUN_PASSES: usize = 64;
+/// How near the walls' extents' edge (inches, past the run's thickness) a run of the outside wall
+/// lies.
+const OUTSIDE_EDGE_IN: f64 = 12.0;
+
+/// Of the pairs `cands`, those that run on in line from the end of one of the `walls` (or of a
+/// pair so taken: [`fills_a_wall`]), about as thick, along the edge of the walls' extents it runs
+/// parallel to, where no wall is yet: the building's outside wall continued where it is drawn
+/// with a lighter pen (Q6487).
+fn outside_runs(
+    cands: Vec<super::perceive::geometry::Pair>,
+    walls: &[super::perceive::geometry::Pair],
+    k: f64,
+) -> Vec<super::perceive::geometry::Pair> {
+    let b = cadaddy_geom::Bounds2::from_points(walls.iter().flat_map(|p| [p.c0, p.c1]).filter(|q| q.is_finite()));
+    if b.is_empty() {
+        return Vec::new();
+    }
+    // Running along an edge of the extents (an edge it is parallel to), near it.
+    let on_edge = |p: &super::perceive::geometry::Pair| {
+        let m = (p.c0 + p.c1) * 0.5;
+        let d = p.c1 - p.c0;
+        let reach = p.thickness.abs() + OUTSIDE_EDGE_IN * k;
+        let edge = if d.x.abs() >= 20.0 * d.y.abs() {
+            (m.y - b.min.y).abs().min((b.max.y - m.y).abs())
+        } else if d.y.abs() >= 20.0 * d.x.abs() {
+            (m.x - b.min.x).abs().min((b.max.x - m.x).abs())
+        } else {
+            f64::INFINITY
+        };
+        b.contains(m) && edge <= reach
+    };
+    // In line from the end of one of `ws` and about as thick: the rest of that wall.
+    let continues = |p: &super::perceive::geometry::Pair, ws: &[super::perceive::geometry::Pair]| {
+        ws.iter().any(|w| {
+            (p.thickness - w.thickness).abs() <= 0.5 * w.thickness.abs() && fills_a_wall(p.c0, p.c1, p.thickness, std::slice::from_ref(w), k)
+        })
+    };
+    // Along a wall already there (its finish or insulation lines): nothing to take in.
+    let along = |p: &super::perceive::geometry::Pair, ws: &[super::perceive::geometry::Pair]| {
+        let m = (p.c0 + p.c1) * 0.5;
+        ws.iter().any(|w| seg_dist(m, w.c0, w.c1) <= 0.5 * (w.thickness + p.thickness))
+    };
+    let mut left: Vec<_> = cands.into_iter().filter(|p| on_edge(p) && !along(p, walls)).collect();
+    let mut taken: Vec<super::perceive::geometry::Pair> = Vec::new();
+    for _ in 0..MAX_RUN_PASSES {
+        let (fill, rest): (Vec<_>, Vec<_>) = left.into_iter().partition(|p| !along(p, &taken) && (continues(p, walls) || continues(p, &taken)));
+        left = rest;
+        if fill.is_empty() {
+            break;
+        }
+        taken.extend(fill);
+    }
+    taken
+}
 
 /// Whether a pair (centreline `a`–`b`, `t` thick) runs in line with one of the walls and meets
 /// its end (within its thickness and 3"): the rest of that wall across a gap, not a thing beside it.
