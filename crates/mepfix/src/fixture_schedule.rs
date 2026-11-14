@@ -1076,20 +1076,20 @@ mod tests {
                 t("MANUFACTURER", at + 15.6, 28.71),
                 t("MODEL NO.", at + 18.5, 28.71),
                 t("DESCRIPTION", at + 23.5, 28.71),
-                t("P-1H", at + 11.5, 25.95),
-                t("ADA WATER CLOSET", at + 12.7, 25.95),
-                t("PROFLO", at + 15.4, 25.95),
-                t("PF6112WH", at + 18.2, 25.95),
+                t("PF-1A", at + 11.5, 25.95),
+                t("ACCESSIBLE WATER CLOSET", at + 12.7, 25.95),
+                t("MAKER ONE", at + 15.4, 25.95),
+                t("WC-100", at + 18.2, 25.95),
                 t("ELONGATED TOILET", at + 20.5, 25.95),
-                t("P-2H", at + 11.5, 24.9),
-                t("ADA LAVATORY", at + 12.9, 24.9),
-                t("SIGNATURE HARDWARE", at + 14.9, 24.9),
-                t("447961", at + 18.6, 24.9),
+                t("PF-2A", at + 11.5, 24.9),
+                t("ACCESSIBLE LAVATORY", at + 12.9, 24.9),
+                t("MAKER TWO", at + 14.9, 24.9),
+                t("LV-200", at + 18.6, 24.9),
                 t("UNDERMOUNT SINK", at + 20.5, 24.9),
-                t("P-3H", at + 11.5, 23.9),
-                t("ADA TUB SHOWER", at + 12.7, 23.9),
-                t("STERLING", at + 15.4, 23.9),
-                t("71570115", at + 18.2, 23.9),
+                t("PF-3A", at + 11.5, 23.9),
+                t("ACCESSIBLE TUB SHOWER", at + 12.7, 23.9),
+                t("MAKER THREE", at + 15.4, 23.9),
+                t("TS-300", at + 18.2, 23.9),
                 t("TUB AND SHOWER UNIT", at + 20.5, 23.9),
             ]);
             // Each table's frame: its rules over and under the header line, the legend's drawn
@@ -1111,9 +1111,9 @@ mod tests {
             assert_eq!(
                 got,
                 [
-                    ("P-1H", "ADA WATER CLOSET", "ELONGATED TOILET"),
-                    ("P-2H", "ADA LAVATORY", "UNDERMOUNT SINK"),
-                    ("P-3H", "ADA TUB SHOWER", "TUB AND SHOWER UNIT")
+                    ("PF-1A", "ACCESSIBLE WATER CLOSET", "ELONGATED TOILET"),
+                    ("PF-2A", "ACCESSIBLE LAVATORY", "UNDERMOUNT SINK"),
+                    ("PF-3A", "ACCESSIBLE TUB SHOWER", "TUB AND SHOWER UNIT")
                 ],
                 "at {at}"
             );
@@ -1149,20 +1149,20 @@ mod tests {
             t("FIXTURE", 17.0, 28.71),
             t("MFR", 20.0, 28.71),
             t("MODEL", 22.0, 28.71),
-            t("P-1H", 11.5, 25.95),
+            t("PF-1A", 11.5, 25.95),
             t("ELONGATED TOILET", 12.6, 25.95),
-            t("ADA WATER CLOSET", 16.5, 25.95),
-            t("PROFLO", 19.8, 25.95),
-            t("PF6112WH", 21.8, 25.95),
-            t("P-2H", 11.5, 24.9),
+            t("ACCESSIBLE WATER CLOSET", 16.5, 25.95),
+            t("MAKER ONE", 19.8, 25.95),
+            t("WC-100", 21.8, 25.95),
+            t("PF-2A", 11.5, 24.9),
             t("UNDERMOUNT SINK", 12.6, 24.9),
-            t("ADA LAVATORY", 16.6, 24.9),
-            t("SIGNATURE", 19.6, 24.9),
-            t("447961", 21.9, 24.9),
+            t("ACCESSIBLE LAVATORY", 16.6, 24.9),
+            t("MAKER TWO", 19.6, 24.9),
+            t("LV-200", 21.9, 24.9),
         ]);
         let s = read_lettering(&texts, &[]).expect("schedule");
         assert_eq!(s.headers, ["ABBREVIATIONS", "TAG", "DESCRIPTION", "FIXTURE", "MFR", "MODEL"]);
         let got: Vec<(&str, &str)> = s.rows.iter().map(|r| (r.tag.as_str(), r.description.as_str())).collect();
-        assert_eq!(got, [("P-1H", "ELONGATED TOILET"), ("P-2H", "UNDERMOUNT SINK")]);
+        assert_eq!(got, [("PF-1A", "ELONGATED TOILET"), ("PF-2A", "UNDERMOUNT SINK")]);
     }
 }
