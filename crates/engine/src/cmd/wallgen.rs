@@ -3023,6 +3023,13 @@ fn plan_level_with(
     if joined > 0 {
         notes.push(format!("{}: {joined} block-long pieces of wall faces joined.", level.name));
     }
+    // A grid drawn over the floor (the reflected ceiling's on a plan printed with it, a tile
+    // pattern): its lines are no wall faces (Q6659).
+    let grid = super::perceive::geometry::drop_grid_lines(&mut segs, &lim, k);
+    if grid > 0 {
+        notes
+            .push(format!("{}: {grid} lines of a grid drawn over the floor (a ceiling grid, a floor pattern) not taken for wall faces.", level.name));
+    }
     // The rounded outlines left out stay in sight until the symbols are read: a tub's or a basin's
     // rounded inner outline is the symbol's, and its pairs with the symbol's outline show the
     // outline is one (left out, the outline's edge paired with the wall face beside it as a wall).
@@ -7414,6 +7421,96 @@ mod tests {
         assert_eq!(walls.iter().filter(|w| (w.thickness - 4.5).abs() < 0.1 && (mid(w).x - 240.0).abs() < 1.0).count(), 2, "{}", listed());
         assert_eq!(walls.len(), 6, "{}", listed());
         assert!(notes.iter().any(|n| n.contains("standing free inside the building")), "{notes:?}");
+    }
+
+    /// Q6659: a 40' × 25' building (6" walls; units inches) printed with its reflected ceiling:
+    /// a 6" partition between two rooms, a 2' ceiling grid in each room ending on the walls'
+    /// faces, a 2' × 2' light fixture and a diffuser (its outline and three slot lines) set in the
+    /// grid, a column grid line running through, out past the building. `grid`: the grid drawn
+    /// in both directions (else none). The walls planned there, and the notes.
+    fn planned_with_ceiling_grid(grid: bool) -> (Vec<PlanWall>, Vec<String>) {
+        let mut d = Drawing::new_imperial();
+        let mut add = |kind: EntityKind| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        };
+        let line = |a: (f64, f64), b: (f64, f64)| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) });
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                    .iter()
+                    .map(|&(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        // The shell's faces and the partition's at x = 237 and 243.
+        add(rect(0.0, 0.0, 480.0, 300.0));
+        add(rect(6.0, 6.0, 474.0, 294.0));
+        add(line((237.0, 6.0), (237.0, 294.0)));
+        add(line((243.0, 6.0), (243.0, 294.0)));
+        if grid {
+            // Each room's grid: 2' apart, 14"-16" borders, the lines stopping on the walls' faces.
+            for (x0, x1, first) in [(6.0, 237.0, 20.0), (243.0, 474.0, 259.0)] {
+                let mut x = first;
+                while x < x1 - 12.0 {
+                    add(line((x, 6.0), (x, 294.0)));
+                    x += 24.0;
+                }
+                let mut y = 22.0;
+                while y < 282.0 {
+                    add(line((x0, y), (x1, y)));
+                    y += 24.0;
+                }
+            }
+        }
+        // The light fixture and the diffuser in room one's grid, and the diffuser's slots.
+        add(rect(44.0, 118.0, 68.0, 142.0));
+        add(rect(92.0, 118.0, 116.0, 142.0));
+        for y in [124.0, 130.0, 136.0] {
+            add(line((92.0, y), (116.0, y)));
+        }
+        // A column grid line through the building, out to its bubble.
+        add(line((140.0, -120.0), (140.0, 420.0)));
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let mut notes = Vec::new();
+        let walls = plan_level(&d, &g, &level, 12.0, &mut notes).walls;
+        (walls, notes)
+    }
+
+    #[test]
+    fn a_ceiling_grid_printed_on_the_plan_is_no_walls() {
+        let (walls, notes) = planned_with_ceiling_grid(true);
+        let listed = || walls.iter().map(|w| format!("{:?}-{:?} {:.1}", w.a, w.b, w.thickness)).collect::<Vec<_>>().join("; ");
+        // The shell's four walls and the partition, 6" each; nothing paired with a grid line
+        // (the fixtures' edges, the column grid line, the walls' faces 14"-16" from a border line).
+        assert!(walls.iter().all(|w| (w.thickness - 6.0).abs() < 0.1), "{}", listed());
+        assert_eq!(
+            walls.iter().filter(|w| w.a.dist(w.b) > 280.0 && (w.a.x - 240.0).abs() < 1.0 && (w.b.x - 240.0).abs() < 1.0).count(),
+            1,
+            "the partition: {}",
+            listed()
+        );
+        let length: f64 = walls.iter().map(|w| w.a.dist(w.b)).sum();
+        let (bare, bare_notes) = planned_with_ceiling_grid(false);
+        let bare_length: f64 = bare.iter().map(|w| w.a.dist(w.b)).sum();
+        // The same walls as the plan without its ceiling grid.
+        assert_eq!(walls.len(), bare.len(), "{} against {bare_notes:?}", listed());
+        assert!((length - bare_length).abs() < 12.0, "{length} against {bare_length}: {}", listed());
+        assert!(notes.iter().any(|n| n.contains("lines of a grid drawn over the floor")), "{notes:?}");
     }
 
     /// Q6583: a one-room-deep building (40' × 16', 6" walls; units inches) with what a plan

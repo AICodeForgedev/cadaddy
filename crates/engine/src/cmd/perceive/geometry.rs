@@ -307,6 +307,170 @@ pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
     before - segs.len()
 }
 
+/// A grid drawn over a plan's floor (a reflected ceiling's 2' x 2' or 2' x 4' grid on a plan
+/// printed with its ceiling, a floor's tile or paving pattern) has at least this many lines in a row.
+const GRID_RUN: usize = 4;
+/// Its lines are at most this far apart, inches (a 2' or 4' ceiling grid, a 5' pattern); further
+/// apart than a wall's thickest ([`Limits::max_thick`]), so no two of them pair up as a wall.
+const GRID_SPACING_MAX_IN: f64 = 60.0;
+/// A line between two of a row's that runs along at least this share of them...
+const GRID_BREAK_SHARE: f64 = 0.5;
+/// ...and is at most this many times as long breaks the row (a wall's face, not the grid's). A
+/// longer line through the grid (a column grid line out to its bubbles) doesn't.
+const GRID_BREAK_LONGER: f64 = 1.5;
+/// Lines weighed at most (hostile drawings).
+const MAX_GRID_LINES: usize = 500_000;
+/// Lines looked at between two of a row's, at most in all (hostile drawings).
+const MAX_GRID_PROBES: usize = 20_000_000;
+
+/// A line weighed by [`drop_grid_lines`]: its offset across its direction, its ends along it,
+/// whether it is an open line long enough to be a grid's, and its segment.
+struct GridLine {
+    off: f64,
+    s0: f64,
+    s1: f64,
+    open: bool,
+    i: usize,
+}
+
+/// Takes out the lines of a grid drawn over the floor (Q6659): a print showing the plan with its
+/// reflected ceiling draws a 2' x 2' grid in every room, and each grid line paired up as a wall
+/// with whatever stands a wall's thickness from it (a light fixture's or a diffuser's edge, a
+/// column grid line, the room's outline), the air-between rule then dropping the real walls
+/// caught between those. A grid line is one of at least [`GRID_RUN`] open lines in one direction
+/// with the same ends (they stop on the same outline), evenly spaced further apart than any wall
+/// is thick ([`Limits::max_thick`]) and at most [`GRID_SPACING_MAX_IN`], the row at least twice
+/// the spacing long, with no line between two of them running along most of them (a wall's
+/// other face). Kept: a closed outline's sides (a room's, an object's), and a row's first or last
+/// line with another line just outside it (less than half the spacing away: a wall's face, its
+/// other face beside it). `k` is drawing units per inch. Returns how many lines were taken out.
+pub(crate) fn drop_grid_lines(segs: &mut Vec<Seg>, lim: &Limits, k: f64) -> usize {
+    use std::f64::consts::PI;
+    let (min_gap, max_gap) = (lim.max_thick, GRID_SPACING_MAX_IN * k);
+    if !(k.is_finite() && k > 0.0 && min_gap.is_finite() && min_gap > 0.0 && max_gap > min_gap) {
+        return 0;
+    }
+    let tol = 0.75 * k;
+    let min_len = if lim.min_len.is_finite() { lim.min_len.max(2.0 * min_gap) } else { 2.0 * min_gap };
+    let mut buckets: std::collections::HashMap<i64, Vec<GridLine>> = std::collections::HashMap::new();
+    let mut weighed = 0usize;
+    for (i, sg) in segs.iter().enumerate() {
+        let d = sg.b - sg.a;
+        let len = d.len();
+        if !(len.is_finite() && len >= 2.0 * tol) {
+            continue;
+        }
+        if weighed >= MAX_GRID_LINES {
+            break;
+        }
+        weighed += 1;
+        let ang = d.y.atan2(d.x).rem_euclid(PI);
+        let bucket = ((ang.to_degrees() * 2.0).round() as i64).rem_euclid(360);
+        let u = Vec2::new((bucket as f64 / 2.0).to_radians().cos(), (bucket as f64 / 2.0).to_radians().sin());
+        let (s0, s1) = minmax(u.dot(sg.a), u.dot(sg.b));
+        let open = !sg.outline_width.is_finite() && len >= min_len;
+        buckets.entry(bucket).or_default().push(GridLine { off: u.perp().dot(sg.a.mid(sg.b)), s0, s1, open, i });
+    }
+    let mut grid = vec![false; segs.len()];
+    let mut probes = 0usize;
+    for lines in buckets.values_mut() {
+        lines.sort_by(|a, b| a.off.total_cmp(&b.off));
+        let lines: &[GridLine] = lines;
+        // The open lines with the same ends, together (by their places in `lines`).
+        let mut rows: Vec<Vec<usize>> = Vec::new();
+        let mut row_of: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+        for (j, l) in lines.iter().enumerate().filter(|(_, l)| l.open) {
+            let key = ((l.s0 / tol).round() as i64, (l.s1 / tol).round() as i64);
+            let near = (-1..=1).flat_map(|a| (-1..=1).map(move |b| (key.0 + a, key.1 + b))).find_map(|q| row_of.get(&q).copied());
+            match near.and_then(|r| rows.get_mut(r)) {
+                Some(row) => row.push(j),
+                None => {
+                    row_of.insert(key, rows.len());
+                    rows.push(vec![j]);
+                }
+            }
+        }
+        // A line strictly between offsets `lo..hi` running along most of the row's span `s0..s1`
+        // and not much longer than it (none of the row's lies between two of its neighbours').
+        let mut across = |lo: f64, hi: f64, s0: f64, s1: f64| {
+            let span = s1 - s0;
+            let from = lines.partition_point(|l| l.off <= lo);
+            lines.get(from..).unwrap_or_default().iter().take_while(|l| l.off < hi).any(|l| {
+                probes += 1;
+                let overlap = l.s1.min(s1) - l.s0.max(s0);
+                probes > MAX_GRID_PROBES || (overlap >= GRID_BREAK_SHARE * span && l.s1 - l.s0 <= GRID_BREAK_LONGER * span)
+            })
+        };
+        for row in rows.iter().filter(|r| r.len() >= GRID_RUN) {
+            // Lines drawn twice over count once.
+            let mut at: Vec<(f64, Vec<usize>)> = Vec::new();
+            for &j in row {
+                let Some(l) = lines.get(j) else { continue };
+                match at.last_mut() {
+                    Some((o, js)) if l.off - *o <= tol => js.push(j),
+                    _ => at.push((l.off, vec![j])),
+                }
+            }
+            let (s0, s1) = row.iter().filter_map(|&j| lines.get(j)).fold((f64::INFINITY, f64::NEG_INFINITY), |a, l| (a.0.min(l.s0), a.1.max(l.s1)));
+            // Runs of evenly spaced lines with no wall's face between two of them (`run_gap`
+            // NaN: a run of one line so far).
+            let mut start = 0usize;
+            let mut run_gap = f64::NAN;
+            for j in 1..=at.len() {
+                let link = match (at.get(j - 1), at.get(j)) {
+                    (Some(p), Some(c)) => {
+                        let gap = c.0 - p.0;
+                        (gap > min_gap && gap <= max_gap && !across(p.0 + tol, c.0 - tol, s0, s1)).then_some(gap)
+                    }
+                    _ => None,
+                };
+                let steady = link.is_some_and(|g| run_gap.is_nan() || (g - run_gap).abs() <= tol.max(0.02 * run_gap));
+                if steady {
+                    if run_gap.is_nan() {
+                        run_gap = link.unwrap_or(f64::NAN);
+                    }
+                    continue;
+                }
+                // The run `start..j`: its first and last lines stay where a wall's other face is
+                // just outside them.
+                let (mut first, mut last) = (start, j - 1);
+                if run_gap.is_finite() && last > first {
+                    if at.get(first).is_some_and(|f| across(f.0 - 0.5 * run_gap, f.0 - tol, s0, s1)) {
+                        first += 1;
+                    }
+                    if at.get(last).is_some_and(|l| across(l.0 + tol, l.0 + 0.5 * run_gap, s0, s1)) {
+                        last -= 1;
+                    }
+                    if last + 1 >= first + GRID_RUN && s1 - s0 >= 2.0 * run_gap {
+                        for (_, js) in at.get(first..=last).unwrap_or_default() {
+                            for &jj in js {
+                                if let Some(g) = lines.get(jj).and_then(|l| grid.get_mut(l.i)) {
+                                    *g = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                // The next run starts at the last line when only the spacing changed there.
+                match link {
+                    Some(g) => {
+                        start = j - 1;
+                        run_gap = g;
+                    }
+                    None => {
+                        start = j;
+                        run_gap = f64::NAN;
+                    }
+                }
+            }
+        }
+    }
+    let before = segs.len();
+    let mut it = grid.iter();
+    segs.retain(|_| !it.next().copied().unwrap_or(false));
+    before - segs.len()
+}
+
 /// A faceted arc (a print's flattened curve) turns at least this many vertices in a row.
 const ARC_TURNS: usize = 3;
 /// Each of a faceted arc's turns, degrees: at least (less is a straight line drawn in pieces), at
@@ -3956,6 +4120,80 @@ mod tests {
         let r = [Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
         let w = outline_width(&r);
         (0..4).map(|i| (r[i], r[(i + 1) % 4])).map(|(a, b)| seg((a.x, a.y), (b.x, b.y), w)).collect()
+    }
+
+    /// Inches: the wall limits the plan reader uses (2½"-20" thick, 12" long).
+    fn wall_limits() -> Limits {
+        Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 }
+    }
+
+    /// Q6659: a room 14'-6" × 23'-6" (its outline closed) with a 2' ceiling grid ending on its
+    /// outline (15" borders across, 21" along), a light fixture's closed outline and a diffuser's
+    /// slot lines in it, and a column grid line through it out to its bubble.
+    #[test]
+    fn a_ceiling_grid_is_no_wall_face() {
+        let mut segs = rect_sides(0.0, 0.0, 174.0, 282.0);
+        let verticals: Vec<f64> = (0..7).map(|i| 15.0 + 24.0 * f64::from(i)).collect();
+        let across: Vec<f64> = (0..11).map(|i| 21.0 + 24.0 * f64::from(i)).collect();
+        segs.extend(verticals.iter().map(|&x| seg((x, 0.0), (x, 282.0), f64::INFINITY)));
+        // One drawn right to left, one drawn twice.
+        segs.extend(
+            across.iter().map(|&y| if y == 45.0 { seg((174.0, y), (0.0, y), f64::INFINITY) } else { seg((0.0, y), (174.0, y), f64::INFINITY) }),
+        );
+        segs.push(seg((0.0, 93.0), (174.0, 93.0), f64::INFINITY));
+        segs.extend(rect_sides(39.0, 117.0, 63.0, 141.0));
+        segs.extend([123.0, 129.0, 135.0].map(|y| seg((87.0, y), (111.0, y), f64::INFINITY)));
+        segs.push(seg((150.0, -120.0), (150.0, 400.0), f64::INFINITY));
+        let n = segs.len();
+        assert_eq!(drop_grid_lines(&mut segs, &wall_limits(), 1.0), 19);
+        assert_eq!(segs.len(), n - 19);
+        // The room's outline, the fixture, the slots and the column grid line stay.
+        assert_eq!(segs.iter().filter(|s| s.outline_width.is_finite()).count(), 8);
+        assert_eq!(segs.iter().filter(|s| s.a.x == 87.0).count(), 3);
+        assert!(segs.iter().any(|s| s.a.x == 150.0 && s.b.y == 400.0));
+        assert!(segs.iter().all(|s| !verticals.contains(&s.a.x) || s.a.y != 0.0 || s.b.y != 282.0));
+        // No units, or no wall limits: nothing taken.
+        let mut again = rect_sides(0.0, 0.0, 174.0, 282.0);
+        again.extend(verticals.iter().map(|&x| seg((x, 0.0), (x, 282.0), f64::INFINITY)));
+        let m = again.len();
+        assert_eq!(drop_grid_lines(&mut again, &wall_limits(), 0.0), 0);
+        assert_eq!(drop_grid_lines(&mut again, &wall_limits(), f64::NAN), 0);
+        assert_eq!(drop_grid_lines(&mut again, &Limits { min_thick: 2.5, max_thick: f64::NAN, min_len: 12.0 }, 1.0), 0);
+        assert_eq!(again.len(), m);
+    }
+
+    /// Q6659: walls in a row are no grid: a row of closets (4" walls 30" apart: each wall's two
+    /// faces), walls whose faces differ in length (one face stops at the corner, the other runs
+    /// past it: the even row of long faces has the short ones between them), and a room's wall
+    /// faces drawn as lines where its grid lands on them 2' from the last grid line (each face's
+    /// other face just outside it).
+    #[test]
+    fn walls_in_a_row_are_no_grid() {
+        let mut closets: Vec<Seg> = Vec::new();
+        for i in 0..6 {
+            let x = 34.0 * f64::from(i);
+            closets.extend([seg((x, 0.0), (x, 120.0), f64::INFINITY), seg((x + 4.0, 0.0), (x + 4.0, 120.0), f64::INFINITY)]);
+        }
+        assert_eq!(drop_grid_lines(&mut closets, &wall_limits(), 1.0), 0);
+        let mut faces: Vec<Seg> = Vec::new();
+        for i in 0..6 {
+            let x = 40.0 * f64::from(i);
+            faces.extend([seg((x, 0.0), (x, 240.0), f64::INFINITY), seg((x + 5.0, 4.0), (x + 5.0, 236.0), f64::INFINITY)]);
+        }
+        assert_eq!(drop_grid_lines(&mut faces, &wall_limits(), 1.0), 0);
+        // A 12' room: wall faces at 0 and 144 (their other faces 6" outside), its grid lines
+        // 24"-120" between them, all running 0-240: the grid goes, the faces stay.
+        let mut room: Vec<Seg> = [-6.0, 0.0, 144.0, 150.0].iter().map(|&x| seg((x, 0.0), (x, 240.0), f64::INFINITY)).collect();
+        room.extend((1..6).map(|i| 24.0 * f64::from(i)).map(|x| seg((x, 0.0), (x, 240.0), f64::INFINITY)));
+        assert_eq!(drop_grid_lines(&mut room, &wall_limits(), 1.0), 5);
+        let mut left: Vec<f64> = room.iter().map(|s| s.a.x).collect();
+        left.sort_by(f64::total_cmp);
+        assert_eq!(left, vec![-6.0, 0.0, 144.0, 150.0]);
+        // Too few lines, or too far apart (parking stripes 9' apart), are no grid either.
+        let mut three: Vec<Seg> = (0..3).map(|i| 24.0 * f64::from(i)).map(|x| seg((x, 0.0), (x, 240.0), f64::INFINITY)).collect();
+        assert_eq!(drop_grid_lines(&mut three, &wall_limits(), 1.0), 0);
+        let mut stripes: Vec<Seg> = (0..8).map(|i| 108.0 * f64::from(i)).map(|x| seg((x, 0.0), (x, 216.0), f64::INFINITY)).collect();
+        assert_eq!(drop_grid_lines(&mut stripes, &wall_limits(), 1.0), 0);
     }
 
     #[test]
