@@ -233,18 +233,21 @@ fn vs_tri_x(v: VI, i: II, x: VX) -> VO {
     return o;
 }
 
-// Lines sit a little in front of the faces they lie on. A corner whose alpha is 254 (253) is
-// a copy of its line nudged a pixel along the view's right (up): the Systems view draws each
-// run's edges three times so the thinnest run is two pixels wide.
+// Lines sit a little in front of the faces they lie on. A corner whose alpha is 254 (253,
+// 252, 251) is a copy of its line nudged a pixel along the view's right (up, left, down); 250
+// to 247 the same two pixels: the Systems view draws each run's edges as many times as its
+// weight needs (line_copies).
 @vertex
 fn vs_line(v: VL, i: II) -> VO {
     var o: VO;
-    let a = v.c.a * 255.0;
+    let code = 255 - i32(round(v.c.a * 255.0));
     var nudge = vec3<f32>(0.0);
-    if (a > 253.5 && a < 254.5) {
-        nudge = u.ao_right.xyz * u.ao.x;
-    } else if (a > 252.5 && a < 253.5) {
-        nudge = u.ao_up.xyz * u.ao.x;
+    if (code >= 1 && code <= 8) {
+        let c = (code - 1) % 4;
+        let along = select(u.ao_up.xyz, u.ao_right.xyz, c % 2 == 0);
+        let sign = select(1.0, -1.0, c >= 2);
+        let step = select(1.0, 2.0, code >= 5);
+        nudge = along * (u.ao.x * step * sign);
     }
     let p = place(i, v.p) + nudge;
     o.pos = u.vp * vec4<f32>(p, 1.0);
