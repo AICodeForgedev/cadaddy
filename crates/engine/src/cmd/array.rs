@@ -30,8 +30,6 @@ const PREVIEW_LIMIT: usize = 2000;
 /// Keyword-only prompts: each typed token is matched on its own (no free text).
 const KEYWORDS: Accept = Accept { point: false, number: false, text: false, select: false, enter: true };
 
-const FLAT_LEVELS: &str = "Levels need an associative array; the copies are made on one level.";
-
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("array", "Array", run_array)
@@ -80,14 +78,25 @@ fn count32(n: u64) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// World transforms of the items of `p` with its base point at `base`, except the first item
-/// (the source objects themselves) and items above the first level (copies are flat).
+/// Plan transforms of the items of `p` on its first level with its base point at `base`, except
+/// the first item (the source objects themselves): what a plan preview shows.
 fn item_mats(p: &ArrayParams, base: Vec2) -> Vec<Mat3> {
     p.items()
         .unwrap_or_default()
         .into_iter()
         .filter(|it| it.level == 0 && (it.i, it.j) != (0, 0))
         .map(|it| Mat3::translate(base + it.insert.xy()).then_before(Mat3::rotate(it.rotation)).then_before(Mat3::translate(-base)))
+        .collect()
+}
+
+/// Every item of `p` but the source objects themselves, as a plan transform and a rise: the
+/// items of the levels above and of rows with an elevation stand higher (Q6656).
+fn item_moves(p: &ArrayParams, base: Vec2) -> Vec<(Mat3, f64)> {
+    p.items()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|it| (it.i, it.j, it.level) != (0, 0, 0))
+        .map(|it| (Mat3::translate(base + it.insert.xy()).then_before(Mat3::rotate(it.rotation)).then_before(Mat3::translate(-base)), it.insert.z))
         .collect()
 }
 
@@ -196,11 +205,14 @@ fn create(s: &mut Session, objs: &[Handle], base: Vec2, p: ArrayParams, assoc: b
         let h = make_assoc(s, objs, base, p)?;
         return Ok(json!({ "handle": h.hex(), "created": copies, "associative": true }));
     }
-    if p.levels > 1 {
-        s.echo(FLAT_LEVELS);
+    // Separate copies on every level and at every row's elevation, raised as 3DMOVE would
+    // (Q6656): never flattened onto the first level.
+    let (n, kept) = copy_all(s, objs, item_moves(&p, base))?;
+    let mut out = json!({ "created": n });
+    if let Some(note) = super::modify::flat_note(kept) {
+        out["message"] = json!(note);
     }
-    let n = copy_all(s, objs, item_mats(&p, base).into_iter())?;
-    Ok(json!({ "created": n }))
+    Ok(out)
 }
 
 /// EXPLODE of an associative array: every item becomes the objects of its block (the source
@@ -260,12 +272,16 @@ fn max_count(s: &Session, others: u64, objs: usize) -> u64 {
     (s.settings.maxarray / others.max(1).saturating_mul(objs.max(1) as u64)).max(1)
 }
 
-fn copy_all(s: &mut Session, hs: &[Handle], mats: impl Iterator<Item = Mat3>) -> Result<usize> {
-    let mut n = 0;
-    for m in mats {
-        n += transform_entities(s, hs, &m, true)?.len();
+/// Copy `hs` by each plan transform and rise: how many copies, and how many of them have no
+/// height and kept their source's.
+fn copy_all(s: &mut Session, hs: &[Handle], moves: Vec<(Mat3, f64)>) -> Result<(usize, usize)> {
+    let (mut n, mut kept) = (0, 0);
+    for (m, dz) in moves {
+        let made = transform_entities(s, hs, &m, true)?;
+        kept += super::modify::lift(s, &made, dz)?;
+        n += made.len();
     }
-    Ok(n)
+    Ok((n, kept))
 }
 
 /// The objects transformed by each matrix, for the preview.
@@ -577,7 +593,7 @@ impl RectM {
             axis_angle: 0.0,
             row_elevation: self.elev,
         });
-        params(kind, if self.assoc { self.levels } else { 1 }, self.ls)
+        params(kind, self.levels, self.ls)
     }
 
     /// A distance typed or picked (from the base point); Enter keeps `cur`.
@@ -616,11 +632,8 @@ impl RectM {
     }
 
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
-        let levels = if self.assoc { self.levels } else { 1 };
+        let levels = self.levels;
         check_size(s, self.rows.saturating_mul(self.cols).saturating_mul(levels), self.objs.len())?;
-        if !self.assoc && self.levels > 1 {
-            s.echo(FLAT_LEVELS);
-        }
         create(s, &self.objs.clone(), self.base, self.params(), self.assoc)?;
         s.set_selection(Vec::new());
         Ok(Step::Done)
@@ -808,9 +821,6 @@ impl Interactive for RectM {
             (LevelsSpace, _) => match self.distance(&i, self.ls)? {
                 Some(d) => {
                     self.ls = d;
-                    if !self.assoc && self.levels > 1 {
-                        s.echo(FLAT_LEVELS);
-                    }
                     Main
                 }
                 None => stage,
@@ -840,9 +850,6 @@ impl Interactive for RectM {
             (RowsElev, Input::Text(t)) => match number(t) {
                 Some(z) if z.is_finite() => {
                     self.elev = z;
-                    if !self.assoc && z.abs() > 1e-12 {
-                        s.echo("Row elevations need an associative array; the copies stay at the same elevation.");
-                    }
                     Main
                 }
                 _ => return Err(other("Requires a number.")),
@@ -1024,7 +1031,7 @@ impl PolarM {
             row_spacing: self.rs,
             row_elevation: self.elev,
         });
-        params(kind, if self.assoc { self.levels } else { 1 }, self.ls)
+        params(kind, self.levels, self.ls)
     }
 
     /// The array after dragging (or typing at) grip `g` with `i` (see [`RectM::grip_edit`]).
@@ -1052,11 +1059,8 @@ impl PolarM {
     }
 
     fn finish(&mut self, s: &mut Session) -> Result<Step> {
-        let levels = if self.assoc { self.levels } else { 1 };
+        let levels = self.levels;
         check_size(s, self.items.saturating_mul(self.rows).saturating_mul(levels), self.objs.len())?;
-        if !self.assoc && self.levels > 1 {
-            s.echo(FLAT_LEVELS);
-        }
         let base = self.base_point(s, self.center);
         create(s, &self.objs.clone(), base, self.params(base, self.center), self.assoc)?;
         s.set_selection(Vec::new());
@@ -1258,9 +1262,6 @@ impl Interactive for PolarM {
             (RowsElev, Input::Text(t)) => match number(t) {
                 Some(z) if z.is_finite() => {
                     self.elev = z;
-                    if !self.assoc && z.abs() > 1e-12 {
-                        s.echo("Row elevations need an associative array; the copies stay at the same elevation.");
-                    }
                     Main
                 }
                 _ => return Err(other("Requires a number.")),
@@ -1268,9 +1269,6 @@ impl Interactive for PolarM {
             (LevelsSpace, _) => match self.distance(&i, self.ls)? {
                 Some(d) => {
                     self.ls = d;
-                    if !self.assoc && self.levels > 1 {
-                        s.echo(FLAT_LEVELS);
-                    }
                     Main
                 }
                 None => stage,

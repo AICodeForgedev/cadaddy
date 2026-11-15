@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use cadaddy_doc::geom::Vec3;
 use cadaddy_doc::{Entity, EntityKind, Mesh, MeshFace};
-use serde_json::Value;
 
 use super::tokens;
 
@@ -31,7 +30,9 @@ const MAX_COUNT: usize = 1 << 28;
 
 /// One chunk's objects: `(schema version, payload)`, v2 when a mesh has binary buffers.
 pub fn encode(items: &[Arc<Entity>]) -> Result<(u16, Vec<u8>), String> {
-    let mut list = Vec::with_capacity(items.len());
+    // Each object's tokens written as it is turned into a value: the chunk's objects as one
+    // value tree held ~10 times the chunk (Q6635).
+    let mut list = tokens::ListWriter::new(items.len());
     let mut meshes: Vec<(u32, &Mesh)> = Vec::new();
     for (i, e) in items.iter().enumerate() {
         match &e.kind {
@@ -41,13 +42,13 @@ pub fn encode(items: &[Arc<Entity>]) -> Result<(u16, Vec<u8>), String> {
                     common: e.common.clone(),
                     kind: EntityKind::Mesh(Mesh { vertices: Vec::new(), faces: Vec::new(), kind: m.kind }),
                 };
-                list.push(serde_json::to_value(&stripped).map_err(|e| e.to_string())?);
+                list.push(&serde_json::to_value(&stripped).map_err(|e| e.to_string())?);
                 meshes.push((u32::try_from(i).map_err(|_| "too many objects in a chunk")?, m));
             }
-            _ => list.push(serde_json::to_value(e.as_ref()).map_err(|e| e.to_string())?),
+            _ => list.push(&serde_json::to_value(e.as_ref()).map_err(|e| e.to_string())?),
         }
     }
-    let toks = tokens::encode(&Value::Array(list));
+    let toks = list.finish()?;
     if meshes.is_empty() {
         return Ok((1, toks));
     }
@@ -118,7 +119,7 @@ fn f64_at(c: &[u8]) -> f64 {
 /// A v2 payload split into its token list and its meshes by item; `None` when it's damaged (the
 /// reader uses [`split`] and builds the objects straight from the tokens).
 #[cfg(test)]
-pub fn decode(data: &[u8]) -> Option<(Value, HashMap<usize, Mesh>)> {
+pub fn decode(data: &[u8]) -> Option<(serde_json::Value, HashMap<usize, Mesh>)> {
     let (toks, meshes) = split(data)?;
     Some((tokens::decode(toks)?, meshes))
 }

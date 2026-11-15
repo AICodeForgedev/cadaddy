@@ -1003,6 +1003,15 @@ fn run_rfi_read(s: &mut Session, p: &Value) -> Result<Value> {
     // The spec's items, and (read only) the requirement and document items the build would raise
     // now.
     let mut list = super::rfi::listed(s.doc().ok(), &sp);
+    // The items the model as it stands now answers (closed by `apply`; listed closed when read).
+    for (id, answer, by) in &ev.closed {
+        if let Some(x) = list.iter_mut().find(|x| &x.id == id && x.status == cadaddy_walk3d::RfiStatus::Open) {
+            x.status = cadaddy_walk3d::RfiStatus::Closed;
+            x.answer = Some(answer.clone());
+            x.answered_by.clone_from(by);
+        }
+    }
+    out["closed_by_model"] = json!(ev.closed.len());
     for r in ev.rfis.iter().chain(docs.rfis.iter()) {
         if !list.iter().any(|x| x.id == r.id) {
             list.push(r.clone());

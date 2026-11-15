@@ -26,6 +26,11 @@ pub const THUMBNAIL_SIZE: (u32, u32) = (256, 192);
 /// The preview a .cdy file embeds: model space as a PNG, `None` when it is empty. Built at the
 /// preview's own pixel size (as the screen is): sub-pixel hatch lines and dashes are left out, so a
 /// densely hatched plan doesn't spend seconds drawing millions of lines into 256 × 192 pixels.
+///
+/// Drawn as it is built, a part of the display list at a time ([`cadaddy_render::build_each`]),
+/// twice: once for the list's bounds (the view), once to draw. The whole list of a print set's
+/// 1.3 million objects held over a gigabyte, on top of the drawing, for every full save (Q6635).
+/// The pixels are the ones the whole list draws.
 pub fn preview(d: &Drawing) -> Option<Vec<u8>> {
     if d.model.is_empty() {
         return None;
@@ -40,7 +45,12 @@ pub fn preview(d: &Drawing) -> Option<Vec<u8>> {
         min_dash: if px.is_finite() && px > 0.0 { px * 2.0 } else { 0.0 },
         ..cadaddy_render::Options::default()
     };
-    crate::png_with(d, &Space::Model, w, h, &opts).ok()
+    let mut bounds = cadaddy_geom::Bounds2::EMPTY;
+    cadaddy_render::build_each(d, &Space::Model, &opts, cadaddy_render::BUILD_EACH_OBJECTS, |l| bounds = bounds.union(&l.bounds));
+    let view = crate::png_view(&bounds, w, h, None);
+    let mut canvas = cadaddy_render::raster::Canvas::new(&view, &cadaddy_render::raster::RasterOptions::default())?;
+    cadaddy_render::build_each(d, &Space::Model, &opts, cadaddy_render::BUILD_EACH_OBJECTS, |l| canvas.draw(l));
+    canvas.finish().encode_png().ok()
 }
 
 /// The drawing as a .cdy file, with a preview of model space.
