@@ -69,6 +69,9 @@ struct Item {
     kinds: Vec<String>,
     words: Vec<String>,
     marks: Vec<String>,
+    /// Words of a circuit's description that make a power device on it this item's connection
+    /// (a box or receptacle drawn at a door on the door holders' circuit is the holder's).
+    circuit_words: Vec<String>,
     place: String,
     backset_in: f64,
     basis: String,
@@ -85,6 +88,7 @@ fn items(r: &Value) -> Vec<Item> {
                     kinds: words(i, "kinds"),
                     words: words(i, "words"),
                     marks: words(i, "marks"),
+                    circuit_words: words(i, "circuit_words"),
                     place: i.get("place").and_then(Value::as_str).unwrap_or("latch_jamb").to_string(),
                     backset_in: num(i, "backset_in", 3.0),
                     basis: i.get("basis").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -95,18 +99,21 @@ fn items(r: &Value) -> Vec<Item> {
 }
 
 /// The rules' item a device is: by its kind, its legend mark, else the words of its type and
-/// description; never a power device (`not_kinds`: a receptacle on a door holders' circuit is no
-/// door holder).
-fn item_of<'a>(items: &'a [Item], not_kinds: &[String], kind: &str, mark: &str, text: &str) -> Option<&'a Item> {
+/// description. A power device (`not_kinds`: a receptacle, a box) is one only by its circuit: on a
+/// circuit whose description the item's `circuit_words` name (the door holders'), it is that
+/// item's connection and goes with it (then `true`).
+fn item_of<'a>(items: &'a [Item], not_kinds: &[String], kind: &str, mark: &str, text: &str, circuit: &str) -> Option<(&'a Item, bool)> {
     let (kind, mark, text) = (kind.trim().to_ascii_uppercase(), mark.trim().to_ascii_uppercase(), text.to_ascii_uppercase());
     if not_kinds.contains(&kind) {
-        return None;
+        let circuit = circuit.to_ascii_uppercase();
+        return items.iter().find(|i| i.circuit_words.iter().any(|w| circuit.contains(w.as_str()))).map(|i| (i, true));
     }
     items
         .iter()
         .find(|i| i.kinds.contains(&kind))
         .or_else(|| items.iter().find(|i| !mark.is_empty() && i.marks.contains(&mark)))
         .or_else(|| items.iter().find(|i| i.words.iter().any(|w| text.contains(w.as_str()))))
+        .map(|i| (i, false))
 }
 
 /// A built door as hardware serves it (plan, drawing units): hinge, the open leaf's end, the shut
@@ -195,7 +202,8 @@ pub(crate) fn side(d: &mut Drawing, upf: f64, apply: bool) -> Sided {
         let store = props::read(&e.common.xdata);
         let get = |k: &str| store.get(k).map(Prop::text).unwrap_or_default();
         let text = ["type", "description", "name", "submittal", "catalog_number"].iter().map(|k| get(k)).collect::<Vec<_>>().join(" ");
-        let Some(item) = item_of(&list, &not_kinds, &get("kind"), &get("type_mark"), &text) else { continue };
+        let circuit = get("circuit_description");
+        let Some((item, by_circuit)) = item_of(&list, &not_kinds, &get("kind"), &get("type_mark"), &text, &circuit) else { continue };
         let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
         let c = Vec2::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
         if !c.is_finite() {
@@ -279,6 +287,9 @@ pub(crate) fn side(d: &mut Drawing, upf: f64, apply: bool) -> Sided {
             out.lowered += 1;
             said.push(format!("brought down below the door's head ({} in)", (dz.abs() / inch * 10.0).round() / 10.0));
         }
+        if by_circuit {
+            said.push(format!("on the circuit {}: its {} connection, it goes with it", circuit.trim(), item.kind.replace('_', " ")));
+        }
         let why = format!(
             "{}; drawn at [{}, {}, {}] ft: {}",
             said.join("; "),
@@ -354,12 +365,16 @@ mod tests {
         let list = items(r);
         let not_kinds = words(r, "not_kinds");
         assert!(list.len() >= 3, "{list:?}");
-        let kind = |k: &str, m: &str, t: &str| item_of(&list, &not_kinds, k, m, t).map(|i| i.kind.clone());
+        let kind = |k: &str, m: &str, t: &str| item_of(&list, &not_kinds, k, m, t, "").map(|i| i.0.kind.clone());
         assert_eq!(kind("low_voltage_outlet", "CR", "low voltage outlet"), Some("card_reader".into()));
         assert_eq!(kind("fire_alarm_device", "", "Electromagnetic door holder, flush"), Some("door_holder".into()));
         assert_eq!(kind("device", "", "DOOR POSITION SWITCH"), Some("door_contact".into()));
-        assert_eq!(kind("receptacle", "", "duplex receptacle DOOR HOLD OPEN"), None);
+        assert_eq!(kind("receptacle", "", "duplex receptacle for the door holders"), None);
         assert_eq!(kind("switch", "DC", ""), None);
         assert_eq!(kind("smoke_detector", "S", "area smoke detector"), None);
+        // A receptacle on the door holders' circuit is the holder's connection; on another, nothing.
+        let on = |circuit: &str| item_of(&list, &not_kinds, "receptacle", "REC", "duplex receptacle", circuit).map(|(i, c)| (i.kind.clone(), c));
+        assert_eq!(on("MAG DOOR HOLDERS - EAST WING"), Some(("door_holder".into(), true)));
+        assert_eq!(on("RECEPTACLES - LOBBY"), None);
     }
 }

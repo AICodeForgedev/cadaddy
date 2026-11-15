@@ -12,6 +12,7 @@
       "kinds": ["door_holder", "mag_door_holder"],
       "words": ["DOOR HOLDER", "DOOR HOLD", "HOLD OPEN", "HOLD-OPEN", "MAGNETIC DOOR"],
       "marks": ["DH", "MDH"],
+      "circuit_words": ["DOOR HOLD", "DOOR HOLDER", "HOLD OPEN", "HOLD-OPEN"],
       "place": "open_leaf_edge",
       "backset_in": 3,
       "basis": "a wall magnetic door holder is set where the open leaf's latch edge rests against the wall (its armature near the leaf's top latch corner), never at the hinge jamb (manufacturers' installation instructions)"
