@@ -25,7 +25,9 @@
 //!   listed, no step back), the commits between (`commits`, as the caller's
 //!   git gives them) and, with the merger's batch log, the batches and branches merged between
 //!   the two builds as the suspects. It returns a table of the last N rows (and writes it, and a
-//!   small SVG plot, when asked).
+//!   small SVG plot, when asked). A small index beside the trend file (`<path>.idx`) keeps the
+//!   row counts and where the last rows are, so a call reads only what was appended since and the
+//!   rows it shows: its cost doesn't grow with the project's history (Q6479).
 //!
 //! Nothing here changes the drawing: the measure runs the read-only checks (`validate.prescreen`,
 //! `validate.areas`, `bim.takeoff` with `keep: false`, `job.status`) and reads the elements' kinds.
@@ -66,8 +68,6 @@ const FAR_IN: f64 = 12.0;
 const OUTSIDE_FT: f64 = 2.0;
 /// The trend file and the merge log, bytes at most.
 const MAX_FILE: u64 = 64 << 20;
-/// Rows of a trend file read, at most.
-const MAX_ROWS: usize = 100_000;
 /// Rows shown in the table by default and at most.
 const DEFAULT_LAST: usize = 10;
 const MAX_LAST: usize = 200;
@@ -89,7 +89,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .files(),
         CommandSpec::new(CMD_TREND, "Accuracy Trend", run_trend)
             .params(
-                "{path: .jsonl trend file (one row per line; made when missing, only ever appended to), row?: a validate.measure row (appended first), row_file?: .json file holding one, last?: n (rows in the table, 10, at most 200), merge_log?: the merger's batch log (lines `TIME BATCH merged BRANCH(notes) BRANCH -> next COMMIT`), commits?: [text] (the commits between the previous row and the newest, as `git log --oneline` gives them), table?: .md file, svg?: .svg file (a plot of the percentages), force?: bool (replace an existing table or plot)} → {rows, appended, skipped_lines, compared?: {from, to}, regressions, changes, findings: [{verdict: regression|change, metric, previous, current, change, allowed, better, why, issue, from, to, commits, suspects: [{batch, next, branches}]}], table, table_path?, svg_path?}: the newest row against the one before it by the rules data (each metric's better direction and tolerance); a metric worse beyond its tolerance is a REGRESSION naming both values, both commits and the batches merged between them (a stable count that rose: a CHANGE, listed, no step back).",
+                "{path: .jsonl trend file (one row per line; made when missing, only ever appended to), row?: a validate.measure row (appended first), row_file?: .json file holding one, last?: n (rows in the table, 10, at most 200), merge_log?: the merger's batch log (lines `TIME BATCH merged BRANCH(notes) BRANCH -> next COMMIT`), commits?: [text] (the commits between the previous row and the newest, as `git log --oneline` gives them), table?: .md file, svg?: .svg file (a plot of the percentages), force?: bool (replace an existing table or plot)} → {rows, appended, skipped_lines, index: {used, read_bytes} (the small index kept beside the trend file as <path>.idx, so a call reads only what was appended and the rows it shows), compared?: {from, to}, regressions, changes, findings: [{verdict: regression|change, metric, previous, current, change, allowed, better, why, issue, from, to, commits, suspects: [{batch, next, branches}]}], table, table_path?, svg_path?}: the newest row against the one before it by the rules data (each metric's better direction and tolerance); a metric worse beyond its tolerance is a REGRESSION naming both values, both commits and the batches merged between them (a stable count that rose: a CHANGE, listed, no step back).",
             )
             .noundo()
             .files(),
@@ -832,6 +832,269 @@ fn append_row(path: &str, row: &Value) -> Result<()> {
     f.write_all(format!("{line}\n").as_bytes()).map_err(|e| bad(CMD_TREND, format!("{path}: {e}")))
 }
 
+// ---------------------------------------------------------------- the trend file's index (Q6479)
+//
+// A trend file grows one row per measured build for the life of a job. Reading and parsing all of
+// it on every call made each call slower with the history, so the file has a small index beside
+// it (`<path>.idx`): how many bytes of whole lines it describes, the row and skipped-line counts
+// of those bytes, where the last rows are, and a check of the bytes at its start and at its end.
+// A call reads only what was appended since (normally its own row) and the few rows it shows; the
+// answer is the same as a full read. The index is rebuilt by one full read when it is missing,
+// unreadable or doesn't match the file: the file is shorter, the same length but changed since,
+// the checked bytes differ (edited or replaced outside CADaddy), or a row it points at no longer
+// reads as one.
+
+/// What an index says it is.
+const INDEX_SCHEMA: &str = "cadaddy.trend-index/1";
+/// Rows whose place the index keeps: the most the table shows (the two compared are among them).
+const INDEX_KEEP: usize = MAX_LAST;
+/// Bytes checked at the start and at the end of what the index describes.
+const CHECK_BYTES: u64 = 4096;
+
+/// What the index knows about the first `len` bytes of a trend file (whole lines only).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, Deserialize)]
+struct TrendIndex {
+    schema: String,
+    /// Bytes described: through the last newline read.
+    len: u64,
+    /// The file's modification time when the index was written (ns since 1970), when known.
+    #[serde(default)]
+    modified_ns: Option<u64>,
+    rows: usize,
+    skipped: usize,
+    /// The last rows' byte ranges `[start, end)` (the line, before trimming), oldest first.
+    tail: Vec<(u64, u64)>,
+    /// Checks (FNV-1a) of the first and the last `CHECK_BYTES` of the `len` bytes.
+    head_check: u64,
+    end_check: u64,
+}
+
+impl TrendIndex {
+    fn empty() -> TrendIndex {
+        TrendIndex { schema: INDEX_SCHEMA.into(), len: 0, modified_ns: None, rows: 0, skipped: 0, tail: Vec::new(), head_check: 0, end_check: 0 }
+    }
+
+    /// One line of the file at `[start, end)`: a row, a skipped line, or nothing (blank).
+    fn feed(&mut self, start: u64, end: u64, line: &str) {
+        let t = line.trim();
+        if t.is_empty() {
+            return;
+        }
+        if serde_json::from_str::<Value>(t).ok().as_ref().and_then(Row::of).is_some() {
+            self.rows += 1;
+            self.tail.push((start, end));
+            if self.tail.len() > INDEX_KEEP {
+                let extra = self.tail.len() - INDEX_KEEP;
+                self.tail.drain(..extra);
+            }
+        } else {
+            self.skipped += 1;
+        }
+    }
+
+    /// Sound on its face: its schema, its ranges inside it and in order, its counts agreeing.
+    fn sound(&self) -> bool {
+        self.schema == INDEX_SCHEMA
+            && self.tail.len() <= INDEX_KEEP
+            && self.tail.len() <= self.rows
+            && (self.rows > 0 || self.tail.is_empty())
+            && self.tail.windows(2).all(|w| w[0].1 <= w[1].0)
+            && self.tail.iter().all(|(a, b)| a < b && *b <= self.len)
+    }
+}
+
+fn index_path(path: &str) -> String {
+    format!("{path}.idx")
+}
+
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+fn modified_ns(meta: &std::fs::Metadata) -> Option<u64> {
+    let t = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(t.as_nanos()).ok()
+}
+
+/// `n` bytes of `f` from `at`.
+fn read_at(f: &mut std::fs::File, at: u64, n: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    f.seek(SeekFrom::Start(at))?;
+    let mut buf = Vec::new();
+    f.take(n).read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// The checks of the first and last `CHECK_BYTES` of the first `len` bytes of `f`.
+fn checks(f: &mut std::fs::File, len: u64) -> std::io::Result<(u64, u64)> {
+    let n = len.min(CHECK_BYTES);
+    Ok((fnv(&read_at(f, 0, n)?), fnv(&read_at(f, len - n, n)?)))
+}
+
+/// Writes the index through a new temporary file renamed over it, so a reader never sees half of
+/// one. Not synced to disk: the index is a cache, and one lost or torn only costs the next call a
+/// full read (a sync costs every call more than the read it saves on a short file). Best effort,
+/// never during a dry run, never into a system folder.
+fn write_index(path: &str, bytes: &[u8]) {
+    // The browser has no files (and no process id).
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (path, bytes);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    write_index_native(path, bytes);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_index_native(path: &str, bytes: &[u8]) {
+    use std::io::Write;
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = format!("{path}.{}-{n}.tmp", std::process::id());
+    if crate::writefile::check(std::path::Path::new(path)).is_err() || crate::writefile::check(std::path::Path::new(&tmp)).is_err() {
+        return;
+    }
+    let wrote = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| f.write_all(bytes));
+    if wrote.is_err() || crate::writefile::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// The trend file as a call needs it: rows and skipped lines in all, and the last rows.
+#[derive(Debug, Default)]
+struct TrendRead {
+    rows: usize,
+    skipped: usize,
+    /// The last rows (as many as asked, fewer when the file has fewer), oldest first.
+    last: Vec<Row>,
+    /// The index was used (false: built by a full read).
+    index_used: bool,
+    /// Bytes of the trend file read by this call.
+    read_bytes: u64,
+}
+
+fn utf8_err(cmd: &str, path: &str) -> crate::EngineError {
+    bad(cmd, format!("{path}: stream did not contain valid UTF-8"))
+}
+
+/// Reads the trend file at `path` for its counts and its last `need` rows (at most
+/// `INDEX_KEEP`), through its index: only the bytes appended since the index was written and the
+/// rows returned are read. Refuses a file over `MAX_FILE` and one that isn't UTF-8, as a full read
+/// does. The index is brought up to date (never written during a dry run).
+fn read_trend(path: &str, need: usize) -> Result<TrendRead> {
+    let need = need.min(INDEX_KEEP);
+    let Ok(meta) = std::fs::metadata(path) else { return Ok(TrendRead::default()) };
+    let len = meta.len();
+    if len > MAX_FILE {
+        return Err(bad(CMD_TREND, format!("{path} is {len} bytes, over the {MAX_FILE} this reads")));
+    }
+    let mut f = std::fs::File::open(path).map_err(|e| bad(CMD_TREND, format!("{path}: {e}")))?;
+    let io = |e: std::io::Error| bad(CMD_TREND, format!("{path}: {e}"));
+    let mut read_bytes = 0u64;
+    // The index, when it still describes the start of this file.
+    let loaded: Option<TrendIndex> = std::fs::read(index_path(path))
+        .ok()
+        .filter(|b| b.len() < (1 << 20))
+        .and_then(|b| serde_json::from_slice::<TrendIndex>(&b).ok())
+        .filter(TrendIndex::sound);
+    let mut idx = match loaded.clone() {
+        Some(i) if i.len == 0 => Some(i),
+        Some(i) if i.len < len || (i.len == len && i.modified_ns.is_some() && i.modified_ns == modified_ns(&meta)) => {
+            let (h, e) = checks(&mut f, i.len).map_err(io)?;
+            read_bytes += 2 * i.len.min(CHECK_BYTES);
+            (h == i.head_check && e == i.end_check).then_some(i)
+        }
+        _ => None,
+    };
+    let mut index_used = idx.is_some();
+    for _attempt in 0..2 {
+        let mut ix = idx.take().unwrap_or_else(TrendIndex::empty);
+        let base = ix.len;
+        // What was appended since: whole lines go into the index, a last line with no newline yet
+        // counts for this answer only.
+        let added = read_at(&mut f, base, MAX_FILE + 1 - base.min(MAX_FILE)).map_err(io)?;
+        read_bytes += added.len() as u64;
+        if base + added.len() as u64 > MAX_FILE {
+            return Err(bad(CMD_TREND, format!("{path} is over the {MAX_FILE} bytes this reads")));
+        }
+        let text = std::str::from_utf8(&added).map_err(|_| utf8_err(CMD_TREND, path))?;
+        let whole = text.rfind('\n').map_or(0, |i| i + 1);
+        let mut at = base;
+        for line in text.get(..whole).unwrap_or_default().split_inclusive('\n') {
+            let end = at + line.len() as u64;
+            ix.feed(at, end, line);
+            at = end;
+        }
+        ix.len = base + whole as u64;
+        let mut view = ix.clone();
+        if let Some(rest) = text.get(whole..).filter(|r| !r.trim().is_empty()) {
+            view.feed(ix.len, base + added.len() as u64, rest);
+        }
+        // The last rows: from the bytes just read, else from where the index says they are.
+        let mut last = Vec::new();
+        let mut moved = false;
+        for &(a, b) in view.tail.iter().skip(view.tail.len().saturating_sub(need)) {
+            let bytes = if a >= base {
+                let (i, j) = (usize::try_from(a - base).unwrap_or(usize::MAX), usize::try_from(b - base).unwrap_or(usize::MAX));
+                added.get(i..j).map(<[u8]>::to_vec)
+            } else {
+                read_bytes += b - a;
+                read_at(&mut f, a, b - a).ok()
+            };
+            match bytes
+                .as_deref()
+                .and_then(|x| std::str::from_utf8(x).ok())
+                .and_then(|t| serde_json::from_str::<Value>(t.trim()).ok())
+                .and_then(|v| Row::of(&v))
+            {
+                Some(r) => last.push(r),
+                None => {
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        if moved {
+            // A row the index points at isn't one any more: the file changed under it. Read it all.
+            idx = None;
+            index_used = false;
+            continue;
+        }
+        // Keep the index for the next call (best effort: a folder that can't be written only
+        // costs the next call a full read).
+        if ix.len > 0 {
+            if let Ok((h, e)) = checks(&mut f, ix.len) {
+                ix.head_check = h;
+                ix.end_check = e;
+            }
+            let now = std::fs::metadata(path).ok();
+            ix.modified_ns = now.as_ref().filter(|m| m.len() == ix.len).and_then(modified_ns);
+            if loaded.as_ref() != Some(&ix)
+                && let Ok(text) = serde_json::to_vec(&ix)
+            {
+                write_index(&index_path(path), &text);
+            }
+        }
+        return Ok(TrendRead { rows: view.rows, skipped: view.skipped, last, index_used, read_bytes });
+    }
+    Err(bad(CMD_TREND, format!("{path} changed while it was read; try again")))
+}
+
+/// Every row of the trend file `text` and its skipped lines, read in full (the answer the index
+/// must give).
+#[cfg(test)]
+fn read_all(text: &str) -> (Vec<Row>, usize) {
+    let mut skipped = 0usize;
+    let mut rows: Vec<Row> = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        match serde_json::from_str::<Value>(line).ok().as_ref().and_then(Row::of) {
+            Some(r) => rows.push(r),
+            None => skipped += 1,
+        }
+    }
+    (rows, skipped)
+}
+
 fn run_trend(s: &mut Session, p: &Value) -> Result<Value> {
     let rules = rules()?;
     let path = str_param(p, "path")
@@ -884,23 +1147,16 @@ fn run_trend(s: &mut Session, p: &Value) -> Result<Value> {
         append_row(&path, &r)?;
         appended = true;
     }
-    let text = match std::fs::metadata(&path) {
-        Ok(_) => read_capped(CMD_TREND, &path)?,
-        Err(_) => String::new(),
-    };
-    let mut skipped = 0usize;
-    let mut rows: Vec<Row> = Vec::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()).take(MAX_ROWS) {
-        match serde_json::from_str::<Value>(line).ok().as_ref().and_then(Row::of) {
-            Some(r) => rows.push(r),
-            None => skipped += 1,
-        }
-    }
+    // The counts and the last rows, through the file's index: a call's cost doesn't grow with the
+    // project's history (Q6479).
+    let read = read_trend(&path, last.max(2))?;
+    let rows = &read.last;
     let batches = match str_param(p, "merge_log").map(str::trim).filter(|x| !x.is_empty()) {
         Some(f) => parse_merge_log(&read_capped(CMD_TREND, f)?),
         None => Vec::new(),
     };
-    let mut out = json!({"path": path, "rows": rows.len(), "appended": appended, "skipped_lines": skipped, "rules_source": rules.source, "regressions": 0, "findings": []});
+    let mut out = json!({"path": path, "rows": read.rows, "appended": appended, "skipped_lines": read.skipped, "rules_source": rules.source, "regressions": 0, "findings": [],
+        "index": {"used": read.index_used, "read_bytes": read.read_bytes}});
     let n = rows.len();
     if let (Some(prev), Some(cur)) = (n.checked_sub(2).and_then(|i| rows.get(i)), n.checked_sub(1).and_then(|i| rows.get(i))) {
         let found = compare(rules, prev, cur);
@@ -1114,6 +1370,136 @@ mod tests {
         // A commit the caller names adds its batch.
         assert_eq!(suspects(&b, "0000000", "1111111", &["89abcde gamma merge".into()]).len(), 1);
         assert!(parse_merge_log("").is_empty() && parse_merge_log("x merged -> next ").is_empty());
+    }
+
+    fn trow(i: usize) -> String {
+        json!({"schema": SCHEMA, "commit": format!("c{i:07}"), "label": "made-up", "metrics": {"gate_a.host_pass_pct": i as f64 % 97.0, "elements.total": 1000.0 + i as f64}})
+            .to_string()
+    }
+
+    fn tdir(name: &str) -> String {
+        let d = std::env::temp_dir().join(format!("cadaddy-trendidx-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d.join("trend.jsonl").to_string_lossy().into_owned()
+    }
+
+    fn append(path: &str, text: &str) {
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).create(true).open(path).unwrap().write_all(text.as_bytes()).unwrap();
+    }
+
+    /// The index's answer is the full read's: counts, and the last `need` rows in order.
+    fn same_as_full(path: &str, need: usize) -> TrendRead {
+        let got = read_trend(path, need).unwrap();
+        let need = need.min(INDEX_KEEP);
+        let (rows, skipped) = read_all(&std::fs::read_to_string(path).unwrap_or_default());
+        assert_eq!((got.rows, got.skipped), (rows.len(), skipped), "{path}");
+        let want: Vec<(String, BTreeMap<String, f64>)> =
+            rows.iter().skip(rows.len().saturating_sub(need)).map(|r| (r.commit.clone(), r.metrics.clone())).collect();
+        let have: Vec<(String, BTreeMap<String, f64>)> = got.last.iter().map(|r| (r.commit.clone(), r.metrics.clone())).collect();
+        assert_eq!(have, want, "{path}");
+        got
+    }
+
+    #[test]
+    fn the_index_answers_as_a_full_read_does_through_appends_junk_and_a_line_with_no_newline() {
+        let path = tdir("same");
+        // No file yet: nothing.
+        assert_eq!(same_as_full(&path, 10).rows, 0);
+        let mut text = String::new();
+        for i in 0..300 {
+            text.push_str(&trow(i));
+            text.push_str(if i % 50 == 0 { "\r\n" } else { "\n" });
+            if i % 37 == 0 {
+                text.push_str("not a row\n\n   \n{\"metrics\": 5}\n");
+            }
+        }
+        std::fs::write(&path, &text).unwrap();
+        let first = same_as_full(&path, 10);
+        assert!(!first.index_used && std::fs::metadata(index_path(&path)).is_ok());
+        for need in [1, 2, 10, 200, 500] {
+            assert!(same_as_full(&path, need).index_used);
+        }
+        // Appends, one at a time and several at once, junk among them.
+        for i in 300..320 {
+            append(&path, &format!("{}\n", trow(i)));
+            assert!(same_as_full(&path, 10).index_used);
+        }
+        append(&path, &format!("junk\n{}\n{}\n", trow(320), trow(321)));
+        same_as_full(&path, 200);
+        // A last line with no newline counts, and isn't put in the index until it is whole; the
+        // next append joins it (one junk line, as a full read sees it).
+        append(&path, &trow(322));
+        assert_eq!(same_as_full(&path, 5).last.last().map(|r| r.commit.clone()), Some("c0000322".into()));
+        append(&path, &format!("{}\n", trow(323)));
+        same_as_full(&path, 5);
+        append(&path, &format!("{}\n", trow(324)));
+        assert!(same_as_full(&path, 5).index_used);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_file_changed_outside_cadaddy_is_read_in_full_again() {
+        let path = tdir("edited");
+        let text: String = (0..400).map(|i| format!("{}\n", trow(i))).collect();
+        std::fs::write(&path, &text).unwrap();
+        same_as_full(&path, 10);
+        // Shorter (rows taken off the end): rebuilt.
+        let cut_at = text.match_indices('\n').nth(349).unwrap().0 + 1;
+        std::fs::write(&path, &text[..cut_at]).unwrap();
+        let r = same_as_full(&path, 10);
+        assert!(!r.index_used && r.rows == 350);
+        // Replaced by another file, longer: the checked bytes differ, rebuilt.
+        let other: String = (1000..1500).map(|i| format!("{}\n", trow(i))).collect();
+        std::fs::write(&path, &other).unwrap();
+        assert!(!same_as_full(&path, 10).index_used);
+        // Edited in place, same length, a new time: rebuilt.
+        let edited = other.replacen("c0001001", "c0009001", 1);
+        std::fs::write(&path, &edited).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+        assert!(!same_as_full(&path, 500).index_used);
+        // A row the index points at, past the checked bytes, made junk with the time put back:
+        // the row no longer reads, so it is read in full.
+        same_as_full(&path, 10);
+        let meta_time = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let broken = edited.replacen("{\"commit\":\"c0001495\"", "[\"commit\",\"c0001495\"", 1);
+        assert_eq!(broken.len(), edited.len());
+        assert_ne!(broken, edited, "the test's edit must change the file");
+        std::fs::write(&path, &broken).unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(meta_time).unwrap();
+        let r = same_as_full(&path, 10);
+        assert!(!r.index_used, "a moved row is read again in full");
+        // A garbled index is rebuilt; an index for a file that is gone is ignored.
+        std::fs::write(index_path(&path), "{not json").unwrap();
+        assert!(!same_as_full(&path, 10).index_used);
+        assert!(same_as_full(&path, 10).index_used);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(same_as_full(&path, 10).rows, 0);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_call_reads_what_was_appended_and_the_rows_it_shows_not_the_history() {
+        // Bytes read per call: the same bound at 500 rows and at 20,000 (Q6479).
+        let mut most = Vec::new();
+        for n in [500usize, 20_000] {
+            let path = tdir(&format!("bytes{n}"));
+            let text: String = (0..n).map(|i| format!("{}\n", trow(i))).collect();
+            std::fs::write(&path, &text).unwrap();
+            assert_eq!(read_trend(&path, 10).unwrap().read_bytes, text.len() as u64, "the first call reads it all once");
+            let mut top = 0u64;
+            for k in 0..5 {
+                append(&path, &format!("{}\n", trow(n + k)));
+                top = top.max(same_as_full(&path, 10).read_bytes);
+            }
+            let row_len = trow(n).len() as u64 + 1;
+            assert!(top <= 2 * CHECK_BYTES + 11 * row_len, "{n} rows: {top} bytes read");
+            most.push(top);
+            let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+        }
+        assert!(most[1] <= most[0] + 64, "{most:?}");
     }
 
     #[test]

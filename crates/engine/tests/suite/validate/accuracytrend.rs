@@ -309,3 +309,42 @@ fn bad_rows_files_and_params_are_refused_and_never_panic() {
     assert!(r["regressions"].as_u64().is_some_and(|n| n >= 1), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_call_through_the_index_answers_as_a_full_read_and_reads_only_the_new_row() {
+    // Q6479: the trend file keeps a small index beside it; an append reads its row and the rows
+    // shown, not the history, and the answer is the one a full read gives (the index deleted).
+    let dir = dir("index");
+    let trend = dir.join("trend.jsonl");
+    let row = |i: usize| {
+        json!({"schema": "cadaddy.accuracy/1", "commit": format!("{:07}abc", i), "label": "made-up",
+            "metrics": {"gate_a.host_pass_pct": if i % 9 == 8 { 50.0 } else { 95.0 }, "elements.total": 1000.0 + i as f64}})
+    };
+    let text: String = (0..3000).map(|i| format!("{}\n", row(i))).collect();
+    std::fs::write(&trend, &text).unwrap();
+    let mut s = Session::new();
+    let first = s.execute("validate.trend", &json!({"path": trend})).unwrap();
+    assert_eq!((first["rows"].as_u64(), first["index"]["used"].as_bool()), (Some(3000), Some(false)), "{first}");
+    assert_eq!(first["index"]["read_bytes"].as_u64(), Some(text.len() as u64));
+    for i in 3000..3010 {
+        let r = s.execute("validate.trend", &json!({"path": trend, "row": row(i), "last": 5})).unwrap();
+        assert_eq!(r["index"]["used"], true, "{r}");
+        assert!(r["index"]["read_bytes"].as_u64().is_some_and(|b| b < 16_000), "{}", r["index"]);
+        // The same call answered by a full read: the index deleted, nothing appended.
+        let mut idx = trend.clone().into_os_string();
+        idx.push(".idx");
+        std::fs::remove_file(&idx).unwrap();
+        let full = s.execute("validate.trend", &json!({"path": trend, "last": 5})).unwrap();
+        assert_eq!(full["index"]["used"], false);
+        let strip = |v: &Value| {
+            let mut v = v.clone();
+            let o = v.as_object_mut().unwrap();
+            o.remove("index");
+            o.remove("appended");
+            v
+        };
+        assert_eq!(strip(&r), strip(&full), "row {i}");
+        assert_eq!(r["rows"].as_u64(), Some(i as u64 + 1));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
