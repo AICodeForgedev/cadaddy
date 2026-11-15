@@ -361,6 +361,8 @@ fn rooms_of(other: Drawing) -> Vec<PlanItem> {
 /// edit; the record takes the model as the outermost command leaves it ([`after_command`]).
 pub(crate) fn record(s: &mut Session, g: &WallGen) {
     record_with(s, g, None, true);
+    #[cfg(test)]
+    tests::panic_if_armed();
 }
 
 /// The generated objects of `d`: each one's fingerprint and tag.
@@ -433,6 +435,18 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Draw
         std::sync::Arc::make_mut(rec).made = made;
     }
     st.model_records.follow(&now, id);
+}
+
+/// A command that died (a panic; the drawing put back as the command found it) whose build was
+/// still to settle: the build died with it. Its record goes, so the next command doesn't settle
+/// it with the model it leaves (that took the next command's hand edits for the build's work:
+/// a wall erased by hand came back at the next rebuild, Q6464). For an interactive command,
+/// where no copy of the records is kept: a JSON command puts its copy back instead
+/// ([`crate::Session::execute`]).
+pub(crate) fn drop_unsettled(st: &mut crate::DocState) {
+    let Some(id) = st.model_records.fresh.take() else { return };
+    st.model_records.records.retain(|(i, _)| *i != id);
+    st.model_records.states.retain(|(_, i)| *i != id);
 }
 
 /// `to` is `from` with a change that is no edit of the model or its plan (the build record written
@@ -1083,6 +1097,113 @@ mod tests {
         // Not a constant: another colour is another fingerprint.
         e.common.color = cadaddy_doc::color::Color::Index(1);
         assert_ne!(fingerprint(&e), in_one_string);
+    }
+
+    thread_local! {
+        /// A build command panics right after it recorded its build (the step a job's later
+        /// stages come after), which nothing can make happen on demand.
+        static PANIC_AFTER_RECORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    pub(super) fn panic_if_armed() {
+        assert!(!PANIC_AFTER_RECORD.get(), "the build command panicked after its build");
+    }
+
+    fn rules() -> Value {
+        json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        })
+    }
+
+    /// After a build that died with its command (the drawing put back as it was): erase the
+    /// first generated wall by hand, then rebuild. The hand erase is the person's, so the wall
+    /// stays erased; the build that died must not take it for its own work.
+    fn erase_then_rebuild_keeps_the_erase(mut s: Session, plan: &[[Handle; 2]], how: &str) {
+        assert!(s.journal.is_outer(), "{how}: the panic left the session inside a call");
+        assert!(s.state().unwrap().model_records.fresh.is_none(), "{how}: the dead build is still waiting to be settled");
+        let walls = built_walls(&s);
+        assert_eq!(walls.len(), 3, "{how}: the drawing is as it was before the failed build");
+        let erased = walls[0];
+        let source = |s: &Session, h: &Handle| s.doc().unwrap().entity(*h).and_then(|e| source_of(e));
+        let erased_from = source(&s, &erased);
+        assert!(erased_from.is_some());
+        s.execute("erase", &json!({"handles": [erased.hex()]})).unwrap();
+        assert_eq!(built_walls(&s).len(), 2);
+        revise_after_a_plan_edit(&mut s, plan);
+        let now = built_walls(&s);
+        assert_eq!(now.len(), 2, "{how}: the wall erased by hand is built again");
+        assert!(now.iter().all(|h| source(&s, h) != erased_from), "{how}: the erased wall's plan made a wall again");
+    }
+
+    /// Q6464: a build command that panics after its build: the drawing is put back, and the
+    /// build it recorded is dropped with it, not settled by the next command.
+    #[test]
+    fn a_build_that_panics_is_not_settled_by_the_next_command() {
+        let (mut s, plan) = walls(3);
+        PANIC_AFTER_RECORD.set(true);
+        let r = s.execute("wallgen", &json!({"rules": rules(), "auto": false}));
+        PANIC_AFTER_RECORD.set(false);
+        assert!(matches!(&r, Err(crate::EngineError::Internal(id, _)) if id == "wallgen"), "{r:?}");
+        erase_then_rebuild_keeps_the_erase(s, &plan, "panic in the command");
+    }
+
+    /// The same when a command run inside another (a job's step) panics after its build.
+    #[test]
+    fn a_nested_build_that_panics_is_not_settled_by_the_next_command() {
+        let (mut s, plan) = walls(3);
+        s.journal.enter();
+        PANIC_AFTER_RECORD.set(true);
+        let r = s.execute("wallgen", &json!({"rules": rules(), "auto": false}));
+        PANIC_AFTER_RECORD.set(false);
+        s.journal.leave();
+        assert!(matches!(&r, Err(crate::EngineError::Internal(..))), "{r:?}");
+        erase_then_rebuild_keeps_the_erase(s, &plan, "panic in a nested command");
+    }
+
+    /// The same when a pass after the build command panics (the session's outer guard).
+    #[test]
+    fn a_build_whose_after_pass_panics_is_not_settled_by_the_next_command() {
+        let (mut s, plan) = walls(3);
+        crate::guard::tests::arm_panic_after_command(true);
+        let r = s.execute("wallgen", &json!({"rules": rules(), "auto": false}));
+        crate::guard::tests::arm_panic_after_command(false);
+        assert!(matches!(&r, Err(crate::EngineError::Internal(..))), "{r:?}");
+        erase_then_rebuild_keeps_the_erase(s, &plan, "panic after the command");
+    }
+
+    /// An interactive command whose input builds (through a command it runs) and then panics.
+    struct BuildsThenPanics;
+
+    impl crate::prompt::Interactive for BuildsThenPanics {
+        fn name(&self) -> &'static str {
+            "BUILDTEST"
+        }
+        fn prompt(&self, _s: &Session) -> crate::prompt::Prompt {
+            crate::prompt::Prompt::new("Specify a point", crate::prompt::Accept::POINT)
+        }
+        fn input(&mut self, s: &mut Session, _i: crate::prompt::Input) -> Result<crate::prompt::Step> {
+            s.execute("wallgen", &json!({"rules": rules(), "auto": false}))?;
+            panic!("the interactive command panicked after its build");
+        }
+        fn begin(&mut self, _s: &mut Session) -> Result<crate::prompt::Step> {
+            Ok(crate::prompt::Step::Continue)
+        }
+    }
+
+    #[test]
+    fn an_interactive_build_that_panics_is_not_settled_by_the_next_command() {
+        let (mut s, plan) = walls(3);
+        let st = s.state().unwrap();
+        let (before, selection_before) = (st.doc.clone(), st.selection.clone());
+        let machine = crate::guard::Guarded::wrap(Box::new(BuildsThenPanics));
+        s.running = Some(crate::Running { id: "buildtest".into(), machine, before, selection_before });
+        s.feed(None).unwrap();
+        let r = s.input(crate::prompt::Input::Point(Vec2::ZERO));
+        assert!(matches!(&r, Err(crate::EngineError::Internal(..))), "{r:?}");
+        assert!(s.running.is_none());
+        erase_then_rebuild_keeps_the_erase(s, &plan, "panic in an interactive command");
     }
 
     /// The timings for Q6463 (not run by default): `N` walls, `K` deleted and `K` recoloured by

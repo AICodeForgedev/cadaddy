@@ -205,6 +205,9 @@ struct Piece {
     panel: String,
     system: String,
     run: String,
+    /// The feeder leg it is part of (`feeder <tag> <from>→<to>`); empty off a feeder or on a
+    /// model built before pieces carried it.
+    feeder: String,
     length_ft: f64,
     angle_deg: f64,
     turn_deg: Option<f64>,
@@ -283,6 +286,7 @@ fn scan(d: &Drawing) -> Scan {
                 panel: text("panel"),
                 system: text("system"),
                 run: text("run"),
+                feeder: text("feeder"),
                 length_ft: pos(num("length_ft").unwrap_or(0.0)),
                 angle_deg: pos(num("angle_deg").unwrap_or(0.0)),
                 turn_deg: num("turn_deg").map(pos),
@@ -349,6 +353,8 @@ struct Wire {
 #[derive(Clone, Debug, Default)]
 struct RunPlan {
     run: String,
+    /// The feeder leg its pieces say they are part of (empty: none said).
+    feeder: String,
     level: String,
     system: String,
     circuit: String,
@@ -438,6 +444,7 @@ fn plan_run(d: &Drawing, sc: &Scan, run: &str, idx: &[usize], upf: f64) -> RunPl
     let first = ps.first().copied().cloned().unwrap_or_default();
     let mut rp = RunPlan {
         run: run.to_string(),
+        feeder: ps.iter().find(|p| !p.feeder.is_empty()).map(|p| p.feeder.clone()).unwrap_or_default(),
         level: first.level.clone(),
         system: first.system.clone(),
         circuit: first.circuit.clone(),
@@ -800,10 +807,17 @@ fn plan(d: &Drawing, sp: &BuildingSpec) -> Plan {
     }
     let runs: Vec<RunPlan> = by_run.iter().map(|(run, idx)| plan_run(d, &sc, run, idx, upf)).collect();
     // The feeders' routed runs: each spec run's id in the pieces (`<base>#<chain>`), its leg.
+    // Legs out of one spot share a base: the leg the pieces carry picks among them; a model
+    // whose pieces carry none takes the first.
     let mut feeder_base: HashMap<String, (usize, String)> = HashMap::new();
+    let mut leg_base: HashMap<(String, String), usize> = HashMap::new();
+    let mut leg_first: HashMap<String, usize> = HashMap::new();
     for (i, sr) in sp.mep.runs.iter().enumerate() {
         if super::ugplan::is_feeder_run(sr) {
-            feeder_base.entry(super::mep::run_base(sr)).or_insert((i, sr.source_sheet.clone()));
+            let base = super::mep::run_base(sr);
+            leg_base.entry((base.clone(), sr.source_sheet.clone())).or_insert(i);
+            leg_first.entry(sr.source_sheet.clone()).or_insert(i);
+            feeder_base.entry(base).or_insert((i, sr.source_sheet.clone()));
         }
     }
     let mut legs: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
@@ -812,8 +826,11 @@ fn plan(d: &Drawing, sp: &BuildingSpec) -> Plan {
     let loop_ft = pos(r.pull_box_loop_ft);
     for (ri, rp) in runs.iter().enumerate() {
         let base = rp.run.rsplit_once('#').map_or(rp.run.as_str(), |(b, _)| b);
-        if let Some((si, leg)) = feeder_base.get(base) {
-            legs.entry(leg.clone()).or_default().push((*si, ri));
+        let of_leg = (!rp.feeder.is_empty())
+            .then(|| leg_base.get(&(base.to_string(), rp.feeder.clone())).or_else(|| leg_first.get(&rp.feeder)).map(|si| (*si, rp.feeder.clone())))
+            .flatten();
+        if let Some((si, leg)) = of_leg.or_else(|| feeder_base.get(base).cloned()) {
+            legs.entry(leg).or_default().push((si, ri));
             // Its wire in the model is the feeder's: its pull is cut from the schedule along
             // the whole route (with the gear ends' slack).
             for w in &rp.wires {
@@ -1120,7 +1137,10 @@ fn feeder_rows_from_spec(sp: &BuildingSpec, f: &cadaddy_walk3d::Feeder, dest: &s
             } else {
                 continue;
             }
-            ids.push(id.clone());
+            // A riser and the run leaving its top share their spot's name: listed once.
+            if !ids.contains(&id) {
+                ids.push(id.clone());
+            }
             placed = true;
             break;
         }

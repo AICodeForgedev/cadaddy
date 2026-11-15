@@ -400,30 +400,58 @@ fn read_sheet(texts: &[TextItem], sheet: &str, page: usize) -> (Vec<PanelSchedul
         }
     }
     let mut out = Vec::new();
+    // Where each table read stands: a table is known by its place, not by its circuits (two
+    // identical panels on one sheet are two schedules).
+    let mut read_at: Vec<Spot> = Vec::new();
     for title in flat.iter().copied().chain(joined.iter()) {
         if out.len() >= MAX_SCHEDULES {
             break;
         }
         let Some((panel, typical_of)) = title_panel(&title.value) else { continue };
-        out.extend(read_one(&flat, title, &panel, typical_of, &legend, sheet));
+        if let Some((schedule, spot)) = read_one(&flat, title, &panel, typical_of, &legend, sheet) {
+            out.push(schedule);
+            read_at.push(spot);
+        }
     }
     let mut unnamed: Vec<Unnamed> = Vec::new();
     for l in nameless {
         if out.len() + unnamed.len() >= MAX_SCHEDULES {
             break;
         }
-        let Some(schedule) = read_one(&flat, l, "", None, &legend, sheet) else { continue };
-        // A table a named title already read (its label one more line of its header) is that one.
-        if out.iter().any(|o| o.circuits == schedule.circuits) || unnamed.iter().any(|u| u.schedule.circuits == schedule.circuits) {
+        let Some((schedule, spot)) = read_one(&flat, l, "", None, &legend, sheet) else { continue };
+        // A table already read (a named title's, its label one more line of its header; or
+        // another label's) is that one.
+        if read_at.iter().any(|r| r.same_table(&spot)) {
             continue;
         }
+        read_at.push(spot);
         unnamed.push(Unnamed { schedule, page, at: l.at, height: l.height });
     }
     (out, unnamed)
 }
 
+/// Where a table read stands: its header's line and its circuit numbers' columns (`lo` to `hi`:
+/// the left side's and the right side's, or the middle's), in its cells' text height.
+#[derive(Clone, Copy, Debug)]
+struct Spot {
+    y: f64,
+    lo: f64,
+    hi: f64,
+    row_h: f64,
+}
+
+impl Spot {
+    /// The same table read twice: its header on the same line (or the line under it, a header
+    /// two lines tall) and its circuit numbers in the same columns.
+    fn same_table(&self, o: &Spot) -> bool {
+        let h = self.row_h.min(o.row_h);
+        (self.y - o.y).abs() <= 2.6 * h && self.lo <= o.hi + 3.0 * h && o.lo <= self.hi + 3.0 * h
+    }
+}
+
 /// The schedule under `title`: its circuits numbered in a CKT column on each side, or down the
-/// middle (`1 A 2`): the reading with more circuits that have a description or a breaker.
+/// middle (`1 A 2`): the reading with more circuits that have a description or a breaker; and
+/// where its table stands.
 fn read_one(
     flat: &[&TextItem],
     title: &TextItem,
@@ -431,9 +459,9 @@ fn read_one(
     typical_of: Option<u32>,
     legend: &BTreeMap<String, String>,
     sheet: &str,
-) -> Option<PanelSchedule> {
-    let real = |p: &Option<PanelSchedule>| {
-        p.as_ref().map_or(0, |p| p.circuits.iter().filter(|c| !c.description.is_empty() || !c.breaker.is_empty()).count())
+) -> Option<(PanelSchedule, Spot)> {
+    let real = |p: &Option<(PanelSchedule, Spot)>| {
+        p.as_ref().map_or(0, |(p, _)| p.circuits.iter().filter(|c| !c.description.is_empty() || !c.breaker.is_empty()).count())
     };
     let by_ckt = read_ckt(flat, title, panel, typical_of, legend, sheet);
     let centred = read_centred(flat, title, panel, typical_of, legend, sheet);
@@ -590,7 +618,7 @@ fn read_ckt(
     typical_of: Option<u32>,
     legend: &BTreeMap<String, String>,
     sheet: &str,
-) -> Option<PanelSchedule> {
+) -> Option<(PanelSchedule, Spot)> {
     let h = title.height;
     // The header: the nearest line under the title with a CKT column (two: the right side's).
     let headings = cadaddy_mepfix::wordrules::words("schedules.panel_circuit_headings");
@@ -860,7 +888,9 @@ fn read_ckt(
         .collect();
     let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
     let totals = totals_of(flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &phases);
-    Some(PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals })
+    let schedule =
+        PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals };
+    Some((schedule, Spot { y: top, lo: lnum, hi: if two { rnum } else { lnum }, row_h }))
 }
 
 /// A cell's text cut short to fit its column (`C...`, `Phas…`): the letters printed before the dots.
@@ -905,7 +935,7 @@ fn read_inward(
     typical_of: Option<u32>,
     legend: &BTreeMap<String, String>,
     sheet: &str,
-) -> Option<PanelSchedule> {
+) -> Option<(PanelSchedule, Spot)> {
     let h = title.height;
     let headings = cadaddy_mepfix::wordrules::words("schedules.panel_circuit_headings");
     let ckts: Vec<&&TextItem> = flat
@@ -1061,7 +1091,9 @@ fn read_inward(
     let header = header_facts(flat, top + 0.6 * row_h, title.at.y + 0.6 * row_h, x0, x1, row_h);
     let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
     let totals = totals_of(flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &phases);
-    Some(PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals })
+    let schedule =
+        PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals };
+    Some((schedule, Spot { y: top, lo: c1, hi: c2, row_h }))
 }
 
 /// A text that only labels a schedule's panel, its tag in the next cell: `PANEL:`, `PANEL NAME:`.
@@ -1118,7 +1150,7 @@ fn read_centred(
     typical_of: Option<u32>,
     legend: &BTreeMap<String, String>,
     sheet: &str,
-) -> Option<PanelSchedule> {
+) -> Option<(PanelSchedule, Spot)> {
     let h = title.height;
     // A title over one side or the middle: the far side's header can be the table's width away.
     let near_title = |t: &TextItem| t.at.y < title.at.y && t.at.y > title.at.y - HEADER_REACH * h && (t.at.x - title.at.x).abs() < 120.0 * h;
@@ -1282,7 +1314,9 @@ fn read_centred(
     }
     let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
     let totals = totals_of(flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &[]);
-    Some(PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals })
+    let schedule =
+        PanelSchedule { panel: panel.to_string(), typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals };
+    Some((schedule, Spot { y: top, lo: centre, hi: centre, row_h }))
 }
 
 /// The rows of a table under its header (`head_bottom`, between `x0` and `x1`), line by line,
@@ -2723,6 +2757,38 @@ mod tests {
         split.retain(|x| x.value != "VOLTS:" && x.value != "208Y/120V");
         let got = read(&split, "X-1");
         assert_eq!(got.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>(), ["QB4"], "{got:#?}");
+    }
+
+    #[test]
+    fn identical_panels_side_by_side_are_two_schedules_a_table_read_twice_is_one() {
+        // Q6458: a table is known by where it stands, not by its circuits. Two identical panels,
+        // one titled and one whose name isn't printed as text, are two schedules.
+        let rows = [("LIGHTING", "RECEPTACLES"), ("SIGN", "SPARE")];
+        let mut sheet = nameless(0.0, &[], rows);
+        sheet.push(t(250.0, 535.0, "PANELBOARD QB3", 10.0));
+        sheet.extend(nameless(500.0, &[], rows));
+        let got = read(&sheet, "X-1");
+        let mut names: Vec<&str> = got.iter().map(|p| p.panel.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["QB3", "UNNAMED-1"], "{got:#?}");
+        assert!(got.iter().all(|p| p.circuits.len() == 4), "{got:#?}");
+        // Two identical tables neither of which prints its name: two placeholders.
+        let mut twins = nameless(0.0, &[], rows);
+        twins.extend(nameless(500.0, &["VOLTAGE:"], rows));
+        let set = read_set(&[("X-1", &twins)]);
+        let mut names: Vec<&str> = set.iter().map(|p| p.panel.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["UNNAMED-1", "UNNAMED-2"], "{set:#?}");
+        // The same two tables in a column, one above the other.
+        let mut stacked = nameless(0.0, &[], rows);
+        stacked.extend(nameless(0.0, &[], rows).into_iter().map(|x| TextItem { at: Vec2::new(x.at.x, x.at.y - 200.0), ..x }));
+        let got = read(&stacked, "X-1");
+        assert_eq!(got.len(), 2, "{got:#?}");
+        // The titled table's own `PANEL NAME:` label (its header's cell) still reads it once.
+        let mut once = nameless(0.0, &[], rows);
+        once.push(t(250.0, 535.0, "PANELBOARD QB3", 10.0));
+        let got = read(&once, "X-1");
+        assert_eq!(got.iter().map(|p| p.panel.as_str()).collect::<Vec<_>>(), ["QB3"], "{got:#?}");
     }
 
     #[test]

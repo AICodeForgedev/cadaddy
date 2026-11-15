@@ -830,7 +830,12 @@ fn main() -> eframe::Result {
                 // that logs UI stalls.
                 let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
                     let i = rs.adapter.get_info();
-                    format!("{} ({:?}, {:?}; driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info)
+                    let line = format!("{} ({:?}, {:?}; driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info);
+                    // Which adapters there were and why this one (adapterpick.rs).
+                    match cadaddy_ui_egui::adapterpick::last() {
+                        Some(choice) => format!("{line}\ngraphics choice: {}", choice.summary()),
+                        None => line,
+                    }
                 });
                 cadaddy_ui_egui::diag::set_host(cadaddy_ui_egui::diag::HostInfo {
                     version: version_string(),
