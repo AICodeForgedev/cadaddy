@@ -40145,6 +40145,7 @@ mod tests {
                 label: label.into(),
                 values: vec![kva],
                 text: format!("{label} {kva:.2} KVA"),
+                corrections: Vec::new(),
             };
             sp.mep.load_summaries = vec![cadaddy_walk3d::LoadSummary {
                 title: "UNIT FEEDER DEMAND CALCULATION".into(),
