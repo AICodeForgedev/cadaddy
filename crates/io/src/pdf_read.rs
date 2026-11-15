@@ -3280,8 +3280,8 @@ fn damaged_text_height(height: f64, sheet_pts: (f64, f64)) -> bool {
     !height.is_finite() || height > sheet_pts.0.max(sheet_pts.1).max(72.0)
 }
 
-/// The boxes of a page's visible real text items, a quarter letter round, for finding what lies
-/// on them.
+/// The boxes of a page's visible real text items (or its hidden ones, [`TextCover::hidden`]), a
+/// quarter letter round, for finding what lies on them.
 struct TextCover {
     boxes: Vec<[f64; 4]>,
     grid: HashMap<(i64, i64), Vec<usize>>,
@@ -3291,9 +3291,18 @@ impl TextCover {
     const CELL: f64 = 36.0;
 
     fn new(texts: &[TextOut]) -> TextCover {
+        Self::of(texts, false)
+    }
+
+    /// The boxes of the hidden texts: the searchable copies of lettering drawn as strokes.
+    fn hidden(texts: &[TextOut]) -> TextCover {
+        Self::of(texts, true)
+    }
+
+    fn of(texts: &[TextOut], hidden: bool) -> TextCover {
         let mut boxes: Vec<[f64; 4]> = Vec::new();
         let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-        for t in texts.iter().filter(|t| !t.value.trim().is_empty() && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)) {
+        for t in texts.iter().filter(|t| !t.value.trim().is_empty() && (t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER)) == hidden) {
             let h = t.height.max(0.5);
             let (dx, dy) = (t.end.0 - t.at.0, t.end.1 - t.at.1);
             let len = dx.hypot(dy);
@@ -5749,6 +5758,9 @@ struct SymbolInstance {
     ocr_idx: Option<usize>,
     /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
     device_type: Option<String>,
+    /// Strokes its cluster took that the symbol step left loose where printed (not the
+    /// symbol's: a leader, a copy's own lettering).
+    released: Vec<usize>,
 }
 
 /// A short mark that may name the device beside it: real PDF text, or lettering the OCR read
@@ -5843,6 +5855,52 @@ fn stands_alone(i: usize, height: f64, boxes: &[[f64; 4]]) -> bool {
     boxes.iter().enumerate().all(|(k, o)| k == i || !(o[0] <= b[2] + gap && o[2] >= b[0] - gap && o[1] <= b[3] + gap && o[3] >= b[1] - gap))
 }
 
+/// The readings of lettering that spell a tag a symbol took from the page's text, read from
+/// strokes the symbol's cluster held and the symbol step left loose: the symbol's TAG attribute
+/// prints that tag. A copy's own lettering is not shared by its type's other copies, so it
+/// leaves the symbol's block (Q6636) and is read like any lettering; written as a text of its
+/// own as well, the tag would stand twice, once loose (a door's tag in a corridor read as a
+/// room's number).
+fn tag_lettering_readings(groups: &[Vec<SymbolInstance>], texts: &[TextOut], readings: &[RecoveredText]) -> Vec<usize> {
+    let tags: Vec<(&str, &[usize])> = groups
+        .iter()
+        .flatten()
+        .filter(|inst| !inst.released.is_empty())
+        .filter_map(|inst| Some((texts.get(inst.nearby_text_idx?)?.value.trim(), inst.released.as_slice())))
+        .filter(|(v, _)| !v.is_empty())
+        .collect();
+    readings
+        .iter()
+        .enumerate()
+        .filter(|(_, rt)| {
+            let v = rt.value.trim();
+            !rt.stroke_indices.is_empty()
+                && tags.iter().any(|(tag, released)| tag.eq_ignore_ascii_case(v) && rt.stroke_indices.iter().all(|si| released.contains(si)))
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The strokes a symbol's cluster held and the symbol step left loose that lie on a hidden text:
+/// a copy's own lettering (its circuit, its number: drawn differently at each copy, so in no
+/// block), which that hidden text stands for. They go where the import puts all lettering a
+/// hidden text confirms (its source layer, off), not loose on the plan as linework, where the
+/// rooms and walls readers would take them for lines of the building (Q6636).
+fn released_lettering(groups: &[Vec<SymbolInstance>], strokes: &[Stroke], texts: &[TextOut]) -> Vec<usize> {
+    let cover = TextCover::hidden(texts);
+    if cover.boxes.is_empty() {
+        return Vec::new();
+    }
+    groups
+        .iter()
+        .flatten()
+        .flat_map(|inst| inst.released.iter().copied())
+        .filter(|&si| {
+            strokes.get(si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_some_and(|b| cover.covers(b[0], b[1]) && cover.covers(b[2], b[3]))
+        })
+        .collect()
+}
+
 /// Smallest and largest symbol on a sheet, in points.
 fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
     let short = (sheet.0 * 72.0).min(sheet.1 * 72.0);
@@ -5850,33 +5908,39 @@ fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
 }
 
 /// Group symbol instances by device type (in tag order); each type with ≥2 instances becomes
-/// a block.  Within a group, instances keep their order (the first one draws the block), each
-/// rid of the drawing round it its cluster took ([`release_unshared_strokes`]).
-fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<SymbolInstance>> {
+/// one block per way it is drawn ([`split_by_shared_drawing`]): a block holds only what all its
+/// copies share, so no copy's own strokes are erased and none are invented at another copy.
+/// Each instance is first rid of the drawing round it its cluster took
+/// ([`release_foreign_strokes`]).
+fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke], fills: &[Fill], doors: &HashSet<usize>) -> Vec<Vec<SymbolInstance>> {
     let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
     for inst in instances {
         let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
         groups.entry(key).or_default().push(inst);
     }
-    let mut out: Vec<Vec<SymbolInstance>> = groups.into_values().filter(|g| g.len() >= 2).collect();
-    for group in &mut out {
-        release_unshared_strokes(group, strokes);
+    let mut out = Vec::new();
+    let lines = LineRuns::new(strokes);
+    for mut group in groups.into_values().filter(|g| g.len() >= 2) {
+        release_doors(&mut group, doors);
+        release_line_dashes(&mut group, strokes, &lines);
+        release_foreign_strokes(&mut group, strokes);
+        out.extend(split_by_shared_drawing(group, strokes, fills));
     }
     out
 }
 
 /// A tag's cluster can take the drawing round it: the frame and glazing of the window a window
-/// tag marks. A block draws its first instance's strokes at every instance, so that window would
-/// be drawn at every tag of its type, and lost where it is when its tag is not the first (Q6435).
-/// The symbol is what its instances share: a stroke drawn alike (same shape, wherever it stands)
-/// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
-/// of them, if more) and more than [`FOREIGN_STROKE_OVER`] times the outline they share round
-/// the tag (its hexagon, circle or box: closed, about as wide as tall, no smaller than the tag's
-/// letters; beside it, a box drawn round the tag's own letters counts too, though its width
-/// follows them) is not the symbol's, and stays loose where printed. An instance sharing no such
-/// outline keeps all its strokes (a symbol drawn turned, a bare letter), and so does a stroke
-/// near the outline's size (a part of the symbol drawn its own way at one instance).
-fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
+/// tag marks, a leader or a wire leaving the symbol (Q6435, Q6636). The symbol is the outline its
+/// instances share round the tag (its hexagon, circle or box: closed, about as wide as tall, no
+/// smaller than the tag's letters, drawn alike in at least [`SHARED_STROKE_MIN`] of its type's
+/// instances, or one in [`SHARED_STROKE_SHARE`] of them if more; beside it, a box drawn round the
+/// tag's own letters counts too, though its width follows them) and what lies inside its reach: a
+/// stroke more than [`FOREIGN_STROKE_OVER`] times that outline reaches beyond the symbol and is
+/// never the symbol's, however many instances draw it alike (a leader drawn the same at every
+/// copy of a typical view), and stays loose where printed. An instance sharing no such outline
+/// keeps its cluster (a symbol drawn turned, a bare letter): [`split_by_shared_drawing`] still
+/// keeps only what its copies share.
+fn release_foreign_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     let need = SHARED_STROKE_MIN.max(group.len().div_ceil(SHARED_STROKE_SHARE));
     let keys: Vec<Vec<Option<StrokeKey>>> =
         group.iter().map(|inst| inst.stroke_indices.iter().map(|&si| strokes.get(si).map(stroke_key)).collect()).collect();
@@ -5913,18 +5977,382 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
             continue;
         }
         let size = outlines.iter().filter(|o| !o.1 && encloses_tag(o.0)).map(|o| o.2).fold(size, f64::max);
-        let kept: Vec<usize> = inst
-            .stroke_indices
-            .iter()
-            .zip(&shared)
-            .filter(|(si, sh)| {
-                **sh || strokes.get(**si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size)
-            })
-            .map(|(&si, _)| si)
-            .collect();
-        // The symbol stays where it was found (its centre is where the readers place the device).
+        let (kept, gone): (Vec<usize>, Vec<usize>) = inst.stroke_indices.iter().partition(|&&si| {
+            strokes.get(si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size)
+        });
         inst.stroke_indices = kept;
+        inst.released.extend(gone);
     }
+}
+
+/// The page's straight strokes by the line they lie on (direction and offset, to
+/// [`KEY_TOL_PT`]), each line's strokes as their spans along it: finds the strokes a line
+/// drawn in pieces runs through end to end ([`LineRuns::continues_both_ways`]).
+struct LineRuns {
+    /// (direction bucket, offset bucket) → (start, end) along the line, sorted by start.
+    by_line: HashMap<(i64, i64), Vec<(f64, f64)>>,
+}
+
+impl LineRuns {
+    fn new(strokes: &[Stroke]) -> Self {
+        let mut by_line: HashMap<(i64, i64), Vec<(f64, f64)>> = HashMap::new();
+        for s in strokes {
+            if let Some((key, span)) = Self::line_of(s) {
+                by_line.entry(key).or_default().push(span);
+            }
+        }
+        for spans in by_line.values_mut() {
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        LineRuns { by_line }
+    }
+
+    /// A straight open stroke's line (its direction, half a degree, and its offset from the
+    /// page's origin square to it) and its span along that line.
+    fn line_of(s: &Stroke) -> Option<((i64, i64), (f64, f64))> {
+        let (&[a, b], false) = (s.pts.as_slice(), s.closed) else { return None };
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        if dx.hypot(dy) <= KEY_TOL_PT {
+            return None;
+        }
+        // direction in [0°, 180°): a line read either way round is the same line
+        let deg = dy.atan2(dx).to_degrees().rem_euclid(180.0);
+        let dir = (deg * 2.0).round() as i64 % 360;
+        let (sin, cos) = (f64::from(dir as i32) / 2.0).to_radians().sin_cos();
+        let off = ((-sin * a.0 + cos * a.1) / KEY_TOL_PT).round() as i64;
+        let (p, q) = (cos * a.0 + sin * a.1, cos * b.0 + sin * b.1);
+        p.is_finite().then_some(((dir, off), (p.min(q), p.max(q))))
+    }
+
+    /// Whether `s` is one piece of a line drawn in pieces (a dash of a grid, centre or hidden
+    /// line, a run of a wall face): another stroke on its line starts within its own length
+    /// past its one end, and another ends within its own length before its other end.
+    fn continues_both_ways(&self, s: &Stroke) -> bool {
+        let Some(((dir, off), (lo, hi))) = Self::line_of(s) else { return false };
+        let reach = hi - lo;
+        let mut after = false;
+        let mut before = false;
+        for o in off - 1..=off + 1 {
+            let Some(spans) = self.by_line.get(&(dir, o)) else { continue };
+            // spans starting from just inside its end to its own length past it
+            let from = spans.partition_point(|sp| sp.0 < hi - KEY_TOL_PT);
+            after |= spans.get(from).is_some_and(|sp| sp.0 <= hi + reach);
+            // spans ending from its own length before its start to just inside it, starting
+            // before it (one search, capped: a line's spans don't overlap much)
+            let to = spans.partition_point(|sp| sp.0 < lo);
+            before |=
+                spans.get(to.saturating_sub(MAX_LINE_LOOKBACK)..to).into_iter().flatten().any(|sp| sp.1 >= lo - reach && sp.1 <= lo + KEY_TOL_PT);
+            if after && before {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// A symbol's cluster can take the swing and leaf of the door beside its tag (a receptacle's
+/// circuit printed by a door): two copies by doors swung alike draw them alike, and a block of
+/// them hides the door from the readers (no door built, the room open through its doorway). A
+/// door's swing and leaf, as the reader finds them ([`door_swings_apart`]), are the door's and
+/// stay loose where printed (Q6636).
+fn release_doors(group: &mut [SymbolInstance], doors: &HashSet<usize>) {
+    if doors.is_empty() {
+        return;
+    }
+    for inst in group.iter_mut() {
+        let (gone, kept): (Vec<usize>, Vec<usize>) = inst.stroke_indices.iter().partition(|si| doors.contains(si));
+        inst.stroke_indices = kept;
+        inst.released.extend(gone);
+    }
+}
+
+/// A symbol's cluster can take the dashes of a line passing by it (the grid line a receptacle
+/// on a column line sits on, a wall's centre line): every copy on such a line draws a dash
+/// alike, and a block of them would carry the line's pieces into the model as the symbol's
+/// drawing (a grid line's dashes, in a block, close a corridor into two rooms). A straight
+/// stroke at least as long as the tag's letters that its line continues past both ends is
+/// that line's, never the symbol's, and stays loose where printed (Q6636).
+fn release_line_dashes(group: &mut [SymbolInstance], strokes: &[Stroke], lines: &LineRuns) {
+    for inst in group.iter_mut() {
+        let letters = inst.nearby_text_at.map_or(0.0, |t| t.1);
+        let (gone, kept): (Vec<usize>, Vec<usize>) = inst.stroke_indices.iter().partition(|&&si| {
+            strokes.get(si).is_some_and(|s| LineRuns::line_of(s).is_some_and(|(_, (lo, hi))| hi - lo >= letters) && lines.continues_both_ways(s))
+        });
+        inst.stroke_indices = kept;
+        inst.released.extend(gone);
+    }
+}
+
+/// One piece of a symbol's drawing: a stroke or a fill, its shape wherever it stands
+/// ([`StrokeKey`]) and where it stands (the low corner of its box, points).
+struct Piece {
+    fill: bool,
+    idx: usize,
+    key: StrokeKey,
+    at: (f64, f64),
+}
+
+fn pieces_of(inst: &SymbolInstance, strokes: &[Stroke], fills: &[Fill]) -> Vec<Piece> {
+    let low = |b: [f64; 4]| (b[0], b[1]);
+    let of_strokes = inst.stroke_indices.iter().filter_map(|&idx| {
+        let s = strokes.get(idx)?;
+        Some(Piece { fill: false, idx, key: stroke_key(s), at: low(bbox(std::slice::from_ref(&s.pts))?) })
+    });
+    let of_fills = inst.fill_indices.iter().filter_map(|&idx| {
+        let f = fills.get(idx)?;
+        Some(Piece { fill: true, idx, key: fill_key(f), at: low(bbox(&f.loops)?) })
+    });
+    of_strokes.chain(of_fills).collect()
+}
+
+/// A fill's shape wherever it stands, as [`stroke_key`] tells a stroke's: its loops' points in
+/// order, each as an offset from the first.
+fn fill_key(f: &Fill) -> StrokeKey {
+    let mut first: Option<(f64, f64)> = None;
+    let offsets: Vec<(i64, i64)> = f
+        .loops
+        .iter()
+        .flatten()
+        .take(MAX_KEY_POINTS)
+        .map(|p| {
+            let o = *first.get_or_insert(*p);
+            (((p.0 - o.0) / KEY_TOL_PT).round() as i64, ((p.1 - o.1) / KEY_TOL_PT).round() as i64)
+        })
+        .collect();
+    (true, f.loops.iter().map(Vec::len).sum(), offsets)
+}
+
+/// How `other` draws the pieces of `reference`: the move that lays the most of them on pieces
+/// of the same shape (voted to [`KEY_TOL_PT`]), and for each piece of `reference` the piece of
+/// `other` it lands on there (one each), if any. `None` when they share no shape.
+fn match_pieces(reference: &[Piece], other: &[Piece]) -> Option<((f64, f64), Vec<Option<usize>>)> {
+    let mut by_key: HashMap<(bool, &StrokeKey), Vec<usize>> = HashMap::new();
+    for (k, p) in other.iter().enumerate() {
+        by_key.entry((p.fill, &p.key)).or_default().push(k);
+    }
+    let cell = |d: (f64, f64)| ((d.0 / KEY_TOL_PT).round() as i64, (d.1 / KEY_TOL_PT).round() as i64);
+    let mut votes: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut cast = 0usize;
+    for r in reference {
+        for &k in by_key.get(&(r.fill, &r.key)).into_iter().flatten().take(MAX_ALIKE_PIECES) {
+            if let Some(o) = other.get(k) {
+                *votes.entry(cell((o.at.0 - r.at.0, o.at.1 - r.at.1))).or_default() += 1;
+                cast += 1;
+            }
+        }
+        if cast >= MAX_PIECE_VOTES {
+            break;
+        }
+    }
+    // the move most pieces agree on; a tie goes to the smaller move (then the lower cell)
+    let best =
+        votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| (b.0.0.abs() + b.0.1.abs(), b.0).cmp(&(a.0.0.abs() + a.0.1.abs(), a.0))))?.0;
+    let mv = (best.0 as f64 * KEY_TOL_PT, best.1 as f64 * KEY_TOL_PT);
+    let mut used = vec![false; other.len()];
+    let lands: Vec<Option<usize>> = reference
+        .iter()
+        .map(|r| {
+            let k = by_key.get(&(r.fill, &r.key)).into_iter().flatten().copied().find(|&k| {
+                !used.get(k).copied().unwrap_or(true)
+                    && other.get(k).is_some_and(|o| (o.at.0 - r.at.0 - mv.0).abs() <= PIECE_TOL_PT && (o.at.1 - r.at.1 - mv.1).abs() <= PIECE_TOL_PT)
+            })?;
+            if let Some(u) = used.get_mut(k) {
+                *u = true;
+            }
+            Some(k)
+        })
+        .collect();
+    Some((mv, lands))
+}
+
+/// Split one device type's instances into blocks of copies drawn alike, each holding only the
+/// pieces all its copies share (Q6636). A block drawn from one copy and stamped at every copy
+/// erased each copy's own strokes (a leader, a tick) and invented the first copy's extras at all
+/// the others. Here the reference copy is the one whose shapes most other copies draw; a copy
+/// joins its block when it draws the reference's outline (its biggest piece another copy draws
+/// too) and while they still share at least half the reference's pieces, laid the same way; each
+/// copy's pieces outside what the block's copies all share leave its cluster and stay loose where
+/// printed. Copies that join no block start the next, up to [`MAX_SYMBOL_VARIANTS`]; the rest
+/// are blocks of their own. Each copy's centre is the centre of the block's drawing where that
+/// copy draws it (a leader no longer pulls the device off its symbol).
+fn split_by_shared_drawing(group: Vec<SymbolInstance>, strokes: &[Stroke], fills: &[Fill]) -> Vec<Vec<SymbolInstance>> {
+    let mut out: Vec<Vec<SymbolInstance>> = Vec::new();
+    let mut left: Vec<(SymbolInstance, Vec<Piece>)> = group
+        .into_iter()
+        .map(|inst| {
+            let pieces = pieces_of(&inst, strokes, fills);
+            (inst, pieces)
+        })
+        .collect();
+    let mut rounds = 0usize;
+    while !left.is_empty() {
+        rounds += 1;
+        if rounds > MAX_SYMBOL_VARIANTS || left.len() == 1 {
+            for (inst, pieces) in left.drain(..) {
+                out.push(vec![keep_pieces(inst, &pieces, &[], (0.0, 0.0), strokes, fills)]);
+            }
+            break;
+        }
+        // the reference: the copy whose shapes the most copies draw (the first of equals)
+        let mut count: HashMap<(bool, &StrokeKey), usize> = HashMap::new();
+        for (_, pieces) in &left {
+            let mut seen: HashSet<(bool, &StrokeKey)> = HashSet::new();
+            for p in pieces {
+                if seen.insert((p.fill, &p.key)) {
+                    *count.entry((p.fill, &p.key)).or_default() += 1;
+                }
+            }
+        }
+        let score = |pieces: &[Piece]| -> usize {
+            let mut seen: HashSet<(bool, &StrokeKey)> = HashSet::new();
+            // a shape only this copy draws counts nothing: a copy's extras never make it the reference
+            pieces
+                .iter()
+                .filter(|p| seen.insert((p.fill, &p.key)))
+                .map(|p| count.get(&(p.fill, &p.key)).copied().unwrap_or(0).saturating_sub(1))
+                .sum()
+        };
+        let ri = left.iter().enumerate().fold((0usize, 0usize), |best, (i, (_, p))| {
+            let s = score(p);
+            if s > best.1 { (i, s) } else { best }
+        });
+        // its outline: the biggest piece another copy also draws (else its biggest)
+        let size_of = |p: &Piece| -> f64 {
+            let b = if p.fill {
+                fills.get(p.idx).and_then(|f| bbox(&f.loops))
+            } else {
+                strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts)))
+            };
+            b.map_or(0.0, |b| (b[2] - b[0]).max(b[3] - b[1]))
+        };
+        let biggest = |shared_only: bool| {
+            left.get(ri.0)
+                .map(|l| l.1.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !shared_only || count.get(&(p.fill, &p.key)).copied().unwrap_or(0) >= 2)
+                .max_by(|a, b| size_of(a.1).total_cmp(&size_of(b.1)))
+                .map(|(k, _)| k)
+        };
+        // a box drawn round the copy's own letters is its outline, though its width follows them
+        // (Q6654): only copies drawing the same box share its block
+        let outline = left.get(ri.0).and_then(|(inst, p)| tag_box_piece(inst, p, strokes)).or_else(|| biggest(true)).or_else(|| biggest(false));
+        drop(count);
+        let (reference, ref_pieces) = left.remove(ri.0);
+        let need = ref_pieces.len().div_ceil(2).max(1);
+        // every other copy: how it lays the reference's pieces, most pieces first
+        let mut matched: Vec<(usize, (f64, f64), Vec<Option<usize>>)> =
+            left.iter().enumerate().filter_map(|(i, (_, p))| match_pieces(&ref_pieces, p).map(|(mv, lands)| (i, mv, lands))).collect();
+        matched.sort_by_key(|m| std::cmp::Reverse(m.2.iter().filter(|l| l.is_some()).count()));
+        let mut core: Vec<bool> = vec![true; ref_pieces.len()];
+        let mut members: Vec<(usize, (f64, f64), Vec<Option<usize>>)> = Vec::new();
+        for (i, mv, lands) in matched {
+            // a copy that doesn't draw the reference's outline is drawn another way
+            if outline.is_some_and(|k| lands.get(k).is_none_or(Option::is_none)) {
+                continue;
+            }
+            // and one whose own box round its letters the reference doesn't draw: the block
+            // would leave its box out
+            if left.get(i).and_then(|(inst, p)| tag_box_piece(inst, p, strokes)).is_some_and(|b| !lands.contains(&Some(b))) {
+                continue;
+            }
+            let trial: Vec<bool> = core.iter().zip(&lands).map(|(c, l)| *c && l.is_some()).collect();
+            if trial.iter().filter(|c| **c).count() >= need {
+                core = trial;
+                members.push((i, mv, lands));
+            }
+        }
+        // the reference's centre: the middle of the shared drawing
+        let shared_box = ref_pieces
+            .iter()
+            .zip(&core)
+            .filter(|(_, c)| **c)
+            .filter_map(|(p, _)| {
+                if p.fill {
+                    fills.get(p.idx).and_then(|f| bbox(&f.loops))
+                } else {
+                    strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts)))
+                }
+            })
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        let centre = shared_box.map_or(reference.center, |b| ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0));
+        let ref_keep: Vec<usize> = (0..ref_pieces.len()).filter(|&k| core.get(k).copied().unwrap_or(false)).collect();
+        let mut block = vec![keep_pieces(reference, &ref_pieces, &ref_keep, centre, strokes, fills)];
+        // members leave `left` (from the back, so the indices hold), then go in order
+        let mut taken: Vec<(usize, (f64, f64), Vec<usize>)> = members
+            .into_iter()
+            .map(|(i, _, lands)| {
+                let keep: Vec<usize> = lands.iter().zip(&core).filter(|(_, c)| **c).filter_map(|(l, _)| *l).collect();
+                // the move, measured on the pieces kept (not the vote's rounded cell)
+                let mut sum = (0.0, 0.0);
+                let mut n = 0.0;
+                for (r, l) in ref_pieces.iter().zip(&lands).zip(&core).filter(|(_, c)| **c).map(|(rl, _)| rl) {
+                    if let Some(o) = l.and_then(|k| left.get(i).and_then(|(_, p)| p.get(k))) {
+                        sum = (sum.0 + o.at.0 - r.at.0, sum.1 + o.at.1 - r.at.1);
+                        n += 1.0;
+                    }
+                }
+                let mv = if n > 0.0 { (sum.0 / n, sum.1 / n) } else { (0.0, 0.0) };
+                (i, mv, keep)
+            })
+            .collect();
+        taken.sort_by_key(|t| std::cmp::Reverse(t.0));
+        let mut joined: Vec<(usize, SymbolInstance)> = Vec::new();
+        for (i, mv, keep) in taken {
+            if i < left.len() {
+                let (inst, pieces) = left.remove(i);
+                joined.push((i, keep_pieces(inst, &pieces, &keep, (centre.0 + mv.0, centre.1 + mv.1), strokes, fills)));
+            }
+        }
+        joined.sort_by_key(|j| j.0);
+        block.extend(joined.into_iter().map(|j| j.1));
+        out.push(block);
+    }
+    out
+}
+
+/// The piece of `inst` drawn round its own tag's letters (a closed stroke the tag's start or
+/// middle lies inside, at least as tall as its letters): the box of a keynote or label, the
+/// symbol's outline whatever its width (Q6654).
+fn tag_box_piece(inst: &SymbolInstance, pieces: &[Piece], strokes: &[Stroke]) -> Option<usize> {
+    let (tag_at, letters) = inst.nearby_text_at.filter(|t| t.1 > 0.0)?;
+    pieces.iter().position(|p| {
+        !p.fill
+            && strokes.get(p.idx).filter(|s| is_outline(s)).is_some_and(|s| {
+                let tall = bbox(std::slice::from_ref(&s.pts)).is_some_and(|b| (b[2] - b[0]).min(b[3] - b[1]) >= letters);
+                let poly: Vec<Vec2> = s.pts.iter().map(|q| Vec2::new(q.0, q.1)).collect();
+                tall && [tag_at, (tag_at.0, tag_at.1 + letters / 2.0)].iter().any(|q| cadaddy_geom::point_in_polygon(&poly, Vec2::new(q.0, q.1)))
+            })
+    })
+}
+
+/// `inst` keeping only the pieces at `keep` (positions in `pieces`) and centred at `centre`; with
+/// no `keep`, a block of its own: all its pieces, centred on their middle.
+fn keep_pieces(mut inst: SymbolInstance, pieces: &[Piece], keep: &[usize], centre: (f64, f64), strokes: &[Stroke], fills: &[Fill]) -> SymbolInstance {
+    if keep.is_empty() {
+        let all = pieces
+            .iter()
+            .filter_map(|p| {
+                if p.fill {
+                    fills.get(p.idx).and_then(|f| bbox(&f.loops))
+                } else {
+                    strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts)))
+                }
+            })
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        if let Some(b) = all {
+            inst.center = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        }
+        return inst;
+    }
+    let kept: Vec<&Piece> = keep.iter().filter_map(|&k| pieces.get(k)).collect();
+    let stroke_indices: Vec<usize> = kept.iter().filter(|p| !p.fill).map(|p| p.idx).collect();
+    inst.released.extend(inst.stroke_indices.iter().filter(|si| !stroke_indices.contains(si)));
+    inst.stroke_indices = stroke_indices;
+    inst.fill_indices = kept.iter().filter(|p| p.fill).map(|p| p.idx).collect();
+    inst.center = centre;
+    inst
 }
 
 /// A stroke kept in a symbol is drawn alike in at least this many of its type's instances …
@@ -5939,6 +6367,17 @@ const OUTLINE_MIN_ASPECT: f64 = 0.5;
 const MAX_KEY_POINTS: usize = 64;
 /// Strokes drawn alike match to this (points).
 const KEY_TOL_PT: f64 = 0.5;
+/// A copy's piece lies where the block draws it to this (points).
+const PIECE_TOL_PT: f64 = 1.0;
+/// Most pieces of one shape in a copy that vote on how it lies …
+const MAX_ALIKE_PIECES: usize = 16;
+/// … and most votes per copy.
+const MAX_PIECE_VOTES: usize = 4096;
+/// Most strokes before a line's piece that are looked at for one ending at its start.
+const MAX_LINE_LOOKBACK: usize = 64;
+/// Most blocks one device type is split into by how its copies are drawn; copies past them are
+/// blocks of their own.
+const MAX_SYMBOL_VARIANTS: usize = 64;
 
 /// A stroke's shape wherever it stands: closed or not, its point count, and each point's offset
 /// from its first, to [`KEY_TOL_PT`] (whichever way round reads first).
@@ -6116,6 +6555,7 @@ fn find_symbol_instances(
         }
 
         instances.push(SymbolInstance {
+            released: Vec::new(),
             center,
             stroke_indices: cluster,
             fill_indices: cluster_fills,
@@ -6526,7 +6966,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             .filter(|(i, t)| is_device_tag(&t.value) && !is_annotation_word(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
-        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes);
+        // the door swings and leaves on the page: a door's, never a symbol's
+        let doors = door_swings_apart(&strokes);
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes, &fills, &doors);
         let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
         let mut taken: HashSet<usize> = shx_stroke_indices.clone();
         for inst in &instances {
@@ -6725,7 +7167,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
         }
 
-        let symbol_groups = group_symbols(instances, &strokes);
+        let symbol_groups = group_symbols(instances, &strokes, &fills, &doors);
         let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
         let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
         let mut symbol_text_indices: HashSet<usize> = HashSet::new();
@@ -6739,6 +7181,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 symbol_ocr_indices.extend(inst.ocr_idx);
             }
         }
+        // the lettering of a tag a symbol took from the page's text is that TAG too
+        symbol_ocr_indices.extend(tag_lettering_readings(&symbol_groups, &texts, &recovered_texts));
+        shx_stroke_indices.extend(released_lettering(&symbol_groups, &strokes, &texts).into_iter().filter(|si| !symbol_stroke_indices.contains(si)));
         if total_symbols > 0 {
             stats.insert("symbol instances detected".into(), total_symbols);
             stats.insert("symbol types".into(), symbol_groups.len());
@@ -7377,7 +7822,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             continue;
         }
         let block_name = format!("PDF-SYM-{}", gi + 1);
-        // use the first instance as the block definition
+        // The first instance draws the block: every instance holds the same pieces (only what
+        // the group's copies share), each at its own centre (Q6636).
         let Some(first) = group.first() else { continue };
         let base_x = first.center.0;
         let base_y = first.center.1;
@@ -7413,6 +7859,48 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                     });
                 }
             }
+        }
+        // and its fills (a filled dot or arrowhead in the symbol), drawn by the block too
+        for &fi in &first.fill_indices {
+            let Some(f) = fills.get(fi) else { continue };
+            let loops: Vec<HatchLoop> = f
+                .loops
+                .iter()
+                .filter(|l| l.len() >= 3)
+                .enumerate()
+                .map(|(i, l)| HatchLoop {
+                    curves: Vec::new(),
+                    vertices: l
+                        .iter()
+                        .map(|(x, y)| {
+                            let p = sp(*x, *y);
+                            PolyVertex { p: Vec2::new(p.x - base.x, p.y - base.y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }
+                        })
+                        .collect(),
+                    outer: i == 0,
+                    sources: Vec::new(),
+                })
+                .collect();
+            if loops.is_empty() {
+                continue;
+            }
+            let hatch = Hatch {
+                pattern: "SOLID".into(),
+                solid: true,
+                loops,
+                scale: 1.0,
+                angle: 0.0,
+                associative: false,
+                style: 0,
+                elevation: 0.0,
+                gradient: None,
+                origin: Vec2::ZERO,
+                background: None,
+                pattern_lines: Vec::new(),
+            };
+            let common = Common { layer: "0".into(), color: color_of(f.pen.rgb), lineweight: Lineweight::Mm100(f.pen.lw), ..Common::default() };
+            let h = d.new_handle();
+            block.entities.push(Entity { handle: h, common, kind: EntityKind::Hatch(Box::new(hatch)) });
         }
         d.blocks.insert(block_name.clone(), std::sync::Arc::new(block));
         // insert all instances of this symbol
@@ -9327,6 +9815,98 @@ mod tests {
         for pair in ["8\" 16'-8\"", "10\" 1'-9\"", "3\" 6'-2\"", "1/8\" 1'-1\"", "1\" 25'"] {
             assert_eq!(standard_pair_scale(pair), None, "{pair}");
         }
+    }
+
+    #[test]
+    fn a_copys_own_lettering_left_by_its_symbol_is_filed_as_lettering_and_its_tag_read_once() {
+        // Q6636: a copy's own lettering (drawn differently at each copy) is in no block. A copy
+        // tagged R10 (its hidden text) whose cluster held the strokes spelling R10 and a stacked
+        // second circuit (another hidden text) released them: a reading of those strokes is the
+        // TAG the insert prints (not written again, loose: a door's tag read as a room number),
+        // and every released stroke lying on a hidden text goes with the lettering. A reading of
+        // the same string from strokes the symbol never held, and a released stroke on no text
+        // (a leader), stay as they are.
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let hidden = |value: &str, at: (f64, f64)| TextOut {
+            at,
+            end: (at.0 + 18.0, at.1),
+            height: 6.0,
+            rotation: 0.0,
+            width_factor: 1.0,
+            value: value.into(),
+            pen,
+            layer: Some(HIDDEN_TEXT_LAYER.into()),
+            style: None,
+            order: 0,
+        };
+        let texts = vec![hidden("R10", (100.0, 100.0)), hidden("R-74", (100.0, 92.0)), hidden("R10", (300.0, 100.0))];
+        let strokes = vec![
+            st(vec![(101.0, 100.5), (101.0, 105.0)]), // 0: the R of R10, on its tag
+            st(vec![(108.0, 100.5), (111.0, 105.0)]), // 1: its 1
+            st(vec![(104.0, 92.5), (107.0, 97.0)]),   // 2: the stacked circuit's lettering
+            st(vec![(90.0, 90.0), (60.0, 60.0)]),     // 3: a leader, on no text
+            st(vec![(301.0, 100.5), (301.0, 105.0)]), // 4: lettering of another R10, no symbol's
+        ];
+        let inst = SymbolInstance {
+            center: (95.0, 100.0),
+            stroke_indices: Vec::new(),
+            fill_indices: Vec::new(),
+            nearby_text: Some("R10".into()),
+            nearby_text_idx: Some(0),
+            nearby_text_at: Some(((100.0, 100.0), 6.0)),
+            ocr_idx: None,
+            device_type: Some("R".into()),
+            released: vec![0, 1, 2, 3],
+        };
+        let groups = vec![vec![inst]];
+        let reading = |v: &str, at: (f64, f64), of: &[usize]| RecoveredText {
+            at,
+            height: 6.0,
+            value: v.into(),
+            stroke_indices: of.iter().copied().collect(),
+            pen,
+            layer: None,
+            unconfirmed: false,
+            confidence: None,
+            review: false,
+            strokes_stay: false,
+            rotation: 0.0,
+            in_cell: false,
+        };
+        let readings = vec![
+            reading("R10", (100.0, 100.0), &[0, 1]),
+            reading("R10", (300.0, 100.0), &[4]),
+            reading("R-74", (100.0, 92.0), &[2]),
+            reading("R10", (100.0, 100.0), &[]),
+        ];
+        assert_eq!(tag_lettering_readings(&groups, &texts, &readings), vec![0], "only the tag read from the strokes its symbol left");
+        let mut filed = released_lettering(&groups, &strokes, &texts);
+        filed.sort_unstable();
+        assert_eq!(filed, vec![0, 1, 2], "the released strokes on a hidden text are lettering; the leader is not");
+        // with no hidden text on the page, nothing is filed as lettering
+        let visible: Vec<TextOut> = texts.iter().map(|t| TextOut { layer: None, ..hidden(&t.value, t.at) }).collect();
+        assert!(released_lettering(&groups, &strokes, &visible).is_empty());
+    }
+
+    #[test]
+    fn a_line_drawn_in_pieces_runs_through_its_dashes_end_to_end() {
+        // Q6636: the dashes of a grid or centre line (and a wall face drawn in runs) continue
+        // past both ends along their own line; a symbol's bar, a dash at a line's end, or a
+        // stroke beside a dashed line (off it by a point) does not.
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let mut strokes: Vec<Stroke> = (0..6).map(|k| f64::from(k) * 20.0).map(|y| st(vec![(50.0, 200.0 + y), (50.0, 214.0 + y)])).collect();
+        // the same line read the other way round, slanted at 30°
+        let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        strokes.extend(
+            (0..3).map(|k| f64::from(k) * 16.0).map(|t| st(vec![(300.0 + (t + 12.0) * c, 100.0 + (t + 12.0) * s), (300.0 + t * c, 100.0 + t * s)])),
+        );
+        strokes.push(st(vec![(51.0, 242.0), (51.0, 252.0)])); // beside the line, a point off it
+        strokes.push(st(vec![(120.0, 300.0), (132.0, 300.0)])); // a bar on its own
+        let lines = LineRuns::new(&strokes);
+        let runs: Vec<bool> = strokes.iter().map(|s| lines.continues_both_ways(s)).collect();
+        assert_eq!(runs, [false, true, true, true, true, false, false, true, false, false, false]);
     }
 
     /// The operations of a content stream, as text to compare.
