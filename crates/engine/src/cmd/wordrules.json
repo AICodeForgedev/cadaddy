@@ -4325,6 +4325,17 @@
     "SLAB PLAN"
    ]
   },
+  "sheets.other_level_view_title_words": {
+   "source": "A plan view title that names another level or the ground around the building, not the storey its sheet is filed on: its marks are not that storey's, though its outline lies on the floor plan's (a roof plan beside the floor plan draws the same shell). A floor plan's sheet's other views of its own storey (a reflected ceiling plan, a power or lighting plan) are fitted onto the floor plan; these never are. (drafting convention: general, no job's title)",
+   "words": [
+    "ROOF",
+    "FOUNDATION",
+    "FOOTING",
+    "SITE PLAN",
+    "KEY PLAN",
+    "VICINITY"
+   ]
+  },
   "sheets.reference_words": {
    "source": "Words of a title that make a sheet or view a reference one (not a plan to read runs off). (drafting convention; moved from printmep.rs `REFERENCE_WORDS`)",
    "pairs": [

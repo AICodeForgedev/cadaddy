@@ -30320,24 +30320,71 @@ fn arch_placer(
     // A level's plan linework leaves out what its sheet's other views draw (an elevation or a
     // detail beside the plan, Q6396: a trade's roof plan fitted onto the roof sheet's elevation
     // of a screen wall), each sheet's views read off it alone. A point in a plan view stays.
-    let targets: std::sync::Arc<Vec<(String, usize, Vec<cadaddy_geom::Vec2>)>> = std::sync::Arc::new(
-        plans
+    // Each level's plan sheet's own views, read once (its plan views and its other views).
+    let plan_sheet_views: Vec<(String, usize, [f64; 4], Vec<([f64; 4], String)>, Vec<[f64; 4]>)> = plans
+        .iter()
+        .filter_map(|(k, r)| {
+            let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
+            let (plan_v, other_v) = sheets.get(i).map(|b| own_views_titled(sheet_views, d, &b.rect)).unwrap_or_default();
+            Some((k.clone(), i, *r, plan_v, other_v))
+        })
+        .collect();
+    // The other plan views of the same floor on a level's plan sheet (Q6641: a reflected ceiling
+    // plan printed under the floor plan): each one's middle off the level's plan, and the plan's
+    // middle outside it; never a view of another level (one the job gave another level, or one
+    // titled as the roof, the foundation or the site: rule data
+    // `sheets.other_level_view_title_words`), whose outline lies on the plan all the same. Each is
+    // fitted onto the plan beside it by its linework (`beside_fit`).
+    let other_level = cadaddy_mepfix::wordrules::words("sheets.other_level_view_title_words");
+    // Each view's linework and the plan's, sampled off the drawing itself (every 3"): the sheet's
+    // linework for fits leaves out what its frame shares with the other sheets of its size, and a
+    // set whose trade sheets print the floor's background in the same spot loses part of the
+    // plan's walls with it, while its ceiling plan, drawn on no other sheet, keeps all of its own.
+    let beside_views: std::sync::Arc<Vec<BesideViews>> = std::sync::Arc::new(
+        plan_sheet_views
             .iter()
-            .filter_map(|(k, r)| {
-                let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
-                let (plan_v, other_v) = sheets.get(i).map(|b| own_views(sheet_views, d, &b.rect)).unwrap_or_default();
+            .filter_map(|(k, i, r, plan_v, other_v)| {
+                let views: Vec<[f64; 4]> = plan_v
+                    .iter()
+                    .filter(|(v, title)| {
+                        !inside(r, mid(v))
+                            && !inside(v, mid(r))
+                            && !cadaddy_mepfix::sheet_reader::title_names(title, other_level)
+                            && !view_rects.iter().any(|(vk, vr)| vk != k && inside(vr, mid(v)))
+                    })
+                    .take(MAX_BESIDE_VIEWS)
+                    .map(|(v, _)| *v)
+                    .collect();
+                if views.is_empty() {
+                    return None;
+                }
+                let mut rects = vec![*r];
+                rects.extend(views.iter().copied());
+                let mut samples = region_samples(d, &rects, 3.0 * k_in0).into_iter();
+                let plan: Vec<cadaddy_geom::Vec2> =
+                    samples.next().unwrap_or_default().into_iter().filter(|p| !other_v.iter().any(|v| inside(v, [p.x, p.y]))).collect();
+                Some(BesideViews { level: k.clone(), sheet: *i, views: views.into_iter().zip(samples).collect(), plan })
+            })
+            .collect(),
+    );
+    let targets: std::sync::Arc<Vec<(String, usize, Vec<cadaddy_geom::Vec2>)>> = std::sync::Arc::new(
+        plan_sheet_views
+            .iter()
+            .map(|(k, i, r, plan_v, other_v)| {
+                let (i, r) = (*i, r);
                 let pts = lines
                     .points(i, Some(r))
                     .into_iter()
                     .filter(|p| {
                         let at = [p.x, p.y];
-                        plan_v.iter().any(|v| inside(v, at)) || !other_v.iter().any(|v| inside(v, at))
+                        plan_v.iter().any(|(v, _)| inside(v, at)) || !other_v.iter().any(|v| inside(v, at))
                     })
                     .collect();
-                Some((k.clone(), i, pts))
+                (k.clone(), i, pts)
             })
             .collect(),
     );
+    drop(plan_sheet_views);
     lap("sheets' linework sampled");
     // Each sheet's plans in drawing units per foot (Q6396), as its import read them (`None`: a
     // sheet of one scale, read at it: the job's units per foot). A sheet whose plans came in at
@@ -30652,6 +30699,61 @@ fn arch_placer(
         chained.lock().ok()?.insert(id, got);
         got
     };
+    // Another plan view of the floor on its level's own plan sheet (Q6641: a reflected ceiling
+    // plan under the floor plan): the sheet's frame puts the plan view on itself and leaves the
+    // view beside it off the building, and the sheet can't be fitted onto itself. The view's
+    // linework (its biggest block: its title and notes stand apart) laid on the plan view's at
+    // the sheet's scale, one to one, as a separate sheet of the same floor would be.
+    let beside_fit = {
+        let (log, names) = (log.clone(), sheet_names.clone());
+        let fits: std::sync::Mutex<std::collections::HashMap<(usize, usize), Option<cadaddy_mepfix::tagid::Sim>>> = Default::default();
+        move |p: [f64; 2], level: &str| -> Option<cadaddy_mepfix::tagid::Sim> {
+            let key = level_key(level);
+            let (bi, b) = beside_views.iter().enumerate().find(|(_, b)| b.level == key && b.views.iter().any(|(v, _)| inside(v, p)))?;
+            let vi = b.views.iter().position(|(v, _)| inside(v, p))?;
+            if let Some(f) = fits.lock().ok()?.get(&(bi, vi)) {
+                return *f;
+            }
+            let (view, pts) = b.views.get(vi)?;
+            let (si, tgt) = (&b.sheet, b.plan.as_slice());
+            let src = super::grids::largest_block(pts, 48.0 * k_in0);
+            let fit = if src.is_empty() || tgt.is_empty() { None } else { super::grids::linework_fit_within(&src, tgt, k_in0, 0.97, 1.03) };
+            let got = fit.filter(|f| f.2 >= BESIDE_VIEW_F1 && f.3 >= 0.03).map(|(s, t, score, _)| {
+                let mid = src.iter().fold(cadaddy_geom::Vec2::new(0.0, 0.0), |a, q| a + *q) * (1.0 / src.len().max(1) as f64);
+                let t = super::grids::at_printed_scale(&src, tgt, k_in0, 1.0, s, t, score).map_or(t + mid * (s - 1.0), |e| e.offset);
+                cadaddy_mepfix::tagid::Sim::scale_offset(1.0, [t.x, t.y])
+            });
+            let number = names.get(*si).cloned().unwrap_or_default();
+            progress_line(&format!(
+                "  placer: {number}'s plan view {:?} onto level {level}'s plan beside it: {}",
+                view.map(f64::round),
+                match (&fit, &got) {
+                    (Some((_, _, score, margin)), Some(m)) => format!(
+                        "offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best: used",
+                        m.tx,
+                        m.ty,
+                        score * 100.0,
+                        margin * 100.0
+                    ),
+                    (Some((s, _, score, margin)), None) => format!(
+                        "best at scale {s:.3}, {:.0}% on the plan, {:.0} points over the next best: not used (too weak or too close to call)",
+                        score * 100.0,
+                        margin * 100.0
+                    ),
+                    _ => format!("no fit at its sheet's scale ({} view points, {} plan points)", src.len(), tgt.len()),
+                }
+            ));
+            log_sheet(
+                &log,
+                json!({"sheet": number, "level": level, "method": "plan view beside the plan", "view": view,
+                    "transform": got.map(|m| json!({"a": m.a, "b": m.b, "tx": m.tx, "ty": m.ty})),
+                    "score": fit.map(|f| f.2), "margin": fit.map(|f| f.3), "used": got.is_some(),
+                    "why_not": got.is_none().then_some("its linework doesn't lie on the plan beside it at the sheet's scale")}),
+            );
+            fits.lock().ok()?.insert((bi, vi), got);
+            got
+        }
+    };
     let place = move |p: [f64; 2], level: &str, lands: &dyn Fn(&cadaddy_mepfix::tagid::Sim) -> bool| {
         place(p, level)
             .filter(|m| lands(m))
@@ -30799,6 +30901,8 @@ fn arch_placer(
                 view_fits.lock().ok()?.insert(i, got);
                 got.filter(|m| lands(m))
             })
+            // Another plan view of the floor beside the plan on its own sheet (Q6641).
+            .or_else(|| beside_fit(p, level).filter(|m| lands(m)))
             .or_else(|| {
                 // The sheet's own linework laid on its level's plan (Q6284: a trade plan whose tags
                 // are few or disagree draws the floor plan's walls all the same).
@@ -30958,12 +31062,12 @@ fn read_sheet_views(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<Vec<(St
 
 /// The regions of sheet `rect`'s plan views and of its other views (elevations, sections,
 /// details, risers, diagrams, schedules: [`cadaddy_mepfix::sheet_reader::names_no_plan`]), the
-/// sheet read on its own ([`SheetViews`]).
-fn own_views(views: &SheetViews, d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+/// sheet read on its own ([`SheetViews`]); each plan view with its title.
+fn own_views_titled(views: &SheetViews, d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<([f64; 4], String)>, Vec<[f64; 4]>) {
     let (mut plans, mut others) = (Vec::new(), Vec::new());
     for v in views.of(d, std::slice::from_ref(rect)) {
         for (title, r) in v.iter() {
-            if cadaddy_mepfix::sheet_reader::names_no_plan(title) { others.push(*r) } else { plans.push(*r) }
+            if cadaddy_mepfix::sheet_reader::names_no_plan(title) { others.push(*r) } else { plans.push((*r, title.clone())) }
         }
     }
     (plans, others)
@@ -30993,6 +31097,47 @@ fn part_of_plan(view: &[cadaddy_geom::Vec2], plan: &[cadaddy_geom::Vec2]) -> boo
     let (v, p) = (cadaddy_geom::Bounds2::from_points(view.iter().copied()), cadaddy_geom::Bounds2::from_points(plan.iter().copied()));
     !v.is_empty() && !p.is_empty() && v.width().max(v.height()) < 0.5 * p.width().max(p.height())
 }
+
+/// A level's plan sheet's other plan views of the same floor (Q6641), each with its linework,
+/// and the plan view's linework, both sampled off the drawing.
+struct BesideViews {
+    level: String,
+    sheet: usize,
+    views: Vec<([f64; 4], Vec<cadaddy_geom::Vec2>)>,
+    plan: Vec<cadaddy_geom::Vec2>,
+}
+
+/// The plan linework of each of `rects` (an object in the first that holds its middle), sampled
+/// every `step` drawing units.
+fn region_samples(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]], step: f64) -> Vec<Vec<cadaddy_geom::Vec2>> {
+    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    let mut on: Vec<Vec<&std::sync::Arc<cadaddy_doc::Entity>>> = vec![Vec::new(); rects.len()];
+    for e in super::bspec::plan_objects(d) {
+        if let Some(c) = super::bspec::centre(d, e)
+            && let Some(i) = rects.iter().position(|r| inside(r, c.x, c.y))
+            && let Some(v) = on.get_mut(i)
+        {
+            v.push(e);
+        }
+    }
+    on.iter()
+        .map(|es| {
+            let all = super::grids::line_samples(es, step);
+            let stride = (all.len() / MAX_BESIDE_POINTS).max(1);
+            all.into_iter().step_by(stride).collect()
+        })
+        .collect()
+}
+
+/// The score a plan view beside its floor's plan must reach on it (Q6641): the same floor drawn
+/// again lies almost wholly on it; a view of a part of it, or of another floor, doesn't.
+const BESIDE_VIEW_F1: f64 = 0.9;
+
+/// Points of a view's or its plan's linework a beside-view fit keeps at most (thinned evenly).
+const MAX_BESIDE_POINTS: usize = 200_000;
+
+/// Other plan views of the floor a level's plan sheet fits onto its plan, at most (Q6641).
+const MAX_BESIDE_VIEWS: usize = 8;
 
 /// Points a job's placer remembers at most.
 const MAX_PLACER_MEMO: usize = 500_000;
@@ -40226,7 +40371,7 @@ mod tests {
                 let alone = read_sheet_views(d, std::slice::from_ref(r));
                 assert_eq!(alone.first(), Some(&**v), "sheet at {r:?}");
                 // Each sheet: its floor plan and its elevation, told apart.
-                let (plans, others) = own_views(&views, d, r);
+                let (plans, others) = own_views_titled(&views, d, r);
                 assert_eq!((plans.len(), others.len()), (1, 1), "sheet at {r:?}: {v:?}");
             }
             assert!(together.iter().all(|v| v.iter().any(|(t, _)| t.contains("FLOOR PLAN"))));
@@ -40623,6 +40768,96 @@ mod tests {
         let p = [10500.0 + 700.0, 1300.0 + 540.0];
         let got = place(p, "Level 1").map(|m| m.apply(p)).unwrap_or_else(|| panic!("not placed: {:#?}", log.lock().map(|l| l.clone())));
         assert!((got[0] - 900.0).abs() < 18.0 && (got[1] - 1640.0).abs() < 18.0, "{got:?}: {:#?}", log.lock().map(|l| l.clone()));
+    }
+
+    /// Q6641: one architectural sheet prints the floor plan (the level's plan), the same floor's
+    /// reflected ceiling plan under it at the same scale, and a roof plan beside it that draws the
+    /// building's walls too. A light in the ceiling plan's fourth room lands in that room on the
+    /// floor plan (its view fitted onto the plan beside it by its linework); a mark in the roof
+    /// plan stays off the storey however well its lines lie on the plan (rule data
+    /// `sheets.other_level_view_title_words`). The sheet's frame put the ceiling plan's lights off
+    /// the building and the sheet can't be fitted onto itself: all were left out.
+    #[test]
+    fn a_ceiling_plan_beside_the_floor_plan_on_its_sheet_is_fitted_onto_it_and_a_roof_plan_is_not() {
+        let mut s = crate::Session::new();
+        let k = 0.25;
+        // A 50' x 15' floor: two rows of rooms of different sizes and door places either side of
+        // a corridor (each wall in 2' strokes, as a print's linework comes in).
+        let floor = |at: [f64; 2]| -> Vec<([f64; 2], [f64; 2])> {
+            let mut segs = vec![([0.0, 0.0], [2400.0, 0.0]), ([0.0, 720.0], [2400.0, 720.0])];
+            let room = |segs: &mut Vec<([f64; 2], [f64; 2])>, x: f64, y: f64, w: f64, h: f64, door: f64| {
+                segs.extend([
+                    ([x, y], [x + door, y]),
+                    ([x + door + 36.0, y], [x + w, y]),
+                    ([x + w, y], [x + w, y + h]),
+                    ([x + w, y + h], [x, y + h]),
+                    ([x, y + h], [x, y]),
+                ]);
+            };
+            let mut x = 0.0;
+            for (i, w) in [180.0, 240.0, 156.0, 300.0, 204.0, 168.0, 276.0, 192.0, 228.0, 216.0].iter().enumerate() {
+                room(&mut segs, x, 360.0, *w, 360.0, 24.0 + 12.0 * i as f64);
+                room(&mut segs, x, 0.0, *w, 300.0, 30.0 + 9.0 * i as f64);
+                x += w;
+            }
+            segs.into_iter().map(|(a, b)| ([at[0] + a[0] * k, at[1] + a[1] * k], [at[0] + b[0] * k, at[1] + b[1] * k])).collect()
+        };
+        let (plan_at, rcp_at, roof_at) = ([300.0, 1300.0], [300.0, 400.0], [1700.0, 1300.0]);
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let mut segs = floor(plan_at);
+            segs.extend(floor(rcp_at));
+            segs.extend(floor(roof_at));
+            // The ceiling plan's own lines: a ceiling grid in the corridor; the roof's eaves.
+            for i in 0..12 {
+                let x = rcp_at[0] + 48.0 * f64::from(i);
+                segs.push(([x, rcp_at[1] + 76.0], [x, rcp_at[1] + 88.0]));
+            }
+            segs.push(([roof_at[0] - 24.0, roof_at[1] - 24.0], [roof_at[0] + 624.0, roof_at[1] - 24.0]));
+            segs.push(([roof_at[0] - 24.0, roof_at[1] + 204.0], [roof_at[0] + 624.0, roof_at[1] + 204.0]));
+            for (a, b) in segs {
+                let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / 24.0).ceil().max(1.0);
+                for i in 0..n as usize {
+                    let at = |f: f64| Vec3::new(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, 0.0);
+                    d.add(
+                        &Space::Model,
+                        Common { layer: "PDF".into(), ..Common::default() },
+                        EntityKind::Line(cadaddy_doc::Line { a: at(i as f64 / n), b: at((i + 1) as f64 / n) }),
+                    )
+                    .ok();
+                }
+            }
+            // Each view's title and scale under it.
+            for (at, number, title) in [(plan_at, "1", "FLOOR PLAN"), (rcp_at, "2", "REFLECTED CEILING PLAN"), (roof_at, "3", "ROOF PLAN")] {
+                for (v, x, y, h) in [
+                    (number, at[0] - 12.0, at[1] - 60.0, 14.0),
+                    (title, at[0] + 20.0, at[1] - 48.0, 14.0),
+                    ("SCALE:  1/4\" = 1'-0\"", at[0] + 20.0, at[1] - 64.0, 8.0),
+                ] {
+                    d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, EntityKind::Text(text(v, x, y, h))).ok();
+                }
+            }
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [250, 1200, 950, 1520]}],
+            "sheets": [{"number": "A-101", "discipline": "A", "level": "Level 1", "rect": [0, 0, 2600, 1800]}]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let logged = || log.lock().map(|l| l.clone()).unwrap_or_default();
+        // A light in the ceiling plan's fourth room: in that room on the floor plan (to the
+        // linework's resolution: its lines are compared a few inches apart).
+        let (dx, dy) = (700.0 * k, 540.0 * k);
+        let p = [rcp_at[0] + dx, rcp_at[1] + dy];
+        let got = place(p, "Level 1").map(|m| m.apply(p)).unwrap_or_else(|| panic!("not placed: {:#?}", logged()));
+        assert!((got[0] - plan_at[0] - dx).abs() < 6.0 && (got[1] - plan_at[1] - dy).abs() < 6.0, "{got:?}: {:#?}", logged());
+        assert!(logged().iter().any(|v| v["method"] == "plan view beside the plan" && v["used"] == true), "{:#?}", logged());
+        // A point in the floor plan itself stays where it is.
+        let q = [plan_at[0] + dx, plan_at[1] + dy];
+        assert_eq!(place(q, "Level 1").map(|m| m.apply(q)), Some(q));
+        // A mark on the roof plan: another level's view, never put on the storey.
+        assert_eq!(place([roof_at[0] + dx, roof_at[1] + dy], "Level 1"), None, "{:#?}", logged());
     }
 
     /// Why the placer's log says `sheet`'s frame placement wasn't used.
