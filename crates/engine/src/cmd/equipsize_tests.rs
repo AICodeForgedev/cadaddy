@@ -75,8 +75,9 @@ fn tags_are_matched_as_pages_write_them() {
     assert_eq!(canon("HP9").as_deref(), Some("HP-9"));
     assert_eq!(canon("MAU-4A").as_deref(), Some("MAU-4A"));
     assert_eq!(canon("12"), None);
-    let t = tags_named("Unit Tags:   CU/AHU-6\nTag #: HP 9, ERV-2");
-    for want in ["CU-6", "AHU-6", "HP-9", "ERV-2"] {
+    let t = tags_named("Unit Tags:   CU/AHU-6\nTag #: QH 9, ERV-2\nMOTOR: 3/4 HP 1 PH", &vocab().not_tag);
+    assert!(!t.contains("HP-1") && !t.contains("PH-1"), "a horsepower is no tag: {t:?}");
+    for want in ["CU-6", "AHU-6", "QH-9", "ERV-2"] {
         assert!(t.contains(want), "{want}: {t:?}");
     }
 }
@@ -97,13 +98,13 @@ fn a_tags_pages_give_it_their_size_and_an_accessorys_is_not_taken() {
     .join(PAGE);
     let got = from_text(&text, "Made-up Heat Pumps.pdf", &[unit("HP-9", &["HEAT", "PUMP"])], &vocab());
     let s = got.get("HP-9").unwrap();
-    assert_eq!(s.size_in, [31.89, 37.24, 16.14]);
+    assert_eq!(s.size_in, Some([31.89, 37.24, 16.14]));
     assert_eq!(s.source, "submittal Made-up Heat Pumps.pdf p.2 (no exceptions taken)");
     // A page naming another unit is that unit's.
     let text = format!("{text}\n--- page 4 of 4 ---\nTAG: CU-8\nHeight 50 Width 50 Depth 50");
     let got = from_text(&text, "x.pdf", &[unit("HP-9", &[]), unit("CU-8", &[])], &vocab());
-    assert_eq!(got.get("HP-9").unwrap().size_in, [31.89, 37.24, 16.14]);
-    assert_eq!(got.get("CU-8").unwrap().size_in, [50.0, 50.0, 50.0]);
+    assert_eq!(got.get("HP-9").unwrap().size_in, Some([31.89, 37.24, 16.14]));
+    assert_eq!(got.get("CU-8").unwrap().size_in, Some([50.0, 50.0, 50.0]));
 }
 
 #[test]
@@ -111,12 +112,12 @@ fn a_unit_named_by_its_model_number_and_one_of_two_on_a_page_by_its_words() {
     let mut u = unit("MAU-4", &["MAKEUP", "AIR"]);
     u.models.insert("QX-7200".into());
     let text = "--- page 1 of 1 ---\nMODEL QX-7200\nHeight 40 Width 90 Depth 60";
-    assert_eq!(from_text(text, "a.pdf", &[u], &vocab()).get("MAU-4").unwrap().size_in, [40.0, 90.0, 60.0]);
+    assert_eq!(from_text(text, "a.pdf", &[u], &vocab()).get("MAU-4").unwrap().size_in, Some([40.0, 90.0, 60.0]));
     // A split system's two sections on one sheet: each unit by the words its schedule gives.
     let text = "--- page 1 of 1 ---\nTag: CU/AHU-6\nOUTDOOR CONDENSING SECTION\nHeight 31 Width 37 Depth 16\n\n\n\nINDOOR AIR HANDLER SECTION\nHeight 49 Width 21 Depth 22";
     let got = from_text(text, "a.pdf", &[unit("CU-6", &["CONDENSING", "OUTDOOR"]), unit("AHU-6", &["AIR", "HANDLER"])], &vocab());
-    assert_eq!(got.get("CU-6").unwrap().size_in, [31.0, 37.0, 16.0]);
-    assert_eq!(got.get("AHU-6").unwrap().size_in, [49.0, 21.0, 22.0]);
+    assert_eq!(got.get("CU-6").unwrap().size_in, Some([31.0, 37.0, 16.0]));
+    assert_eq!(got.get("AHU-6").unwrap().size_in, Some([49.0, 21.0, 22.0]));
 }
 
 #[test]
@@ -158,11 +159,11 @@ fn a_box_takes_its_submittals_size_and_its_curb_and_keeps_the_schedules_beside_i
     let before = basis_counts(&eq);
     assert_eq!((before.get("rule"), before.get("schedule")), (Some(&1), Some(&1)));
     let mut got = BTreeMap::new();
-    got.insert("HP-9".to_string(), Submitted { size_in: [31.89, 37.24, 16.14], curb: None, source: "submittal a.pdf p.2".into() });
+    got.insert("HP-9".to_string(), Submitted { size_in: Some([31.89, 37.24, 16.14]), curb: None, source: "submittal a.pdf p.2".into() });
     got.insert(
         "MAU-4".to_string(),
         Submitted {
-            size_in: [48.0, 81.75, 54.0],
+            size_in: Some([48.0, 81.75, 54.0]),
             curb: Some(Curb { height_in: 30.0, plan_in: None }),
             source: "submittal b.pdf p.3 (no exceptions taken)".into(),
         },
@@ -203,7 +204,7 @@ fn hostile_text_does_not_panic() {
         let _ = dims_in(t, &v);
         let _ = curb_in(t, &v);
         let _ = from_text(t, "a.pdf", &[unit("HP-9", &[])], &v);
-        let _ = tags_named(t);
+        let _ = tags_named(t, &v.not_tag);
     }
     let long = "HEIGHT 1 ".repeat(10_000);
     let _ = dims_in(&long, &v);
@@ -217,6 +218,107 @@ fn a_file_is_read_when_its_name_calls_the_units_kind_or_its_pages_name_it() {
     assert!(relevant("/subs/Split Systems/Rev 1-0/Submittal 0101.pdf", &us));
     assert!(relevant("/subs/Mechanical/Heat Pumps.pdf", &us));
     assert!(!relevant("/subs/Concrete Mix/Rev 1-0/Submittal 0101.pdf", &us));
-    assert!(names_a_unit("--- page 1 of 2 ---\nUnit Tags: HP-9", &us));
-    assert!(!names_a_unit("--- page 1 of 2 ---\nUnit Tags: HP-19", &us));
+    assert!(names_a_unit("--- page 1 of 2 ---\nUnit Tags: HP-9", &us, &v));
+    assert!(!names_a_unit("--- page 1 of 2 ---\nUnit Tags: HP-19", &us, &v));
+    assert!(!names_a_unit("--- page 1 of 2 ---\nFAN MOTOR 1/2 HP 9 AMPS", &us, &v), "a horsepower is no tag");
+}
+
+#[test]
+fn a_split_systems_sheet_gives_each_section_to_its_unit_through_the_pairing() {
+    // The schedule: QH-5 (another maker's model than the sheet's: a substitution) serves FC-9;
+    // the sheet names only the fan coils (`FC 9,10,&12`) and its two sections side by side.
+    let mut hp = MepEquipment { tag: "QH-5".into(), kind: "heat_pump".into(), ..MepEquipment::default() };
+    hp.properties.insert("SERVES".into(), "FC-9".into());
+    hp.properties.insert("MODEL".into(), "OLD-1234".into());
+    let fc = MepEquipment { tag: "FC-9".into(), kind: "fan_coil_unit".into(), ..MepEquipment::default() };
+    let us = units(&[hp, fc], &vocab());
+    let text = [
+        "--- page 1 of 2 ---
+SUBMITTAL COVER - PROJECT A
+X NO EXCEPTIONS TAKEN",
+        "--- page 2 of 2 ---
+Single Zone Heat Pump System   FC 9,10,&12
+Outdoor Model: NEW-777
+Indoor Model: NEW-778
+Job Data:
+
+
+
+
+
+         Outdoor - Heat Pump   Indoor - Heat Pump
+         Pipe Size   in (mm)   3/8in(9.52mm)   Indoor Unit   Airflow   CFM   900
+         Refrigerant Type   R-1   Height   in (mm)   44.5(1130)
+         Charge   lbs (kg)   7(3)   Width   in (mm)   20.5(521)
+         Face Area   Sq. Ft.   4
+         0.7(65)   Depth   in (mm)   19.5(495)
+         Shipping Height   in (mm)   23(584)
+         Fins per inch   19
+Circuits   6
+Model   ABC123
+
+
+
+         Sound Pressure   dB(A)   60   SEER2   16
+         Height   in (mm)   30.5(775)   EER2   10
+         Width   in (mm)   36.5(927)   Heating Capacity   36000
+         Depth   in (mm)   15.5(394)   Heating Range   6700~41300
+         Shipping Height   in (mm)   34(864)",
+    ]
+    .join(
+        "
+",
+    );
+    let got = from_text(&text, "Made-up Split Systems.pdf", &us, &vocab());
+    assert_eq!(got.get("FC-9").and_then(|s| s.size_in), Some([44.5, 20.5, 19.5]), "{got:?}");
+    assert_eq!(got.get("QH-5").and_then(|s| s.size_in), Some([30.5, 36.5, 15.5]), "{got:?}");
+    // A sheet headed as the outdoor section's: not the indoor unit's.
+    let text = "--- page 1 of 1 ---
+Outdoor Unit Heat Pump System
+FC-9/QH-5
+
+
+
+
+Height 21 Width 31 Depth 13";
+    let got = from_text(text, "a.pdf", &us, &vocab());
+    assert_eq!((got.get("QH-5").and_then(|s| s.size_in), got.get("FC-9")), (Some([21.0, 31.0, 13.0]), None), "{got:?}");
+}
+
+#[test]
+fn a_through_wall_units_sheet_its_overall_size_and_not_its_cut_out_or_carton() {
+    // Curly inch marks, a fraction after its whole number, an order in brackets; the cut-out and
+    // the packed carton are not the unit.
+    let text = "Sleeve Dimensions (H x W x D)   15\u{201D} x 40\u{201D} x 12 3/4\u{201D} (all models)\n\
+                Dimensions with Front (H x W x D)   15\u{201D} x 40\u{201D} x 20 1/2\u{201D} (all models)\n\
+                Cut Out Dimensions (H x W x D)   15 1/4\u{201D} x 40 1/4\u{201D} x 30\u{201D}\n\
+                Dimensions with Packaging (H x W x D)   17\" x 43\" x 24\"";
+    let s = sizes(text);
+    assert_eq!(s, vec![[15.0, 40.0, 12.75], [15.0, 40.0, 20.5]], "{s:?}");
+    let got = from_text(&format!("--- page 1 of 1 ---\nPLAN DESIGNATION   QX-1\n{text}"), "a.pdf", &[unit("QX-1", &[])], &vocab());
+    assert_eq!(got.get("QX-1").and_then(|s| s.size_in), Some([15.0, 40.0, 20.5]), "the largest: the unit with its front");
+    // A list of a tag's numbers.
+    let t = tags_named("Unit Tags: QF-1, 2, 3, RH-1, 2", &vocab().not_tag);
+    for want in ["QF-1", "QF-2", "QF-3", "RH-1", "RH-2"] {
+        assert!(t.contains(want), "{want}: {t:?}");
+    }
+}
+
+#[test]
+fn a_submittal_giving_only_the_curb_sets_the_curb_and_keeps_the_unit() {
+    let mut unit_box =
+        equipment("MAU-4", "rtu", [0.0, 0.0], [96.0, 60.0], 4.5, "outline: the plan's outline by its tag", "rule: the usual height of its kind");
+    unit_box.bottom_ft = 14.0 / 12.0;
+    let mut curb = equipment("MAU-4 CURB", "roof_curb", [0.0, 0.0], [96.0, 60.0], 14.0 / 12.0, "", "M-ROOF-CURB");
+    curb.properties.insert("UNIT".into(), "MAU-4".into());
+    let mut eq = vec![unit_box, curb];
+    let text = "--- page 1 of 1 ---\nUnit Tags: MAU-4\nROOF CURB - 49.5\" Width, 75\" Length, 30\" Supply Height, Insulated.";
+    let got = from_text(text, "a.pdf", &[unit("MAU-4", &[])], &vocab());
+    let s = got.get("MAU-4").unwrap();
+    assert_eq!((s.size_in, s.curb.map(|c| c.height_in)), (None, Some(30.0)));
+    let a = apply(&mut eq, &got, 12.0);
+    assert_eq!((a.resized.len(), a.curbs), (0, 1));
+    assert!(close(eq[0].max[0] - eq[0].min[0], 96.0) && close(eq[0].height_ft, 4.5), "the unit as it was: {:?}", eq[0]);
+    assert!(close(eq[0].bottom_ft, 2.5) && close(eq[1].height_ft, 2.5), "{eq:?}");
+    assert!(close(eq[1].max[0] - eq[1].min[0], 75.0) && close(eq[1].max[1] - eq[1].min[1], 49.5), "the curb's own plan size: {:?}", eq[1]);
 }

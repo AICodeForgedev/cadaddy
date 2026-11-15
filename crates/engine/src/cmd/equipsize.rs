@@ -37,12 +37,12 @@ use crate::{Result, Session};
 pub(crate) const RULE: &str = "M-EQUIP-SUBMITTAL-SIZE";
 const CMD: &str = "bim.equipment_sizes";
 /// Submittal files read in one pass, pages read of each, the largest file read.
-const MAX_FILES: usize = 64;
+const MAX_FILES: usize = 120;
 const MAX_PAGES: u32 = 80;
 const MAX_FILE_BYTES: usize = 80 * 1024 * 1024;
 /// Submittal files looked at, and pages read of one to tell whether it is about a unit.
 const MAX_LISTED_FILES: usize = 2_000;
-const PROBE_PAGES: u32 = 3;
+const PROBE_PAGES: u32 = 2;
 /// A page naming more units than this is a list (a schedule, an index), not one unit's sheet.
 const MAX_PAGE_TAGS: usize = 8;
 /// Lines of one page and words of one line looked at.
@@ -56,7 +56,9 @@ const CURB_MIN_IN: f64 = 4.0;
 const CURB_MAX_IN: f64 = 72.0;
 /// Lines a header row's values may be below it; lines between the parts of one size.
 const HEADER_REACH: usize = 3;
-const SET_REACH: usize = 2;
+const SET_REACH: usize = 3;
+/// Lines at a page's top read as its heading (what its sizes are of).
+const HEADING_LINES: usize = 4;
 /// Lines above a size read with it (what it is the size of).
 const CONTEXT_LINES: usize = 2;
 /// Units looked at, and resized units listed in a report.
@@ -125,6 +127,13 @@ pub(crate) struct Vocab {
     /// Per equipment kind, the words a submittal's file name may call it by (`heat_pump`:
     /// `SPLIT`, `DUCTLESS`).
     kind_words: BTreeMap<String, Vec<String>>,
+    /// A split system's sections: the kinds of each side and the words that name it.
+    outdoor_kinds: BTreeSet<String>,
+    indoor_kinds: BTreeSet<String>,
+    outdoor_words: Vec<String>,
+    indoor_words: Vec<String>,
+    /// Words a number after them doesn't make a tag of (`HP 1` is a horsepower, `PAGE 2` a page).
+    pub(crate) not_tag: BTreeSet<String>,
 }
 
 impl Vocab {
@@ -164,6 +173,11 @@ impl Vocab {
             accessory: list("accessory_words"),
             generic: list("generic_words").into_iter().collect(),
             kind_words,
+            outdoor_kinds: list("outdoor_kinds").into_iter().map(|k| k.to_ascii_lowercase()).collect(),
+            indoor_kinds: list("indoor_kinds").into_iter().map(|k| k.to_ascii_lowercase()).collect(),
+            outdoor_words: list("outdoor_words"),
+            indoor_words: list("indoor_words"),
+            not_tag: list("not_tag_words").into_iter().collect(),
         }
     }
 }
@@ -177,6 +191,8 @@ pub(crate) struct Dims {
     l: Option<f64>,
     /// Its lines and the ones just above, upper case.
     context: String,
+    /// Its first line and the ones above it, nearest first (upper case).
+    lead: Vec<String>,
 }
 
 impl Dims {
@@ -241,7 +257,7 @@ fn label(t: &str) -> Option<(Axis, bool)> {
 fn unit_word(t: &str) -> Option<Len> {
     let t = t.trim_matches(['(', ')', '[', ']', ',', ':']);
     match t {
-        "IN" | "IN." | "INS" | "INCH" | "INCHES" | "\"" | "''" | "IN.(MM)" | "IN(MM)" | "IN./MM" | "IN/MM" => Some(Len::In),
+        "IN" | "IN." | "INS" | "INCH" | "INCHES" | "\"" | "''" | "\u{201D}" | "\u{2033}" | "IN.(MM)" | "IN(MM)" | "IN./MM" | "IN/MM" => Some(Len::In),
         "MM" | "MM." | "MILLIMETERS" | "MILLIMETRES" => Some(Len::Mm),
         "CM" | "CM." => Some(Len::Cm),
         "FT" | "FT." | "FEET" | "'" => Some(Len::Ft),
@@ -288,12 +304,22 @@ fn length(t: &str) -> Option<(f64, Option<Len>)> {
     }
     // Feet and inches.
     if let Some((ft, rest)) = t.split_once('\'') {
-        let rest = rest.trim_start_matches('-').trim_end_matches('"').trim_end_matches("''");
+        let rest = rest.trim_start_matches('-').trim_end_matches(['"', '\u{201D}', '\u{2033}']).trim_end_matches("''");
         let ft = plain_number(ft)?;
         let inch = if rest.is_empty() { 0.0 } else { plain_number(rest)? };
         return Some((ft * 12.0 + inch, Some(Len::In)));
     }
-    for (suffix, unit) in [("MM", Len::Mm), ("CM", Len::Cm), ("IN.", Len::In), ("IN", Len::In), ("\"", Len::In), ("FT.", Len::Ft), ("FT", Len::Ft)] {
+    for (suffix, unit) in [
+        ("MM", Len::Mm),
+        ("CM", Len::Cm),
+        ("IN.", Len::In),
+        ("IN", Len::In),
+        ("\"", Len::In),
+        ("\u{201D}", Len::In),
+        ("\u{2033}", Len::In),
+        ("FT.", Len::Ft),
+        ("FT", Len::Ft),
+    ] {
         if let Some(n) = t.strip_suffix(suffix) {
             return plain_number(n).map(|v| (v, Some(unit)));
         }
@@ -343,7 +369,10 @@ fn word_tokens(raw: &str, out: &mut Vec<Tok>) {
     }
     // A length with its letter on it: `16"D`, `31-7/8"H`.
     if let Some(last) = w.chars().last().filter(|c| matches!(c, 'H' | 'W' | 'D' | 'L'))
-        && let Some((v, u)) = w.get(..w.len() - 1).filter(|r| r.ends_with(['"', '.']) || r.ends_with(|c: char| c.is_ascii_digit())).and_then(length)
+        && let Some((v, u)) = w
+            .get(..w.len() - 1)
+            .filter(|r| r.ends_with(['"', '.', '\u{201D}', '\u{2033}']) || r.ends_with(|c: char| c.is_ascii_digit()))
+            .and_then(length)
         && let Some((a, word)) = label(&last.to_string())
     {
         out.push(Tok::Num(v, u));
@@ -480,10 +509,11 @@ fn bind(toks: &[Tok], order_before: Option<&[Axis]>, mode: Mode, vocab: &Vocab) 
             let line_unit = parts.iter().find_map(|p| p.1).unwrap_or(Len::In);
             let labelled = parts.iter().all(|p| p.2.is_some());
             let ord = order.as_deref().or(order_before);
+            let other = toks.iter().take(i).any(|t| matches!(t, Tok::Word(w) if vocab.not_unit.contains(w.as_str())));
             let axes: Option<Vec<Axis>> = if labelled {
                 Some(parts.iter().filter_map(|p| p.2).collect())
             } else {
-                ord.filter(|o| o.len() == parts.len()).map(<[Axis]>::to_vec)
+                ord.filter(|o| o.len() == parts.len() && !other).map(<[Axis]>::to_vec)
             };
             if let Some(axes) = axes.filter(|a| a.iter().collect::<BTreeSet<_>>().len() == a.len()) {
                 for (p, a) in parts.iter().zip(axes) {
@@ -594,6 +624,9 @@ pub(crate) fn dims_in(page: &str, vocab: &Vocab) -> Vec<Dims> {
     let mut cur: Option<(Dims, usize, usize)> = None;
     let mut order: Option<Vec<Axis>> = None;
     let mut pending_header: Option<(Vec<Axis>, usize)> = None;
+    let lead = |first: usize| -> Vec<String> {
+        (0..=CONTEXT_LINES).filter_map(|k| first.checked_sub(k)).filter_map(|i| lines.get(i)).map(|l| l.to_ascii_uppercase()).collect()
+    };
     let context = |first: usize, last: usize| -> String {
         let a = first.saturating_sub(CONTEXT_LINES);
         lines.get(a..=last.min(lines.len().saturating_sub(1))).map(|ls| ls.join(" \n ").to_ascii_uppercase()).unwrap_or_default()
@@ -629,6 +662,7 @@ pub(crate) fn dims_in(page: &str, vocab: &Vocab) -> Vec<Dims> {
             if fresh {
                 if let Some((mut d, first, last)) = cur.take() {
                     d.context = context(first, last);
+                    d.lead = lead(first);
                     sets.push(d);
                 }
                 cur = Some((Dims::default(), n, n));
@@ -641,6 +675,7 @@ pub(crate) fn dims_in(page: &str, vocab: &Vocab) -> Vec<Dims> {
     }
     if let Some((mut d, first, last)) = cur.take() {
         d.context = context(first, last);
+        d.lead = lead(first);
         sets.push(d);
     }
     sets
@@ -713,8 +748,9 @@ pub(crate) fn canon(tag: &str) -> Option<String> {
 }
 
 /// The tags a page's words could be: each word's (`HP-9`, `HP9`), a letters word with the number
-/// after it (`HP 9`), and a shared number (`AH/AHP-1` → `AH-1`, `AHP-1`).
-fn tags_named(page: &str) -> BTreeSet<String> {
+/// after it (`QH 9`; not a measure's: `HP 1` is a horsepower, `not_tag`), and a shared number
+/// (`AH/AHP-1` → `AH-1`, `AHP-1`).
+fn tags_named(page: &str, not_tag: &BTreeSet<String>) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let words: Vec<String> = page
         .to_ascii_uppercase()
@@ -746,13 +782,21 @@ fn tags_named(page: &str) -> BTreeSet<String> {
             continue;
         }
         if let Some(c) = canon(w) {
+            // A list after it shares its letters (`EF-1, 2, 3`).
+            let letters = c.split('-').next().unwrap_or_default().to_string();
+            for next in words.iter().skip(i + 1).take(12).take_while(|n| n.chars().all(|ch| ch.is_ascii_digit())) {
+                if let Some(t) = canon(&format!("{letters}-{next}")) {
+                    out.insert(t);
+                }
+            }
             out.insert(c);
-        } else if w.chars().all(|c| c.is_ascii_alphabetic())
-            && let Some(next) = words.get(i + 1)
-            && next.starts_with(|c: char| c.is_ascii_digit())
-            && let Some(c) = canon(&format!("{w}-{next}"))
-        {
-            out.insert(c);
+        } else if w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphabetic()) && !not_tag.contains(w.as_str()) {
+            // `HP 9`, and a list of numbers after the letters (`FCU 1,2,3,&5`).
+            for next in words.iter().skip(i + 1).take(12).take_while(|n| n.starts_with(|c: char| c.is_ascii_digit()) || n.as_str() == "AND") {
+                if let Some(c) = canon(&format!("{w}-{next}")) {
+                    out.insert(c);
+                }
+            }
         }
     }
     out
@@ -767,6 +811,10 @@ pub(crate) struct Unit {
     pub models: BTreeSet<String>,
     /// What a submittal file's name may call it (its kind's words in the rules data).
     pub file_words: BTreeSet<String>,
+    /// The units its schedule row pairs it with (a heat pump and the fan coil it serves).
+    pub partners: BTreeSet<String>,
+    /// Its section of a split system, when it is one: `Some(true)` outdoor, `Some(false)` indoor.
+    pub outdoor: Option<bool>,
 }
 
 /// A word without its plural `S`, for matching names (`FANS` → `FAN`).
@@ -799,7 +847,13 @@ pub(crate) fn units(eq: &[MepEquipment], vocab: &Vocab) -> Vec<Unit> {
                 }
                 continue;
             }
-            if ["STATUS", "BASIS", "SUPPORT", "PAIRED", "SERVES"].contains(&key.as_str()) {
+            if ["PAIRED", "SERVES", "SERVICE"].contains(&key.as_str()) {
+                if let Some(t) = canon(v) {
+                    u.partners.insert(t);
+                }
+                continue;
+            }
+            if ["STATUS", "BASIS", "SUPPORT"].contains(&key.as_str()) {
                 continue;
             }
             text.push(' ');
@@ -809,6 +863,22 @@ pub(crate) fn units(eq: &[MepEquipment], vocab: &Vocab) -> Vec<Unit> {
             if !vocab.generic.contains(&w) && u.words.len() < 40 {
                 u.words.insert(w);
             }
+        }
+        // Its side: on a roof support (outdoors), else its kind's, else a paired unit's other one.
+        let kind = e.kind.to_ascii_lowercase();
+        u.outdoor = if e.properties.contains_key("SUPPORT") || vocab.outdoor_kinds.contains(&kind) {
+            Some(true)
+        } else if vocab.indoor_kinds.contains(&kind) || (!u.partners.is_empty() && kind.contains("split")) {
+            Some(false)
+        } else {
+            u.outdoor
+        };
+    }
+    // A pairing either way round.
+    let pairs: Vec<(String, String)> = by.values().flat_map(|u| u.partners.iter().map(move |p| (p.clone(), u.tag.clone()))).collect();
+    for (a, b) in pairs {
+        if let Some(u) = by.get_mut(&a) {
+            u.partners.insert(b);
         }
     }
     by.into_values().collect()
@@ -822,8 +892,8 @@ fn support(e: &MepEquipment) -> bool {
 /// What an approved submittal gives one unit.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Submitted {
-    /// Height, width (the long plan side), depth, inches.
-    pub size_in: [f64; 3],
+    /// Height, width (the long plan side), depth, inches (none: it gives only the curb).
+    pub size_in: Option<[f64; 3]>,
     pub curb: Option<Curb>,
     /// `submittal <file> p.<n> (<stamp>)`.
     pub source: String,
@@ -846,9 +916,9 @@ fn has_word(ctx: &str, w: &str) -> bool {
 
 /// A size's standing for a unit: its tag next to it, the unit's words around it; none for an
 /// accessory's size near none of them.
-fn score(d: &Dims, u: &Unit, known: &BTreeSet<&str>, vocab: &Vocab) -> Option<i64> {
+fn score(d: &Dims, u: &Unit, known: &BTreeSet<&str>, heading: &str, vocab: &Vocab) -> Option<i64> {
     // Its tag alone next to it (a line naming two units is both's heading).
-    let named: Vec<String> = tags_named(&d.context).into_iter().filter(|t| known.contains(t.as_str())).collect();
+    let named: Vec<String> = tags_named(&d.context, &vocab.not_tag).into_iter().filter(|t| known.contains(t.as_str())).collect();
     let tag_hit = named.len() == 1 && named.iter().any(|t| *t == u.tag);
     let ctx_words: BTreeSet<String> = alpha_words(&d.context).collect();
     let word_hits = u.words.iter().filter(|w| ctx_words.contains(*w)).count().min(5) as i64;
@@ -856,7 +926,23 @@ fn score(d: &Dims, u: &Unit, known: &BTreeSet<&str>, vocab: &Vocab) -> Option<i6
     if accessory && !tag_hit && word_hits == 0 {
         return None;
     }
-    Some(if tag_hit { 10 } else { 0 } + 2 * word_hits)
+    // A split system's section: the side the words around the size name, else its page's heading;
+    // the other side's size is not this unit's.
+    let mut side = 0;
+    if let Some(outdoor) = u.outdoor {
+        let names = |text: &str, words: &[String]| words.iter().any(|w| has_word(text, w));
+        let (mine, theirs) = if outdoor { (&vocab.outdoor_words, &vocab.indoor_words) } else { (&vocab.indoor_words, &vocab.outdoor_words) };
+        let at = |text: &str| (names(text, mine), names(text, theirs));
+        // The nearest line naming one side only (a two-column heading names both), else the
+        // page's heading.
+        let (m, t) = d.lead.iter().map(|l| at(l)).find(|(a, b)| a != b).unwrap_or_else(|| at(heading));
+        match (m, t) {
+            (false, true) => return None,
+            (true, false) => side = 3,
+            _ => {}
+        }
+    }
+    Some(if tag_hit { 10 } else { 0 } + 2 * word_hits + side)
 }
 
 /// What one submittal's text gives each unit it is about (see the module doc). `file`: its name.
@@ -885,12 +971,19 @@ pub(crate) fn from_text(text: &str, file: &str, units: &[Unit], vocab: &Vocab) -
     let mut prev: BTreeSet<&str> = BTreeSet::new();
     for (n, page) in pages {
         let squeezed: String = page.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect();
-        let mut tags: BTreeSet<&str> = tags_named(page).iter().filter_map(|t| known.get(t.as_str()).copied()).collect();
+        let mut tags: BTreeSet<&str> = tags_named(page, &vocab.not_tag).iter().filter_map(|t| known.get(t.as_str()).copied()).collect();
         for (m, t) in &models {
             if squeezed.contains(*m) {
                 tags.insert(*t);
             }
         }
+        // A unit's partner is on its page too (a split system's two sections on one sheet).
+        let partners: Vec<&str> = tags
+            .iter()
+            .filter_map(|t| units.iter().find(|u| u.tag == *t))
+            .flat_map(|u| u.partners.iter().filter_map(|p| known.get(p.as_str()).copied()))
+            .collect();
+        tags.extend(partners);
         if tags.len() > MAX_PAGE_TAGS {
             prev.clear();
             continue;
@@ -905,10 +998,11 @@ pub(crate) fn from_text(text: &str, file: &str, units: &[Unit], vocab: &Vocab) -
         }
         let sets = dims_in(page, vocab);
         let curb = curb_in(page, vocab);
+        let heading = page.lines().filter(|l| !l.trim().is_empty()).take(HEADING_LINES).collect::<Vec<_>>().join(" \n ").to_ascii_uppercase();
         for t in &tags {
             let Some(u) = units.iter().find(|u| u.tag == *t) else { continue };
             for d in &sets {
-                let (Some(sz), Some(sc)) = (d.size_in(), score(d, u, &known, vocab)) else { continue };
+                let (Some(sz), Some(sc)) = (d.size_in(), score(d, u, &known, &heading, vocab)) else { continue };
                 cands.entry(*t).or_default().push((sc, d.volume(), sz, n));
             }
             if let Some(c) = curb {
@@ -917,13 +1011,19 @@ pub(crate) fn from_text(text: &str, file: &str, units: &[Unit], vocab: &Vocab) -
         }
     }
     let stamp = if status.is_empty() { String::new() } else { format!(" ({status})") };
-    for (t, list) in cands {
+    for (t, list) in &cands {
         // The best standing; among equals the largest (an accessory is smaller than its unit).
         let Some(best) = list.iter().max_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(b.3.cmp(&a.3))) else { continue };
         out.insert(
             t.to_string(),
-            Submitted { size_in: best.2, curb: curbs.get(t).map(|c| c.1), source: format!("submittal {file} p.{}{stamp}", best.3) },
+            Submitted { size_in: Some(best.2), curb: curbs.get(t).map(|c| c.1), source: format!("submittal {file} p.{}{stamp}", best.3) },
         );
+    }
+    // A unit whose submittal gives its curb and no size: the curb.
+    for (t, (n, c)) in curbs {
+        if !cands.contains_key(t) {
+            out.insert(t.to_string(), Submitted { size_in: None, curb: Some(c), source: format!("submittal {file} p.{n}{stamp}") });
+        }
     }
     out
 }
@@ -974,8 +1074,8 @@ fn relevant(path: &str, units: &[Unit]) -> bool {
 }
 
 /// Whether a submittal's first pages name one of the units (its tag, or its model number).
-fn names_a_unit(text: &str, units: &[Unit]) -> bool {
-    let named = tags_named(text);
+fn names_a_unit(text: &str, units: &[Unit], vocab: &Vocab) -> bool {
+    let named = tags_named(text, &vocab.not_tag);
     let squeezed: String = text.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect();
     units.iter().any(|u| named.contains(&u.tag) || u.models.iter().any(|m| squeezed.contains(m.as_str())))
 }
@@ -1026,7 +1126,10 @@ pub(crate) fn read(files: &[String], units: &[Unit], vocab: &Vocab) -> Reading {
         return r;
     }
     let mut mine: Vec<&String> = files.iter().take(MAX_LISTED_FILES).collect();
-    mine.sort_by(|a, b| super::equipsub::revision(b).cmp(&super::equipsub::revision(a)).then(a.cmp(b)));
+    // The files their names tie to a unit first, then the others; each lot the newest revision first.
+    mine.sort_by(|a, b| {
+        relevant(b, units).cmp(&relevant(a, units)).then(super::equipsub::revision(b).cmp(&super::equipsub::revision(a))).then(a.cmp(b))
+    });
     let mut taken = 0usize;
     for f in mine {
         if taken >= MAX_FILES {
@@ -1048,7 +1151,7 @@ pub(crate) fn read(files: &[String], units: &[Unit], vocab: &Vocab) -> Reading {
         let mut text = None;
         if !relevant(f, units) {
             match super::spec_import::pdf_text_pages(&bytes, f, PROBE_PAGES) {
-                Ok(t) if names_a_unit(&t, units) => {
+                Ok(t) if names_a_unit(&t, units, vocab) => {
                     let pages: u32 = t.split_whitespace().nth(4).and_then(|n| n.parse().ok()).unwrap_or(u32::MAX);
                     if pages <= PROBE_PAGES {
                         text = Some(Ok(t));
@@ -1070,7 +1173,20 @@ pub(crate) fn read(files: &[String], units: &[Unit], vocab: &Vocab) -> Reading {
             continue;
         }
         for (t, s) in from_text(&text, &name, units, vocab) {
-            r.got.entry(t).or_insert(s);
+            // A later file gives what an earlier one didn't (the size where it gave only the curb).
+            match r.got.get_mut(&t) {
+                None => {
+                    r.got.insert(t, s);
+                }
+                Some(have) => {
+                    if have.size_in.is_none() && s.size_in.is_some() {
+                        have.size_in = s.size_in;
+                        have.source = s.source;
+                    } else if have.curb.is_none() {
+                        have.curb = s.curb;
+                    }
+                }
+            }
         }
         r.read.push(name);
     }
@@ -1154,7 +1270,12 @@ pub(crate) fn apply(eq: &mut [MepEquipment], got: &BTreeMap<String, Submitted>, 
             continue;
         }
         let Some(sub) = canon(&e.tag).and_then(|t| got.get(&t)) else { continue };
-        let [h, w, dp] = sub.size_in;
+        let Some([h, w, dp]) = sub.size_in else {
+            // Only its curb: the unit stays as it is, on that curb.
+            out.changed.push(k);
+            placed.insert((e.level.to_ascii_lowercase(), e.tag.trim().to_ascii_uppercase()), (e.min, e.max, sub.curb, sub.source.clone()));
+            continue;
+        };
         let (dx, dy) = ((e.max[0] - e.min[0]).abs(), (e.max[1] - e.min[1]).abs());
         if !(dx.is_finite() && dy.is_finite() && e.height_ft.is_finite()) {
             continue;
