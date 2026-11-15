@@ -522,6 +522,84 @@ fn numbers_after(words: &[String]) -> Vec<u32> {
     out
 }
 
+/// A text across the sheet: its lettering, height, place across the sheet's extents (0 to 1) and
+/// place in the drawing ([`texts_across`]).
+type Across = (String, f64, [f64; 2], [f64; 2]);
+
+/// A title block's sheet number is lettered this many times the body lettering at least.
+const NUMBER_OVER_BODY: f64 = 2.5;
+/// How far over the sheet number its title field stands, in the number's heights.
+const TITLE_OVER_NUMBER: f64 = 4.0;
+
+/// The sheet's body lettering: the median height of its texts (notes, legend rows, tags).
+fn body_height(texts: &[Across]) -> f64 {
+    let mut h: Vec<f64> = texts.iter().map(|t| t.1).filter(|h| h.is_finite() && *h > 0.0).collect();
+    h.sort_by(f64::total_cmp);
+    h.get(h.len() / 2).copied().unwrap_or(0.0)
+}
+
+/// The title block's title field: the line of words nearest over the title block's sheet number
+/// (`number` as read, else the largest lettering there that reads as one, at least
+/// [`NUMBER_OVER_BODY`] times the body lettering), starting or centred within
+/// [`TITLE_OVER_NUMBER`] of its heights from it and smaller than it. None when no number stands
+/// out in the title block. `all`: every text of the sheet; `texts`: the lines a title may be.
+fn title_over_number<'a>(all: &[Across], texts: &'a [Across], number: &str) -> Option<&'a Across> {
+    let body = body_height(all);
+    let n = all
+        .iter()
+        .filter(|t| {
+            in_title_block(t.2)
+                && t.1 >= NUMBER_OVER_BODY * body
+                && if number.is_empty() { looks_like_sheet_number(&t.0) || crate::sheet_facts::is_sheet_number(&t.0) } else { t.0 == number }
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let hn = n.1;
+    if !(hn.is_finite() && hn > 0.0) {
+        return None;
+    }
+    let mid = |t: &Across| t.3[0] + 0.5 * t.0.chars().count().min(200) as f64 * 0.6 * t.1;
+    texts
+        .iter()
+        .filter(|t| {
+            t.1 < hn
+                && t.3[1] > n.3[1]
+                && t.3[1] - n.3[1] <= TITLE_OVER_NUMBER * hn
+                && ((t.3[0] - n.3[0]).abs() <= hn || (mid(t) - mid(n)).abs() <= hn)
+                && t.0.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| w.len() >= 2).count() >= 1
+        })
+        .min_by(|a, b| (a.3[1] - n.3[1]).total_cmp(&(b.3[1] - n.3[1])))
+}
+
+/// Most lines a title field's title runs to.
+const MAX_FIELD_LINES: usize = 3;
+
+/// A title field's title: `bottom`, the line over the number, and the lines of its lettering
+/// stacked with it, each starting or centred where it does (`SECOND FLOOR` over `POWER PLAN`),
+/// top to bottom, joined. A heading or a note beside the field is not part of it.
+fn field_lines(texts: &[Across], bottom: &Across) -> String {
+    let h = bottom.1;
+    let mid = |t: &Across| t.3[0] + 0.5 * t.0.chars().count().min(200) as f64 * 0.6 * t.1;
+    let mut lines: Vec<&Across> = vec![bottom];
+    while lines.len() < MAX_FIELD_LINES {
+        let (top, low) = lines.iter().fold((f64::NEG_INFINITY, f64::INFINITY), |(t, b), l| (t.max(l.3[1]), b.min(l.3[1])));
+        let next = texts
+            .iter()
+            .filter(|t| {
+                (t.1 - h).abs() <= 0.1 * h
+                    && ((t.3[1] > top && t.3[1] - top <= 2.0 * h) || (t.3[1] < low && low - t.3[1] <= 2.0 * h))
+                    && ((t.3[0] - bottom.3[0]).abs() <= h || (mid(t) - mid(bottom)).abs() <= h)
+                    && !lines.iter().any(|l| std::ptr::eq(*l, *t))
+            })
+            .min_by(|a, b| (a.3[1] - bottom.3[1]).abs().total_cmp(&(b.3[1] - bottom.3[1]).abs()));
+        match next {
+            Some(t) => lines.push(t),
+            None => break,
+        }
+    }
+    lines.sort_by(|a, b| b.3[1].total_cmp(&a.3[1]));
+    lines.iter().map(|l| l.0.as_str()).collect::<Vec<_>>().join(" ")
+}
+
 fn detect_title(d: &Drawing, number: &str) -> String {
     let mut candidates: Vec<(f64, String)> = Vec::new();
     let has_title_layer = d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case("TITLE"));
@@ -546,16 +624,25 @@ fn detect_title(d: &Drawing, number: &str) -> String {
     }
     if candidates.is_empty() {
         // No TITLE layer: the title block's texts, else the views' titles across the sheet.
-        let texts: Vec<(String, f64, [f64; 2], [f64; 2])> = texts_across(d).into_iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).collect();
+        let all = texts_across(d);
+        let texts: Vec<Across> = all.iter().filter(|(v, _, _, _)| v != number && !v.is_empty()).cloned().collect();
         let titled = |v: &str| {
             let up = v.to_uppercase();
             ["PLAN", "SCHEDULE", "COVER", "FRAMING", "CEILING", "ASSEMBLIES", "DETAILS", "SECTIONS", "ELEVATIONS", "DIAGRAM", "LAYOUT"]
                 .iter()
                 .any(|k| up.contains(k))
         };
+        // The title block's title field first: the line right over its sheet number. A sheet of
+        // legends, symbols or notes is titled so there (`PLUMBING SYMBOLS LEGEND`, Q6638), and its
+        // legend's rows (`KEYED PLAN NOTE TAG`, a title column's height) never title it.
+        let legend_words = crate::wordrules::words("sheets.legend_notes_heading_words");
+        let names_legend = |v: &str| v.to_uppercase().split(|c: char| !c.is_ascii_alphanumeric()).any(|w| legend_words.contains(&w));
+        if let Some(c) = title_over_number(&all, &texts, number).filter(|c| names_legend(&c.0) || titled(&c.0)) {
+            return field_lines(&texts, c);
+        }
         // The largest titled lines, the title block's first; a heading over a block of notes
         // (`SHEET NOTES - FLOOR PLAN` at the top of the title column) isn't the title.
-        let mut ranked: Vec<&(String, f64, [f64; 2], [f64; 2])> = texts.iter().filter(|(v, _, _, _)| titled(v)).collect();
+        let mut ranked: Vec<&Across> = texts.iter().filter(|(v, _, _, _)| titled(v)).collect();
         // The title column at the right edge first, then the foot strip, then the views.
         let rank = |at: [f64; 2]| (in_title_block(at), at[0] > 0.8);
         ranked.sort_by(|a, b| rank(b.2).cmp(&rank(a.2)).then(b.1.total_cmp(&a.1)));
@@ -2136,6 +2223,57 @@ mod tests {
             }
         }
         d
+    }
+
+    /// A sheet of legend tables with no labelled title block (Q6638): its title column holds a
+    /// legend's rows, one of them `KEYED PLAN NOTE TAG`, a larger `PLAN TAG KEY` heading, and
+    /// at the foot the sheet's title right over its number. `title` is that title.
+    fn legend_columns(title: &str) -> Drawing {
+        let mut d = bordered();
+        let body = 4.5;
+        // Legend tables across the sheet: a symbol's mark and its description, row after row.
+        for (col, x) in [120.0, 520.0, 920.0, 1320.0].into_iter().enumerate() {
+            sheet_text(&mut d, [x, 1300.0], &format!("LEGEND TABLE {}", col + 1), 8.0);
+            for row in 0..40 {
+                sheet_text(&mut d, [x + 40.0, 1270.0 - 14.0 * f64::from(row)], "INDICATES A SAMPLE SYMBOL", body);
+            }
+        }
+        sheet_text(&mut d, [1548.0, 495.0], "PLAN TAG KEY:", 8.7);
+        for (i, row) in [
+            "INDICATES DIRECTION OF NORTH",
+            "DETAIL REFERENCE - UPPER NUMBER",
+            "INDICATES SHEET NUMBER",
+            "KEYED PLAN NOTE TAG",
+            "INDICATES CONNECTION",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sheet_text(&mut d, [1626.0, 468.0 - 14.0 * i as f64], row, body);
+            sheet_text(&mut d, [1592.0, 468.0 - 14.0 * i as f64], "1", body);
+        }
+        for (i, row) in ["PLAN MARK", "UNIT A", "UNIT B", "UNIT C", "UNIT D", "UNIT E"].into_iter().enumerate() {
+            sheet_text(&mut d, [1633.0, 203.0 - 8.5 * i as f64], row, body);
+        }
+        sheet_text(&mut d, [1810.0, 150.0], title, 7.0);
+        sheet_text(&mut d, [1811.0, 78.0], "MP7", 28.0);
+        d
+    }
+
+    #[test]
+    fn a_legend_sheets_title_is_its_title_field_not_a_legend_row() {
+        // Q6638: the line over the title block's number titles the sheet; a legend's row in the
+        // title column never does (it read as a plan's title by its word PLAN).
+        let d = legend_columns("MECHANICAL SYMBOLS LEGEND");
+        assert_eq!(recognise_dxf(&d).title, "MECHANICAL SYMBOLS LEGEND");
+        // A plan laid out the same way keeps its title.
+        let d = legend_columns("FIRST FLOOR MECHANICAL PLAN");
+        assert_eq!(recognise_dxf(&d).title, "FIRST FLOOR MECHANICAL PLAN");
+        // The line over the number names no kind of sheet (a project's name): the titled lines
+        // decide as before, the largest in the title block first.
+        let mut d = legend_columns("SAMPLE");
+        sheet_text(&mut d, [1810.0, 300.0], "SECOND FLOOR PLAN", 9.0);
+        assert_eq!(recognise_dxf(&d).title, "SECOND FLOOR PLAN");
     }
 
     /// A 300-square view of crossing lines at (x, y), titled below as view titles are.
