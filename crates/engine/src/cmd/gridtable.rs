@@ -206,7 +206,27 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     ys.dedup_by(|a, b| (*a - *b).abs() < 0.2 * h);
     // The header's band: between the lines above and below it.
     let above = ys.iter().copied().filter(|y| *y > header_y).fold(t.at.y, f64::min);
-    let below = ys.iter().copied().filter(|y| *y < header_y).fold(f64::NEG_INFINITY, f64::max);
+    let mut below = ys.iter().copied().filter(|y| *y < header_y).fold(f64::NEG_INFINITY, f64::max);
+    // A key heading stacked in one cell (`PLAN` over `MARK`) under a rule that runs across most
+    // of the header (a group heading's, `LUMINAIRE SOURCE` and `ELECTRICAL` side by side): the
+    // band under that rule whose first cell is the heading's next line is the header's too, not
+    // a row whose mark is `MARK` (fix-schedule-plan-mark-header-unread).
+    let first_col = |x: f64| xs.first().is_some_and(|a| x >= a - tol) && xs.get(1).is_some_and(|b| x < b - tol);
+    let first_cell = |lo: f64, hi: f64| {
+        let mut on: Vec<&TextItem> = texts
+            .iter()
+            .filter(|x| x.rotation.abs() < 0.05 && x.at.y > lo && x.at.y < hi && first_col(x.at.x) && !x.value.trim().is_empty())
+            .collect();
+        on.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+        on.iter().map(|x| x.value.trim()).collect::<Vec<_>>().join(" ")
+    };
+    for _ in 0..MAX_HEADER_BANDS {
+        let Some(next) = ys.iter().copied().filter(|y| *y < below - tol).max_by(f64::total_cmp) else { break };
+        if !(below.is_finite() && key_heading(&first_cell(below, above)) && key_heading(&first_cell(next, below))) {
+            break;
+        }
+        below = next;
+    }
     // A group's sub-columns (`TYPE | COLOR` under `LAMPS`) are drawn from the rule under its
     // heading down: their lines cross the header's band low, not where its first line is.
     if below.is_finite() && above > below {
@@ -223,6 +243,8 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     let col = |x: f64| xs.windows(2).position(|w| x >= w[0] - tol && x < w[1] - tol);
     let gather = |lo: f64, hi: f64| -> Vec<String> {
         let mut cells = vec![String::new(); xs.len() - 1];
+        // Each cell's last text, for a catalog number wrapped onto the cell's next line.
+        let mut last: Vec<Option<&TextItem>> = vec![None; xs.len() - 1];
         let mut inside: Vec<&TextItem> =
             texts.iter().filter(|x| x.rotation.abs() < 0.05 && x.at.y > lo && x.at.y < hi && x.at.x >= x0 - tol && x.at.x < x1).collect();
         inside.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
@@ -234,11 +256,17 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
                 continue;
             }
             seen.push(x);
-            if let Some(c) = col(x.at.x).and_then(|c| cells.get_mut(c)) {
-                if !c.is_empty() {
+            let Some(i) = col(x.at.x) else { continue };
+            let right = xs.get(i + 1).copied().unwrap_or(f64::INFINITY);
+            let prev = last.get(i).copied().flatten();
+            if let Some(c) = cells.get_mut(i) {
+                if !c.is_empty() && !prev.is_some_and(|p| catalog_wraps(p, x, right)) {
                     c.push(' ');
                 }
                 c.push_str(x.value.trim());
+            }
+            if let Some(l) = last.get_mut(i) {
+                *l = Some(x);
             }
         }
         cells
@@ -247,18 +275,24 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
     // Rows with no rules between them or under the header (the table ruled only round its
     // header and rows): its first column's text lines in the band, the first its heading and
     // each next one a row's start, the lines down to the next one (a wrapped description) its own.
-    let key_lines: Vec<(f64, f64)> = {
-        let mut ks: Vec<(f64, f64)> = texts
+    let key_lines: Vec<(f64, f64, &str)> = {
+        let mut ks: Vec<(f64, f64, &str)> = texts
             .iter()
             .filter(|x| x.rotation.abs() < 0.05 && x.at.y > header_lo && x.at.y < above && col(x.at.x) == Some(0) && !x.value.trim().is_empty())
-            .map(|x| (x.at.y, x.height.max(1e-9)))
+            .map(|x| (x.at.y, x.height.max(1e-9), x.value.trim()))
             .collect();
         ks.sort_by(|a, b| b.0.total_cmp(&a.0));
         ks.dedup_by(|a, b| (a.0 - b.0).abs() < 0.5 * b.1);
         ks
     };
-    let unruled = below.is_finite() && key_lines.len() >= MIN_UNRULED_LINES;
-    if unruled && let Some((y, hk)) = key_lines.get(1) {
+    // The heading's lines: the first, and the ones under it that go on with a key heading stacked
+    // in its cell (`PLAN` over `MARK`, fix-schedule-plan-mark-header-unread).
+    let heading_lines = match key_lines.first() {
+        Some((_, _, v)) if key_heading(v) => 1 + key_lines.iter().skip(1).take(MAX_HEADER_BANDS).take_while(|(_, _, v)| key_heading(v)).count(),
+        _ => 1,
+    };
+    let unruled = below.is_finite() && key_lines.len() + 1 >= heading_lines + MIN_UNRULED_LINES;
+    if unruled && let Some((y, hk, _)) = key_lines.get(heading_lines) {
         header_lo = y + 0.7 * hk;
     }
     let mut headers = gather(header_lo, above);
@@ -300,8 +334,8 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         lower.push(f);
     }
     if unruled {
-        for (i, (y, hk)) in key_lines.iter().enumerate().skip(1).take(MAX_ROWS) {
-            let lo = key_lines.get(i + 1).map_or(below, |(n, hn)| n + 0.7 * hn);
+        for (i, (y, hk, _)) in key_lines.iter().enumerate().skip(heading_lines).take(MAX_ROWS) {
+            let lo = key_lines.get(i + 1).map_or(below, |(n, hn, _)| n + 0.7 * hn);
             rows.push(gather(lo, y + 0.7 * hk));
         }
     } else if lower.len() >= 2 {
@@ -345,6 +379,45 @@ pub(crate) fn read_at(texts: &[TextItem], segs: &[(Vec2, Vec2)], t: &TextItem, s
         notes,
         extent: [x0, notes_bottom.min(bottom), x1, t.at.y + h],
     })
+}
+
+/// Lines of a key heading stacked in one cell (or header bands it spans) looked at, at most.
+const MAX_HEADER_BANDS: usize = 3;
+
+/// Whether a cell's text is a key column's heading, or a line of one stacked in its cell: only
+/// words of `schedules.key_heading_words` (`PLAN`, `MARK`, `TYPE`, `NO.`).
+pub(crate) fn key_heading(v: &str) -> bool {
+    let words = cadaddy_mepfix::wordrules::words("schedules.key_heading_words");
+    let mut parts = v.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).peekable();
+    parts.peek().is_some() && parts.all(|w| words.iter().any(|k| k.eq_ignore_ascii_case(w)))
+}
+
+/// A catalog number's least letters, for [`catalog_wraps`].
+const MIN_CATALOG_LEN: usize = 8;
+/// A wrapped catalog number's tail of plain letters has at most this many (`NV`, `UNV`, `BLK`).
+const MAX_PLAIN_TAIL: usize = 6;
+/// A capital's width in its height (a sheet's sans lettering), for where a text ends.
+const CAP_EM: f64 = 0.6;
+
+/// Whether `next`, on the line under `prev` in one cell (its right rule at `right`), goes on with
+/// the catalog number `prev` (`QZ7T-2-K3/930-G-R2-DIM-U` over `NV`): `prev` is one long word of
+/// letters, digits and separators that ends on a separator or reaches the cell's right side, and
+/// `next` one word of the same. Such a number is one value, joined with no space.
+fn catalog_wraps(prev: &TextItem, next: &TextItem, right: f64) -> bool {
+    let catalog_word = |v: &str| !v.is_empty() && v.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '-' | '/' | '.'));
+    let (p, n) = (prev.value.trim(), next.value.trim());
+    let h = prev.height.max(1e-9);
+    if (prev.at.y - next.at.y) < 0.5 * h || !catalog_word(p) || !catalog_word(n) {
+        return false;
+    }
+    let shaped = p.len() >= MIN_CATALOG_LEN && p.contains(['-', '/']) && p.chars().any(|c| c.is_ascii_digit());
+    // (a long plain word under it is a description's next word, not a number's tail)
+    let tail = n.len() <= MAX_PLAIN_TAIL || n.contains(['-', '/']) || n.chars().any(|c| c.is_ascii_digit());
+    if !tail {
+        return false;
+    }
+    let ends = prev.at.x + CAP_EM * h * p.chars().count() as f64;
+    shaped && (p.ends_with(['-', '/']) || ends >= right - 2.0 * CAP_EM * h)
 }
 
 /// The extent `(x0, x1)` of the horizontal rule at `y` that `span` is a piece of: the pieces
@@ -599,5 +672,123 @@ mod tests {
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0].headers, ["TAG", "MODEL", "DESCRIPTION"]);
         assert_eq!(tables[0].rows, vec![vec!["A".to_string(), "ML4DM10".into(), "PUBLIC SPACES".into()]]);
+    }
+
+    /// fix-schedule-plan-mark-header-unread: a luminaire schedule whose key column is headed
+    /// `PLAN` over `MARK` (two lines in one cell), with `LUMINAIRE SOURCE` and `ELECTRICAL` group
+    /// headings over their sub-columns and a catalog number wrapped onto its cell's second line.
+    /// Ruled (its group rules together cross most of the header, so they read as a row rule) and
+    /// unruled (no rule under the header, none between rows): either way the heading is
+    /// `PLAN MARK`, its rows are the types (never a type `MARK`), and the catalog number is one.
+    #[test]
+    fn a_key_heading_stacked_on_two_lines_is_the_header_not_a_row() {
+        let texts = |rows_at: [f64; 3]| {
+            let mut v = vec![
+                t(5.0, 11.0, "LUMINAIRE SCHEDULE"),
+                t(0.2, 10.55, "PLAN"),
+                t(0.2, 10.4, "MARK"),
+                t(1.1, 10.47, "MANUFACTURER"),
+                t(3.1, 10.47, "MODEL"),
+                t(4.6, 10.55, "LUMINAIRE SOURCE"),
+                t(9.1, 10.55, "ELECTRICAL"),
+                t(4.6, 10.3, "TYPE"),
+                t(5.6, 10.3, "LUMENS"),
+                t(6.6, 10.3, "CCT"),
+                t(7.6, 10.3, "CRI"),
+                t(9.1, 10.3, "VOLTAGE"),
+                t(10.1, 10.3, "LOAD (VA)"),
+                t(11.1, 10.47, "NOTES"),
+            ];
+            let [a, b, c] = rows_at;
+            for (y, mark, maker, model) in
+                [(a, "XQ", "MAKER A", "QZ7T-2-K3/930-G-R2-BB/4"), (b, "ZR", "MAKER B", "CD4-LED"), (c, "ZRE", "MAKER B", "CD4-LED-EM")]
+            {
+                v.extend([
+                    t(0.1, y, mark),
+                    t(1.1, y, maker),
+                    t(3.05, y, model),
+                    t(4.6, y, "LED"),
+                    t(5.6, y, "1000"),
+                    t(6.6, y, "4000"),
+                    t(7.6, y, "80"),
+                    t(9.1, y, "120"),
+                    t(10.1, y, "10"),
+                ]);
+            }
+            // the first row's catalog number goes on under it
+            v.push(t(3.05, a - 0.15, "5QRS"));
+            v
+        };
+        let vertical = |x: f64, top: f64, bottom: f64| (Vec2::new(x, top), Vec2::new(x, bottom));
+        let horizontal = |y: f64, x0: f64, x1: f64| (Vec2::new(x0, y), Vec2::new(x1, y));
+        // Ruled: row rules, a rule under the header, the group rules (4.5-9 and 9-11) together
+        // more than half its width; the sub-columns' lines from the group rules down.
+        let mut ruled: Vec<(Vec2, Vec2)> = [0.0, 1.0, 3.0, 4.5, 9.0, 11.0, 12.0].iter().map(|x| vertical(*x, 10.8, 9.0)).collect();
+        ruled.extend([5.5, 6.5, 7.5, 8.5, 10.0].iter().map(|x| vertical(*x, 10.45, 9.0)));
+        ruled.extend([10.8, 10.2, 9.8, 9.4, 9.0].iter().map(|y| horizontal(*y, 0.0, 12.0)));
+        ruled.extend([horizontal(10.45, 4.5, 9.0), horizontal(10.45, 9.0, 11.0)]);
+        // Unruled: its border and column lines only.
+        let mut unruled: Vec<(Vec2, Vec2)> =
+            [0.0, 1.0, 3.0, 4.5, 5.5, 6.5, 7.5, 8.5, 9.0, 10.0, 11.0, 12.0].iter().map(|x| vertical(*x, 10.8, 8.6)).collect();
+        unruled.extend([10.8, 8.6].iter().map(|y| horizontal(*y, 0.0, 12.0)));
+        for (name, segs) in [("ruled", ruled), ("unruled", unruled)] {
+            let v = texts([10.05, 9.65, 9.25]);
+            let Some(title) = v.first() else { return };
+            let tb = read_at(&v, &segs, title, "E-9").unwrap_or_else(|| panic!("{name}: no table"));
+            assert_eq!(tb.headers.first().map(String::as_str), Some("PLAN MARK"), "{name}: {tb:#?}");
+            assert!(tb.headers.iter().any(|h| h == "MANUFACTURER") && tb.headers.iter().any(|h| h.ends_with("VOLTAGE")), "{name}: {:?}", tb.headers);
+            let marks: Vec<&str> = tb.rows.iter().filter_map(|r| r.first().map(String::as_str)).collect();
+            assert_eq!(marks, ["XQ", "ZR", "ZRE"], "{name}: {tb:#?}");
+            let (types, _) = super::super::lightsched::fixture_types(&tb, &std::collections::BTreeSet::new());
+            let got: Vec<(&str, &str, &str, &str)> =
+                types.iter().map(|f| (f.tag.as_str(), f.manufacturer.as_str(), f.model.as_str(), f.voltage.as_str())).collect();
+            assert_eq!(
+                got,
+                [
+                    ("XQ", "MAKER A", "QZ7T-2-K3/930-G-R2-BB/45QRS", "120"),
+                    ("ZR", "MAKER B", "CD4-LED", "120"),
+                    ("ZRE", "MAKER B", "CD4-LED-EM", "120")
+                ],
+                "{name}: {tb:#?}"
+            );
+        }
+    }
+
+    /// fix-schedule-plan-mark-header-unread: a schedule whose key column numbers its types (`1`,
+    /// `2`, the plans tag the fixtures so) reads them as types, not as voltages; a description
+    /// wrapped onto its cell's next line keeps its space.
+    #[test]
+    fn numbered_types_under_a_key_heading_are_types() {
+        let tb = GridTable {
+            headers: vec!["TYPE".into(), "DESCRIPTION".into(), "VOLTAGE".into()],
+            rows: vec![vec!["1".into(), "DOWNLIGHT".into(), "120".into()], vec!["2".into(), "TROFFER".into(), "277".into()]],
+            ..GridTable::default()
+        };
+        let (types, _) = super::super::lightsched::fixture_types(&tb, &std::collections::BTreeSet::new());
+        let got: Vec<(&str, &str)> = types.iter().map(|f| (f.tag.as_str(), f.voltage.as_str())).collect();
+        assert_eq!(got, [("1", "120"), ("2", "277")]);
+        // A column no key heading names keeps a bare number for a voltage, never a type.
+        let tb = GridTable {
+            headers: vec!["VOLTS".into(), "DESCRIPTION".into()],
+            rows: vec![vec!["120".into(), "DOWNLIGHT".into()]],
+            ..GridTable::default()
+        };
+        assert!(super::super::lightsched::fixture_types(&tb, &std::collections::BTreeSet::new()).0.is_empty());
+        // A plain word under a long word is a description's next word, not a catalog's tail.
+        let segs: Vec<(Vec2, Vec2)> = [0.0, 1.0, 3.0]
+            .iter()
+            .map(|x| (Vec2::new(*x, 8.5), Vec2::new(*x, 9.7)))
+            .chain([9.7, 9.3, 8.5].iter().map(|y| (Vec2::new(0.0, *y), Vec2::new(3.0, *y))))
+            .collect();
+        let v = vec![
+            t(1.0, 10.0, "LIGHT FIXTURE SCHEDULE"),
+            t(0.1, 9.5, "TYPE"),
+            t(1.1, 9.5, "DESCRIPTION"),
+            t(0.1, 9.1, "A"),
+            t(1.02, 9.1, "2X4-LED/TROFFER-12"),
+            t(1.02, 8.95, "RECESSED"),
+        ];
+        let tables = read_titled(&v, &segs, "light fixture schedule", "E-9");
+        assert_eq!(tables.first().and_then(|tb| tb.rows.first()).map(|r| r.join("|")), Some("A|2X4-LED/TROFFER-12 RECESSED".to_string()));
     }
 }

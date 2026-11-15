@@ -780,6 +780,40 @@ fn a_tags_symbol_keeps_a_stroke_near_its_size_or_with_no_outline_round_the_tag()
 }
 
 #[test]
+fn a_box_drawn_round_its_tags_letters_stays_the_symbols() {
+    // Four labels of one type, each in a box drawn round its letters (as wide as the label is
+    // long, so no two boxes are alike), with a small square on the box's top left corner that
+    // every label shares. The box round the tag is the symbol's outline, though no other instance draws
+    // it alike and it is over twice the shared square: it stays in the symbol, never loose (a
+    // keynote box whose box was left out reads as some other symbol downstream).
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for (label, (cx, cy)) in ["PB1", "PB12", "PB1-3", "PB1-13"].into_iter().zip([(150, 300), (250, 300), (150, 400), (250, 400)]) {
+        let half = 4 + 2 * label.len() as i32;
+        let (x0, x1, y0, y1) = (cx - half, cx + half, cy - 9, cy + 9);
+        content.extend_from_slice(format!("{x0} {y0} m {x1} {y0} l {x1} {y1} l {x0} {y1} l h S ").as_bytes());
+        content.extend_from_slice(format!("{} {} m {} {} l {} {} l {} {} l h S ", x0, y1 - 4, x0 + 8, y1 - 4, x0 + 8, y1 + 4, x0, y1 + 4).as_bytes());
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td ({label}) Tj ET ", x0 + 5, cy - 2).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
+    let d = &r.drawing;
+    assert_eq!(symbol_tags(d).len(), 4, "every label is a symbol with its TAG");
+    // A closed four-cornered outline wider than tall: a label's box.
+    let label_box = |e: &Entity| {
+        matches!(&e.kind, EntityKind::LwPolyline(p) if p.closed && p.vertices.len() == 4 && {
+            let span = |f: fn(&cadaddy_geom::PolyVertex) -> f64| {
+                p.vertices.iter().map(f).fold(f64::NEG_INFINITY, f64::max) - p.vertices.iter().map(f).fold(f64::INFINITY, f64::min)
+            };
+            span(|v| v.p.x) > span(|v| v.p.y)
+        })
+    };
+    let loose = d.model.iter().filter(|e| label_box(e)).count();
+    assert_eq!(loose, 0, "no label's box is left loose");
+    let in_blocks = d.blocks.values().filter(|b| b.name.starts_with("PDF-SYM-") && b.entities.iter().any(|e| label_box(e))).count();
+    assert!(in_blocks >= 1, "the symbol draws its box");
+}
+
+#[test]
 fn dimension_words_never_anchor_a_symbol() {
     // Six windows across a wall, each drawn as a frame rectangle and a pane line, and under each a
     // dimension: a short line with a tick at each end and "EQ" lettered over its middle (equal

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1288,
-    "count": 1288,
+    "callableAsJson": 1289,
+    "count": 1289,
     "ids": [
       "-attedit",
       "-block",
@@ -134,6 +134,7 @@
       "bim.count",
       "bim.dimming",
       "bim.element",
+      "bim.equipment_sizes",
       "bim.estimate",
       "bim.export.ar",
       "bim.export.ar.manifest",

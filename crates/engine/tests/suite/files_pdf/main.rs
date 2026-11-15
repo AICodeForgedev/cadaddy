@@ -15,6 +15,7 @@ mod detailscale;
 mod devicefit;
 mod drawingsheets;
 mod enlargedviews;
+mod equipsize;
 mod fpshopdrawings;
 mod job_sheets_out;
 mod jobmep;

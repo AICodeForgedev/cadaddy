@@ -120,7 +120,7 @@ fn col_of(header: &str) -> Col {
     let first = h.split(' ').next().unwrap_or_default();
     let is = |ws: &[&str]| ws.contains(&h.as_str());
     let starts = |ws: &[&str]| ws.iter().any(|w| h == *w || h.starts_with(&format!("{w} ")));
-    if is(&["TAG", "MARK", "SYMBOL", "TAG NO", "MARK NO", "FIXTURE TAG", "FIXTURE MARK"]) {
+    if is(&["TAG", "MARK", "SYMBOL", "TAG NO", "MARK NO", "FIXTURE TAG", "FIXTURE MARK"]) || key_tag_heading(&h) {
         Col::Tag
     } else if h.contains("FIXTURE") {
         Col::Fixture { strong: true }
@@ -161,6 +161,83 @@ fn col_of(header: &str) -> Col {
     }
 }
 
+/// Whether a heading's words (as [`header_words`] gives them) are a key heading that names the
+/// tags (`PLAN MARK`, `FIXTURE ID`, `MARK NUMBER`): only words of `schedules.key_heading_words`, one
+/// of them a word of `schedules.key_tag_words` (fix-schedule-plan-mark-header-unread).
+fn key_tag_heading(h: &str) -> bool {
+    let words: Vec<&str> = h.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    !words.is_empty()
+        && words.iter().all(|w| crate::wordrules::words("schedules.key_heading_words").contains(w))
+        && words.iter().any(|w| crate::wordrules::words("schedules.key_tag_words").contains(w))
+}
+
+/// Whether a text is a line of a key heading ([`key_tag_heading`]'s words: `PLAN`, `MARK`), that
+/// may be stacked in its cell with the heading's other lines.
+fn key_heading_line(v: &str) -> bool {
+    let h = header_words(v);
+    let mut words = h.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).peekable();
+    words.peek().is_some() && words.all(|w| crate::wordrules::words("schedules.key_heading_words").contains(&w))
+}
+
+/// Lines of a heading stacked in one cell, at most.
+const MAX_STACK: usize = 3;
+/// A stacked heading's next line is at most this many heights under the one above it.
+const STACK_GAP_H: f64 = 1.8;
+
+/// Whether `upper` is the line of a stacked heading right over `lower` (one cell: their letters
+/// overlap across, about one line apart, of one size).
+fn stacked_over(upper: &TextItem, lower: &TextItem) -> bool {
+    let h = lower.height;
+    let dy = upper.at.y - lower.at.y;
+    let span = |t: &TextItem| (t.at.x, t.at.x + CHAR_EM * t.height * t.value.trim().chars().count() as f64);
+    let ((a0, a1), (b0, b1)) = (span(upper), span(lower));
+    let overlap = a1.min(b1) - a0.max(b0);
+    dy > 0.5 * h && dy <= STACK_GAP_H * h && (0.7 * h..=1.4 * h).contains(&upper.height) && overlap > 0.5 * (a1 - a0).min(b1 - b0)
+}
+
+/// A schedule's header cells lettered on more than one line (`PLAN` over `MARK`, `MOUNTING` over
+/// `TYPE`), each made one text: the lines of one cell (their letters overlapping across) joined top
+/// down, starting where its leftmost line starts, on the lowest line's baseline. A group heading over
+/// several cells (`CONNECTION SIZES` over `CW | HW | W | V`) is no column of its own and is left
+/// out. Texts on one line are kept as they are.
+fn header_cells(band: &[&TextItem]) -> Vec<TextItem> {
+    let span = |t: &TextItem| (t.at.x, t.at.x + CHAR_EM * t.height * t.value.trim().chars().count() as f64);
+    let lower_than = |a: &TextItem, b: &TextItem| b.at.y - a.at.y > 0.5 * a.height.min(b.height);
+    let covers = |g: &TextItem, t: &TextItem| {
+        let ((g0, g1), (t0, t1)) = (span(g), span(t));
+        let mid = (t0 + t1) / 2.0;
+        mid >= g0 - g.height && mid <= g1 + g.height
+    };
+    // A group heading: two cells or more under it, side by side.
+    let group = |g: &TextItem| {
+        let under: Vec<&&TextItem> = band.iter().filter(|t| lower_than(t, g) && covers(g, t)).collect();
+        under.iter().enumerate().any(|(i, a)| {
+            under.iter().skip(i + 1).any(|b| {
+                let ((a0, a1), (b0, b1)) = (span(a), span(b));
+                a1.min(b1) < a0.max(b0)
+            })
+        })
+    };
+    let mut kept: Vec<&TextItem> = band.iter().copied().filter(|t| !group(t)).collect();
+    kept.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+    let mut cells: Vec<Vec<&TextItem>> = Vec::new();
+    for t in kept {
+        match cells.iter_mut().find(|c| c.last().is_some_and(|l| stacked_over(l, t))) {
+            Some(c) => c.push(t),
+            None => cells.push(vec![t]),
+        }
+    }
+    cells
+        .into_iter()
+        .filter_map(|c| {
+            let low = c.last()?;
+            let value = c.iter().map(|t| t.value.trim()).collect::<Vec<_>>().join(" ");
+            let x = c.iter().map(|t| t.at.x).fold(f64::INFINITY, f64::min);
+            Some(TextItem { value, at: cadaddy_geom::Vec2::new(x, low.at.y), height: low.height, rotation: low.rotation })
+        })
+        .collect()
+}
+
 /// Whether a cell says no value (`--`, `-`, `N/A`).
 fn blank(v: &str) -> bool {
     let t = v.trim();
@@ -186,6 +263,16 @@ pub fn is_size(t: &str) -> bool {
         None => num_ok(whole) || frac_ok(whole),
     }
 }
+
+/// A schedule's numbered mark: one to three digits alone (`1`, `12`), when the plans tag the
+/// fixtures with numbers (fix-schedule-plan-mark-header-unread).
+pub fn is_numbered_tag(t: &str) -> bool {
+    let t = t.trim();
+    (1..=MAX_NUMBER_DIGITS).contains(&t.len()) && t.chars().all(|c| c.is_ascii_digit())
+}
+
+/// A numbered mark's most digits.
+const MAX_NUMBER_DIGITS: usize = 3;
 
 /// Whether a text is shaped like a schedule's tag: one to four capitals, then maybe a dash and a
 /// number, a suffix letter, more numbers after commas (`EEW`, `P-1H`, `TP-1`, `WH-1,2,3`).
@@ -402,6 +489,32 @@ fn own_table<'a>(on_row: Vec<&'a TextItem>, tag_head: &TextItem) -> Vec<&'a Text
     on_row.into_iter().zip(keep).filter_map(|(t, k)| k.then_some(t)).collect()
 }
 
+/// The lines of a header text's cell, top down, `low` the last: the key heading's lines stacked
+/// over it (`PLAN` over `MARK`, [`key_heading_line`]), or `low` alone. None when `low` is itself
+/// a line over another of the heading (that lowest line stands for them).
+fn heading_stack<'a>(texts: &'a [TextItem], low: &'a TextItem) -> Option<Vec<&'a TextItem>> {
+    if !key_heading_line(&low.value) {
+        return Some(vec![low]);
+    }
+    if texts.iter().any(|t| !std::ptr::eq(t, low) && key_heading_line(&t.value) && stacked_over(low, t)) {
+        return None;
+    }
+    let mut stack = vec![low];
+    while stack.len() < MAX_STACK {
+        let Some(cur) = stack.last().copied() else { break };
+        let over = texts
+            .iter()
+            .filter(|t| !std::ptr::eq(*t, cur) && key_heading_line(&t.value) && stacked_over(t, cur))
+            .min_by(|a, b| (a.at.y - cur.at.y).total_cmp(&(b.at.y - cur.at.y)));
+        match over {
+            Some(t) => stack.push(t),
+            None => break,
+        }
+    }
+    stack.reverse();
+    Some(stack)
+}
+
 /// The first plumbing fixture schedule among a sheet's texts ([`read_lettering`]) that `accept`
 /// takes: a table it turns down is passed over for the next one.
 fn read_lettering_where(texts: &[TextItem], sheet_rules: &Rules, accept: &dyn Fn(&FixtureSchedule) -> bool) -> Option<FixtureSchedule> {
@@ -434,10 +547,34 @@ fn read_lettering_where(texts: &[TextItem], sheet_rules: &Rules, accept: &dyn Fn
             _ => false,
         }
     };
-    for tag_head in texts.iter().filter(|t| tag_head_of(t)) {
-        let h = tag_head.height;
-        let row_of = |t: &TextItem| (t.at.y - tag_head.at.y).abs() <= 0.5 * h && (t.at.x - tag_head.at.x).abs() <= MAX_WIDTH_H * h;
-        let mut on_row: Vec<&TextItem> = texts.iter().filter(|t| row_of(t)).collect();
+    // Each header candidate: a text with the lines of a key heading stacked over it in its cell
+    // (`PLAN` over `MARK`; the lowest line stands for them), the header row the band they span.
+    for low in texts.iter().filter(|t| t.height.is_finite() && t.height > 0.0) {
+        let Some(stack) = heading_stack(texts, low) else { continue };
+        let head = match stack.as_slice() {
+            [one] => (*one).clone(),
+            more => match header_cells(more).pop() {
+                Some(joined) => joined,
+                None => continue,
+            },
+        };
+        if !tag_head_of(&head) {
+            continue;
+        }
+        let h = head.height;
+        let top = stack.first().map_or(head.at.y, |t| t.at.y);
+        let row_of = |t: &TextItem| t.at.y >= head.at.y - 0.5 * h && t.at.y <= top + 0.5 * h && (t.at.x - head.at.x).abs() <= MAX_WIDTH_H * h;
+        // The header's cells: its texts as they are on one line; lettered on several lines, each
+        // cell's lines joined (a group heading over several left out), the heading's own one.
+        let mut cells: Vec<TextItem> = if stack.len() == 1 {
+            texts.iter().filter(|t| row_of(t) && !std::ptr::eq(*t, low)).cloned().collect()
+        } else {
+            let band: Vec<&TextItem> = texts.iter().filter(|t| row_of(t) && !stack.iter().any(|s| std::ptr::eq(*s, *t))).collect();
+            header_cells(&band)
+        };
+        cells.push(head);
+        let Some(tag_head) = cells.last() else { continue };
+        let mut on_row: Vec<&TextItem> = cells.iter().collect();
         on_row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
         // Schedules side by side (a two-sided sheet): each starts at its tag header (the columns
         // left of the first one are the first's), so this one's row runs from its own tag header
@@ -516,8 +653,12 @@ fn read_lettering_where(texts: &[TextItem], sheet_rules: &Rules, accept: &dyn Fn
         let mut below: Vec<&TextItem> =
             texts.iter().filter(|t| inside(t, tag_col) && t.at.y < tag_head.at.y - 0.5 * h && t.at.y > tag_head.at.y - MAX_DEPTH_H * h).collect();
         below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
-        let stop_y = below.iter().find(|t| !is_fixture_tag(&t.value)).map(|t| t.at.y);
-        let tags: Vec<&TextItem> = below.into_iter().take_while(|t| is_fixture_tag(&t.value)).take(MAX_ROWS).collect();
+        // Its marks are lettered (`P-1`) or numbered (`1`, the plans tagging fixtures so), as its
+        // first one is: a list of numbered notes under lettered marks is no more rows.
+        let numbered = below.first().is_some_and(|t| is_numbered_tag(&t.value));
+        let tag_like = |v: &str| if numbered { is_numbered_tag(v) } else { is_fixture_tag(v) };
+        let stop_y = below.iter().find(|t| !tag_like(&t.value)).map(|t| t.at.y);
+        let tags: Vec<&TextItem> = below.into_iter().take_while(|t| tag_like(&t.value)).take(MAX_ROWS).collect();
         // A header's second line (`MODEL` over `NO.`), between the header row and the first row:
         // its column's name goes on.
         let first_row = tags.first().map_or(tag_head.at.y - 2.0 * h, |t| t.at.y);
@@ -1164,5 +1305,83 @@ mod tests {
         assert_eq!(s.headers, ["ABBREVIATIONS", "TAG", "DESCRIPTION", "FIXTURE", "MFR", "MODEL"]);
         let got: Vec<(&str, &str)> = s.rows.iter().map(|r| (r.tag.as_str(), r.description.as_str())).collect();
         assert_eq!(got, [("PF-1A", "ELONGATED TOILET"), ("PF-2A", "UNDERMOUNT SINK")]);
+    }
+
+    /// fix-schedule-plan-mark-header-unread: a plumbing fixture schedule whose tag column is
+    /// headed `PLAN` over `MARK` (two lines in one cell), its other headings centred on the
+    /// header's height, a `CONNECTION SIZES` group heading over `CW | HW | W | V`, and marks that
+    /// are bare numbers. Unruled and ruled; and the same with `FIXTURE` over `TAG`, its headings
+    /// on the top line and lettered tags.
+    #[test]
+    fn a_tag_heading_stacked_on_two_lines_heads_numbered_marks() {
+        let schedule = |top: (&str, &str), single_y: f64, marks: [&str; 3]| {
+            let mut v = vec![
+                t("PLUMBING FIXTURE SCHEDULE", 4.0, 10.6),
+                t(top.0, 0.05, 10.15),
+                t(top.1, 0.05, 10.0),
+                t("DESCRIPTION", 1.0, single_y),
+                t("MANUFACTURER", 3.5, single_y),
+                t("MODEL", 5.5, single_y),
+                t("TRIM", 7.0, single_y),
+                t("CONNECTION SIZES (IN)", 8.0, 10.15),
+                t("CW", 8.0, 10.0),
+                t("HW", 8.5, 10.0),
+                t("W", 9.0, 10.0),
+                t("V", 9.5, 10.0),
+                t("NOTES", 10.5, single_y),
+            ];
+            let rows = [
+                (9.6, "WALL HUNG LAVATORY", "MAKER ONE", "AB-100", "1/2\"", "1/2\"", "1-1/2\"", "1-1/4\""),
+                (9.2, "WATER CLOSET, ADA", "MAKER ONE", "AB-200", "1\"", "--", "4\"", "2\""),
+                (8.8, "SERVICE SINK", "MAKER TWO", "CD-300", "3/4\"", "3/4\"", "3\"", "1-1/2\""),
+            ];
+            for (mark, (y, fixture, maker, model, cw, hw, w, vent)) in marks.into_iter().zip(rows) {
+                v.extend([
+                    t(mark, 0.05, y),
+                    t(fixture, 1.0, y),
+                    t(maker, 3.5, y),
+                    t(model, 5.5, y),
+                    t(cw, 8.0, y),
+                    t(hw, 8.5, y),
+                    t(w, 9.0, y),
+                    t(vent, 9.5, y),
+                ]);
+            }
+            v
+        };
+        // Its rules: columns, the sub-columns from the group's rule down, the rules over and under
+        // the header.
+        let mut verticals: Vec<(f64, f64, f64)> = [0.0, 0.9, 3.4, 5.4, 6.9, 7.9, 9.9, 11.5].iter().map(|x| (*x, 8.6, 10.35)).collect();
+        verticals.extend([8.4, 8.9, 9.4].iter().map(|x| (*x, 8.6, 10.1)));
+        let rules = Rules { verticals, horizontals: vec![(10.35, 0.0, 11.5), (10.1, 7.9, 9.9), (9.85, 0.0, 11.5), (8.6, 0.0, 11.5)] };
+        for (top, single_y, marks) in [(("PLAN", "MARK"), 10.075, ["1", "2", "3"]), (("FIXTURE", "TAG"), 10.15, ["P-1", "P-2", "P-3"])] {
+            let v = schedule(top, single_y, marks);
+            for (name, s) in [("unruled", read_lettering(&v, &[])), ("ruled", read_ruled(&v, &rules))] {
+                let s = s.unwrap_or_else(|| panic!("{top:?} {name}: no schedule"));
+                let got: Vec<(&str, &str, &str, &str)> =
+                    s.rows.iter().map(|r| (r.tag.as_str(), r.fixture.as_str(), r.manufacturer.as_str(), r.model.as_str())).collect();
+                assert_eq!(
+                    got,
+                    [
+                        (marks[0], "WALL HUNG LAVATORY", "MAKER ONE", "AB-100"),
+                        (marks[1], "WATER CLOSET, ADA", "MAKER ONE", "AB-200"),
+                        (marks[2], "SERVICE SINK", "MAKER TWO", "CD-300"),
+                    ],
+                    "{top:?} {name}: {s:?}"
+                );
+                assert_eq!(s.headers.first().map(String::as_str), Some(format!("{} {}", top.0, top.1).as_str()), "{top:?} {name}: {:?}", s.headers);
+                let first = s.rows.first().unwrap_or_else(|| panic!("rows"));
+                assert_eq!(first.connections.get("cw").map(String::as_str), Some("1/2\""), "{top:?} {name}: {:?}", s.headers);
+                assert_eq!(first.connections.get("vent").map(String::as_str), Some("1-1/4\""), "{top:?} {name}: {:?}", s.headers);
+            }
+        }
+        // Numbered notes under lettered marks are no more rows; a key heading alone over numbers
+        // with nothing naming fixtures is no schedule.
+        let mut v = schedule(("FIXTURE", "TAG"), 10.15, ["P-1", "P-2", "P-3"]);
+        v.extend([t("1", 0.05, 8.4), t("PROVIDE STOPS", 1.0, 8.4)]);
+        assert_eq!(read_lettering(&v, &[]).map(|s| s.rows.len()), Some(3));
+        let bare = [t("PLAN", 0.0, 10.15), t("MARK", 0.0, 10.0), t("QTY", 2.0, 10.075), t("1", 0.0, 9.5), t("2", 0.0, 9.0)];
+        assert!(read_lettering(&bare, &[]).is_none());
+        assert!(is_numbered_tag("12") && !is_numbered_tag("1.") && !is_numbered_tag("1234") && !is_fixture_tag("1"));
     }
 }

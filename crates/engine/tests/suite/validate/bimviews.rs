@@ -485,3 +485,44 @@ fn a_click_picks_only_what_the_view_draws() {
     assert!(s.selection().iter().all(|h| mep.model.contains(*h)), "only what the MEP view draws");
     assert!(!s.selection().iter().any(|h| gone.contains(h)));
 }
+
+/// An agent sets every list-valued rule its doc lists (Q6661: the agent guard refused
+/// `systems_palette`, the `*_words` lists and the `[r, g, b]` colours as "a single value, not a
+/// list", so an agent couldn't give the systems their colours). Each key's value comes from the
+/// built-in rules, so the test covers every list the rules data has; the doc names each one with
+/// its list note, and a value of the wrong shape is still refused.
+#[test]
+fn an_agent_sets_every_list_valued_rule() {
+    use cadaddy_engine::cmd::bimviews::Rules;
+    let defaults = serde_json::to_value(Rules::defaults()).unwrap();
+    let doc = cadaddy_engine::find_command("bim.view.rules").unwrap().params;
+    let mut lists = 0;
+    for (k, v) in defaults.as_object().unwrap() {
+        if k == "version" || k == "source" {
+            continue;
+        }
+        if v.is_array() {
+            lists += 1;
+            let note = format!("{k} ([");
+            assert!(doc.contains(&note), "the doc names `{k}` with its list note `{note}…])`");
+        }
+        let mut s = building(1, 1);
+        let r = s.execute_agent("bim.view.rules", &json!({"rules": {k.as_str(): v}}));
+        let r = r.unwrap_or_else(|e| panic!("an agent sets `{k}` to {v}: {e}"));
+        assert_eq!(r["source"], "project", "{k}: {r}");
+        assert_eq!(&r["rules"][k.as_str()], v, "{k} kept");
+    }
+    assert!(lists >= 20, "the rules' lists were walked: {lists}");
+    // The owner's palette shape, through the agent path.
+    let mut s = building(1, 1);
+    let palette = json!([{"key": "power", "label": "Power", "group": "Electrical", "rgb": [255, 118, 0], "trades": ["conduit", "gear"]}]);
+    let r = s.execute_agent("bim.view.rules", &json!({"rules": {"systems_palette": palette, "gear_words": ["switchboard"]}})).unwrap();
+    assert_eq!(r["rules"]["systems_palette"][0]["key"], "power", "{r}");
+    assert_eq!(r["rules"]["gear_words"], json!(["switchboard"]), "{r}");
+    // The wrong shape is still refused: a list where the doc shows a number, a word where it
+    // shows a list.
+    let e = s.execute_agent("bim.view.rules", &json!({"rules": {"plumbing_main_min_in": [2]}})).unwrap_err().to_string();
+    assert!(e.contains("`rules` entry `plumbing_main_min_in` must be a number"), "{e}");
+    let e = s.execute_agent("bim.view.rules", &json!({"rules": {"gear_words": "switchboard"}})).unwrap_err().to_string();
+    assert!(e.contains("`rules` entry `gear_words` must be a list"), "{e}");
+}
