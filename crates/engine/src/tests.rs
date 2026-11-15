@@ -1625,9 +1625,43 @@ fn map_params_take_any_key_and_check_values() {
     assert_eq!(map_entry_doc("{on?: bool}"), None, "an optional field is a struct's");
     assert_eq!(map_entry_doc("{kind, color?}"), None);
     assert_eq!(map_entry_doc("{name: a, other: b}"), None);
-    assert!(wrong_map_entry("visible", "E", &json!({}), "bool").is_some_and(|m| m.contains("true or false")));
-    assert!(wrong_map_entry("waste", "E", &json!("x"), "number").is_some_and(|m| m.contains("a number")));
-    assert_eq!(wrong_map_entry("colors", "E", &json!([1, 0, 0]), "[r, g, b] | \"#rrggbb\""), None);
+    assert!(wrong_map_entry("visible", "E", &json!({}), "bool", &[]).is_some_and(|m| m.contains("true or false")));
+    assert!(wrong_map_entry("waste", "E", &json!("x"), "number", &[]).is_some_and(|m| m.contains("a number")));
+    assert_eq!(wrong_map_entry("colors", "E", &json!([1, 0, 0]), "[r, g, b] | \"#rrggbb\"", &[]), None);
+}
+
+/// A key a map's notes name with a note in brackets takes the shape that note shows, over the
+/// map's entry doc (Q6661: bim.view.rules' `systems_palette ([{…}])` and `gear_words ([word])`
+/// were refused as "a single value, not a list"); a key named without one, or with words, keeps
+/// the entry doc's check.
+#[test]
+fn named_map_keys_take_their_own_note() {
+    let notes = [
+        "?: {key: value} (any of: palette ([{key, rgb}]), names ([word]), shade ([r, g, b]), extra ({a, b}), min_in (2.5), tol (0), far_ft (number), copies (count), kind (category words, any), plain, …)",
+    ];
+    assert_eq!(named_entry_kind(&notes, "palette"), Some(EntryKind::List));
+    assert_eq!(named_entry_kind(&notes, "names"), Some(EntryKind::List));
+    assert_eq!(named_entry_kind(&notes, "shade"), Some(EntryKind::List));
+    assert_eq!(named_entry_kind(&notes, "extra"), Some(EntryKind::Object));
+    assert_eq!(named_entry_kind(&notes, "min_in"), Some(EntryKind::Number));
+    assert_eq!(named_entry_kind(&notes, "tol"), Some(EntryKind::Number));
+    assert_eq!(named_entry_kind(&notes, "far_ft"), Some(EntryKind::Number));
+    assert_eq!(named_entry_kind(&notes, "copies"), Some(EntryKind::Number));
+    assert_eq!(named_entry_kind(&notes, "kind"), None, "a note in words says nothing of the shape");
+    assert_eq!(named_entry_kind(&notes, "plain"), None);
+    assert_eq!(named_entry_kind(&notes, "key"), None, "the map's own placeholder is no key");
+    assert_eq!(named_entry_kind(&notes, "in"), None, "a whole name only, not part of one");
+    assert_eq!(named_entry_kind(&notes, ""), None);
+    let entry = "value";
+    assert_eq!(wrong_map_entry("rules", "palette", &json!([{"key": "a"}]), entry, &notes), None);
+    assert_eq!(wrong_map_entry("rules", "names", &json!(["a"]), entry, &notes), None);
+    assert!(wrong_map_entry("rules", "names", &json!("a"), entry, &notes).is_some_and(|m| m.contains("`rules` entry `names` must be a list")));
+    assert!(wrong_map_entry("rules", "extra", &json!([1]), entry, &notes).is_some_and(|m| m.contains("must be an object")));
+    assert!(wrong_map_entry("rules", "min_in", &json!([2]), entry, &notes).is_some_and(|m| m.contains("must be a number")));
+    assert_eq!(wrong_map_entry("rules", "min_in", &json!(3), entry, &notes), None);
+    // Not named, or named in words: the entry doc's single value.
+    assert!(wrong_map_entry("rules", "plain", &json!(["a"]), entry, &notes).is_some_and(|m| m.contains("a single value, not a list")));
+    assert!(wrong_map_entry("rules", "other", &json!({}), entry, &notes).is_some_and(|m| m.contains("a single value, not an object")));
 }
 
 /// ARRAY's rectangular form takes `columns` and `columnSpacing` (AutoCAD's own words, the grips'
