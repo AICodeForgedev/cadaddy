@@ -3571,30 +3571,84 @@ fn path_leaf(p: &str) -> &str {
 /// a stop.
 fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
     let Some(path) = job.checkpoint.clone() else { return };
-    let Some(hooks) = super::file::io() else { return };
+    if super::file::io().is_none() {
+        return;
+    }
     let started = web_time::Instant::now();
     if save_job(s, job).is_err() {
         return;
     }
-    let Ok(d) = s.doc() else { return };
-    // A .cdy file without its preview (`ckpt`), else as the path says.
-    let written = (hooks.write)(d, "checkpoint.ckpt").or_else(|_| (hooks.write)(d, &path)).and_then(|bytes| {
-        let p = std::path::Path::new(&path);
-        if let Some(dir) = p.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        // Written aside, then moved over the last one: a crash mid-write keeps the last checkpoint.
-        let part = p.with_extension("cdy.part");
-        crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
-        crate::writefile::rename(&part, p).map_err(|e| e.to_string())
-    });
+    let written = store_checkpoint(s, &path);
     // How long it took, and the peak memory after it (a checkpoint per stage must not be the
     // job's peak: compare with the stage's line).
     let peak = super::memstat::process_mb().map_or_else(String::new, |(_, p)| format!(" (peak memory {p} MB)"));
-    progress_line(&format!("  checkpoint written in {:.1} s{peak}", started.elapsed().as_secs_f64()));
+    let how = match &written {
+        Ok(Stored::Appended(n)) => format!("appended ({:.1} MB)", *n as f64 / 1e6),
+        Ok(Stored::Whole(n)) => format!("written ({:.1} MB)", *n as f64 / 1e6),
+        Err(_) => "not written".to_string(),
+    };
+    progress_line(&format!("  checkpoint {how} in {:.1} s{peak}", started.elapsed().as_secs_f64()));
     if let Err(e) = written {
         s.echo(format!("guided: the job's checkpoint couldn't be written to {path}: {e}"));
     }
+}
+
+/// How a checkpoint was stored, and the bytes written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored {
+    /// The parts that changed, appended to the last checkpoint.
+    Appended(u64),
+    /// The whole file.
+    Whole(u64),
+}
+
+/// Store the job's drawing as its checkpoint at `path` (Q6576). When the file there is still the
+/// checkpoint this drawing last wrote (or was resumed from), only the parts that changed since are
+/// encoded and appended, with a new index: the model's unchanged chunks are neither encoded nor
+/// held twice. A checkpoint cut short while appending reads as the one before it (the last complete
+/// index). Otherwise, and when the superseded parts would be too much of the file, the whole file
+/// is written aside and moved over the last one, so a crash mid-write keeps the last checkpoint.
+/// The file has no preview: it is written again and again, and the preview renders all of model
+/// space.
+fn store_checkpoint(s: &mut Session, path: &str) -> std::result::Result<Stored, String> {
+    use cadaddy_io::cdy::{Output, SaveState};
+    let prev = s.state().ok().and_then(|st| st.job_checkpoint.clone()).filter(|c| c.holds(path));
+    let held = prev.as_ref().and_then(|c| c.state().downcast_ref::<SaveState>()).filter(|h| prev.as_ref().is_some_and(|c| c.file_len() == h.len));
+    let (stored, state) = {
+        let d = s.doc().map_err(|e| e.to_string())?;
+        let (out, state) = cadaddy_io::cdy::save(d, held, &|| None)?;
+        match out {
+            Output::Append { from, bytes, index_at } => match super::file::append_cdy(path, from, &bytes, index_at) {
+                Ok(()) => (Stored::Appended(bytes.len() as u64), state),
+                // The file was cut back to the last checkpoint: write it whole.
+                Err(_) => {
+                    drop(bytes);
+                    let (Output::Full(bytes), state) = cadaddy_io::cdy::save(d, None, &|| None)? else {
+                        return Err("the .cdy saver didn't write the whole file".into());
+                    };
+                    (Stored::Whole(replace_checkpoint(path, &bytes)?), state)
+                }
+            },
+            Output::Full(bytes) => (Stored::Whole(replace_checkpoint(path, &bytes)?), state),
+        }
+    };
+    if let Ok(st) = s.state_mut() {
+        st.job_checkpoint = super::file::CdySaved::new(path, std::sync::Arc::new(state));
+    }
+    Ok(stored)
+}
+
+/// Write a whole checkpoint aside, then move it over the last one: a crash mid-write keeps the
+/// last checkpoint. The bytes written.
+fn replace_checkpoint(path: &str, bytes: &[u8]) -> std::result::Result<u64, String> {
+    let p = std::path::Path::new(path);
+    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let part = p.with_extension("cdy.part");
+    crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
+    crate::writefile::rename(&part, p).map_err(|e| e.to_string())?;
+    Ok(bytes.len() as u64)
 }
 
 /// Whether the file at `path` is a job's checkpoint (a drawing holding a job's state): one the
@@ -3622,10 +3676,14 @@ fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<GuidedJob> {
 }
 
 /// A checkpoint's drawing (its job state inside).
-fn checkpoint_drawing(path: &str) -> Result<cadaddy_doc::Drawing> {
+/// With what the file holds matched to the drawing read from it, when it can be: the job's next
+/// checkpoint then appends only what changed ([`store_checkpoint`]).
+fn checkpoint_drawing(path: &str) -> Result<(cadaddy_doc::Drawing, Option<cadaddy_io::cdy::SaveState>)> {
     let hooks = super::file::io().ok_or_else(|| bad("job.start", "no file reader to read the checkpoint with"))?;
     let bytes = std::fs::read(path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
-    (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))
+    let d = (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
+    let seed = cadaddy_io::cdy::is_cdy(&bytes).then(|| cadaddy_io::cdy::seed(&d, &bytes)).flatten();
+    Ok((d, seed))
 }
 
 /// The stages' names.
@@ -7269,6 +7327,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut placer: Option<SheetPlacer> = None;
     // How the placer put each sheet onto its level's plan (or why it couldn't), for the result.
     let mut placer_log: Option<PlacerLog> = None;
+    // Each sheet's views, read once for every placer the build makes (Q6442).
+    let sheet_views = SheetViews::default();
     // The building's shell first: each storey's outline from its exterior walls, before anything
     // is placed in it (rooms, MEP and devices go inside it).
     let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
@@ -7501,7 +7561,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         shells
                     })
                     .clone();
-                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference);
+                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference, &sheet_views);
                 placer_log = Some(log);
                 let sim = placer.insert(held_placer(place));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
@@ -8324,8 +8384,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             shells
                         })
                         .clone();
-                    let (place, log) =
-                        arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
+                    let (place, log) = arch_placer(
+                        s.doc()?,
+                        &sp,
+                        &shell,
+                        enlarged_fits(job),
+                        &sheet_import_scales(job),
+                        reference.as_deref().unwrap_or("A"),
+                        &sheet_views,
+                    );
                     placer_log = Some(log);
                     placer = Some(held_placer(place));
                 }
@@ -9050,21 +9117,27 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // the electrical sheets; what none completes (type, circuit, control) is the finding, its
         // objects built inferred and unsure, completed by proposal.
         let t_arch = web_time::Instant::now();
-        architect_report =
-            match architect_objects_step(s, job, &mut devices, shells.as_deref().unwrap_or(&[]), reference.as_deref().unwrap_or("A"), &typical.views)
-            {
-                Ok(v) => {
-                    progress_line(&format!(
-                        "  the architect's objects completed by the electrical sheets: {}; open groups {}, built {} in {:.1} s",
-                        v["requirements"],
-                        v["open_groups"],
-                        v["built"],
-                        t_arch.elapsed().as_secs_f64()
-                    ));
-                    v
-                }
-                Err(e) => json!({"error": e.to_string()}),
-            };
+        architect_report = match architect_objects_step(
+            s,
+            job,
+            &mut devices,
+            shells.as_deref().unwrap_or(&[]),
+            reference.as_deref().unwrap_or("A"),
+            &typical.views,
+            &sheet_views,
+        ) {
+            Ok(v) => {
+                progress_line(&format!(
+                    "  the architect's objects completed by the electrical sheets: {}; open groups {}, built {} in {:.1} s",
+                    v["requirements"],
+                    v["open_groups"],
+                    v["built"],
+                    t_arch.elapsed().as_secs_f64()
+                ));
+                v
+            }
+            Err(e) => json!({"error": e.to_string()}),
+        };
         let placed_now = super::readers::place_devices(s, &devices, "guided job");
         // A unit whose receptacle its keynote puts in its sub-base sits on that sub-base.
         if placed_now.is_ok()
@@ -13178,6 +13251,8 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             continue;
         }
         let sheet = sh.number.split('/').next().unwrap_or(&sh.number).trim().to_string();
+        // The symbol inserts whose blocks were drawn from them (their strokes are theirs, Q6603).
+        let drawn = super::labelspot::drawn_copies(&sub);
         for (title, rect) in views.iter().map(|(t, r, _)| (t, r)).chain(room_plans) {
             let inside = |p: cadaddy_geom::Vec2| p.x >= rect[0] && p.x <= rect[2] && p.y >= rect[1] && p.y <= rect[3];
             let mine: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts.iter().filter(|t| inside(t.at)).collect();
@@ -13198,13 +13273,17 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             // read elsewhere is that device here too.
             let mut pieces = Vec::new();
             let mut known: Vec<([f64; 4], super::unitmarks::Symbol)> = Vec::new();
-            // Its loose straight pieces, for the leaders its labels are set on (Q6337).
+            // Its loose objects, for the switch symbols drawn as linework (Q6602).
             let mut loose: Vec<&cadaddy_doc::EntityKind> = Vec::new();
+            // Its straight pieces, for the leaders its labels are set on (Q6337), the symbol
+            // blocks' own too (a leader the import took into a block, Q6603).
+            let mut leader_src: Vec<cadaddy_doc::EntityKind> = Vec::new();
             for e in sub.model.iter() {
                 let b = cadaddy_doc::entity_bounds(&sub, e, 0);
                 if b.is_empty() || b.max.x < rect[0] || b.min.x > rect[2] || b.max.y < rect[1] || b.min.y > rect[3] {
                     continue;
                 }
+                super::labelspot::leader_pieces(&sub, e, &drawn, &mut leader_src);
                 let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else {
                     super::unitmarks::pieces(&e.kind, &mut pieces);
                     if loose.len() < super::labelspot::MAX_LEADER_SEGS {
@@ -13252,7 +13331,7 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 .filter(|dv| sheet_key(&dv.sheet) == key && inside(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
                 .collect();
             let strokes = super::labelspot::Strokes::of(loose.iter().copied(), text_h);
-            let leaders = super::labelspot::Leaders::of(loose, 4.0 * text_h);
+            let leaders = super::labelspot::Leaders::of(leader_src.iter(), 4.0 * text_h).with_lettering(&mine);
             let view = super::unitmarks::View {
                 sheet: &sheet,
                 level: &level,
@@ -13359,6 +13438,7 @@ fn architect_objects_step(
     shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)],
     reference: &str,
     typical_views: &BTreeMap<String, Vec<[f64; 4]>>,
+    sheet_views: &SheetViews,
 ) -> Result<Value> {
     use super::crossdisc as cd;
     let clock = web_time::Instant::now();
@@ -13467,7 +13547,7 @@ fn architect_objects_step(
             .collect();
         add_sheet_links(&mut sp_all, &extra);
         let d = s.doc()?;
-        let (place, _) = arch_placer(d, &sp_all, shells, enlarged_fits(job), &sheet_import_scales(job), reference);
+        let (place, _) = arch_placer(d, &sp_all, shells, enlarged_fits(job), &sheet_import_scales(job), reference, sheet_views);
         let spans: BTreeMap<String, (u64, u64)> = arch.iter().filter_map(|sh| Some((sheet_key(&sh.number), sh.span?))).collect();
         for (sheet, at, row) in &hits {
             let Some(r) = rows.get(*row) else { continue };
@@ -29993,6 +30073,7 @@ fn arch_placer(
     enlarged: Vec<EnlargedFit>,
     plan_units: &[(String, f64)],
     reference: &str,
+    sheet_views: &SheetViews,
 ) -> (impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<>, PlacerLog) {
     let log: PlacerLog = Default::default();
     let arch_ref = reference.eq_ignore_ascii_case("A");
@@ -30081,7 +30162,13 @@ fn arch_placer(
     // And the views the job gave a level (a sheet's view of one floor), which the titles may miss.
     let view_rects: Vec<(String, [f64; 4])> =
         sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
-    let mut grid_views = sheet_plan_views(d, &others);
+    // Every sheet whose views the placer reads (the other sheets, each level's plan sheet), read
+    // in one walk of the model, and none read again that the build's placers read before (Q6442).
+    let mut wanted = others.clone();
+    wanted.extend(plans.iter().filter_map(|(_, r)| sheets.iter().find(|b| inside(&b.rect, mid(r))).map(|b| b.rect)));
+    drop(sheet_views.of(d, &wanted));
+    lap("sheets' views read");
+    let mut grid_views = sheet_plan_views(sheet_views, d, &others);
     grid_views.extend(view_rects.iter().map(|(_, r)| *r));
     let grid = super::grids::GridPlacer::new(d, upf, &plans, &others, &grid_views);
     lap("grid intersections read");
@@ -30098,7 +30185,7 @@ fn arch_placer(
             .iter()
             .filter_map(|(k, r)| {
                 let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
-                let (plan_v, other_v) = sheets.get(i).map(|b| own_views(d, &b.rect)).unwrap_or_default();
+                let (plan_v, other_v) = sheets.get(i).map(|b| own_views(sheet_views, d, &b.rect)).unwrap_or_default();
                 let pts = lines
                     .points(i, Some(r))
                     .into_iter()
@@ -30627,63 +30714,135 @@ fn arch_placer(
     (place, log)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Walks of the whole model to read sheets' views (Q6442: one per build, not one per level).
+    static SHEET_VIEW_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A sheet's views as read off the sheet alone: each view's title and region.
+type ViewsOfSheet = std::sync::Arc<Vec<(String, [f64; 4])>>;
+
+/// Each sheet's views ([`cadaddy_mepfix::sheet_facts::view_titles`], the sheet read on its own),
+/// kept for a build (Q6442): every level plan of a placer, and every placer the build makes over
+/// the same drawing, reads a sheet's views once, and the sheets not read yet are read in one walk
+/// of the model. A drawing changed since (its model or its blocks no longer the copy read) is
+/// read afresh.
+#[derive(Default)]
+pub(crate) struct SheetViews {
+    memo: std::sync::Mutex<SheetViewsMemo>,
+}
+
+#[derive(Default)]
+struct SheetViewsMemo {
+    /// The drawing the views were read off: its model and blocks (shared, so the copy costs a
+    /// pointer per chunk and tells a changed drawing by pointers).
+    read: Option<(cadaddy_doc::EntityStore, cadaddy_doc::shared::Shared<BTreeMap<String, std::sync::Arc<cadaddy_doc::Block>>>)>,
+    /// Each sheet's views by its rectangle (to the bit).
+    by_rect: std::collections::HashMap<[u64; 4], ViewsOfSheet>,
+}
+
+/// Sheets whose views a build keeps at most (a set has a few hundred).
+const MAX_SHEET_VIEWS_KEPT: usize = 4_096;
+
+impl SheetViews {
+    /// The views of each of the sheets `rects`, in their order; those not read yet are read in
+    /// one walk of the model.
+    fn of(&self, d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<ViewsOfSheet> {
+        let key = |r: &[f64; 4]| r.map(f64::to_bits);
+        let Ok(mut m) = self.memo.lock() else {
+            return read_sheet_views(d, rects).into_iter().map(std::sync::Arc::new).collect();
+        };
+        let same = m.read.as_ref().is_some_and(|(model, blocks)| d.model.unchanged_from(model) && d.blocks.same(blocks));
+        if !same || m.by_rect.len() > MAX_SHEET_VIEWS_KEPT {
+            m.by_rect.clear();
+            m.read = Some((d.model.clone(), d.blocks.clone()));
+        }
+        let mut missing: Vec<[f64; 4]> = Vec::new();
+        for r in rects {
+            if !m.by_rect.contains_key(&key(r)) && !missing.iter().any(|q| key(q) == key(r)) {
+                missing.push(*r);
+            }
+        }
+        if !missing.is_empty() {
+            for (r, v) in missing.iter().zip(read_sheet_views(d, &missing)) {
+                m.by_rect.insert(key(r), std::sync::Arc::new(v));
+            }
+        }
+        rects.iter().map(|r| m.by_rect.get(&key(r)).cloned().unwrap_or_default()).collect()
+    }
+}
+
+/// The views (title, region) on each of the sheets `rects`, each sheet read on its own: one walk
+/// of the model puts each object on every sheet its middle falls in (shared, not copied), then
+/// each sheet's objects are read as a drawing of their own.
+fn read_sheet_views(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<Vec<(String, [f64; 4])>> {
+    #[cfg(test)]
+    SHEET_VIEW_WALKS.with(|c| c.set(c.get() + 1));
+    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    let mut on: Vec<Vec<std::sync::Arc<cadaddy_doc::Entity>>> = vec![Vec::new(); rects.len()];
+    if !rects.is_empty() {
+        for e in d.model.iter() {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            if b.is_empty() {
+                continue;
+            }
+            let c = b.center();
+            for (r, mine) in rects.iter().zip(on.iter_mut()) {
+                if inside(r, c.x, c.y) {
+                    mine.push(e.clone());
+                }
+            }
+        }
+    }
+    // The drawing's tables and blocks once, its model left out: each sheet's objects go into a
+    // copy of it.
+    let mut bare = d.clone();
+    bare.model = cadaddy_doc::EntityStore::new();
+    on.into_iter()
+        .map(|mine| {
+            if mine.is_empty() {
+                return Vec::new();
+            }
+            let mut sub = bare.clone();
+            let mut store = cadaddy_doc::EntityStore::new();
+            for e in mine {
+                store.push_shared(e);
+            }
+            sub.model = store;
+            let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+            cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts).into_iter().filter_map(|v| Some((v.title, v.region?))).collect()
+        })
+        .collect()
+}
+
 /// The regions of sheet `rect`'s plan views and of its other views (elevations, sections,
 /// details, risers, diagrams, schedules: [`cadaddy_mepfix::sheet_reader::names_no_plan`]), the
-/// sheet read on its own.
-fn own_views(d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
-    let mine: Vec<cadaddy_doc::Entity> = d
-        .model
-        .iter()
-        .filter(|e| {
-            let b = cadaddy_doc::entity_bounds(d, e, 0);
-            let c = b.center();
-            !b.is_empty() && c.x >= rect[0] && c.x <= rect[2] && c.y >= rect[1] && c.y <= rect[3]
-        })
-        .map(|e| (**e).clone())
-        .collect();
-    if mine.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-    let mut sub = d.clone();
-    let mut store = cadaddy_doc::EntityStore::new();
-    store.push_many(mine);
-    sub.model = store;
-    let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+/// sheet read on its own ([`SheetViews`]).
+fn own_views(views: &SheetViews, d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
     let (mut plans, mut others) = (Vec::new(), Vec::new());
-    for v in cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts) {
-        let Some(r) = v.region else { continue };
-        if cadaddy_mepfix::sheet_reader::names_no_plan(&v.title) { others.push(r) } else { plans.push(r) }
+    for v in views.of(d, std::slice::from_ref(rect)) {
+        for (title, r) in v.iter() {
+            if cadaddy_mepfix::sheet_reader::names_no_plan(title) { others.push(*r) } else { plans.push(*r) }
+        }
     }
     (plans, others)
 }
 
 /// The regions of the plan views (not elevations, sections, details, risers, diagrams,
-/// schedules) on each of the sheets `rects`, each sheet read on its own.
-fn sheet_plan_views(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
-    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
-    let mut on: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); rects.len()];
-    for e in d.model.iter() {
-        let b = cadaddy_doc::entity_bounds(d, e, 0);
-        if b.is_empty() {
-            continue;
-        }
-        let c = b.center();
-        if let Some(i) = rects.iter().position(|r| inside(r, c.x, c.y)) {
-            on[i].push((**e).clone());
-        }
-    }
+/// schedules) on each of the sheets `rects`, each sheet read on its own ([`SheetViews`]); a sheet
+/// listed twice is read once.
+fn sheet_plan_views(views: &SheetViews, d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
     let not_plan = |t: &str| {
         let u = t.to_ascii_uppercase();
         !u.contains("PLAN") && ["ELEVATION", "SECTION", "DETAIL", "RISER", "DIAGRAM", "SCHEDULE", "ISOMETRIC"].iter().any(|w| u.contains(w))
     };
+    let mut seen: BTreeSet<[u64; 4]> = BTreeSet::new();
     let mut out = Vec::new();
-    for mine in on.into_iter().filter(|m| !m.is_empty()) {
-        let mut sub = d.clone();
-        let mut store = cadaddy_doc::EntityStore::new();
-        store.push_many(mine);
-        sub.model = store;
-        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        out.extend(cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts).into_iter().filter(|v| !not_plan(&v.title)).filter_map(|v| v.region));
+    for (v, r) in views.of(d, rects).iter().zip(rects) {
+        if seen.insert(r.map(f64::to_bits)) {
+            out.extend(v.iter().filter(|(t, _)| !not_plan(t)).map(|(_, r)| *r));
+        }
     }
     out
 }
@@ -33592,7 +33751,10 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             job.audit("job_refreshed", "pipeline", None, Some(from), Some(json!({"checkpoint": path, "other_build": labels(&other), "why": why})));
             started_over = Some(json!({"from": from.label(), "other_build": labels(&other), "started_over": true, "why": why, "prints_note": note}));
         } else {
-            *s.doc_mut()? = checkpoint_drawing(&path)?;
+            let (d, seed) = checkpoint_drawing(&path)?;
+            *s.doc_mut()? = d;
+            let held = seed.and_then(|seed| super::file::CdySaved::new(&path, std::sync::Arc::new(seed)));
+            s.state_mut()?.job_checkpoint = held;
             // The print set's project lives in the session, not the drawing.
             s.execute("printset.open", &json!({"path": pdfs}))?;
             for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
@@ -39743,6 +39905,118 @@ mod tests {
         assert!(super::super::jobtemp::remove(&job.id));
     }
 
+    /// A made-up set of `levels` floors, each level's plan on a sheet of its own (side by side):
+    /// a titled plan view with its scale line, an elevation beside it, and `filler` lines of
+    /// linework per sheet. Returns the session and its building spec.
+    fn many_level_set(levels: u32, filler: u32) -> (crate::Session, cadaddy_walk3d::BuildingSpec) {
+        let mut s = crate::Session::new();
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            let seg = |d: &mut cadaddy_doc::Drawing, a: [f64; 2], b: [f64; 2]| {
+                let (a, b) = (cadaddy_geom::Vec3::new(a[0], a[1], 0.0), cadaddy_geom::Vec3::new(b[0], b[1], 0.0));
+                d.add(&Space::Model, common(), EntityKind::Line(cadaddy_doc::Line { a, b })).ok();
+            };
+            for i in 0..levels {
+                let x0 = 2000.0 * f64::from(i);
+                for (a, b) in
+                    [([0.0, 0.0], [1000.0, 0.0]), ([1000.0, 0.0], [1000.0, 800.0]), ([1000.0, 800.0], [0.0, 800.0]), ([0.0, 800.0], [0.0, 0.0])]
+                {
+                    seg(d, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+                }
+                for (v, title) in [([x0 + 100.0, 120.0], format!("LEVEL {} FLOOR PLAN", i + 1)), ([x0 + 700.0, 120.0], "NORTH ELEVATION".to_string())]
+                {
+                    for k in 0..4 {
+                        let y = v[1] + 40.0 + 60.0 * f64::from(k);
+                        seg(d, [v[0], y], [v[0] + 200.0, y]);
+                        seg(d, [v[0] + 50.0 * f64::from(k), v[1] + 40.0], [v[0] + 50.0 * f64::from(k), v[1] + 220.0]);
+                    }
+                    d.add(&Space::Model, common(), EntityKind::Text(text(&title, v[0], v[1] - 19.0, 7.4))).ok();
+                    d.add(&Space::Model, common(), EntityKind::Text(text("SCALE: 1/4\" = 1'-0\"", v[0], v[1] - 28.0, 4.6))).ok();
+                }
+                for k in 0..filler {
+                    let (x, y) = (x0 + 20.0 + f64::from(k % 90) * 10.0, 400.0 + f64::from(k / 90 % 35) * 10.0);
+                    seg(d, [x, y], [x + 6.0, y + 3.0]);
+                }
+            }
+        }
+        let lv: Vec<Value> = (0..levels)
+            .map(|i| {
+                let x0 = 2000.0 * f64::from(i);
+                json!({"name": format!("Level {}", i + 1), "elevation_ft": 12.0 * f64::from(i), "height_ft": 12.0, "ceiling_ft": 9.0,
+                    "region": [x0 + 100.0, 100.0, x0 + 600.0, 700.0]})
+            })
+            .collect();
+        let sh: Vec<Value> = (0..levels)
+            .map(|i| {
+                let x0 = 2000.0 * f64::from(i);
+                json!({"number": format!("A-{}", 101 + i), "discipline": "A", "level": format!("Level {}", i + 1), "rect": [x0, 0.0, x0 + 1000.0, 800.0]})
+            })
+            .collect();
+        let sp = serde_json::from_value(json!({"units_per_foot": 12.0, "levels": lv, "sheets": sh})).unwrap_or_else(|e| panic!("{e}"));
+        (s, sp)
+    }
+
+    /// Q6442: building the level-plan placer reads each sheet's views once, in one walk of the
+    /// model for all the sheets, and a second placer of the same build (the architect's objects
+    /// after the MEP plans') reads none again: not once per level plan and again per placer.
+    #[test]
+    fn the_placer_reads_the_sheets_views_in_one_walk_shared_by_every_level_and_placer() {
+        let (s, sp) = many_level_set(20, 50);
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        SHEET_VIEW_WALKS.with(|c| c.set(0));
+        // The build's placers share one reading of the sheets' views.
+        let views = SheetViews::default();
+        let (first, _) = arch_placer(d, &sp, &[], Vec::new(), &[], "A", &views);
+        let (second, _) = arch_placer(d, &sp, &[], Vec::new(), &[], "A", &views);
+        let walks = SHEET_VIEW_WALKS.with(std::cell::Cell::get);
+        assert!(walks <= 1, "the model was walked {walks} times for sheets' views by two placers of 20 levels");
+        // The placers still place: a point on level 3's plan stays on it.
+        let p = [2.0 * 2000.0 + 300.0, 400.0];
+        assert_eq!(first(p, "Level 3").map(|m| m.apply(p)), second(p, "Level 3").map(|m| m.apply(p)));
+    }
+
+    /// Q6442: the sheets' views read together are each sheet's read on its own, and a drawing
+    /// changed since is read afresh, never answered from the views of the drawing before.
+    #[test]
+    fn sheets_views_read_together_match_each_sheet_alone_and_a_changed_drawing_is_reread() {
+        let (mut s, sp) = many_level_set(4, 20);
+        let rects: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect).collect();
+        let views = SheetViews::default();
+        {
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            let together = views.of(d, &rects);
+            for (r, v) in rects.iter().zip(&together) {
+                let alone = read_sheet_views(d, std::slice::from_ref(r));
+                assert_eq!(alone.first(), Some(&**v), "sheet at {r:?}");
+                // Each sheet: its floor plan and its elevation, told apart.
+                let (plans, others) = own_views(&views, d, r);
+                assert_eq!((plans.len(), others.len()), (1, 1), "sheet at {r:?}: {v:?}");
+            }
+            assert!(together.iter().all(|v| v.iter().any(|(t, _)| t.contains("FLOOR PLAN"))));
+        }
+        // A section added to the second sheet: read again, not the views from before.
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            let v = [2000.0 + 400.0, 470.0];
+            let v3 = |x: f64, y: f64| cadaddy_geom::Vec3::new(x, y, 0.0);
+            for k in 0..4 {
+                let (y, x) = (v[1] + 40.0 + 60.0 * f64::from(k), v[0] + 50.0 * f64::from(k));
+                d.add(&Space::Model, common(), EntityKind::Line(cadaddy_doc::Line { a: v3(v[0], y), b: v3(v[0] + 200.0, y) })).ok();
+                d.add(&Space::Model, common(), EntityKind::Line(cadaddy_doc::Line { a: v3(x, v[1] + 40.0), b: v3(x, v[1] + 220.0) })).ok();
+            }
+            d.add(&Space::Model, common(), EntityKind::Text(text("BUILDING SECTION", v[0], v[1] - 19.0, 7.4))).ok();
+            d.add(&Space::Model, common(), EntityKind::Text(text("SCALE: 1/4\" = 1'-0\"", v[0], v[1] - 28.0, 4.6))).ok();
+        }
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let second = rects.get(1).copied().unwrap_or_default();
+        let fresh = read_sheet_views(d, &[second]);
+        let kept = views.of(d, &[second]);
+        assert_eq!(fresh.first(), kept.first().map(|v| &**v));
+        assert!(kept.iter().flat_map(|v| v.iter()).any(|(t, _)| t.contains("SECTION")), "{kept:?}");
+    }
+
     /// Q6007: a made-up electrical plan (level 1, inches) with a fixture schedule, three A
     /// fixtures on circuit D-7 (a homerun arrow at the last one), two B fixtures on D-9 (no
     /// homerun), and panel D drawn as a box lettered D. The job reads the circuits, routes
@@ -39778,7 +40052,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p)).map(|q| [q[0].round(), q[1].round()]);
         // A duct's point where M-101 draws it lands where A-101 has that spot, by M-101's tags.
         assert_eq!(at([2560.0, 430.0]), Some([500.0, 400.0]));
@@ -39871,7 +40145,8 @@ mod tests {
     fn lights_on_the_architects_ceiling_plan_and_not_on_the_electrical_plan_are_flagged_and_built() {
         let (mut s, mut job, mut devices) = architect_objects_set(0);
         let before = devices.len();
-        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new(), &SheetViews::default())
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["legend_rows"], json!(["A-601: RECESSED DOWN LIGHT (light)"]), "{r:#}");
         assert_eq!((r["architect_found"].clone(), r["architect_placed"].clone()), (json!(6), json!(6)), "{r:#}");
         assert_eq!(r["open_groups"], json!(1), "{r:#}");
@@ -39939,7 +40214,7 @@ mod tests {
         assert_eq!(read["byKind"]["conflict"], json!(1), "{read:#}");
         // Run again (a rebuild): the same one item, not two.
         let mut again: Vec<super::super::readers::ReadDevice> = devices.iter().take(before).cloned().collect();
-        architect_objects_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        architect_objects_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new(), &SheetViews::default()).unwrap_or_else(|e| panic!("{e}"));
         let read = s.execute("rfi.list", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(read["byKind"]["conflict"], json!(1), "{read:#}");
     }
@@ -39948,7 +40223,8 @@ mod tests {
     fn an_architects_ceiling_plan_the_electrical_plan_agrees_with_gives_no_finding() {
         let (mut s, mut job, mut devices) = architect_objects_set(2);
         let before = devices.len();
-        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new(), &SheetViews::default())
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["open_groups"], json!(0), "{r:#}");
         assert_eq!(r["requirements"]["lights"]["completed_by_electrical"], json!(6), "{r:#}");
         assert_eq!(r["objects"]["lights"], json!({"architect": 6, "engineer": 6}), "{r:#}");
@@ -40105,7 +40381,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         // A smoke detector in the fourth room drawn on the fire alarm sheet lands in that room on
         // the floor plan (to the linework's resolution: its lines are compared a foot or two apart).
         let p = [10500.0 + 700.0, 1300.0 + 540.0];
@@ -40121,7 +40397,7 @@ mod tests {
     #[test]
     fn a_sheet_of_another_building_in_the_same_title_block_is_not_stacked_on_the_plan() {
         let (s, sp) = frame_sheets();
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p));
         // The mechanical plan draws the floor plan's walls where the floor plan's sheet has them:
         // its frame holds.
@@ -40226,7 +40502,8 @@ mod tests {
     #[test]
     fn a_sheet_of_one_scale_note_fits_an_off_scale_plan_at_their_ratio() {
         let (s, sp) = off_scale_plan_sheets(1.0, 2.0);
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[("A-401".to_string(), 6.0)], "A");
+        let (place, log) =
+            arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[("A-401".to_string(), 6.0)], "A", &SheetViews::default());
         let at = |p: [f64; 2]| place(p, "Roof").map(|m| m.apply(p));
         let l = || log.lock().map(|l| l.clone()).unwrap_or_default();
         // The trade sheet's (500, 400) of the walls, drawn twice the plan's size.
@@ -40239,7 +40516,7 @@ mod tests {
 
         // Both at the job's scale: one to one, as before.
         let (s, sp) = off_scale_plan_sheets(1.0, 1.0);
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let p = [4500.0, 400.0];
         let m = place(p, "Roof").map(|m| m.apply(p)).unwrap_or_else(|| panic!("M-401 not placed: {:#?}", log.lock().map(|l| l.clone())));
         assert!((m[0] - 500.0).abs() < 15.0 && (m[1] - 400.0).abs() < 15.0, "{m:?}");
@@ -40303,7 +40580,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "M");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "M", &SheetViews::default());
         let q = place([2800.0, 450.0], "Level 2").map(|m| m.apply([2800.0, 450.0]));
         assert!(q.is_some_and(|q| (q[0] - 500.0).abs() < 1.0 && (q[1] - 400.0).abs() < 1.0), "{q:?} {:#?}", log.lock().map(|l| l.clone()));
         let l = log.lock().map(|l| l.clone()).unwrap_or_default();
@@ -48206,6 +48483,143 @@ mod tests {
 #[cfg(test)]
 #[path = "guided_symbols_tests.rs"]
 mod symbols_tests;
+
+#[cfg(test)]
+mod checkpoint_append_tests {
+    //! fix-job-checkpoint-full-rewrite (Q6576): a job's checkpoints after the first append only the
+    //! parts of the drawing that changed. Each used to encode the whole .cdy again; on a four-storey
+    //! print set the one after the 3D build added 1.06 GB on top of the build's 4.4 GB, the job's
+    //! peak, and cost 3-4 s a stage.
+    use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, Space};
+    use cadaddy_geom::Vec3;
+
+    fn hooks() {
+        crate::cmd::file::set_io(crate::cmd::file::IoHooks {
+            read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+            write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+            plot: None,
+            read_pdf: None,
+            read_dwf: None,
+            write_dwfx: None,
+        });
+    }
+
+    /// `n` made-up lines in model space, from `at` on.
+    fn lines(d: &mut cadaddy_doc::Drawing, at: usize, n: usize) {
+        for i in at..at + n {
+            let (x, y) = ((i % 997) as f64 * 3.7, (i / 997) as f64 * 2.9);
+            d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 1.5, y + 0.5, 0.0) })).unwrap();
+        }
+    }
+
+    fn scratch(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6576-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("job checkpoint.cdy").to_string_lossy().into_owned()
+    }
+
+    /// A session holding a 60,000-line drawing and a job checkpointing to `path`.
+    fn job_session(path: &str) -> (Session, GuidedJob) {
+        let mut s = crate::Session::new();
+        lines(s.doc_mut().unwrap(), 0, 60_000);
+        let mut job = GuidedJob::new("/made-up/prints", JobGoal::Takeoff);
+        job.checkpoint = Some(path.to_string());
+        (s, job)
+    }
+
+    fn len(path: &str) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    /// The job id of the checkpoint at `path`, read as the job reads it (without its drawing).
+    fn job_id(path: &str) -> Option<String> {
+        checkpoint_agent(path)?.get("guided_job")?.get("id")?.as_str().map(str::to_string)
+    }
+
+    #[test]
+    fn a_jobs_next_checkpoint_appends_only_what_changed() {
+        hooks();
+        let path = scratch("append");
+        let (mut s, mut job) = job_session(&path);
+        write_checkpoint(&mut s, &job);
+        let first = std::fs::read(&path).unwrap();
+        // A stage adds a few objects and moves the job on.
+        lines(s.doc_mut().unwrap(), 60_000, 25);
+        job.id = "second".into();
+        write_checkpoint(&mut s, &job);
+        let now = std::fs::read(&path).unwrap();
+        // The first checkpoint is kept byte for byte and the change is appended after it: a
+        // small part of the file, not the whole drawing encoded again.
+        assert!(
+            now.len() > first.len() && now.starts_with(&first),
+            "the second checkpoint was written whole ({} bytes, first {})",
+            now.len(),
+            first.len()
+        );
+        let appended = now.len() - first.len();
+        assert!(appended * 10 < first.len(), "{appended} bytes appended to a {}-byte checkpoint", first.len());
+        // It reads as the drawing and job it was written from.
+        let d = cadaddy_io::cdy::read_cdy(&now).unwrap();
+        assert_eq!(d.model.len(), 60_025);
+        assert_eq!(job_id(&path).as_deref(), Some("second"));
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_checkpoint_cut_short_while_appending_reads_as_the_one_before() {
+        hooks();
+        let path = scratch("cut");
+        let (mut s, mut job) = job_session(&path);
+        job.id = "first".into();
+        write_checkpoint(&mut s, &job);
+        let first = len(&path);
+        lines(s.doc_mut().unwrap(), 60_000, 2_000);
+        job.id = "second".into();
+        write_checkpoint(&mut s, &job);
+        let second = len(&path);
+        assert!(second > first);
+        // The machine stopped halfway through appending the second one.
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_len(first + (second - first) / 2).unwrap();
+        drop(f);
+        // A resume finds the first: its job (read without the drawing) and its drawing.
+        assert_eq!(job_id(&path).as_deref(), Some("first"));
+        assert!(is_job_checkpoint(&path));
+        let d = cadaddy_io::cdy::read_cdy(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(d.model.len(), 60_000);
+        // The job's next checkpoint isn't appended to the cut file: it is written whole.
+        job.id = "third".into();
+        write_checkpoint(&mut s, &job);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(cadaddy_io::cdy::verify(&bytes).unwrap()["ok"], serde_json::json!(true));
+        assert_eq!(cadaddy_io::cdy::read_cdy(&bytes).unwrap().model.len(), 62_000);
+        assert_eq!(job_id(&path).as_deref(), Some("third"));
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_job_resumed_from_its_checkpoint_appends_to_it() {
+        hooks();
+        let path = scratch("resume");
+        let (mut s, job) = job_session(&path);
+        write_checkpoint(&mut s, &job);
+        let first = std::fs::read(&path).unwrap();
+        // Another run reads the checkpoint (as `job.start` resuming does) and goes on.
+        let (d, seed) = checkpoint_drawing(&path).unwrap();
+        assert!(seed.is_some(), "a checkpoint this build wrote matches the drawing read from it");
+        let mut s = crate::Session::new();
+        *s.doc_mut().unwrap() = d;
+        s.state_mut().unwrap().job_checkpoint = seed.and_then(|seed| crate::cmd::file::CdySaved::new(&path, std::sync::Arc::new(seed)));
+        lines(s.doc_mut().unwrap(), 60_000, 25);
+        assert!(matches!(store_checkpoint(&mut s, &path), Ok(Stored::Appended(_))));
+        let now = std::fs::read(&path).unwrap();
+        assert!(now.starts_with(&first) && (now.len() - first.len()) * 10 < first.len());
+        assert_eq!(cadaddy_io::cdy::read_cdy(&now).unwrap().model.len(), 60_025);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

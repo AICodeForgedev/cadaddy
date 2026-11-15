@@ -496,6 +496,29 @@ fn an_edit_appends_only_its_chunk_and_reads_back_exactly() {
     assert_eq!(state.len as usize, file.len());
 }
 
+/// fix-job-checkpoint-full-rewrite (Q6576): a job's checkpoint is appended to; one the machine
+/// stopped appending to still gives the state of the save before it without reading the drawing.
+#[test]
+fn the_agent_state_of_a_save_cut_short_is_the_one_before_it() {
+    let mut d = lines(5000);
+    d.agent = Some(r#"{"guided_job":{"id":"first"}}"#.to_string()).into();
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    d.agent = Some(r#"{"guided_job":{"id":"second"}}"#.to_string()).into();
+    for i in 0..3000 {
+        let x = i as f64;
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, 5.0, 0.0), b: Vec3::new(x, 6.0, 0.0) })).unwrap();
+    }
+    let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
+    assert!(matches!(out, Output::Append { .. }));
+    let whole = stored(&file, &out);
+    assert_eq!(agent(&whole), Ok(Some(r#"{"guided_job":{"id":"second"}}"#.to_string())));
+    for cut in [file.len() + 1, (file.len() + whole.len()) / 2, whole.len() - 1] {
+        let part = whole.get(..cut).unwrap();
+        assert_eq!(agent(part), Ok(Some(r#"{"guided_job":{"id":"first"}}"#.to_string())), "cut at {cut} of {}", whole.len());
+    }
+}
+
 #[test]
 fn a_file_read_back_saves_incrementally() {
     let d = every_kind();
