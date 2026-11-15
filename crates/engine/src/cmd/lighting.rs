@@ -5,14 +5,18 @@
 //!   wattage, dimming, mounting type, finish) comes from the approved submittal's cut sheet for its
 //!   type, else the light fixture schedule, else the specification's luminaire section, each with
 //!   its source ([`resolve`]). Where two of them both speak and disagree it is a conflict citing
-//!   both, never a silent pick.
+//!   both, never a silent pick; except the basis of design (maker, catalog number) an approved
+//!   submittal names another product for: a substitution, recorded (Q6653).
 //! - **Controls** ([`link_controls`]): a switch's leg letter links it to the luminaires of that
 //!   letter near it (`controls` on the switch, `controlled_by` on the luminaire), a 3-way switch
 //!   to its mate, a sensor to its room's luminaires; emergency and exit fixtures are unswitched by
 //!   design; a dimmer over a driver that doesn't dim (or dims another way) is a conflict.
 //! - **Conflicts** ([`Conflict`]): every disagreement between the plans, the schedule, the
 //!   submittal, the specification and the energy code, each a review item of kind `conflict` with
-//!   both sides cited (an RFI of kind `conflict` in the building spec).
+//!   both sides cited (an RFI of kind `conflict` in the building spec). What the documents answer
+//!   themselves is a record ([`Conflict::record`]), reported and never an RFI: an approved
+//!   substitution, a submittal page's copied header, a sensor beyond the energy code's minimum;
+//!   W and VA are compared as power (Q6653).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -148,6 +152,11 @@ pub(crate) fn volts_of(text: &str) -> Option<(u32, u32)> {
 
 /// The wattage (or VA) a line gives: `13VA`, `LED 39 VA`, `24W`.
 pub(crate) fn watts_of(text: &str) -> Option<f64> {
+    power_of(text).map(|(w, _)| w)
+}
+
+/// The power a line gives and whether it is apparent power (`VA`) rather than real (`W`).
+pub(crate) fn power_of(text: &str) -> Option<(f64, bool)> {
     let ts = tokens(text);
     for (i, t) in ts.iter().enumerate() {
         let num: String = t.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
@@ -157,7 +166,7 @@ pub(crate) fn watts_of(text: &str) -> Option<f64> {
         let rest = t.get(num.len()..).unwrap_or("");
         let unit = if rest.is_empty() { ts.get(i + 1).map_or("", String::as_str) } else { rest };
         if matches!(unit, "W" | "VA" | "WATT" | "WATTS") {
-            return num.trim_end_matches('.').parse::<f64>().ok().filter(|w| w.is_finite() && *w > 0.0 && *w < 5_000.0);
+            return num.trim_end_matches('.').parse::<f64>().ok().filter(|w| w.is_finite() && *w > 0.0 && *w < 5_000.0).map(|w| (w, unit == "VA"));
         }
     }
     None
@@ -914,8 +923,17 @@ pub(crate) fn agree(field: &str, a: &str, b: &str) -> Option<bool> {
             Some((x.0 <= y.0 && y.1 <= x.1) || (y.0 <= x.0 && x.1 <= y.1))
         }
         "wattage" => {
-            let (x, y) = (watts_of(a)?, watts_of(b)?);
-            Some((x - y).abs() <= 0.2 * x.max(y) + 1.0)
+            // Compared as power (Q6653): a load's VA is its watts over its power factor, so a VA
+            // figure at or above the watts (down to the least power factor) is the same load; a
+            // wattage over the VA is not (real power never exceeds apparent power).
+            let ((x, x_va), (y, y_va)) = (power_of(a)?, power_of(b)?);
+            let close = (x - y).abs() <= 0.2 * x.max(y) + 1.0;
+            let covered = match (x_va, y_va) {
+                (true, false) => y <= x && y >= MIN_POWER_FACTOR * x,
+                (false, true) => x <= y && x >= MIN_POWER_FACTOR * y,
+                _ => false,
+            };
+            Some(close || covered)
         }
         "cri" => {
             // A minimum (`90 minimum`, the specification's) is met by any CRI at or above it.
@@ -959,6 +977,10 @@ fn norm_dim(v: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// The least power factor a luminaire's driver runs at (watts over VA) when its VA is compared
+/// with its watts.
+const MIN_POWER_FACTOR: f64 = 0.5;
 
 /// One field two or more documents disagree on: each side's value and document.
 #[derive(Clone, Debug, PartialEq)]
@@ -1134,6 +1156,11 @@ pub(crate) struct Conflict {
     pub at: Option<[f64; 2]>,
     pub elements: Vec<String>,
     pub severity: Option<cadaddy_walk3d::rfi::Severity>,
+    /// A difference the documents themselves answer (Q6653), recorded and never a question for
+    /// the design team: an approved submittal's product in place of the schedule's basis of
+    /// design (the approved submittal is what was bought), a submittal page's copied header its
+    /// own cut sheet contradicts, a code minimum the plans exceed.
+    pub record: bool,
 }
 
 impl Conflict {
@@ -1146,6 +1173,12 @@ impl Conflict {
         if !self.sides.iter().any(|(x, y)| *x == d && *y == s) {
             self.sides.push((d, s));
         }
+        self
+    }
+
+    /// As a record ([`Conflict::record`]): reported, not an RFI.
+    pub(crate) fn recorded(mut self) -> Conflict {
+        self.record = true;
         self
     }
 
@@ -1195,12 +1228,41 @@ pub(crate) fn by_topic(cs: &[Conflict]) -> BTreeMap<String, usize> {
     out
 }
 
-/// The product conflicts of a fixture type (fields its documents disagree on), one per field.
+/// The fields that name a product rather than require something of it: the schedule's basis of
+/// design. An approved submittal naming another product answers them (Q6653).
+pub(crate) const BASIS_FIELDS: [&str; 2] = ["manufacturer", "catalog_number"];
+
+/// The product conflicts of a fixture type (fields its documents disagree on), one per field. A
+/// field of the basis of design ([`BASIS_FIELDS`]) where the approved submittal is one side is a
+/// substitution, recorded and not asked (Q6653): the approved submittal is what was bought. A
+/// requirement it misses (CCT, voltage, lumens…) stays a conflict.
 pub(crate) fn field_conflicts(ty: &str, fcs: &[FieldConflict], elements: &[String]) -> Vec<Conflict> {
     fcs.iter()
         .map(|fc| {
             let label = FIELDS.iter().find(|(k, _)| *k == fc.field).map_or(fc.field, |(_, l)| *l);
             let said: Vec<String> = fc.sides.iter().map(|s| format!("{} ({})", s.value, s.doc)).collect();
+            let submitted = fc.sides.iter().find(|s| s.kind == SourceKind::Submittal);
+            if let Some(sub) = submitted.filter(|_| BASIS_FIELDS.contains(&fc.field)) {
+                let others: Vec<String> =
+                    fc.sides.iter().filter(|s| s.kind != SourceKind::Submittal).map(|s| format!("{} ({})", s.value, s.doc)).collect();
+                let mut c = Conflict::new(
+                    "approved substitution",
+                    format!("lighting type {ty}"),
+                    format!(
+                        "type {ty} {label}: the approved submittal's {} ({}) in place of the basis of design {}; built as submitted, the design value kept beside it",
+                        sub.value,
+                        sub.doc,
+                        others.join(", ")
+                    ),
+                    String::new(),
+                )
+                .with_elements(elements.iter().cloned())
+                .recorded();
+                for s in &fc.sides {
+                    c = c.side(s.doc.clone(), s.value.clone());
+                }
+                return c;
+            }
             let mut c = Conflict::new(
                 label,
                 format!("lighting type {ty}"),
@@ -1234,6 +1296,9 @@ pub(crate) fn header_conflict(ty: &str, named: &str, why: &str, doc: &str, row: 
     .side(doc, format!("page header: {named}"))
     .side(row_doc, basis)
     .with_elements(elements.iter().cloned())
+    // A page header its own cut sheet contradicts is a header copied from another product's page:
+    // the cut sheet's body is the product, so the documents don't disagree (Q6653).
+    .recorded()
 }
 
 /// The schedule, the submittal and the plans' counts of each type against each other: a plan's
@@ -1351,8 +1416,15 @@ pub(crate) fn type_conflicts(t: &TypeCheck) -> Vec<Conflict> {
             );
         }
     }
+    // Types one cut sheet lists together (`K/ZX09`: one page, one product) are one entry (Q6653):
+    // a listed type with no schedule row beside a scheduled one is the same product's other name,
+    // and the entry is no "one product for two types".
+    let listed_with = |ty: &str| -> Vec<&String> {
+        let Some(me) = t.submitted.get(ty) else { return Vec::new() };
+        t.submitted.iter().filter(|(o, p)| o.as_str() != ty && *p == me).map(|(o, _)| o).collect()
+    };
     for (ty, (m, cat, doc)) in t.submitted {
-        if sched(ty).is_none() && !t.schedule.is_empty() {
+        if sched(ty).is_none() && !t.schedule.is_empty() && !listed_with(ty).iter().any(|o| sched(o).is_some()) {
             let src = t.schedule.first().map_or_else(String::new, |r| r.source.clone());
             let shown = t.on_plans.get(ty).map_or(0, Vec::len);
             out.push(
@@ -1385,6 +1457,11 @@ pub(crate) fn type_conflicts(t: &TypeCheck) -> Vec<Conflict> {
         }
     }
     for (_, tys) in by_cat.into_iter().filter(|(_, v)| v.len() >= 2) {
+        // One cut sheet's list of types, not two cut sheets.
+        let entries: BTreeSet<&(String, String, String)> = tys.iter().filter_map(|ty| t.submitted.get(*ty)).collect();
+        if entries.len() < 2 {
+            continue;
+        }
         let names: Vec<&str> = tys.iter().map(|t| t.as_str()).collect();
         let mut c = Conflict::new(
             "one product for two types",
@@ -1969,7 +2046,10 @@ pub(crate) fn sensor_conflicts(
         )
         .side(plans, format!("sensor {}", marks.into_iter().collect::<Vec<_>>().join(", ")))
         .side(code.clone(), format!("not among its spaces ({name})"))
-        .with_elements(hs);
+        .with_elements(hs)
+        // The energy code's list is a minimum: a sensor beyond it is never a conflict (Q6653),
+        // only extra material and labor, recorded for the takeoff.
+        .recorded();
         c.severity = Some(cadaddy_walk3d::rfi::Severity::Low);
         out.push(c);
     }
@@ -2287,6 +2367,63 @@ mod tests {
         assert_eq!(rfi.elements, vec!["1a".to_string()]);
     }
 
+    /// Q6653: an approved submittal naming another maker and catalog number than the schedule's
+    /// basis of design is a substitution, recorded; a requirement it misses (its CCT) stays a
+    /// conflict. Any schedule, any makers: the basis-of-design fields, not one job's values.
+    #[test]
+    fn an_approved_substitution_is_recorded_not_a_conflict() {
+        for (maker, model, sub_maker, sub_cat) in
+            [("NORTHSTAR", "AB12 L48 MVOLT 35K", "Lumenfield Lighting", "ZX-2 UNV 40K"), ("FIRST CO", "SERIES-1", "Second Works", "MODEL 2")]
+        {
+            let r = row("P1", maker, model, "LED 20VA", "RECESSED", "DOWNLIGHT");
+            let sub =
+                submittal_says(&[("manufacturer", sub_maker.into(), "Package p.7".into()), ("catalog_number", sub_cat.into(), "Package p.7".into())]);
+            let (_, fcs) = resolve(&[&sub, &schedule_says(&r)]);
+            let items = field_conflicts("P1", &fcs, &["e1".into()]);
+            let records: Vec<&Conflict> = items.iter().filter(|c| c.record).collect();
+            assert_eq!(records.len(), 2, "the maker and the catalog number: {items:?}");
+            assert!(records.iter().all(|c| c.topic == "approved substitution" && c.sides.len() == 2), "{records:?}");
+            assert!(records[0].issue.contains(sub_maker), "{:?}", records[0]);
+            let real: Vec<&str> = items.iter().filter(|c| !c.record).map(|c| c.topic.as_str()).collect();
+            if model.contains("35K") {
+                assert_eq!(real, vec!["CCT"], "a CCT the submittal misses is still asked: {items:?}");
+            } else {
+                assert!(real.is_empty(), "{items:?}");
+            }
+        }
+        // The schedule and the specification disagreeing with no submittal: still a conflict.
+        let r = row("P2", "MAKER A", "AB12", "LED 20VA", "RECESSED", "DOWNLIGHT");
+        let spec: Sayings = [("manufacturer", Said::new("Maker C", SourceKind::Spec, "spec p.2"))].into_iter().collect();
+        let (_, fcs) = resolve(&[&schedule_says(&r), &spec]);
+        assert!(field_conflicts("P2", &fcs, &[]).iter().all(|c| !c.record));
+    }
+
+    /// Q6653: W and VA are compared as power: the same number agrees, a VA above the watts
+    /// (a power factor under one) agrees, watts above the VA don't.
+    #[test]
+    fn watts_and_va_are_compared_as_power() {
+        assert_eq!(agree("wattage", "16 W", "16 VA"), Some(true));
+        assert_eq!(agree("wattage", "16VA", "16W"), Some(true));
+        assert_eq!(agree("wattage", "10 W", "16 VA"), Some(true), "power factor 0.63");
+        assert_eq!(agree("wattage", "16 VA", "10W"), Some(true));
+        assert_eq!(agree("wattage", "24 W", "16 VA"), Some(false), "real power never exceeds apparent power");
+        assert_eq!(agree("wattage", "4 W", "16 VA"), Some(false), "below any driver's power factor");
+        assert_eq!(agree("wattage", "10 VA", "16 VA"), Some(false));
+        assert_eq!(agree("wattage", "10 W", "16 W"), Some(false));
+        assert_eq!(power_of("LED 13.8VA"), Some((13.8, true)));
+        assert_eq!(power_of("24W"), Some((24.0, false)));
+    }
+
+    /// Q6653: a submittal page header its own cut sheet contradicts is a copied header: recorded,
+    /// never a conflict.
+    #[test]
+    fn a_copied_page_header_is_recorded() {
+        let r = row("E", "MAKER A", "WS-1", "LED 12VA", "WALL", "SCONCE");
+        let c = header_conflict("E", "OTHER MAKER ZZ9", "page header only", "Package p.9", &r, &["e1".into()]);
+        assert!(c.record, "{c:?}");
+        assert_eq!(c.sides.len(), 2);
+    }
+
     #[test]
     fn a_value_left_to_another_document_is_none() {
         let r = row("Q9", "REFER TO CIVIL PHOTOMETRIC PLAN", "REFER TO CIVIL PHOTOMETRIC PLAN", "LED", "SURFACE", "EXTERIOR WALL PACK");
@@ -2358,6 +2495,23 @@ mod tests {
         assert_eq!(topics.get("scheduled type on no plan"), None, "Q5 is on the plans: {topics:?}");
         let q5 = cs.iter().find(|c| c.topic == "scheduled type read on the plans, none built").unwrap_or_else(|| panic!("{cs:?}"));
         assert!(q5.issue.contains("type Q5: the plans show 4; none is in the model"), "{q5:?}");
+        // Q6653: one cut sheet listing two types (`Q5/ZX8`: one page, one product) covers the
+        // scheduled Q5; its other name ZX8 is no unscheduled type and the entry is no "one product
+        // for two types".
+        submitted.insert("Q5".to_string(), ("Maker".to_string(), "X1-LED".to_string(), "Package p.20".to_string()));
+        submitted.insert("ZX8".to_string(), ("Maker".to_string(), "X1-LED".to_string(), "Package p.20".to_string()));
+        let cs = type_conflicts(&TypeCheck {
+            schedule: &schedule,
+            submitted: &submitted,
+            on_plans: &on_plans,
+            read: &read,
+            submitted_qty: &qty,
+            submittal_name: "Package",
+        });
+        let topics = by_topic(&cs);
+        assert_eq!(topics.get("scheduled type with no submittal"), None, "Q5 is covered: {topics:?}");
+        assert_eq!(topics.get("submitted type with no schedule row"), Some(&1), "Q7 only, not ZX8: {topics:?}");
+        assert_eq!(topics.get("one product for two types"), Some(&1), "Q3 and Q4 only: {topics:?}");
     }
 
     fn dev(h: &str, kind: &str, mark: &str, room: &str, leg: &str, at: [f64; 2]) -> Dev {
@@ -2486,6 +2640,11 @@ mod tests {
         assert!(need.sides.iter().any(|(d, _)| d == "IECC 2018 C405.2.1") && need.sides.iter().any(|(d, _)| d.starts_with("26 09 23")), "{need:?}");
         let guest = cs.iter().find(|c| c.topic == "guest room master control").unwrap();
         assert!(guest.issue.starts_with("2 TYPE 7A guest rooms (C1, C2)") && guest.sides.iter().any(|(d, _)| d == "IECC 2018 C405.2.4"), "{guest:?}");
+        // A sensor beyond the code's minimum is recorded, never a conflict (Q6653); a missing
+        // required one stays a conflict.
+        let extra = cs.iter().find(|c| c.topic == "sensor where none is required").unwrap();
+        assert!(extra.record, "{extra:?}");
+        assert!(!need.record && !guest.record);
         // No edition named: the rule's section, said so.
         let cs = sensor_conflicts(&rule, None, &[], &rooms, &lums, &ctrls, "the plans");
         assert!(cs.iter().any(|c| c.sides.iter().any(|(d, _)| d.contains("edition not named"))));

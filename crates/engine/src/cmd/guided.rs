@@ -21916,6 +21916,24 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     for (h, st) in &writes {
         let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, st).into());
     }
+    // What the documents answer themselves (an approved substitution, a copied page header, a
+    // code minimum exceeded, Q6653) is recorded, never asked.
+    let (records, conflicts): (Vec<Conflict>, Vec<Conflict>) = conflicts.into_iter().partition(|c| c.record);
+    let per_record = lt::by_topic(&records);
+    for (topic, n) in &per_record {
+        let mine: Vec<&Conflict> = records.iter().filter(|c| &c.topic == topic).collect();
+        let shown: Vec<String> = mine.iter().take(6).map(|c| c.issue.clone()).collect();
+        let more = if mine.len() > shown.len() { format!(" (and {} more)", mine.len() - shown.len()) } else { String::new() };
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Lighting records, {topic}: {n}: {}{more}", shown.join("; ")),
+            "the documents answer these themselves: recorded, not a question for the design team",
+            1,
+            Vec::new(),
+            None,
+            false,
+        );
+    }
     // Every conflict a review item (an RFI of kind `conflict`): this build's replace the last
     // build's open ones; answered ones stay.
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
@@ -22099,6 +22117,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         "by_level": by_level,
         "by_unit_type": by_type,
         "conflicts": per_topic,
+        "records": per_record,
         "review_items": rfis,
     });
     Ok(())
@@ -27371,8 +27390,9 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     };
     // (b) Each trade with buried work and no plan of its own gets its generated sheet.
     let check = s.execute("ugsheets.check", &json!({}))?;
-    // The required services the drawings don't show, and the proposed routes too close to another
-    // trade's buried line, become RFIs (review items), not silent errors.
+    // The required services the drawings don't show become RFIs (review items), not silent
+    // errors; the proposed routes too close to another trade's buried line are coordination items
+    // for those proposals (Q6653).
     let reviewed = s.execute("ugsheets.review", &json!({})).unwrap_or(Value::Null);
     let review_rfis: Vec<Value> = reviewed["rfis"].as_array().cloned().unwrap_or_default();
     let mut trades = serde_json::Map::new();
@@ -27460,7 +27480,7 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     let n_cross =
         |sev: &str| check["findings"].as_array().map_or(0, |a| a.iter().filter(|f| f["check"] == "crossing" && f["severity"] == sev).count());
     lines.push(format!(
-        "crossings with other trades' buried lines: {} too close (errors), {} proposed routes too close (for review), {} to pothole (warnings); {} new RFIs",
+        "crossings with other trades' buried lines: {} too close (errors), {} proposed routes too close (coordination items with their routes), {} to pothole (warnings); {} new RFIs",
         n_cross("error"),
         n_cross("review"),
         n_cross("warning"),
@@ -27527,6 +27547,7 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         "scale_sheet": scale_sheet,
         "rfis": rfis,
         "review_rfis": review_rfis,
+        "coordination": reviewed["coordination"].as_array().map_or(0, Vec::len),
         "unplaced_rfis": unplaced.iter().map(|(id, ask)| json!({"id": id, "issue": ask})).collect::<Vec<_>>(),
         "sleeves": check["sleeves"].as_array().map_or(0, Vec::len),
         "findings": check["findings"].as_array().map(|a| a.iter().filter(|f| f["check"] == "bearing_plane" || f["check"] == "stub_undimensioned").cloned().collect::<Vec<_>>()),
@@ -49103,9 +49124,10 @@ mod tests {
 
     /// Q6336: a luminaire whose submittal page header names a product its own cut sheet doesn't
     /// show (`bim.submittals` said it as `submittal_header`, no catalog number) is built as its
-    /// schedule row, not corrected to the header, and the disagreement is one conflict citing both.
+    /// schedule row, not corrected to the header. Q6653: the header is one copied from another
+    /// product's page, so it is a record citing both, never a conflict RFI.
     #[test]
-    fn a_submittal_header_its_cut_sheet_contradicts_is_a_conflict_not_a_correction() {
+    fn a_submittal_header_its_cut_sheet_contradicts_is_recorded_not_a_correction() {
         use cadaddy_doc::props::{self, SourceKind};
         let mut s = crate::Session::new();
         s.execute("new", &json!({})).unwrap();
@@ -49141,17 +49163,12 @@ mod tests {
         let rfis = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
         let mine: Vec<&Value> =
             rfis["items"].as_array().into_iter().flatten().filter(|r| r["topic"] == "lighting: submittal header vs its cut sheet").collect();
-        assert_eq!(mine.len(), 1, "one per type: {rfis}");
-        let issue = mine[0]["issue"].as_str().unwrap_or_default();
-        assert!(issue.contains("OTHERCO LIGHTING ZQ50RB") && issue.contains("MAKER ONE EU2-B-K-4M"), "{issue}");
-        assert_eq!(mine[0]["sides"].as_array().map(Vec::len), Some(2), "{rfis}");
-        assert!(
-            job.findings
-                .iter()
-                .any(|f| f.description.starts_with("Lighting conflicts, submittal header vs its cut sheet: 1")
-                    && f.corrected.is_none_or(|c| c[1] == 0)),
-            "said, not counted as corrected"
-        );
+        assert!(mine.is_empty(), "a record, not an RFI: {rfis}");
+        let rec =
+            job.findings.iter().find(|f| f.description.starts_with("Lighting records, submittal header vs its cut sheet: 1")).expect("recorded");
+        assert!(rec.description.contains("OTHERCO LIGHTING ZQ50RB") && rec.description.contains("MAKER ONE EU2-B-K-4M"), "{}", rec.description);
+        assert!(rec.severity == 1 && rec.corrected.is_none(), "information, not a conflict finding");
+        assert_eq!(result["lighting"]["records"]["submittal header vs its cut sheet"], 1, "{result}");
     }
 
     /// A panel the gear step lays out after the build, under a vent already built: the vent is
