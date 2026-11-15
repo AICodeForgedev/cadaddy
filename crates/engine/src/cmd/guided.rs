@@ -7408,6 +7408,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 Ok(_) => {}
                 Err(e) => progress_line(&format!("  floor framing not read: {e}")),
             }
+            // A revision one discipline's sheet carries for an object must reach the other
+            // sheets of its level that draw it (Q6650).
+            match revision_currency(s, job) {
+                Ok(v) if !v.is_null() => job.audit("revision_currency", "pipeline", None, Some(StageName::BimBuild), Some(v)),
+                Ok(_) => {}
+                Err(e) => progress_line(&format!("  revision currency between sheets not checked: {e}")),
+            }
             // The drafted spec is the plans' alone: the M and P plans' runs go back in, each on
             // its level, so the build makes them.
             if let Some(mep) = job.mep.clone().filter(|m| !m.runs.is_empty() || !m.terminals.is_empty() || !m.equipment.is_empty())
@@ -31798,6 +31805,32 @@ fn placement_discipline(job: &GuidedJob) -> Option<String> {
 /// lowest top of parapet the sections and elevations mark above the bearing, as a height over
 /// the roof's surface (the higher ones reported). A parapet an elevation read already gave the
 /// level is kept. What was put in (null: nothing).
+/// Revision currency between disciplines (Q6650, [`super::revcurrency`]): each sheet's revision
+/// table and clouds read; every other discipline's sheet of the level that draws a clouded
+/// object (or what carries it) and carries no row of that revision or later is an RFI naming
+/// both sheets and the revision. The check's items of an earlier run are replaced. The audit
+/// entry (null when no model spec is stored yet).
+pub(crate) fn revision_currency(s: &mut Session, job: &GuidedJob) -> Result<Value> {
+    let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
+    let report = super::revcurrency::check(s.doc()?, &job.sheet_regions, sp.units_per_foot);
+    sp.rfis.retain(|r| !(r.id.starts_with(super::revcurrency::ID_PREFIX) && r.topic == super::revcurrency::TOPIC));
+    let mut added = 0usize;
+    for rfi in &report.rfis {
+        if sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
+            break;
+        }
+        sp.rfis.push(rfi.clone());
+        added += 1;
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
+    let out = report.json();
+    progress_line(&format!(
+        "  revision currency: {} sheets read ({} with a revision table), {} revision clouds, {} clouded equipment marks; {added} sheet(s) not revised for another discipline's revision",
+        out["sheets_read"], out["sheets_with_revisions"], report.clouds, report.clouded_marks
+    ));
+    Ok(out)
+}
+
 fn roof_documents(s: &mut Session, job: &GuidedJob) -> Result<Value> {
     let (mut sp, true) = super::bspec::current(s, "bim_build")? else { return Ok(Value::Null) };
     let roofs: Vec<String> = sp.levels.iter().filter(|l| super::wallgen::roof_level(&sp.levels, &l.name)).map(|l| l.name.clone()).collect();
