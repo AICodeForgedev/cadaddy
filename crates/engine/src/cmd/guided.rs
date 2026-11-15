@@ -3917,6 +3917,12 @@ struct DeviceCensus {
     retyped: usize,
     /// Luminaires read from their type mark and circuit label alone (no symbol made of them).
     lone_marks: usize,
+    /// Of the luminaires read from a mark alone, those with no circuit label under it: the mark
+    /// beside the fixture's outline or on a leader to it (Q6639).
+    bare_marks: usize,
+    /// Mark-shaped texts the electrical plans print again and again that no loaded legend or
+    /// schedule lists, by text: a fixture schedule on a sheet not loaded may (Q6639).
+    unread_marks: BTreeMap<String, usize>,
     /// Symbols with no tag beside them.
     untagged: usize,
     /// Symbols drawn inside a legend or schedule: samples, not devices.
@@ -4737,6 +4743,23 @@ fn device_census(
             let taken_labels: Vec<cadaddy_geom::Vec2> =
                 syms.iter().filter(|(_, _, h, _)| read_handles.contains(&h.hex())).filter_map(|(_, _, _, at)| at.map(|(p, _)| p)).collect();
             let mut lone: Vec<super::readers::ReadDevice> = Vec::new();
+            // Mark-shaped lettering printed on the plan that no loaded legend lists: a fixture
+            // schedule on a sheet not loaded may list it (the devices stage reads those then).
+            for t in sheet_texts.iter().filter(|t| !legend.covers(t.at) && type_mark_shaped(&t.value) && !luminaire(t.value.trim())) {
+                let v = t.value.trim().to_ascii_uppercase();
+                // A mark lettered like a circuit (`LA-1`, `EX-1`, `OC-32`) is still a mark when a
+                // circuit label sits just under it (`LA-1` over `P1-6`): the schedule then decides.
+                if sheet_numbers.contains(&v) || (circuit_text(&v, &sheet_numbers) && !over_circuit_label(t, sheet_texts, &sheet_numbers)) {
+                    continue;
+                }
+                if c.unread_marks.len() < MAX_UNREAD_MARKS || c.unread_marks.contains_key(&v) {
+                    *c.unread_marks.entry(v).or_default() += 1;
+                }
+            }
+            // The sheet's closed outlines (a fixture drawn as a plain rectangle or circle), read
+            // once, for marks printed with no circuit label under them.
+            let outlines_g: std::cell::OnceCell<Vec<FixtureOutline>> = std::cell::OnceCell::new();
+            let outlines = || outlines_g.get_or_init(|| fixture_outlines(objects.get(g).into_iter().flatten().map(|e| &e.kind)));
             for t in sheet_texts.iter().filter(|t| luminaire(t.value.trim()) && !legend.covers(t.at)) {
                 let reach = LONE_MARK_REACH_H * t.height;
                 if job.level_at([t.at.x, t.at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) {
@@ -4745,7 +4768,7 @@ fn device_census(
                 // Its circuit: a label under it, within reach, lettered as it is (a mark of another
                 // size is no fixture's: a glyph misread from linework, a title), and no read
                 // symbol's own tag.
-                let Some(label) = sheet_texts
+                let label = sheet_texts
                     .iter()
                     .filter(|o| {
                         circuit_text(&o.value, &sheet_numbers)
@@ -4755,8 +4778,62 @@ fn device_census(
                             && o.height <= LONE_MARK_SIZE * t.height
                             && !taken_labels.iter().any(|p| p.dist(o.at) <= TAKEN_LABEL_EPS * o.height)
                     })
-                    .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
-                else {
+                    .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)));
+                let Some(label) = label else {
+                    // No circuit label under it (Q6639): the scheduled type mark alone, printed by
+                    // the fixture's outline (inside it or just beside it) or on a leader to it,
+                    // the circuit shown by the home run instead. Not a read symbol's own tag, not
+                    // a grid or callout bubble's letter, and with no outline or leader it is
+                    // lettering (the schedule's copy, a note): left out.
+                    let h = t.height;
+                    if !(h.is_finite() && h > 0.0) || taken_labels.iter().any(|p| p.dist(t.at) <= TAKEN_BARE_EPS_H * h) {
+                        continue;
+                    }
+                    if bubbles.iter().any(|(mid, r, _, _)| cadaddy_geom::Vec2::new(mid[0], mid[1]).dist(t.at) <= 1.3 * r) {
+                        continue;
+                    }
+                    let grid = bubbles_here
+                        .get_or_insert_with(|| super::grids::grid_bubbles(d, objects.get(g).map_or(&[][..], Vec::as_slice), k_in, true))
+                        .iter()
+                        .any(|(o, r, l)| l.eq_ignore_ascii_case(t.value.trim()) && o.dist(t.at) <= 1.3 * r);
+                    if grid {
+                        continue;
+                    }
+                    let outline = bare_mark_outline(t, sheet_texts, outlines());
+                    let (at, how) = match super::labelspot::locate(t, &[], Some(leaders_of(h)), &outline.into_iter().collect::<Vec<_>>(), f64::MAX) {
+                        (p, super::labelspot::Spot::Leader) => (p, "at the end of the leader from it"),
+                        (p, super::labelspot::Spot::Symbol) => (p, "at the fixture outline it is printed by"),
+                        _ => continue,
+                    };
+                    let read = |dv: &super::readers::ReadDevice| {
+                        let fixture = dv.kind.is_empty() || dv.kind.contains("luminaire");
+                        fixture && cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]).dist(at) <= LONE_SYMBOL_H * h
+                    };
+                    if c.placed.iter().filter(|dv| dv.sheet == sheet).any(read) || lone.iter().any(read) {
+                        continue;
+                    }
+                    let tag = t.value.trim().to_ascii_uppercase();
+                    let (lum, source) = luminaire_of(&tag);
+                    // A switch leg lettered under the mark (`(a)` under `(DX-2)`): its leg.
+                    let leg = sheet_texts
+                        .iter()
+                        .filter(|o| o.at.y < t.at.y && o.at.dist(t.at) <= MARK_OVER_LABEL_H * h && o.height <= LONE_MARK_SIZE * h)
+                        .filter_map(|o| leg_letter(&o.value))
+                        .next()
+                        .unwrap_or_default();
+                    lone.push(super::readers::ReadDevice {
+                        tag: tag.clone(),
+                        at: [at.x, at.y],
+                        sheet: sheet.clone(),
+                        level: job.level_at([t.at.x, t.at.y]).map_or_else(String::new, |r| r.level.clone()),
+                        kind: lum,
+                        kind_source: source,
+                        leg,
+                        label_at: Some([t.at.x, t.at.y]),
+                        spot: format!("{how}: its type mark {} on {sheet} (no circuit label under it)", t.value.trim()),
+                        ..super::readers::ReadDevice::default()
+                    });
+                    c.bare_marks += 1;
                     continue;
                 };
                 // Read already: a luminaire of this sheet by the mark (its symbol, beside or under
@@ -6298,6 +6375,180 @@ const LONE_SYMBOL_H: f64 = 2.0;
 const TAKEN_LABEL_EPS: f64 = 0.05;
 /// Most luminaires one sheet's lone marks add.
 const MAX_LONE_MARKS: usize = 2_000;
+/// Mark-shaped lettering no loaded legend lists, printed at least this often on the electrical
+/// plans, sends the devices stage to the schedules on the sheets not loaded (Q6639).
+const MIN_UNREAD_MARK_REPEATS: usize = 3;
+/// Distinct unread marks kept, at most.
+const MAX_UNREAD_MARKS: usize = 400;
+/// A bare mark printed where a read symbol's tag is (within this many of its heights) is that tag.
+const TAKEN_BARE_EPS_H: f64 = 0.25;
+/// A fixture's outline beside a bare type mark: its long side from this many to this many of the
+/// mark's heights (smaller is a dot or an arrowhead, larger a room or a casework run), its short
+/// side at least this many (a closed sliver is a line).
+const OUTLINE_MIN_H: f64 = 0.6;
+const OUTLINE_MAX_H: f64 = 15.0;
+const OUTLINE_MIN_SIDE_H: f64 = 0.3;
+/// The mark is inside its fixture's outline or within this many of its heights of it.
+const OUTLINE_REACH_H: f64 = 1.5;
+/// A text's letters are about this share of its height wide.
+const MARK_CHAR_W_H: f64 = 0.7;
+/// Closed outlines of one sheet looked at, and corners of one, at most.
+const MAX_OUTLINES: usize = 200_000;
+const MAX_OUTLINE_CORNERS: usize = 64;
+
+/// A closed outline drawn on a sheet (a circle, a closed polyline): its extents.
+#[derive(Clone, Copy, Debug)]
+struct FixtureOutline {
+    lo: cadaddy_geom::Vec2,
+    hi: cadaddy_geom::Vec2,
+}
+
+/// The closed outlines among a sheet's objects: circles, and closed polylines of a few corners
+/// (an arc side's bulge widens its extents by its rise).
+fn fixture_outlines<'a>(objects: impl IntoIterator<Item = &'a cadaddy_doc::EntityKind>) -> Vec<FixtureOutline> {
+    use cadaddy_geom::Vec2;
+    let mut out = Vec::new();
+    for k in objects {
+        if out.len() >= MAX_OUTLINES {
+            break;
+        }
+        let o = match k {
+            cadaddy_doc::EntityKind::Circle(c) if c.radius.is_finite() && c.radius > 0.0 => {
+                let (x, y, r) = (c.center.x, c.center.y, c.radius);
+                FixtureOutline { lo: Vec2::new(x - r, y - r), hi: Vec2::new(x + r, y + r) }
+            }
+            cadaddy_doc::EntityKind::LwPolyline(pl) if pl.closed && (2..=MAX_OUTLINE_CORNERS).contains(&pl.vertices.len()) => {
+                let (mut lo, mut hi) = (Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN));
+                let mut rise = 0.0f64;
+                let n = pl.vertices.len();
+                for (i, v) in pl.vertices.iter().enumerate() {
+                    lo = Vec2::new(lo.x.min(v.p.x), lo.y.min(v.p.y));
+                    hi = Vec2::new(hi.x.max(v.p.x), hi.y.max(v.p.y));
+                    if v.bulge.is_finite()
+                        && v.bulge != 0.0
+                        && let Some(next) = pl.vertices.get((i + 1) % n)
+                    {
+                        rise = rise.max(v.bulge.abs().min(1.0) * v.p.dist(next.p) / 2.0);
+                    }
+                }
+                FixtureOutline { lo: Vec2::new(lo.x - rise, lo.y - rise), hi: Vec2::new(hi.x + rise, hi.y + rise) }
+            }
+            _ => continue,
+        };
+        if o.lo.is_finite() && o.hi.is_finite() && o.hi.x > o.lo.x && o.hi.y > o.lo.y {
+            out.push(o);
+        }
+    }
+    out
+}
+
+/// The extents a text's letters fill (level, or turned a quarter either way).
+fn text_box(t: &cadaddy_mepfix::sheet_facts::TextItem) -> (cadaddy_geom::Vec2, cadaddy_geom::Vec2) {
+    use cadaddy_geom::Vec2;
+    let h = t.height;
+    let w = MARK_CHAR_W_H * h * t.value.trim().chars().count().max(1) as f64;
+    let turned = (t.rotation.sin().abs()) > 0.7;
+    let (dx, dy) = if turned { (h, w) } else { (w, h) };
+    let (x, y) = if turned && t.rotation.sin() > 0.0 {
+        (t.at.x - h, t.at.y)
+    } else if turned {
+        (t.at.x, t.at.y - w)
+    } else {
+        (t.at.x, t.at.y)
+    };
+    (Vec2::new(x, y), Vec2::new(x + dx, y + dy))
+}
+
+/// The gap between two extents (0 when they overlap).
+fn box_gap(a: (cadaddy_geom::Vec2, cadaddy_geom::Vec2), b: (cadaddy_geom::Vec2, cadaddy_geom::Vec2)) -> f64 {
+    let dx = (b.0.x - a.1.x).max(a.0.x - b.1.x).max(0.0);
+    let dy = (b.0.y - a.1.y).max(a.0.y - b.1.y).max(0.0);
+    dx.hypot(dy)
+}
+
+/// The fixture a type mark printed with no circuit label labels (Q6639): the middle of the
+/// nearest closed outline of a fixture's size the mark is inside or just beside. An outline that
+/// holds other lettering (a keynote's hexagon with its number, a room with its name) is a marker
+/// or a space, not a fixture.
+fn bare_mark_outline(
+    t: &cadaddy_mepfix::sheet_facts::TextItem,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    outlines: &[FixtureOutline],
+) -> Option<cadaddy_geom::Vec2> {
+    let h = t.height;
+    if !(h.is_finite() && h > 0.0) {
+        return None;
+    }
+    let mark = text_box(t);
+    let own = t.value.trim();
+    let lettered = |o: &FixtureOutline| {
+        texts.iter().take(MAX_SHEET_TEXTS).any(|x| {
+            let (lo, hi) = text_box(x);
+            let mid = lo.mid(hi);
+            x.value.trim() != own && mid.x > o.lo.x && mid.x < o.hi.x && mid.y > o.lo.y && mid.y < o.hi.y
+        })
+    };
+    outlines
+        .iter()
+        .filter(|o| {
+            let (w, d) = (o.hi.x - o.lo.x, o.hi.y - o.lo.y);
+            let (long, short) = (w.max(d), w.min(d));
+            (OUTLINE_MIN_H * h..=OUTLINE_MAX_H * h).contains(&long) && short >= OUTLINE_MIN_SIDE_H * h
+        })
+        .map(|o| (box_gap(mark, (o.lo, o.hi)), o))
+        .filter(|(gap, _)| *gap <= OUTLINE_REACH_H * h)
+        .filter(|(_, o)| !lettered(o))
+        .min_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| ((a.1.hi.x - a.1.lo.x) * (a.1.hi.y - a.1.lo.y)).total_cmp(&((b.1.hi.x - b.1.lo.x) * (b.1.hi.y - b.1.lo.y))))
+        })
+        .map(|(_, o)| o.lo.mid(o.hi))
+}
+
+/// Lettering shaped like a device type mark: one to eight capitals, digits and dashes (`D`,
+/// `G4E`, `LA-1`), maybe in parentheses (`(DX-2)`), with a letter.
+fn type_mark_shaped(v: &str) -> bool {
+    let v = v.trim();
+    let inner = v.strip_prefix('(').and_then(|x| x.strip_suffix(')')).unwrap_or(v);
+    let n = inner.chars().count();
+    (1..=8).contains(&n)
+        && inner.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '.')
+        && inner.chars().any(|c| c.is_ascii_uppercase())
+        && !inner.starts_with(['-', '.'])
+        && !inner.ends_with(['-', '.'])
+}
+
+/// A circuit label printed just under `t`, lettered as it is (Q6639): `P1-6` under `LA-1`, the
+/// type-over-circuit tag. The same reach and size rules as a lone mark's circuit label.
+fn over_circuit_label(
+    t: &cadaddy_mepfix::sheet_facts::TextItem,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    sheet_numbers: &BTreeSet<String>,
+) -> bool {
+    let h = t.height;
+    if !(h.is_finite() && h > 0.0) {
+        return false;
+    }
+    texts.iter().any(|o| {
+        o.at.y < t.at.y
+            && o.at.dist(t.at) <= LONE_MARK_REACH_H * h
+            && h <= LONE_MARK_SIZE * o.height
+            && o.height <= LONE_MARK_SIZE * h
+            && circuit_text(&o.value, sheet_numbers)
+    })
+}
+
+/// A switch leg lettered under a fixture's mark: one lower-case letter, maybe in parentheses
+/// (`a`, `(a)`).
+fn leg_letter(v: &str) -> Option<String> {
+    let v = v.trim();
+    let inner = v.strip_prefix('(').and_then(|x| x.strip_suffix(')')).unwrap_or(v);
+    let mut cs = inner.chars();
+    match (cs.next(), cs.next()) {
+        (Some(c), None) if c.is_ascii_lowercase() => Some(c.to_string()),
+        _ => None,
+    }
+}
 /// The casework luminaires among `groups` (devices placed on their level's plan, `upi` drawing
 /// units per inch) laid out by the casework details on the job's architectural and interiors
 /// sheets ([`super::caseworklights`]).
@@ -6490,11 +6741,19 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut census = device_census(s, job, &bubbles, &[]);
     // Marks the loaded sheets' legends don't list may be a luminaire schedule's on a sheet the
     // drawing doesn't hold (the set's electrical schedules sheet): read those, and count again
-    // when they list any.
-    if !census.unlisted.is_empty() {
-        let plan_tags: BTreeSet<String> = census.by_type.keys().chain(census.unlisted.keys()).map(|t| t.trim().to_ascii_uppercase()).collect();
+    // when they list any. The marks are a symbol's tag, or lettering the electrical plans print
+    // again and again by plain linework (`LA-1` over `P1-6` by a rectangle drawn loose, Q6639).
+    let unread: Vec<&String> = census.unread_marks.iter().filter(|(_, n)| **n >= MIN_UNREAD_MARK_REPEATS).map(|(t, _)| t).collect();
+    if !census.unlisted.is_empty() || !unread.is_empty() {
+        let plan_tags: BTreeSet<String> =
+            census.by_type.keys().chain(census.unlisted.keys()).chain(unread.iter().copied()).map(|t| t.trim().to_ascii_uppercase()).collect();
         let unloaded = schedule_legends_on(&unloaded_schedule_pages(job), &plan_tags);
-        let listed: Vec<&String> = census.unlisted.keys().filter(|t| unloaded.iter().any(|(_, l)| l.types.contains(t.as_str()))).collect();
+        let listed: Vec<&String> = census
+            .unlisted
+            .keys()
+            .chain(unread.iter().copied())
+            .filter(|t| unloaded.iter().any(|(_, l)| l.types.contains(t.trim().to_ascii_uppercase().as_str())))
+            .collect();
         if !unloaded.is_empty() {
             progress_line(&format!(
                 "  luminaire schedules on sheets not loaded: {} on {:?}; the plans' unlisted marks they list: {:?}",
@@ -6533,6 +6792,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     results["circuit_tagged_symbols"] = json!(census.circuit);
     results["circuit_tagged_retyped"] = json!(census.retyped);
     results["luminaires_by_mark_alone"] = json!(census.lone_marks);
+    results["luminaires_by_bare_mark"] = json!(census.bare_marks);
     let not_devices: usize = census.not_device.values().sum();
     results["non_device_tags"] = json!(not_devices);
     results["device_types"] = json!({
@@ -38494,6 +38754,117 @@ mod tests {
         assert!(spot("b", 90.0).starts_with("at the switch symbol drawn as linework nearest its label D,b on E-7"), "{}", spot("b", 90.0));
         assert!(spot("a", 290.0).starts_with("at the switch symbol drawn as linework"), "{}", spot("a", 290.0));
         assert!(spot("c", 500.0).contains("location to check") && spot("c", 900.0).contains("location to check"), "{:?}", job.devices);
+    }
+
+    /// A scheduled type mark printed with no circuit label under it (Q6639): a luminaire at the
+    /// fixture outline it labels (the troffer rectangle under `G4`, the downlight circle by
+    /// `(DX-3)`, not the keynote hexagon with its `1`), its switch leg from the `(a)` under it. The
+    /// same mark with no outline or leader by it (the schedule's copy, a note) is no fixture.
+    #[test]
+    fn a_bare_fixture_mark_is_a_luminaire_at_its_outline() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-3", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        job.luminaire_types = vec!["G4".into(), "(DX-3)".into(), "D".into()];
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("G4", 100.0, 520.0, 4.0),
+            ("(DX-3)", 300.0, 500.0, 4.0),
+            ("(a)", 300.0, 494.0, 4.0),
+            ("1", 321.0, 499.0, 4.0),
+            ("D", 500.0, 500.0, 4.0),
+            ("D", 700.0, 500.0, 4.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                    .iter()
+                    .map(|(x, y)| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        if let Ok(d) = s.doc_mut() {
+            for k in [
+                rect(100.0, 480.0, 140.0, 517.0),
+                rect(318.0, 496.0, 328.0, 506.0),
+                EntityKind::Circle(Circle { center: Vec3::new(310.0, 510.0, 0.0), radius: 3.0 }),
+                EntityKind::Circle(Circle { center: Vec3::new(695.0, 507.0, 0.0), radius: 3.0 }),
+            ] {
+                d.add(&Space::Model, Common { layer: "PDF".into(), ..Common::default() }, k).ok();
+            }
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-3".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-3".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut got: Vec<(String, String, [i64; 2])> = job
+            .devices
+            .iter()
+            .filter(|d| d.kind.contains("luminaire"))
+            .map(|d| (d.tag.clone(), d.leg.clone(), [d.at[0].round() as i64, d.at[1].round() as i64]))
+            .collect();
+        got.sort();
+        let want: Vec<(String, String, [i64; 2])> = [("(DX-3)", "a", [310, 510]), ("D", "", [695, 507]), ("G4", "", [120, 499])]
+            .iter()
+            .map(|(t, l, p)| (t.to_string(), l.to_string(), *p))
+            .collect();
+        assert_eq!(got, want, "{r:#}");
+        assert_eq!(r["luminaires_by_bare_mark"], json!(3), "{r:#}");
+        assert!(job.devices.iter().all(|d| d.kind.contains("luminaire") || d.tag != "D"), "{:?}", job.devices);
+    }
+
+    #[test]
+    fn type_mark_shapes_and_leg_letters() {
+        for v in ["D", "G4E", "LA-1", "(DX-2)", "OC-32"] {
+            assert!(type_mark_shaped(v), "{v}");
+        }
+        for v in ["P1-6 x", "la-1", "-A", "123", "(a)", "ABCDEFGHI", ""] {
+            assert!(!type_mark_shaped(v), "{v}");
+        }
+        assert_eq!(leg_letter("(a)"), Some("a".into()));
+        assert_eq!(leg_letter(" b "), Some("b".into()));
+        assert_eq!(leg_letter("ab"), None);
+        assert_eq!(leg_letter("A"), None);
+    }
+
+    /// A type mark lettered like a circuit (`LA-1`, `OC-32`) printed over its circuit label
+    /// (`P1-6`) is still counted as a mark for the schedules not loaded (Q6639, a set whose every
+    /// fixture type reads as a panel-circuit). Alone, or over lettering of another size or too
+    /// far below, it stays a circuit label.
+    #[test]
+    fn a_circuit_shaped_mark_over_its_circuit_label_is_a_mark() {
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let t = |v: &str, x: f64, y: f64, h: f64| TextItem { value: v.into(), at: cadaddy_geom::Vec2::new(x, y), height: h, rotation: 0.0 };
+        let none = BTreeSet::new();
+        for mark in ["LA-1", "EX-1", "OC-32"] {
+            assert!(circuit_text(mark, &none), "{mark} reads as a circuit");
+            let m = t(mark, 100.0, 506.0, 4.0);
+            assert!(over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 500.0, 4.0)], &none), "{mark}");
+            assert!(!over_circuit_label(&m, std::slice::from_ref(&m), &none), "{mark} alone");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 512.0, 4.0)], &none), "{mark} under a label");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 470.0, 4.0)], &none), "{mark} label far below");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 500.0, 12.0)], &none), "{mark} over a title");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("NOTE", 100.0, 500.0, 4.0)], &none), "{mark} over a word");
+        }
+        let nan = t("LA-1", 100.0, 506.0, f64::NAN);
+        assert!(!over_circuit_label(&nan, &[t("P1-6", 100.0, 500.0, 4.0)], &none));
     }
 
     /// A luminaire read from its mark alone carries its whole circuit label (Q6256): the switch
