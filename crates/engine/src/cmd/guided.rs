@@ -4578,7 +4578,9 @@ fn device_census(
             // schedule on a sheet not loaded may list it (the devices stage reads those then).
             for t in sheet_texts.iter().filter(|t| !legend.covers(t.at) && type_mark_shaped(&t.value) && !luminaire(t.value.trim())) {
                 let v = t.value.trim().to_ascii_uppercase();
-                if circuit_text(&v, &sheet_numbers) || sheet_numbers.contains(&v) {
+                // A mark lettered like a circuit (`LA-1`, `EX-1`, `OC-32`) is still a mark when a
+                // circuit label sits just under it (`LA-1` over `P1-6`): the schedule then decides.
+                if sheet_numbers.contains(&v) || (circuit_text(&v, &sheet_numbers) && !over_circuit_label(t, sheet_texts, &sheet_numbers)) {
                     continue;
                 }
                 if c.unread_marks.len() < MAX_UNREAD_MARKS || c.unread_marks.contains_key(&v) {
@@ -6213,6 +6215,26 @@ fn type_mark_shaped(v: &str) -> bool {
         && inner.chars().any(|c| c.is_ascii_uppercase())
         && !inner.starts_with(['-', '.'])
         && !inner.ends_with(['-', '.'])
+}
+
+/// A circuit label printed just under `t`, lettered as it is (Q6639): `P1-6` under `LA-1`, the
+/// type-over-circuit tag. The same reach and size rules as a lone mark's circuit label.
+fn over_circuit_label(
+    t: &cadaddy_mepfix::sheet_facts::TextItem,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    sheet_numbers: &BTreeSet<String>,
+) -> bool {
+    let h = t.height;
+    if !(h.is_finite() && h > 0.0) {
+        return false;
+    }
+    texts.iter().any(|o| {
+        o.at.y < t.at.y
+            && o.at.dist(t.at) <= LONE_MARK_REACH_H * h
+            && h <= LONE_MARK_SIZE * o.height
+            && o.height <= LONE_MARK_SIZE * h
+            && circuit_text(&o.value, sheet_numbers)
+    })
 }
 
 /// A switch leg lettered under a fixture's mark: one lower-case letter, maybe in parentheses
@@ -37700,6 +37722,29 @@ mod tests {
         assert_eq!(leg_letter(" b "), Some("b".into()));
         assert_eq!(leg_letter("ab"), None);
         assert_eq!(leg_letter("A"), None);
+    }
+
+    /// A type mark lettered like a circuit (`LA-1`, `OC-32`) printed over its circuit label
+    /// (`P1-6`) is still counted as a mark for the schedules not loaded (Q6639, a set whose every
+    /// fixture type reads as a panel-circuit). Alone, or over lettering of another size or too
+    /// far below, it stays a circuit label.
+    #[test]
+    fn a_circuit_shaped_mark_over_its_circuit_label_is_a_mark() {
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let t = |v: &str, x: f64, y: f64, h: f64| TextItem { value: v.into(), at: cadaddy_geom::Vec2::new(x, y), height: h, rotation: 0.0 };
+        let none = BTreeSet::new();
+        for mark in ["LA-1", "EX-1", "OC-32"] {
+            assert!(circuit_text(mark, &none), "{mark} reads as a circuit");
+            let m = t(mark, 100.0, 506.0, 4.0);
+            assert!(over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 500.0, 4.0)], &none), "{mark}");
+            assert!(!over_circuit_label(&m, &[m.clone()], &none), "{mark} alone");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 512.0, 4.0)], &none), "{mark} under a label");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 470.0, 4.0)], &none), "{mark} label far below");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 500.0, 12.0)], &none), "{mark} over a title");
+            assert!(!over_circuit_label(&m, &[m.clone(), t("NOTE", 100.0, 500.0, 4.0)], &none), "{mark} over a word");
+        }
+        let nan = t("LA-1", 100.0, 506.0, f64::NAN);
+        assert!(!over_circuit_label(&nan, &[t("P1-6", 100.0, 500.0, 4.0)], &none));
     }
 
     /// A luminaire read from its mark alone carries its whole circuit label (Q6256): the switch
