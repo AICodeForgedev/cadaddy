@@ -19,7 +19,14 @@
 //!   from `conduit.reroute {feeders: "all"}` on demand; bspec.set and model.build only follow the
 //!   routes there are (a model may leave a feeder unrouted on purpose: the build gives it its
 //!   raceway into its gear);
-//! - a proposed route whose gear is gone is not kept.
+//! - a proposed route whose gear is gone is not kept;
+//! - a route follows the model's feed data (Q6664): a proposed route whose chains differ from
+//!   those the gear's feeds give now (a stack's copies recorded fed from another breaker, or
+//!   through other copies' lugs, or the other way along the stack) is routed again as the feed
+//!   data says; a route drawn or entered by hand that differs is kept as given and said;
+//! - never both: a feeder is not routed where its typical panel's copies already take a route
+//!   that is kept as given (drawn, entered, a feeder of no listed tag); the two disagree, said,
+//!   and the copies keep their one raceway in.
 //!
 //! Nothing is replaced silently: the report lists each feeder routed again and why.
 
@@ -54,11 +61,22 @@ pub(crate) struct Followed {
     /// Feeders with placed gear and no route before / after.
     pub unrouted_before: usize,
     pub unrouted_after: usize,
+    /// Feeders whose stored route doesn't follow the feed data (other chains) before / after.
+    pub off_feed_before: usize,
+    pub off_feed_after: usize,
+    /// Routes kept as given that the feed data disagrees with, and feeders not routed because
+    /// their copies already take a route kept as given (route and feed data disagree).
+    pub disagree: Vec<(String, String)>,
 }
 
 impl Followed {
     pub(crate) fn changed(&self) -> bool {
         !self.rerouted.is_empty() || !self.dropped.is_empty()
+    }
+
+    /// Whether there is anything to say: a change, or a route and the feed data disagreeing.
+    pub(crate) fn notable(&self) -> bool {
+        self.changed() || !self.disagree.is_empty()
     }
 
     pub(crate) fn json(&self) -> Value {
@@ -67,22 +85,26 @@ impl Followed {
             "rerouted": self.rerouted.len(), "kept": self.kept, "dropped": self.dropped.len(),
             "off_gear_before": self.off_gear_before, "off_gear_after": self.off_gear_after,
             "unrouted_before": self.unrouted_before, "unrouted_after": self.unrouted_after,
+            "off_feed_before": self.off_feed_before, "off_feed_after": self.off_feed_after,
+            "disagree": self.disagree.len(), "disagree_list": list(&self.disagree),
             "rerouted_list": list(&self.rerouted), "dropped_list": list(&self.dropped),
         })
     }
 
     /// One line for the command line, or none when nothing changed.
     pub(crate) fn line(&self) -> Option<String> {
-        if !self.changed() {
+        if !self.notable() {
             return None;
         }
         let names = self.rerouted.iter().take(6).map(|(f, why)| format!("{f} ({why})")).collect::<Vec<_>>().join("; ");
+        let disagree = self.disagree.iter().take(3).map(|(f, why)| format!("{f} ({why})")).collect::<Vec<_>>().join("; ");
         Some(format!(
-            "feeders followed their gear: {} routed again{}{}; {} kept",
+            "feeders followed their gear and feeds: {} routed again{}{}; {} kept{}",
             self.rerouted.len(),
             if names.is_empty() { String::new() } else { format!(": {names}") },
             if self.dropped.is_empty() { String::new() } else { format!("; {} routes dropped (their gear is gone)", self.dropped.len()) },
-            self.kept
+            self.kept,
+            if disagree.is_empty() { String::new() } else { format!("; route and feed data disagree for {}: {disagree}", self.disagree.len()) }
         ))
     }
 }
@@ -211,6 +233,8 @@ pub(crate) fn follow(sp: &mut BuildingSpec, mode: Mode) -> Followed {
     // Per feeder: route it again (with why), drop its route, or keep it.
     let mut replace: BTreeSet<String> = BTreeSet::new();
     let mut drop: BTreeSet<String> = BTreeSet::new();
+    // Feeders to route (again), with why: laid unless their copies take a route kept as given.
+    let mut wanted: Vec<(String, String, String)> = Vec::new();
     let groups: BTreeSet<&String> = fresh_by.keys().chain(stored_by.keys()).collect();
     for g in groups {
         let feeder = g.strip_prefix('#').and_then(|i| i.parse::<usize>().ok());
@@ -223,8 +247,7 @@ pub(crate) fn follow(sp: &mut BuildingSpec, mode: Mode) -> Followed {
             if !new.is_empty() {
                 out.unrouted_before += 1;
                 if route_missing {
-                    out.rerouted.push((name, "not routed: its gear is placed".into()));
-                    replace.insert(g.clone());
+                    wanted.push((g.clone(), name, "not routed: its gear is placed".into()));
                 }
             }
             continue;
@@ -243,22 +266,60 @@ pub(crate) fn follow(sp: &mut BuildingSpec, mode: Mode) -> Followed {
         if !at_gear {
             out.off_gear_before += 1;
         }
+        // The chains it lays against those the feed data gives now (Q6664).
+        let off_feed = feeder.is_some() && off_feed(old, new);
+        if off_feed {
+            out.off_feed_before += 1;
+        }
         // Drawn or entered by hand: kept as given (the check counts it).
-        if at_gear || !old.iter().all(|r| proposed(r)) {
+        if !old.iter().all(|r| proposed(r)) {
+            out.kept += 1;
+            if off_feed && out.disagree.len() < MAX_LISTED {
+                out.disagree.push((name, "a route drawn or entered by hand, kept as given: it doesn't follow the panels' recorded feed".into()));
+            }
+            continue;
+        }
+        if at_gear && !off_feed {
             out.kept += 1;
             continue;
         }
-        let why = if old.iter().any(|r| !r.edited_by.is_empty()) {
-            "its gear moved: the route (edited) ended where the gear was"
+        // Other chains than the feed's say more than an end off its gear.
+        let why = if off_feed {
+            format!("its route doesn't follow the panels' feed: {}", feed_difference(old, new))
+        } else if old.iter().any(|r| !r.edited_by.is_empty()) {
+            "its gear moved: the route (edited) ended where the gear was".to_string()
         } else {
-            "its gear moved: the route ended where the gear was"
+            "its gear moved: the route ended where the gear was".to_string()
         };
-        out.rerouted.push((name, why.into()));
-        replace.insert(g.clone());
+        wanted.push((g.clone(), name, why));
+    }
+    // Never both (Q6664): a typical panel's copy that takes a route kept as given (another
+    // feeder's, drawn or entered) gets no second raceway in; the two disagree, said.
+    let reach = AT_GEAR_REACH_FT * upf(sp);
+    let changing: BTreeSet<&String> = wanted.iter().map(|w| &w.0).chain(drop.iter()).collect();
+    let kept_runs: Vec<&MepRun> = stored_by.iter().filter(|(g, _)| !changing.contains(g)).flat_map(|(_, v)| v.iter().copied()).collect();
+    for (g, name, why) in wanted {
+        let feeder = g.strip_prefix('#').and_then(|i| i.parse::<usize>().ok());
+        let copies = feeder.and_then(|i| sp.mep.feeders.get(i)).map_or_else(Vec::new, |f| {
+            landed_gear(sp, feeder, fresh_by.get(&g).map(Vec::as_slice).unwrap_or_default())
+                .into_iter()
+                .filter(|e| !e.tag.trim().eq_ignore_ascii_case(f.from.trim()) && !e.tag.trim().eq_ignore_ascii_case(f.to.trim()))
+                .collect()
+        });
+        let taken = copies.iter().find(|e| kept_runs.iter().any(|r| end_at(sp, r, e, reach)));
+        if let Some(e) = taken {
+            if out.disagree.len() < MAX_LISTED {
+                out.disagree.push((name, format!("not laid ({why}): {} already takes a route kept as given", e.tag)));
+            }
+            continue;
+        }
+        out.rerouted.push((name, why));
+        replace.insert(g);
     }
     if replace.is_empty() && drop.is_empty() {
         out.off_gear_after = out.off_gear_before;
         out.unrouted_after = out.unrouted_before;
+        out.off_feed_after = out.off_feed_before;
         return out;
     }
     // The fresh routes keep the ids of the runs they replace, run for run where as many.
@@ -288,7 +349,51 @@ pub(crate) fn follow(sp: &mut BuildingSpec, mode: Mode) -> Followed {
     let after = check(sp);
     out.off_gear_after = after.0;
     out.unrouted_after = after.1;
+    out.off_feed_after = off_feed_count(sp);
     out
+}
+
+/// The chains a feeder's runs lay: each run names its feeder's chain, source to last copy
+/// (`feeder 604 DP1→G-101→G-201`).
+fn chains<'a>(runs: &[&'a MepRun]) -> BTreeSet<&'a str> {
+    runs.iter().map(|r| r.source_sheet.trim()).collect()
+}
+
+/// Whether a stored route lays other chains than the fresh one (the feed data's).
+fn off_feed(old: &[&MepRun], new: &[&MepRun]) -> bool {
+    chains(old) != chains(new)
+}
+
+/// How a stored route's chains differ from the feed data's, briefly.
+fn feed_difference(old: &[&MepRun], new: &[&MepRun]) -> String {
+    let (o, n) = (chains(old), chains(new));
+    let short = |c: &str| c.trim_start_matches("feeder ").to_string();
+    let laid: Vec<String> = o.difference(&n).take(2).map(|c| short(c)).collect();
+    let fed: Vec<String> = n.difference(&o).take(2).map(|c| short(c)).collect();
+    format!(
+        "{} of its {} chains differ (laid {}; the feed {})",
+        n.difference(&o).count().max(o.difference(&n).count()),
+        n.len(),
+        if laid.is_empty() { "-".to_string() } else { laid.join(", ") },
+        if fed.is_empty() { "-".to_string() } else { fed.join(", ") }
+    )
+}
+
+/// The listed feeders whose stored route lays other chains than the feed data gives.
+pub(crate) fn off_feed_count(sp: &BuildingSpec) -> usize {
+    if sp.mep.feeders.is_empty() {
+        return 0;
+    }
+    let (fresh, _) = super::gearbuild::feeder_runs(sp);
+    let mut fresh_by: BTreeMap<String, Vec<&MepRun>> = BTreeMap::new();
+    for r in fresh.iter().take(MAX_RUNS) {
+        fresh_by.entry(group_of(sp, r)).or_default().push(r);
+    }
+    let mut stored_by: BTreeMap<String, Vec<&MepRun>> = BTreeMap::new();
+    for r in sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).take(MAX_RUNS) {
+        stored_by.entry(group_of(sp, r)).or_default().push(r);
+    }
+    fresh_by.iter().filter(|(g, new)| g.starts_with('#') && stored_by.get(*g).is_some_and(|old| off_feed(old, new))).count()
 }
 
 /// The feeders whose stored route doesn't land on its gear, and those with placed gear and no
@@ -539,6 +644,107 @@ mod tests {
         assert_eq!((f.kept, f.off_gear_before, f.off_gear_after), (1, 1, 1));
         assert_eq!(sp.mep.runs, given);
         assert_eq!(check(&sp), (1, 0));
+    }
+
+    /// Q6664: P1 on the first floor beside stack 2, P2 on the third over stack 1; two stacks of
+    /// three copies of typical panel U, a feeder from each source's schedule row; no route yet.
+    fn two_stacks() -> BuildingSpec {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        for (k, n) in ["Level 1", "Level 2", "Level 3"].iter().enumerate() {
+            sp.levels.push(serde_json::from_value(json!({"name": n, "elevation_ft": 10.0 * k as f64, "height_ft": 10.0, "ceiling_ft": 9.0})).expect("level"));
+        }
+        sp.mep.equipment = vec![gear("P1", "Level 1", [3100.0, 100.0]), gear("P2", "Level 3", [900.0, 100.0])];
+        for level in 1..=3 {
+            for (stack, x) in [(1, 1000.0), (2, 3000.0)] {
+                sp.mep.equipment.push(gear(&format!("U-{level}0{stack}"), &format!("Level {level}"), [x, 600.0]));
+            }
+        }
+        sp.mep.panel_schedules = vec![cadaddy_walk3d::PanelSchedule { panel: "U".into(), typical_of: Some(6), ..Default::default() }];
+        sp.mep.feeders = ["P1", "P2"]
+            .iter()
+            .map(|p| cadaddy_walk3d::Feeder {
+                tag: "604".into(),
+                from: (*p).into(),
+                to: "U".into(),
+                conduits: 1,
+                conduit_in: 1.25,
+                source: format!("made-up feeder schedule; panel {p} schedule circuit 1"),
+                ..Default::default()
+            })
+            .collect();
+        sp
+    }
+
+    /// The panels' feed as entered: U1a <- P1, U2a <- U1a, U3a <- U2a; U3b <- P2, U2b <- U3b, U1b <- U2b.
+    fn record_feeds(sp: &mut BuildingSpec) {
+        for (tag, from) in [("U-101", "P1"), ("U-201", "U-101"), ("U-301", "U-201"), ("U-302", "P2"), ("U-202", "U-302"), ("U-102", "U-202")] {
+            if let Some(e) = sp.mep.equipment.iter_mut().find(|e| e.tag == tag) {
+                e.properties.insert("fed_from".into(), from.into());
+            }
+        }
+    }
+
+    fn laid(sp: &BuildingSpec) -> BTreeSet<String> {
+        sp.mep.runs.iter().filter(|r| super::super::ugplan::is_feeder_run(r)).map(|r| r.source_sheet.clone()).collect()
+    }
+
+    const AS_FED: [&str; 2] = ["feeder 604 P1→U-101→U-201→U-301", "feeder 604 P2→U-302→U-202→U-102"];
+
+    #[test]
+    fn a_proposed_route_against_the_panels_recorded_feed_is_routed_again_as_the_feed_says() {
+        let mut sp = two_stacks();
+        // Routed before the feed was recorded: the nearest stacks (P1 feeding stack 2 bottom up,
+        // P2 stack 1 top down), each stack fed from the wrong source and the wrong end.
+        sp.mep.runs = super::super::gearbuild::feeder_runs(&sp).0;
+        let before = laid(&sp);
+        assert!(before.contains("feeder 604 P1→U-102→U-202→U-302"), "{before:#?}");
+        record_feeds(&mut sp);
+        // Each source's route lands on the other stack than its feed's.
+        assert_eq!(check(&sp), (2, 0));
+        assert_eq!(off_feed_count(&sp), 2);
+        let f = follow(&mut sp, Mode::Moved);
+        assert_eq!(f.rerouted.len(), 2, "{f:?}");
+        assert!(f.rerouted.iter().all(|(_, why)| why.starts_with("its route doesn't follow the panels' feed")), "{f:?}");
+        assert_eq!((f.off_feed_before, f.off_feed_after), (2, 0), "{f:?}");
+        assert_eq!(laid(&sp), AS_FED.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
+        assert!(f.line().is_some_and(|l| l.contains("2 routed again")), "{:?}", f.line());
+        // Followed: a second pass keeps it.
+        let again = follow(&mut sp, Mode::Moved);
+        assert!(!again.changed() && again.disagree.is_empty(), "{again:?}");
+    }
+
+    #[test]
+    fn a_feeder_is_never_laid_beside_a_route_kept_as_given_into_its_copies() {
+        let mut sp = two_stacks();
+        record_feeds(&mut sp);
+        // Stack 1's raceway drawn on the prints (no listed feeder's route): kept as given.
+        let drawn: Vec<MepRun> = super::super::gearbuild::feeder_runs(&sp)
+            .0
+            .into_iter()
+            .filter(|r| r.source_sheet == AS_FED[0])
+            .map(|r| MepRun { source_sheet: "E-2".into(), size_source: "drawn".into(), height_source: "drawn".into(), ..r })
+            .collect();
+        assert!(!drawn.is_empty());
+        sp.mep.runs = drawn.clone();
+        let f = follow(&mut sp, Mode::All);
+        // Stack 2 is routed; P1's feeder into stack 1 is not laid beside the drawn raceway.
+        assert_eq!(f.rerouted.len(), 1, "{f:?}");
+        assert!(f.rerouted[0].0.starts_with("604 P2→U"), "{f:?}");
+        assert_eq!(f.disagree.len(), 1, "{f:?}");
+        assert!(f.disagree[0].0.starts_with("604 P1→U") && f.disagree[0].1.contains("already takes a route kept as given"), "{f:?}");
+        assert!(f.line().is_some_and(|l| l.contains("route and feed data disagree")), "{:?}", f.line());
+        assert_eq!(laid(&sp), BTreeSet::from(["E-2".to_string(), AS_FED[1].to_string()]));
+        assert!(drawn.iter().all(|r| sp.mep.runs.contains(r)), "the drawn raceway is kept as given");
+
+        // A listed feeder's route entered by hand along other chains: kept as given, and said.
+        let mut sp = two_stacks();
+        sp.mep.runs = super::super::gearbuild::feeder_runs(&sp).0.into_iter().map(|r| MepRun { height_source: "entered".into(), ..r }).collect();
+        let given = sp.mep.runs.clone();
+        record_feeds(&mut sp);
+        let f = follow(&mut sp, Mode::All);
+        assert!(!f.changed(), "{f:?}");
+        assert_eq!(sp.mep.runs, given);
+        assert_eq!((f.off_feed_before, f.off_feed_after, f.disagree.len()), (2, 2, 2), "{f:?}");
     }
 
     #[test]

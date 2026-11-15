@@ -27218,18 +27218,19 @@ fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crat
     let line = if short.is_empty() { line } else { format!("{line}; {}", short.join("; ")) };
     // Each typical panel's copy records its feed: the plan's breaker label's, else proposed (Q6436).
     let fed = super::gearbuild::record_typical_feeds(&mut sp);
-    let line = if fed.by_label + fed.proposed + fed.unfed == 0 {
+    let line = if fed.by_label + fed.proposed + fed.recorded + fed.unfed == 0 {
         line
     } else {
         format!(
-            "{line}; typical panels' copies fed: {} by the plans' breaker labels, {} proposed by the nearest stack, {} unfed{}",
+            "{line}; typical panels' copies fed: {} by the plans' breaker labels, {} proposed by the nearest stack, {} as recorded on them, {} unfed{}",
             fed.by_label,
             fed.proposed,
+            fed.recorded,
             fed.unfed,
             if fed.notes.is_empty() { String::new() } else { format!(" ({})", fed.notes.iter().take(6).cloned().collect::<Vec<_>>().join("; ")) }
         )
     };
-    result["typical_feeds"] = json!({"by_label": fed.by_label, "proposed": fed.proposed, "unfed": fed.unfed, "notes": fed.notes});
+    result["typical_feeds"] = json!({"by_label": fed.by_label, "proposed": fed.proposed, "recorded": fed.recorded, "unfed": fed.unfed, "notes": fed.notes});
     let n = runs.len();
     build_new_mep(s, sp, runs, &BTreeSet::new())?;
     report_progress(s, json!({"step": "feeder routes"}), &line);

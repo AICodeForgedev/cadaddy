@@ -114,6 +114,7 @@ mod slabarea;
 mod soak5speed;
 mod sorted_print_walls;
 mod specrooms;
+mod stackfeeds;
 mod spectag;
 mod stair_treads_walls;
 mod stairs;
