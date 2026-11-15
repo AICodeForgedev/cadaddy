@@ -31,7 +31,9 @@
 //!   alternative.
 //! - **G-CLASH**: no stick comes within the clearance (rules data, by what it passes) of a duct,
 //!   pipe, terminal, structure, equipment, other conduit or a piece of gear's working space
-//!   (NEC 110.26(A)); the router's `clash` items are carried in (source `build`).
+//!   (NEC 110.26(A)); the router's `clash` items are carried in (source `build`). Two runs
+//!   crossing are one clash with two sides: each stick gets the fail (one `clash_id`), and a run
+//!   with a clash anywhere is never passed as clear.
 //! - **E-TAKEOFF**: the stored count index (what `bim.count` and the BOM read) and the
 //!   `conduit.takeoff` lines against a recount of the model's pieces (conduit by its sticks' ends,
 //!   wire and cable by their lengths, every fitting and box one each), within the rule's
@@ -2950,11 +2952,12 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 known.insert((b.to_ascii_uppercase(), circ.to_string()));
             }
         }
+        // A run with a clash anywhere is not clear, wherever the clash is (in scope or not).
         let mut clashed: BTreeSet<&str> = BTreeSet::new();
         for ((run, oh), (oi, at, pad, s)) in &hits {
+            clashed.insert(run.as_str());
             let Some(o) = obs.get(*oi) else { continue };
             let Some(place) = in_scope(&s.level, *at) else { continue };
-            clashed.insert(run.as_str());
             let need_in = r2((pad - s.r) / upf * 12.0);
             let floor = cx.sp.level(&s.level).map_or(0.0, |l| l.elevation_ft * upf);
             let by_router = known.contains(&(oh.hex().to_ascii_uppercase(), s.circuit.clone()));
@@ -2982,33 +2985,40 @@ pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
                 "prescreen",
             );
         }
+        // A crossing is a pair: each stick gets the finding (its own run failed, the other run
+        // named), both under one clash id, so neither run reads clear.
         for (i, j, p, gap_in, along) in &cross {
             let (Some(s), Some(t)) = (net.sticks.get(*i), net.sticks.get(*j)) else { continue };
-            let Some(place) = in_scope(&s.level, *p) else { continue };
             clashed.insert(s.run.as_str());
-            push(
-                CLASH,
-                r,
-                Some(s.handle),
-                "conduit",
-                &format!("{}|{}", s.run, t.run),
-                "fail",
-                format!(
-                    "conduit {} ({}) {} conduit {} ({}) {:.1} in apart (surface to surface)",
-                    s.run,
-                    s.circuit,
-                    if *along { "runs alongside" } else { "crosses" },
-                    t.run,
-                    t.circuit,
-                    gap_in
-                ),
-                format!("{} in clear of other conduit", cl("conduit")),
-                format!("{:.1} in clear, {}, away from any box", gap_in, if *along { "side by side" } else { "crossing" }),
-                json!({"check": "clash", "run": s.run, "circuit": s.circuit, "gap_in": r2(*gap_in), "alongside": along, "z_ft": r2((p.z - cx.sp.level(&s.level).map_or(0.0, |l| l.elevation_ft * upf)) / upf), "b": {"handle": t.handle.hex(), "category": "conduit", "run": t.run, "circuit": t.circuit, "trade": "electrical"}}),
-                &s.level,
-                place,
-                "prescreen",
-            );
+            clashed.insert(t.run.as_str());
+            let Some(place) = in_scope(&s.level, *p) else { continue };
+            let clash_id = finding_id(CLASH, &s.level, &format!("{}|{}", s.run, t.run), "pair");
+            let z_ft = r2((p.z - cx.sp.level(&s.level).map_or(0.0, |l| l.elevation_ft * upf)) / upf);
+            for (a, b) in [(s, t), (t, s)] {
+                push(
+                    CLASH,
+                    r,
+                    Some(a.handle),
+                    "conduit",
+                    &format!("{}|{}", a.run, b.run),
+                    "fail",
+                    format!(
+                        "conduit {} ({}) {} conduit {} ({}) {:.1} in apart (surface to surface)",
+                        a.run,
+                        a.circuit,
+                        if *along { "runs alongside" } else { "crosses" },
+                        b.run,
+                        b.circuit,
+                        gap_in
+                    ),
+                    format!("{} in clear of other conduit", cl("conduit")),
+                    format!("{:.1} in clear, {}, away from any box", gap_in, if *along { "side by side" } else { "crossing" }),
+                    json!({"check": "clash", "run": a.run, "circuit": a.circuit, "gap_in": r2(*gap_in), "alongside": along, "z_ft": z_ft, "clash_id": clash_id, "pair": [s.handle.hex(), t.handle.hex()], "b": {"handle": b.handle.hex(), "category": "conduit", "run": b.run, "circuit": b.circuit, "trade": "electrical"}}),
+                    &a.level,
+                    place,
+                    "prescreen",
+                );
+            }
         }
         // Each run with no clash: a pass.
         for (run, ids) in &run_sticks {
