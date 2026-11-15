@@ -163,7 +163,7 @@ pub fn write(d: &Drawing, version_code: &str) -> Result<(Vec<u8>, WriteReport)> 
         .filter(|h| !written.contains(h))
         .collect();
     let mut kept = 0;
-    if let Some((stashed, n)) = crate::dwg_keep::stash_tags(&tags, &take) {
+    if let Some((stashed, n)) = crate::dwg_keep::stash_tags(&tags, &take, &[]) {
         tags = stashed;
         kept = n;
     }

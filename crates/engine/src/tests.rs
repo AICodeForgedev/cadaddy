@@ -1671,3 +1671,59 @@ fn setvar_rejects_non_finite_text_for_real_variables() {
         }
     }
 }
+
+/// Every command refuses an object for a parameter its doc shows as a single value, naming it
+/// (battle test 8 B7-019: 342 object values ran silently in 128 commands, all in the job, BIM and
+/// MEP families that skipped the check). Swept over the whole registry.
+#[test]
+fn every_command_refuses_an_object_for_a_single_value() {
+    let mut accepted = Vec::new();
+    let mut checked = 0;
+    for spec in command_specs() {
+        let doc = params_doc(spec);
+        for k in offered_params(spec) {
+            let notes = param_notes(doc, k);
+            if notes.is_empty() || notes.iter().any(|n| note_takes_object(n) || n.contains('{')) {
+                continue;
+            }
+            checked += 1;
+            let p = json!({ k: {"a": [1]} });
+            match refuse_unknown_params(spec, &p).and_then(|()| refuse_wrong_typed_params(spec, &p)) {
+                Ok(()) => accepted.push(format!("{} {{{k}: object}}", spec.id)),
+                Err(e) => assert!(e.to_string().contains(&format!("`{k}`")), "{}: the refusal names `{k}`: {e}", spec.id),
+            }
+        }
+    }
+    assert!(checked > 3000, "the registry was swept: {checked}");
+    assert!(accepted.is_empty(), "{} single-value parameters took an object:\n{}", accepted.len(), accepted.join("\n"));
+}
+
+/// The objects the job, BIM and MEP commands do take still pass once they are checked (battle
+/// test 8): a doc naming `object` in words, a choice with a structure after a note in brackets
+/// that has a comma in it, and the review answers and citations.
+#[test]
+fn documented_objects_still_pass_the_type_check() {
+    let ok = |id: &str, p: serde_json::Value| {
+        let spec = find_command(id).unwrap();
+        refuse_unknown_params(spec, &p).and_then(|()| refuse_wrong_typed_params(spec, &p)).map_err(|e| format!("{id} {p}: {e}"))
+    };
+    for (id, p) in [
+        ("model.build", json!({"spec": {"stack": true}})),
+        ("bspec.validate", json!({"spec": {"levels": []}})),
+        ("mep.add", json!({"properties": {"Voltage": "208"}})),
+        ("bim.export.ar.rules", json!({"rules": {"caps": {}}})),
+        ("job.answer", json!({"id": "Q-levels-3", "answer": {"elevation_ft": 12.5, "name": "Mezzanine"}})),
+        ("schedule.build", json!({"crew": {"drywall": 6}})),
+        ("schedule.build", json!({"crew": 4})),
+        ("review.resolve", json!({"id": "r1", "answer": {"size_in": 12}, "citation": {"kind": "schedule", "document": "Sample schedule"}})),
+        ("review.batch", json!({"kind": "mep_guess", "answer": "Correct", "citation": {"kind": "spec", "document": "Sample spec"}})),
+        ("bim.completeness", json!({"baseline": {"overall": {}}})),
+        ("progress.hours", json!({"rows": [{"date": "2026-01-05", "hours": 8}]})),
+    ] {
+        ok(id, p).unwrap();
+    }
+    // A plain value where only an object is described is still checked as before.
+    assert!(ok("schedule.build", json!({"crew": "four"})).is_ok(), "a number or an object: text is left to the command");
+    assert!(ok("review.resolve", json!({"id": {"a": [1]}, "answer": 1})).unwrap_err().contains("`id` must be"));
+    assert!(ok("model.build", json!({"slabThickness": {"a": [1]}})).unwrap_err().contains("`slabThickness` must be a number"));
+}

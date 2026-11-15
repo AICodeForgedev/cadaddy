@@ -232,7 +232,7 @@ fn summary(t: &Topic) -> Value {
     json!({
         "guid": t.guid, "index": t.index, "title": t.title, "status": t.status, "type": t.topic_type, "priority": t.priority,
         "assignee": t.assignee, "author": t.author, "created": t.created, "modified": t.modified,
-        "comments": t.comments.len(), "selected": t.viewpoints.first().map_or(0, |v| v.selection.len()),
+        "comments": t.comments.len(), "selected": t.viewpoints.first().map_or(0, |v| v.selection.len() + v.handles.len()),
         "snapshot": t.viewpoints.iter().any(|v| v.snapshot.is_some()),
     })
 }
@@ -270,15 +270,39 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let idx = ifcmodel::cached_index(s)?;
     let upm = super::ifcref::units_per_metre(s.doc()?);
-    // The objects: given (handles or GlobalIds), else the selection. Map-based lookup.
-    let picked_indices: Vec<usize> = match p.get("selection").and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(Value::as_str).take(MAX_SELECTED).filter_map(|q| idx.by_guid_or_handle(q.trim())).collect(),
-        None => {
-            let sel = s.selection();
-            sel.iter().filter_map(|h| idx.by_handle(*h)).take(MAX_SELECTED).collect()
-        }
+    // The objects: given (handles or GlobalIds), else the selection. Map-based lookup. An object
+    // of this drawing that is no IFC element (a built model element) goes by its handle
+    // (Q6384); a name of no object at all is refused.
+    let mut picked_indices: Vec<usize> = Vec::new();
+    let mut own: Vec<Handle> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    let refs: Vec<String> = match p.get("selection").filter(|v| !v.is_null()) {
+        Some(Value::Array(a)) => a
+            .iter()
+            .take(MAX_SELECTED)
+            .map(|v| v.as_str().map(|q| q.trim().to_string()).ok_or_else(|| bad("bcf.create", "`selection` is a list of handles or GlobalIds")))
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => return Err(bad("bcf.create", "`selection` is a list of handles or GlobalIds")),
+        None => s.selection().iter().take(MAX_SELECTED).map(|h| h.hex()).collect(),
     };
+    for q in refs.iter().filter(|q| !q.is_empty()) {
+        if let Some(i) = idx.by_guid_or_handle(q) {
+            picked_indices.push(i);
+        } else if let Some(h) = Handle::parse_hex(q).filter(|h| s.doc().is_ok_and(|d| d.entity(*h).is_some())) {
+            own.push(h);
+        } else {
+            unknown.push(q.chars().take(40).collect());
+        }
+    }
+    if !unknown.is_empty() {
+        unknown.truncate(10);
+        return Err(bad("bcf.create", format!("`selection`: no object {} in the drawing", unknown.join(", "))));
+    }
     let picked: Vec<&Element> = picked_indices.iter().filter_map(|i| idx.els.get(*i)).collect();
+    // IFC elements without a GlobalId go by their handle too.
+    own.extend(picked.iter().filter(|e| e.tag.guid.is_empty()).map(|e| e.handle));
+    own.sort_unstable_by_key(|h| h.0);
+    own.dedup();
     // The camera: given, the one last set, else along the view at the selection (or everything).
     let (eye, target) = match (vec3_param("bcf.create", p, "eye")?, vec3_param("bcf.create", p, "target")?) {
         (Some(e), Some(t)) if (e - t).len() > 1e-9 => (e, t),
@@ -308,7 +332,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     let snapshot = if bool_or(p, "snapshot", true) && !idx.els.is_empty() {
         let dim = |k: &str, def: u32| p.get(k).and_then(Value::as_u64).map_or(def, |v| u32::try_from(v).unwrap_or(2048).clamp(16, 2048));
         let keep = s.selection();
-        s.set_selection(picked.iter().map(|e| e.handle).collect());
+        s.set_selection(picked.iter().map(|e| e.handle).chain(own.iter().copied()).collect());
         let shot = ifcmodel::render_png(
             s,
             Some(eye),
@@ -342,7 +366,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
         selection: picked.iter().map(|e| e.tag.guid.clone()).filter(|g| !g.is_empty()).collect(),
         snapshot_type: if snapshot.is_some() { "png".into() } else { String::new() },
         snapshot: snapshot.map(|b| base64_encode(&b)),
-        handles: Vec::new(),
+        handles: own.iter().map(|h| h.hex()).collect(),
     };
     let mut t = Topic {
         guid: guid.clone(),
@@ -371,7 +395,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let out = json!({
         "guid": guid, "index": t.index, "title": title, "status": t.status,
-        "selected": t.viewpoints.first().map_or(0, |v| v.selection.len()), "snapshot": t.viewpoints.iter().any(|v| v.snapshot.is_some()),
+        "selected": t.viewpoints.first().map_or(0, |v| v.selection.len() + v.handles.len()), "snapshot": t.viewpoints.iter().any(|v| v.snapshot.is_some()),
     });
     topics.topics.push(t);
     save(s, &topics)?;
