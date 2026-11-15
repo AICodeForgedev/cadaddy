@@ -126,6 +126,8 @@ pub(crate) struct Ctx {
     ground: BTreeSet<String>,
     inch: f64,
     recessed_words: Vec<String>,
+    /// The walls' stud cavities, for a recessed can deeper than its wall's (Q6560).
+    cav: crate::cmd::recess::Cavities,
 }
 
 impl Ctx {
@@ -143,7 +145,11 @@ impl Ctx {
             })
             .unwrap_or_default();
         let recessed_words = cadaddy_mepfix::wordrules::words("equipment.in_wall_mounting_words").iter().map(|w| w.to_ascii_uppercase()).collect();
-        Ctx { rated, ground, inch, recessed_words }
+        let cav = match (s.doc(), &sp) {
+            (Ok(d), Some(sp)) => crate::cmd::recess::Cavities::of(d, sp),
+            _ => crate::cmd::recess::Cavities::none(),
+        };
+        Ctx { rated, ground, inch, recessed_words, cav }
     }
 
     /// The verdict on `a` (moved by `shift`) meeting `b`: none when it is a clash as the
@@ -247,6 +253,14 @@ impl Ctx {
                     "recessed {}\" deep in a {}\" wall, deeper than the wall: it comes out of the far face (a deeper wall or chase, or mounted on the face)",
                     r3((hi - lo) / self.inch),
                     r3(wa.thick / self.inch)
+                )));
+            }
+            // In the wall but deeper than its stud cavity: the studs and the far face's board are
+            // where its back is.
+            if let Some(why) = self.cav.too_deep(wall.handle, wa.thick / self.inch, (hi - lo) / self.inch) {
+                return Some(Verdict::Conflict(format!(
+                    "recessed: {why}, so its back is in the far face's framing and board (mounted on the face, or the wall framed deeper) ({})",
+                    crate::cmd::recess::RULE
                 )));
             }
             return normal(Normal::Recessed);

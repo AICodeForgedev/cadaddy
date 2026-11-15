@@ -27994,6 +27994,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
         return Vec::new();
     }
     let pieces = super::propfill::wall_footprints_on_plans(d);
+    let cav = super::recess::Cavities::of(d, sp);
     let doors = built_doors(d, upf);
     let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
     // Every box, its sides, for what stands in front of a panel: a panel as the build will set it.
@@ -28003,7 +28004,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
         .iter()
         .map(|e| {
             let floor = levels.iter().find(|(n, _)| n.eq_ignore_ascii_case(&e.level)).map_or(0.0, |(_, f)| *f) * upf;
-            let (lo, hi) = super::validate_gear::as_the_build_sets_it(e, &pieces, floor, upf);
+            let (lo, hi) = super::validate_gear::as_the_build_sets_it(e, &pieces, floor, upf, &cav);
             (e.tag.clone(), e.level.to_ascii_lowercase(), lo, hi, [e.bottom_ft * 12.0, (e.bottom_ft + e.height_ft) * 12.0])
         })
         .collect();

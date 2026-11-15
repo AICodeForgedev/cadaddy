@@ -226,6 +226,7 @@ pub(crate) mod provenance;
 pub mod pulllist;
 pub(crate) mod reach;
 pub mod readers;
+pub(crate) mod recess;
 pub mod redline;
 pub mod relevel;
 pub(crate) mod requirements;

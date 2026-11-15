@@ -423,6 +423,15 @@
       "skip_from": ["equipment", "site_work", "ceiling", "floor", "hoistway"]
     },
     {
+      "id": "E-RECESS-CAVITY",
+      "trade": "electrical",
+      "fills": "a cabinet whose mounting sets it into its wall (a recessed or flush panel) where the wall can't hold it: its box deeper than the wall's stud cavity (the framing depth its wall type gives, else the wall's built thickness less the type's face layers, else less one board on each face) is mounted on the wall's face instead, the design mounting kept beside it (numbers: face_board_in, the board on each face of a wall whose type gives no layers; tol_in, how much deeper than the cavity a cabinet may be and still go in; on_face, the mounting it is corrected to)",
+      "basis": "trade practice: a recessed cabinet in a framed wall sits between the studs, its back against the board of the far face, so it can be no deeper than the stud cavity; NEC 312.3 lets a cabinet project from the finished surface, so where the wall can't take it the electrician mounts it on the face; alternative: frame the wall (or a furred-out bay of it) deep enough to take the cabinet, a change to the wall the framer and the architect make",
+      "face_board_in": 0.625,
+      "tol_in": 0.125,
+      "on_face": "surface, on the wall's face"
+    },
+    {
       "id": "E-SENSOR-POWER-PACK",
       "trade": "electrical",
       "fills": "the power pack each low-voltage occupancy or vacancy sensor zone needs, which the plans rarely draw: one per zone (a room, or each switched or dimmed leg in it when its sensors carry leg letters), a dimming pack when the zone's sensor dims 0-10V, mounted on a box beside the controlled luminaire nearest its sensors, the zone's sensors wired to it with low-voltage cable; a wall-box sensor that switches line voltage itself takes none; a pack the documents draw in a room is that room's (numbers and words: low_voltage_words and line_voltage_words, what a sensor's legend, type or product says of its voltage, read first; remote_words and wallbox_words, what they say of where it mounts; then what the specification's lighting control section says (a separate power pack, recorded on each sensor as control_power; spec_context_lines, how many lines after one naming a sensor still speak of sensors); remote_mountings, the mountings (the built element's) of a sensor that is never in a wall box; wallbox_max_height_in, the highest a wall-box sensor (a switch's replacement, at switch height) is mounted: one on a wall higher is a high-wall sensor; dimming_words, a sensor that dims; pack_words, a drawn pack; switching_item, dimming_item, box_item and box_size, cable_item and cable_size, what is bought; cable_slack_ft, the drops and makeup each sensor's cable adds to the plan run; default_cable_ft, one sensor's cable when no location is known; zone_reach_ft, how far from its sensors a luminaire the sensor does not name may be and still take the pack)",

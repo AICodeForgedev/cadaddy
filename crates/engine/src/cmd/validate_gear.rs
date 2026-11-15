@@ -842,8 +842,15 @@ pub(crate) fn clear_face(
 }
 
 /// A box's low and high corners as the build will set it: a panel on the face of the wall nearest
-/// it (into the wall when recessed, turned with the wall), anything else where the spec has it.
-pub(crate) fn as_the_build_sets_it(e: &MepEquipment, pieces: &[super::propfill::WallPiece], floor: f64, upf: f64) -> ([f64; 2], [f64; 2]) {
+/// it (into the wall when recessed and its cavity holds it, `cav`; turned with the wall), anything
+/// else where the spec has it.
+pub(crate) fn as_the_build_sets_it(
+    e: &MepEquipment,
+    pieces: &[super::propfill::WallPiece],
+    floor: f64,
+    upf: f64,
+    cav: &super::recess::Cavities,
+) -> ([f64; 2], [f64; 2]) {
     let kind = e.kind.to_ascii_lowercase();
     let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
     if e.round || !matches!(kind.as_str(), "panel" | "panelboard" | "load_center") {
@@ -854,7 +861,7 @@ pub(crate) fn as_the_build_sets_it(e: &MepEquipment, pieces: &[super::propfill::
         return (e.min, e.max);
     };
     let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
-    let recessed = super::mep::mounted_in_wall(e);
+    let (recessed, _) = super::mep::into_wall(e, &f, dp, upf, cav);
     let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
     let half = Vec2::new((f.along.x * w).abs() + (f.out.x * dp).abs(), (f.along.y * w).abs() + (f.out.y * dp).abs()) * 0.5;
     ([mid.x - half.x, mid.y - half.y], [mid.x + half.x, mid.y + half.y])
@@ -2297,13 +2304,13 @@ mod tests {
         let walls = [piece(1, [100.0, 0.0], [104.0, 200.0])];
         let mut e = lettered([80.0, 100.0], [94.0, 104.0]);
         e.properties.clear();
-        let (lo, hi) = as_the_build_sets_it(&e, &walls, 0.0, 12.0);
+        let (lo, hi) = as_the_build_sets_it(&e, &walls, 0.0, 12.0, &super::super::recess::Cavities::none());
         assert!((hi[0] - lo[0] - 4.0).abs() < 1e-6 && (hi[1] - lo[1] - 14.0).abs() < 1e-6, "{lo:?} {hi:?}");
         assert!((hi[0] - 100.0).abs() < 1e-6, "on the west face: {lo:?} {hi:?}");
-        let (lo, hi) = as_the_build_sets_it(&lettered([500.0, 100.0], [514.0, 104.0]), &walls, 0.0, 12.0);
+        let (lo, hi) = as_the_build_sets_it(&lettered([500.0, 100.0], [514.0, 104.0]), &walls, 0.0, 12.0, &super::super::recess::Cavities::none());
         assert_eq!((lo, hi), ([500.0, 100.0], [514.0, 104.0]));
         e.kind = "pull_box".into();
-        assert_eq!(as_the_build_sets_it(&e, &walls, 0.0, 12.0), (e.min, e.max));
+        assert_eq!(as_the_build_sets_it(&e, &walls, 0.0, 12.0, &super::super::recess::Cavities::none()), (e.min, e.max));
     }
 
     #[test]

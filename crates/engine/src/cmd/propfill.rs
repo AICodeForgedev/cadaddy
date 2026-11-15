@@ -2471,13 +2471,14 @@ pub(crate) fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
 /// a door's head is a piece from the head up).
 pub(crate) type WallPiece = (Option<String>, Handle, Vec<Vec2>, [f64; 2]);
 
-/// A wall face a device goes on: the wall, the point on its face, the face's direction and its
-/// outward normal (toward the room).
+/// A wall face a device goes on: the wall, the point on its face, the face's direction, its
+/// outward normal (toward the room) and the wall's thickness behind it (drawing units).
 pub(crate) struct WallFace {
     pub(crate) wall: Handle,
     pub(crate) at: Vec2,
     pub(crate) along: Vec2,
     pub(crate) out: Vec2,
+    pub(crate) thick: f64,
 }
 
 /// The face of `level`'s nearest wall within `reach` of `p`: one of each footprint's long sides
@@ -2507,7 +2508,9 @@ pub(crate) fn wall_face(walls: &[WallPiece], level: &str, p: Vec2, reach: f64, z
             }
             // Outward: right of the edge on a counter-clockwise outline.
             let out = if ccw { Vec2::new(u.y, -u.x) } else { Vec2::new(-u.y, u.x) };
-            best = Some((dd, WallFace { wall: *h, at: q, along: u, out }));
+            // Its thickness: how far the outline reaches behind the face.
+            let thick = poly.iter().map(|v| -((*v - *a).x * out.x + (*v - *a).y * out.y)).fold(0.0, f64::max);
+            best = Some((dd, WallFace { wall: *h, at: q, along: u, out, thick }));
         }
     }
     best.map(|(_, f)| f)

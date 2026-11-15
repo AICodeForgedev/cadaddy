@@ -170,16 +170,74 @@ fn normal_construction_is_not_a_clash_and_penetrations_are_listed_with_their_sea
     assert_eq!(wall["firestop"], json!(false), "{wall}");
 }
 
+/// The built panel LP1: its plan extent across the west wall (x, inches), its `prop:MOUNTING`.
+fn lp1(s: &Session) -> ((f64, f64), String) {
+    let d = s.doc().unwrap();
+    let e = d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == "tag:LP1")).expect("LP1 built");
+    let b = cadaddy_engine::doc::entity_bounds(d, e, 0);
+    let mounting = e.common.xdata.iter().find_map(|t| t.value.strip_prefix("prop:MOUNTING=")).unwrap_or_default().to_string();
+    ((b.min.x, b.max.x), mounting)
+}
+
+/// Q6560 fix-recessed-panel-wall-too-thin: a panel recessed by its schedule whose can is deeper
+/// than its wall's stud cavity can't go in. The build mounts it on the wall's face, as the field
+/// would, and keeps the design mounting beside it with the reason and the rule (E-RECESS-CAVITY).
 #[test]
-fn a_recessed_can_deeper_than_its_wall_is_still_a_clash() {
-    // A 10" can recessed in a 7 1/4" wall comes out of the wall's far face.
-    let mut s = building(None, 10.0);
+fn a_recessed_can_deeper_than_its_walls_studs_is_mounted_on_the_face_with_the_design_kept() {
+    // The west wall is 7 1/4" (x 0..7.25), its type 2x6 studs: a 5 1/2" cavity.
+    let s = building(None, 4.0);
+    let ((lo, hi), mounting) = lp1(&s);
+    assert!((hi - 7.25).abs() < 0.01 && (lo - 3.25).abs() < 0.01, "a 4\" can fits the cavity: recessed, front flush: {lo} {hi}");
+    assert_eq!(mounting, "RECESSED");
+    // A 6" can is less than the wall's thickness but deeper than its studs; a 10" one comes out of
+    // the far face. Both go on the face (back on the wall's room face, x 7.25).
+    for can in [6.0, 10.0] {
+        let mut s = building(None, can);
+        let ((lo, hi), mounting) = lp1(&s);
+        assert!((lo - 7.25).abs() < 0.01 && (hi - 7.25 - can).abs() < 0.01, "{can}\" can on the wall's face: {lo} {hi}");
+        assert!(mounting.to_ascii_lowercase().contains("surface"), "{mounting}");
+        let p = s.execute("bim.provenance", &json!({"corrections": true})).unwrap();
+        let listed = p["corrections"]["listed"].as_array().cloned().unwrap_or_default();
+        let c = listed.iter().find(|c| c["key"] == json!("MOUNTING")).unwrap_or_else(|| panic!("{p:#}"));
+        assert_eq!(c["design"], json!("RECESSED"), "{c}");
+        assert!(c["corrected"].as_str().is_some_and(|x| x.contains("surface")), "{c}");
+        let why = c["reason"].as_str().unwrap_or_default();
+        assert!(why.contains("E-RECESS-CAVITY") && why.contains("5.5\"") && why.contains("alternative"), "{c}");
+        // On the face it isn't in the wall: no clash.
+        let r = s.execute("bim.clash", &json!({})).unwrap();
+        let clashes = r["clashes"].as_array().cloned().unwrap_or_default();
+        assert!(!clashes.iter().any(|c| has(c, "equipment", "wall")), "{}", short(&r));
+    }
+}
+
+#[test]
+fn a_can_standing_recessed_deeper_than_its_walls_studs_or_the_wall_is_a_clash() {
+    // Cans already standing recessed in the west wall (7 1/4", 2x6 studs): 6" deep, deeper than
+    // its studs; 10" deep, out of the far face; 4" deep, in its cavity.
+    let mut s = building(None, 4.0);
+    let panel = |tag: &str| ["kind:equipment".to_string(), "part:equipment:panel".into(), format!("tag:{tag}"), "prop:MOUNTING=RECESSED".into()];
+    let six = panel("LP2");
+    built_box(&mut s, "mep", &six.iter().map(String::as_str).collect::<Vec<_>>(), [1.25, 150.0, 42.0], [7.25, 170.0, 78.0]);
+    let ten = panel("LP3");
+    built_box(&mut s, "mep", &ten.iter().map(String::as_str).collect::<Vec<_>>(), [-2.75, 200.0, 42.0], [7.25, 220.0, 78.0]);
     let r = s.execute("bim.clash", &json!({})).unwrap();
     eprintln!("bim.clash: {}", short(&r));
     let clashes = r["clashes"].as_array().cloned().unwrap_or_default();
-    let can = clashes.iter().find(|c| has(c, "equipment", "wall")).unwrap_or_else(|| panic!("{}", short(&r)));
-    assert_eq!(can["kind"], json!("hard"), "{can}");
-    assert!(can["message"].as_str().unwrap_or_default().contains("deeper than"), "{can}");
+    let d = s.doc().unwrap();
+    let handle = |tag: &str| {
+        let want = format!("tag:{tag}");
+        d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == want)).map(|e| json!(e.handle.hex())).expect("built")
+    };
+    let of = |tag: &str| {
+        let h = handle(tag);
+        clashes.iter().find(|c| has(c, "equipment", "wall") && (c["a"]["handle"] == h || c["b"]["handle"] == h)).cloned()
+    };
+    let lp2 = of("LP2").unwrap_or_else(|| panic!("the 6\" can: {}", short(&r)));
+    assert_eq!(lp2["kind"], json!("hard"), "{lp2}");
+    assert!(lp2["message"].as_str().unwrap_or_default().contains("stud cavity is 5.5\""), "{lp2}");
+    let lp3 = of("LP3").unwrap_or_else(|| panic!("the 10\" can: {}", short(&r)));
+    assert!(lp3["message"].as_str().unwrap_or_default().contains("deeper than"), "{lp3}");
+    assert!(of("LP1").is_none(), "the 4\" can is in its cavity: {}", short(&r));
 }
 
 /// A box (inches) on L1 tagged as a build tags its elements: part, level, source, then `tags`.

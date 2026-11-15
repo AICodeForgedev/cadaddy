@@ -2662,6 +2662,8 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
     let walls =
         if sp.mep.equipment.iter().any(|e| panel(&e.kind)) || any_through { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
     let fps = any_through.then(|| super::propfill::Footprints::of(d, sp));
+    // The walls' cavities, for a recessed panel the wall can't hold (Q6560).
+    let cav = if walls.is_empty() { super::recess::Cavities::none() } else { super::recess::Cavities::of(d, sp) };
     // Each seated unit's sleeve opening, cut in its wall once every unit is built.
     let mut sleeves: Vec<(super::throughwall::Seat, f64, f64)> = Vec::new();
     for (k, e) in sp.mep.equipment.iter().enumerate().take(MAX_RUNS).filter(|(_, e)| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
@@ -2680,17 +2682,17 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
         let at = if through(e) {
             match super::throughwall::seat(&tw, e, &level.name, &walls, fps.as_ref(), upf, (z0 + z1) * 0.5) {
                 super::throughwall::Seated::In(st) => {
-                    let p = EquipmentPlan { a: st.unit.a, b: st.unit.b, depth: st.unit.depth, face: None };
+                    let p = EquipmentPlan { a: st.unit.a, b: st.unit.b, depth: st.unit.depth, face: None, correction: None };
                     seated = Some(*st);
                     p
                 }
                 super::throughwall::Seated::Review(why) => {
                     review = Some(why);
-                    equipment_plan(e, &level.name, &walls, upf, z0, z1)
+                    equipment_plan(e, &level.name, &walls, upf, z0, z1, &cav)
                 }
             }
         } else {
-            equipment_plan(e, &level.name, &walls, upf, z0, z1)
+            equipment_plan(e, &level.name, &walls, upf, z0, z1, &cav)
         };
         let face = at.face;
         if face.is_none() && e.round {
@@ -2720,6 +2722,9 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
             xdata.push(t(1000, cap(format!("title:{}", e.title))));
         }
         for (k, v) in e.properties.iter().take(64) {
+            // A mounting corrected for the field is the one installed (its design value is kept
+            // by the correction).
+            let v = at.correction.as_ref().filter(|c| c.key == *k).map_or(v, |c| &c.corrected);
             xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
         }
         for (k, v) in e.sources.iter().take(8) {
@@ -2758,6 +2763,7 @@ pub(crate) fn build_equipment_indexed(d: &mut Drawing, sp: &BuildingSpec, only: 
         // a through-wall unit's drawn place beside its seated one.
         let mut corrections = e.corrections.clone();
         corrections.extend(seated.as_ref().and_then(|st| super::throughwall::location_correction(st, upf)));
+        corrections.extend(at.correction.clone());
         let mut xdata = super::provenance::with_corrections(xdata, &corrections);
         if !e.type_mark.trim().is_empty() {
             xdata.extend(cadaddy_doc::bimspec::type_mark_xdata(&cap(e.type_mark.trim().to_string())));
@@ -2792,12 +2798,36 @@ pub(crate) struct EquipmentPlan {
     pub b: Vec2,
     pub depth: f64,
     pub face: Option<super::propfill::WallFace>,
+    /// Its mounting corrected for the field: recessed by its data in a wall that can't hold it,
+    /// on the face instead ([`super::recess`]).
+    pub correction: Option<cadaddy_walk3d::RunCorrection>,
+}
+
+/// Whether a panel whose box is `dp` deep (drawing units) goes into the wall of face `f`: its
+/// mounting sets it there and the wall's cavity holds it ([`super::recess`]); else on the face,
+/// with the correction where its mounting said recessed.
+pub(crate) fn into_wall(
+    e: &cadaddy_walk3d::MepEquipment,
+    f: &super::propfill::WallFace,
+    dp: f64,
+    upf: f64,
+    cav: &super::recess::Cavities,
+) -> (bool, Option<cadaddy_walk3d::RunCorrection>) {
+    if !mounted_in_wall(e) {
+        return (false, None);
+    }
+    let inches = |v: f64| v / upf * 12.0;
+    match cav.fit(e, f.wall, inches(f.thick), inches(dp)) {
+        super::recess::Fit::InWall => (true, None),
+        super::recess::Fit::OnFace(c) => (false, Some(c)),
+    }
 }
 
 /// [`EquipmentPlan`] of `e` on `level` (heights `z0`..`z1`, drawing units): a panel on the face
 /// of the wall nearest it (`walls`: [`super::propfill::wall_footprints_on_plans`]), recessed (its front
 /// flush, its back in the wall) when its mounting says so, else on the face, turned with the
-/// wall; anything else (and a panel no wall is near) its spec box.
+/// wall; anything else (and a panel no wall is near) its spec box. A recessed panel deeper than
+/// its wall's cavity (`cav`) goes on the face, its mounting corrected.
 pub(crate) fn equipment_plan(
     e: &cadaddy_walk3d::MepEquipment,
     level: &str,
@@ -2805,6 +2835,7 @@ pub(crate) fn equipment_plan(
     upf: f64,
     z0: f64,
     z1: f64,
+    cav: &super::recess::Cavities,
 ) -> EquipmentPlan {
     let panel = matches!(e.kind.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
     let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
@@ -2815,16 +2846,16 @@ pub(crate) fn equipment_plan(
     };
     match face {
         Some(f) => {
-            let recessed = mounted_in_wall(e);
             let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+            let (recessed, correction) = into_wall(e, &f, dp, upf, cav);
             let along = f.along * (w / 2.0);
             // The box's middle line, half its depth from the face (into the wall when recessed).
             let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
-            EquipmentPlan { a: mid - along, b: mid + along, depth: dp, face: Some(f) }
+            EquipmentPlan { a: mid - along, b: mid + along, depth: dp, face: Some(f), correction }
         }
         None => {
             let cy = (lo.y + hi.y) / 2.0;
-            EquipmentPlan { a: Vec2::new(lo.x, cy), b: Vec2::new(hi.x, cy), depth: hi.y - lo.y, face: None }
+            EquipmentPlan { a: Vec2::new(lo.x, cy), b: Vec2::new(hi.x, cy), depth: hi.y - lo.y, face: None, correction: None }
         }
     }
 }

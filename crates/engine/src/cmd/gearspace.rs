@@ -251,6 +251,7 @@ pub(crate) fn clear_built_of(d: &cadaddy_doc::Drawing, sp: &mut BuildingSpec, ta
     let has_gear = sp.mep.equipment.iter().any(super::validate_gear::is_gear);
     // The walls where the plans draw them, as the gear is built on them.
     let walls = if has_gear { super::propfill::wall_footprints_on_plans(d) } else { Vec::new() };
+    let cav = if has_gear { super::recess::Cavities::of(d, sp) } else { super::recess::Cavities::none() };
     let levels = sp.levels.clone();
     let level_of = |name: &str| sp.level_matching(name).and_then(|i| levels.get(i)).cloned();
     let places: Vec<Option<Footprint>> = sp
@@ -263,7 +264,7 @@ pub(crate) fn clear_built_of(d: &cadaddy_doc::Drawing, sp: &mut BuildingSpec, ta
             }
             let l = level_of(&e.level)?;
             let z0 = (l.elevation_ft + e.bottom_ft) * upf;
-            let at = super::mep::equipment_plan(e, &l.name, &walls, upf, z0, z0 + e.height_ft * upf);
+            let at = super::mep::equipment_plan(e, &l.name, &walls, upf, z0, z0 + e.height_ft * upf, &cav);
             let (dx, dy) = (at.b.x - at.a.x, at.b.y - at.a.y);
             let len = dx.hypot(dy);
             let u = if len > 1e-9 { [dx / len, dy / len] } else { [1.0, 0.0] };
