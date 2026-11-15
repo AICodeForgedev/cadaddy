@@ -1698,17 +1698,32 @@ const NOTES_PAGE_MIN_SENTENCES: usize = 250;
 /// Fewest legend, notes or specification headings such a page has.
 const NOTES_PAGE_MIN_HEADINGS: usize = 3;
 
+/// Fewest legend, notes or specification headings that make a page with no plan view a sheet of
+/// legends when its lettering is mostly words ([`LEGENDS_PAGE_MIN_WORD_SHARE`]) and its sample
+/// symbols draw fewer wall faces than a plan ([`LEGENDS_PAGE_MAX_WALL_LENGTH`]): a sheet of
+/// legend tables (pipes, fittings, ducts, luminaires, devices, raceways, abbreviations) whose
+/// samples draw double lines like walls (Q6638: 13 headings, 0.51 wall faces, 0.46 words).
+/// Measured on four real sets (360 pages): every plan with no view titled as one had 7 headings
+/// or fewer (a civil sheet), the pages with 10 or more are legend, notes, cover and diagram sheets.
+const LEGENDS_PAGE_MIN_HEADINGS: usize = 10;
+/// Least share of lines of words on such a page (its plans' had 0.32 at most among those with 5
+/// headings or more, legend sheets 0.37 to 0.54).
+const LEGENDS_PAGE_MIN_WORD_SHARE: f64 = 0.30;
+/// Most wall faces such a page may draw (those plans 1.1 and up, legend sheets 0.12 to 0.99).
+const LEGENDS_PAGE_MAX_WALL_LENGTH: f64 = 1.0;
+
 /// Whether a page is a sheet of legends, notes and specifications, whatever its title or number
 /// says (Q6361): no view on it is titled as a plan, it has a legend's, notes' or specification's
 /// heading, and either its linework draws (almost) no walls (table rules and sample symbols beside
 /// their lettering) and its lettering is a legend's (lines of words, not a plan's tags: Q6599), or
-/// its lettering is mostly notes and specification text.
+/// its lettering is mostly notes and specification text, or it holds many legends (Q6638).
 pub(crate) fn legend_notes_page(c: &crate::sheet_facts::PageContent) -> bool {
-    let words = c.word_lines as f64 >= LEGEND_PAGE_MIN_WORD_SHARE * c.texts as f64;
+    let share = |s: f64| c.word_lines as f64 >= s * c.texts as f64;
     c.plan_views == 0
         && c.headings > 0
-        && ((c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH && words)
-            || (c.headings >= NOTES_PAGE_MIN_HEADINGS && c.sentences >= NOTES_PAGE_MIN_SENTENCES))
+        && ((c.wall_length <= LEGEND_PAGE_MAX_WALL_LENGTH && share(LEGEND_PAGE_MIN_WORD_SHARE))
+            || (c.headings >= NOTES_PAGE_MIN_HEADINGS && c.sentences >= NOTES_PAGE_MIN_SENTENCES)
+            || (c.headings >= LEGENDS_PAGE_MIN_HEADINGS && c.wall_length <= LEGENDS_PAGE_MAX_WALL_LENGTH && share(LEGENDS_PAGE_MIN_WORD_SHARE)))
 }
 
 /// A page of the set during classify: read now, or kept as it was (read before, unreadable, or
@@ -1883,13 +1898,22 @@ const SERIES_MIN_PAGES: usize = 5;
 /// two letters whose first is a discipline (rule data `sheets.discipline_prefix`). A mark that
 /// repeats page to page is one number, not a series; and where a series sits still has to agree
 /// page to page before it gives the set a number spot ([`number_spots`]).
+///
+/// Every number is looked at, so the result never depends on page order: the stream is already
+/// bounded by its pages ([`MAX_SHEETS`]) and each page's candidates. What is kept is bounded by
+/// value, not by position: one or two capital letters make at most 702 series, and each keeps no
+/// more than the [`SERIES_MIN_PAGES`] different numbers that make it one.
 fn set_series(numbers: impl Iterator<Item = String>) -> std::collections::BTreeSet<String> {
     let mut by_letters: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
-    for n in numbers.take(MAX_SHEETS * 64) {
+    for n in numbers {
         let n = n.trim().to_ascii_uppercase();
         let letters = sheet_facts::discipline_of(&n);
-        if (1..=2).contains(&letters.len()) {
-            by_letters.entry(letters).or_default().insert(n);
+        if !(1..=2).contains(&letters.len()) {
+            continue;
+        }
+        let seen = by_letters.entry(letters).or_default();
+        if seen.len() < SERIES_MIN_PAGES {
+            seen.insert(n);
         }
     }
     let known = crate::wordrules::pairs("sheets.discipline_prefix");
@@ -3585,6 +3609,22 @@ mod classify_tests {
     }
 
     #[test]
+    fn a_series_does_not_depend_on_page_order() {
+        // a big set: one number repeated on page after page, then another discipline's five
+        // numbers; the second series is found whichever comes first
+        let repeated = || std::iter::repeat_n("GX101".to_string(), 130_000);
+        let late = || (1..=5).map(|i| format!("AJ20{i}"));
+        let first = set_series(repeated().chain(late())).into_iter().collect::<Vec<_>>();
+        let last = set_series(late().chain(repeated())).into_iter().collect::<Vec<_>>();
+        assert_eq!(first, ["AJ"]);
+        assert_eq!(last, ["AJ"]);
+        // many different numbers of one series ahead of another still leave room for the other
+        let many = || (0..200_000).map(|i| format!("GX{i}"));
+        assert_eq!(set_series(many().chain(late())).into_iter().collect::<Vec<_>>(), ["AJ", "GX"]);
+        assert_eq!(set_series(late().chain(many())).into_iter().collect::<Vec<_>>(), ["AJ", "GX"]);
+    }
+
+    #[test]
     fn a_designator_with_a_modifier_is_its_discipline() {
         // the first letter names the discipline, the next the kind of sheet within it
         for (letters, want) in [("A", "A"), ("AC", "A"), ("AE", "A"), ("ep", "E"), ("MP", "M"), ("SD", "S")] {
@@ -3669,6 +3709,21 @@ mod classify_tests {
         assert!(!super::legend_notes_page(&notes(165, 12)), "a plan's notes column");
         assert!(!super::legend_notes_page(&notes(300, 2)), "too few headings");
         assert!(!super::legend_notes_page(&crate::sheet_facts::PageContent { plan_views: 1, ..notes(300, 12) }));
+        // Q6638: a sheet of many legend tables whose sample symbols (a duct's two lines, a wall
+        // type) draw some wall faces, its lettering mostly words, too few sentences to be notes.
+        let legends = |headings: usize, wall_length: f64, word_lines: usize| crate::sheet_facts::PageContent {
+            wall_length,
+            headings,
+            sentences: 129,
+            texts: 867,
+            word_lines,
+            ..Default::default()
+        };
+        assert!(super::legend_notes_page(&legends(13, 0.51, 400)), "many legends: a legend sheet");
+        assert!(!super::legend_notes_page(&legends(7, 0.51, 400)), "a plan's few legend headings");
+        assert!(!super::legend_notes_page(&legends(13, 1.59, 400)), "a plan's walls");
+        assert!(!super::legend_notes_page(&legends(13, 0.51, 200)), "a plan's tags and marks");
+        assert!(!super::legend_notes_page(&crate::sheet_facts::PageContent { plan_views: 1, ..legends(13, 0.51, 400) }), "a view titled as a plan");
     }
 
     #[test]

@@ -183,7 +183,20 @@ fn floor_and_room_views_one_level_one_room() {
     assert_eq!((r["view"].as_str(), r["level"].as_str()), (Some("floor"), Some("L2")));
     assert_eq!(r["rooms"].as_array().unwrap().len(), 6);
     let d = shown(&s);
-    assert!(d.model.iter().filter(|e| made_as(e).is_some()).all(|e| cadaddy_engine::cmd::bspec::made_level(e).as_deref() == Some("L2")), "only L2");
+    // Only L2's storey (Q6660): L2's own, and the pieces of other levels' runs standing in it
+    // (the risers from L1 through L2's floor), cut to it (12' to 24').
+    let in_storey = |e: &Entity| match &e.kind {
+        cadaddy_engine::doc::EntityKind::Mesh(m) => m.vertices.iter().all(|v| v.z >= 144.0 - 1e-6 && v.z <= 288.0 + 1e-6),
+        _ => false,
+    };
+    assert!(
+        d.model.iter().filter(|e| made_as(e).is_some()).all(|e| cadaddy_engine::cmd::bspec::made_level(e).as_deref() == Some("L2") || in_storey(e)),
+        "only L2's storey"
+    );
+    assert!(
+        d.model.iter().any(|e| cadaddy_engine::cmd::bspec::made_level(e).as_deref() == Some("L1") && in_storey(e)),
+        "L1's risers through L2's floor"
+    );
     let ls = labels(&d);
     for want in ["wall", "door", "window", "room", "light", "casework"] {
         assert!(has(&ls, |l| l == want), "{want} not on the floor");

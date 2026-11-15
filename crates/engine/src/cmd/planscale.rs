@@ -739,6 +739,34 @@ pub fn no_scale_question(sheet: &str, title: &str) -> String {
     }
 }
 
+/// The architectural floor plans, each read at a scale, that plan `r`'s levels are built from,
+/// when every level of `r` has one besides `r` (Q6638); None when one may be `r`. `r` left at
+/// paper size is then not the plan its storey is built from: a trade's plan, a second plan of
+/// the floor or a sheet misfiled as a plan, whose scale an unattended job doesn't stop for.
+/// `at_paper`: whether a sheet was left at paper size.
+pub fn storey_plans_elsewhere(r: &SheetRegion, regions: &[SheetRegion], at_paper: &dyn Fn(&str) -> bool) -> Option<Vec<String>> {
+    let levels = r.all_levels();
+    if levels.is_empty() {
+        return None;
+    }
+    let mut plans: Vec<String> = Vec::new();
+    for l in &levels {
+        let k = level_key(l);
+        let plan = regions.iter().find(|o| {
+            !base(&o.number).eq_ignore_ascii_case(base(&r.number))
+                && built_plan(o)
+                && o.discipline.eq_ignore_ascii_case("A")
+                && !at_paper(&o.number)
+                && o.all_levels().iter().any(|ol| level_key(ol) == k)
+        })?;
+        let n = base(&plan.number).to_string();
+        if !plans.contains(&n) {
+            plans.push(n);
+        }
+    }
+    Some(plans)
+}
+
 /// Each storey's floor-plan area (square feet) from the architectural plans it is built from,
 /// with the sheet giving the largest: the levels under the rules' minimum.
 pub fn small_levels(regions: &[SheetRegion], k_in: f64) -> Vec<(String, String, f64)> {
