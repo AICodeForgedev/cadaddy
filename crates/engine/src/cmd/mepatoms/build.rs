@@ -4979,7 +4979,7 @@ mod tests {
             let sp = json!({
                 "version": 1, "units_per_foot": 12,
                 "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
-                "ceiling_types": [{"name": "HL-1", "kind": "gypsum"}, {"name": "AT-1", "kind": "grid"}],
+                "ceiling_types": [{"name": "CX-1", "kind": "gypsum"}, {"name": "CX-2", "kind": "grid"}],
                 "rcp": rcp,
                 "mep": {
                     "systems": [{"name": "E-BRANCH", "layer": "E-BRANCH", "kind": "conduit", "size_in": [0.5, 0], "bottom_ft": 8, "show": true}],
@@ -5002,7 +5002,7 @@ mod tests {
         };
         let text = |ps: &Props, k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
         // Over a gypsum ceiling at 7'-6": one panel, at the ceiling, under the box.
-        let (d, r) = build_with(area("HL-1", 7.5));
+        let (d, r) = build_with(area("CX-1", 7.5));
         assert_eq!(r["junctionBoxes"], json!(1), "{r}");
         assert_eq!(r["junctionAccess"]["accessPanels"], json!(1), "{r}");
         let panels = of_kind(&d, "access_panel");
@@ -5026,10 +5026,10 @@ mod tests {
         assert!(text(b, "access").to_ascii_lowercase().contains("access panel"), "{}", text(b, "access"));
         assert!(text(b, "correction:access").starts_with(super::super::jboxaccess::RULE) && text(b, "correction:access").contains("314.29"));
         // Over a grid ceiling: reached through its tiles, no panel.
-        let (d, r) = build_with(area("AT-1", 7.5));
+        let (d, r) = build_with(area("CX-2", 7.5));
         assert_eq!((r["junctionAccess"]["accessPanels"].clone(), of_kind(&d, "access_panel").len()), (json!(0), 0), "{r}");
         // A gypsum ceiling over the box (the box in the room under it): no panel.
-        let (d, r) = build_with(area("HL-1", 9.5));
+        let (d, r) = build_with(area("CX-1", 9.5));
         assert_eq!(of_kind(&d, "access_panel").len(), 0, "{r}");
         // No ceiling read: not known, left as it is and counted.
         let (d, r) = build_with(json!({}));

@@ -173,9 +173,9 @@ mod tests {
             "units_per_foot": 12.0,
             "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12}, {"name": "Level 2", "elevation_ft": 12, "height_ft": 12}],
             "ceiling_types": [
-                {"name": "HL-1", "kind": "gypsum"},
-                {"name": "AT-1", "kind": "grid"},
-                {"name": "EX-1", "kind": "open"}
+                {"name": "CX-1", "kind": "gypsum"},
+                {"name": "CX-2", "kind": "grid"},
+                {"name": "CX-3", "kind": "open"}
             ]
         });
         if let (Some(o), Some(x)) = (v.as_object_mut(), extra.as_object()) {
@@ -193,18 +193,18 @@ mod tests {
     #[test]
     fn the_ceiling_under_a_point_is_read_by_its_kind() {
         let sp = spec(json!({"rcp": {"ceilings": [
-            {"level": "Level 1", "room": "A", "outline": sq(0.0, 0.0, 120.0), "height_ft": 9.0, "ceiling_type": "HL-1"},
-            {"level": "Level 1", "outline": sq(200.0, 0.0, 120.0), "height_ft": 9.0, "ceiling_type": "AT-1"},
+            {"level": "Level 1", "room": "A", "outline": sq(0.0, 0.0, 120.0), "height_ft": 9.0, "ceiling_type": "CX-1"},
+            {"level": "Level 1", "outline": sq(200.0, 0.0, 120.0), "height_ft": 9.0, "ceiling_type": "CX-2"},
             {"level": "Level 1", "outline": sq(400.0, 0.0, 120.0), "height_ft": 8.0, "grid": {"spacing_in": [24.0, 24.0], "origin": [400.0, 0.0]}},
             {"level": "Level 1", "outline": sq(600.0, 0.0, 120.0), "height_ft": 8.5},
-            {"level": "Level 1", "outline": sq(800.0, 0.0, 120.0), "height_ft": 10.0, "ceiling_type": "EX-1"},
-            {"level": "Level 2", "outline": sq(0.0, 0.0, 120.0), "height_ft": 8.0, "ceiling_type": "HL-1"}
+            {"level": "Level 1", "outline": sq(800.0, 0.0, 120.0), "height_ft": 10.0, "ceiling_type": "CX-3"},
+            {"level": "Level 2", "outline": sq(0.0, 0.0, 120.0), "height_ft": 8.0, "ceiling_type": "CX-1"}
         ], "soffits": [{"level": "Level 1", "outline": sq(20.0, 20.0, 24.0), "height_ft": 7.5}]}}));
         let at = |level: &str, x: f64, y: f64| under(&sp, &[], level, Vec2::new(x, y), 12.0);
         // A typed gypsum ceiling: hard, its underside at the level's floor plus its height.
         let Under::Hard(h) = at("Level 1", 60.0, 90.0) else { panic!("{:?}", at("Level 1", 60.0, 90.0)) };
         assert_eq!(h.z, 108.0);
-        assert!(h.what.contains("room A") && h.what.contains("HL-1") && h.what.contains("9'-0\""), "{}", h.what);
+        assert!(h.what.contains("room A") && h.what.contains("CX-1") && h.what.contains("9'-0\""), "{}", h.what);
         // A soffit inside it is what is under a point over the soffit.
         let Under::Hard(s) = at("Level 1", 30.0, 30.0) else { panic!("soffit") };
         assert_eq!(s.z, 90.0);
