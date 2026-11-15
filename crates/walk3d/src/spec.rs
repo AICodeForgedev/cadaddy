@@ -2113,9 +2113,13 @@ pub struct PanelCircuit {
     pub wire: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_va: Option<f64>,
-    /// What the drawings print where a submittal corrected `load_va`.
+    /// What the drawings print where a submittal or a cross-check corrected `load_va`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_load_va: Option<f64>,
+    /// The values a cross-check corrected for the field (`load_va`: a feeder row that isn't the
+    /// fed panel's total), each beside the design value with the reason and the rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
@@ -2284,6 +2288,11 @@ pub struct LoadSummaryLine {
     /// The line's texts after its label, as printed (`3,000 x 125% = 3,750`).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// The values a cross-check corrected for the field (`count`: a per-unit item counted for
+    /// more or fewer units than the plans give it to), each beside the printed value with the
+    /// reason and the rule (the printed values stay as read).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.

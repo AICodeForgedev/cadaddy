@@ -211,6 +211,36 @@
       "step": "rough_in",
       "severity": "high",
       "propose": "none"
+    },
+    {
+      "id": "E-FEEDER-ROW-LOAD",
+      "object": "feeder row",
+      "trade": "electrical",
+      "kinds": ["panel_schedule"],
+      "needs": ["load_va"],
+      "from_build": "schedules",
+      "build_kinds": ["feeder_row"],
+      "what": "the load of the panel it feeds",
+      "basis": "NEC 215.2(A)(1) and 220.40: a feeder's load is the loads it supplies; its row in the source panel's schedule carries the fed panel's own total, and the feeder, its protection and the service are sized from it",
+      "ask": "Which load does the feeder carry: the fed panel's own schedule total (as corrected), or is that schedule wrong?",
+      "step": "rough_in",
+      "severity": "medium",
+      "propose": "none"
+    },
+    {
+      "id": "E-CALC-UNIT-COUNT",
+      "object": "load calculation line",
+      "trade": "electrical",
+      "kinds": ["load_summary"],
+      "needs": ["count"],
+      "from_build": "schedules",
+      "build_kinds": ["unit_count", "line_total"],
+      "what": "a count of its per-unit item that its total and the plans agree with",
+      "basis": "NEC 220.84(C) and 220.53: a demand calculation adds each unit's loads; a per-unit line's count times its VA is its total, and an item only some units have is counted for the units on that feeder the plans give it to",
+      "ask": "How many units on this feeder have the item: the calculation's count or the plans'?",
+      "step": "rough_in",
+      "severity": "low",
+      "propose": "none"
     }
   ]
 }

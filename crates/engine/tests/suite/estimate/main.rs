@@ -22,6 +22,7 @@ mod mepqty;
 mod procure;
 mod pubcost;
 mod pulllist;
+mod schedarith;
 mod schedules3d;
 mod takeoff_device_lines;
 mod takeoff_mep_handles;

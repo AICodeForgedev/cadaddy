@@ -248,6 +248,8 @@ pub(crate) struct Evaluation {
     writes: Vec<(Handle, Vec<(String, Prop)>)>,
     /// The objects an earlier pass marked open (their marks go before the new ones are set).
     marked: Vec<Handle>,
+    /// The schedules' arithmetic (feeder rows, calculation counts) and the corrections it makes.
+    schedules: Option<super::loadcalc::arith::Report>,
 }
 
 fn lower(v: &[String]) -> Vec<String> {
@@ -554,6 +556,50 @@ fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::R
     ev.outcomes.push(out);
 }
 
+/// A requirement the schedules' own arithmetic measures (`schedules`: a feeder row against the
+/// panel it feeds, a load calculation's per-unit count against its total and the plans). Each
+/// mismatch of its kinds is one RFI, with the correction the field makes recorded beside the
+/// printed value ([`super::loadcalc::arith::correct`]).
+fn from_schedules(rules: &Rules, r: &Requirement, report: Option<&super::loadcalc::arith::Report>, ev: &mut Evaluation) {
+    let mut out = Outcome { id: r.id.clone(), object: r.object.clone(), trade: r.trade.clone(), ..Outcome::default() };
+    let Some(rep) = report else {
+        ev.outcomes.push(out);
+        return;
+    };
+    let kinds = lower(&r.build_kinds);
+    out.objects = if kinds.iter().any(|k| k == "feeder_row") { rep.feeder_rows } else { rep.count_lines };
+    for m in rep.mismatches.iter().filter(|m| kinds.iter().any(|k| k == m.kind)) {
+        out.missing += 1;
+        if ev.rfis.len() >= MAX_RAISED {
+            ev.not_raised += 1;
+            continue;
+        }
+        let place = if m.kind == "feeder_row" {
+            format!("panel {} circuit {}", m.panel, m.item)
+        } else if m.panel.is_empty() {
+            format!("load calculation line '{}'", m.item)
+        } else {
+            format!("panel {} load calculation line '{}'", m.panel, m.item)
+        };
+        let mut rfi = Rfi::new(RfiKind::Requirement, "", [0.0, 0.0], place, m.message.clone(), format!("Corrected for the field: {}", m.correction));
+        rfi.id = stable_id(&r.id, "", &format!("{}|{}|{}", m.kind, m.panel, m.item));
+        rfi.severity = r.severity();
+        rfi.topic = format!("requirement: {} ({})", r.id, r.object);
+        rfi.proposed = Some(r.ask.clone());
+        rfi.sheets = m.sheets.clone();
+        let doc = if m.sheets.is_empty() { "the panel schedules".to_string() } else { m.sheets.join(", ") };
+        rfi.sides = vec![
+            RfiSide { document: doc, says: m.message.clone() },
+            RfiSide { document: r.basis.split(':').next().unwrap_or("").trim().to_string(), says: m.cite.clone() },
+        ];
+        rfi.before = if rules.steps.iter().any(|s| s.id == r.step) { r.step.clone() } else { rules.default_step.clone() };
+        ev.rfis.push(rfi);
+    }
+    out.missing = out.missing.min(out.objects);
+    out.documented = out.objects - out.missing;
+    ev.outcomes.push(out);
+}
+
 /// Every requirement over the model's objects: the measure, the RFIs (one per requirement and
 /// space) and the proposals.
 pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
@@ -568,7 +614,16 @@ pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
         ..Evaluation::default()
     };
     let breakers = super::breakers::stored(d);
+    if rules.requirements.iter().any(|r| r.from_build == "schedules") {
+        ev.schedules = sp.map(|sp| super::loadcalc::arith::check(d, sp));
+    }
     for r in &rules.requirements {
+        if r.from_build == "schedules" {
+            let rep = ev.schedules.take();
+            from_schedules(rules, r, rep.as_ref(), &mut ev);
+            ev.schedules = rep;
+            continue;
+        }
         if !r.from_build.is_empty() {
             from_build(rules, r, breakers.as_ref(), &mut ev);
             continue;
@@ -684,6 +739,10 @@ pub(crate) fn apply(s: &mut Session, ev: &Evaluation) -> Result<usize> {
     let (mut sp, stored) = super::bspec::current(s, "requirements")?;
     if !stored {
         return Ok(written);
+    }
+    // The schedules' corrections, each beside the printed value.
+    if let Some(rep) = &ev.schedules {
+        written += super::loadcalc::arith::correct(&mut sp, rep);
     }
     let raised: BTreeSet<&str> = ev.rfis.iter().map(|r| r.id.as_str()).collect();
     sp.rfis.retain(|x| x.kind != Some(RfiKind::Requirement) || x.status != RfiStatus::Open || raised.contains(x.id.as_str()));
