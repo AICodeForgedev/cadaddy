@@ -37737,7 +37737,7 @@ mod tests {
             assert!(circuit_text(mark, &none), "{mark} reads as a circuit");
             let m = t(mark, 100.0, 506.0, 4.0);
             assert!(over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 500.0, 4.0)], &none), "{mark}");
-            assert!(!over_circuit_label(&m, &[m.clone()], &none), "{mark} alone");
+            assert!(!over_circuit_label(&m, std::slice::from_ref(&m), &none), "{mark} alone");
             assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 512.0, 4.0)], &none), "{mark} under a label");
             assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 470.0, 4.0)], &none), "{mark} label far below");
             assert!(!over_circuit_label(&m, &[m.clone(), t("P1-6", 100.0, 500.0, 12.0)], &none), "{mark} over a title");
