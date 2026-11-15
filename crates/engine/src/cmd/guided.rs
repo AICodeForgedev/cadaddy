@@ -6121,7 +6121,8 @@ fn fixture_outlines<'a>(objects: impl IntoIterator<Item = &'a cadaddy_doc::Entit
                 for (i, v) in pl.vertices.iter().enumerate() {
                     lo = Vec2::new(lo.x.min(v.p.x), lo.y.min(v.p.y));
                     hi = Vec2::new(hi.x.max(v.p.x), hi.y.max(v.p.y));
-                    if v.bulge.is_finite() && v.bulge != 0.0
+                    if v.bulge.is_finite()
+                        && v.bulge != 0.0
                         && let Some(next) = pl.vertices.get((i + 1) % n)
                     {
                         rise = rise.max(v.bulge.abs().min(1.0) * v.p.dist(next.p) / 2.0);
@@ -6145,7 +6146,13 @@ fn text_box(t: &cadaddy_mepfix::sheet_facts::TextItem) -> (cadaddy_geom::Vec2, c
     let w = MARK_CHAR_W_H * h * t.value.trim().chars().count().max(1) as f64;
     let turned = (t.rotation.sin().abs()) > 0.7;
     let (dx, dy) = if turned { (h, w) } else { (w, h) };
-    let (x, y) = if turned && t.rotation.sin() > 0.0 { (t.at.x - h, t.at.y) } else if turned { (t.at.x, t.at.y - w) } else { (t.at.x, t.at.y) };
+    let (x, y) = if turned && t.rotation.sin() > 0.0 {
+        (t.at.x - h, t.at.y)
+    } else if turned {
+        (t.at.x, t.at.y - w)
+    } else {
+        (t.at.x, t.at.y)
+    };
     (Vec2::new(x, y), Vec2::new(x + dx, y + dy))
 }
 
@@ -6188,7 +6195,10 @@ fn bare_mark_outline(
         .map(|o| (box_gap(mark, (o.lo, o.hi)), o))
         .filter(|(gap, _)| *gap <= OUTLINE_REACH_H * h)
         .filter(|(_, o)| !lettered(o))
-        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| ((a.1.hi.x - a.1.lo.x) * (a.1.hi.y - a.1.lo.y)).total_cmp(&((b.1.hi.x - b.1.lo.x) * (b.1.hi.y - b.1.lo.y)))))
+        .min_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| ((a.1.hi.x - a.1.lo.x) * (a.1.hi.y - a.1.lo.y)).total_cmp(&((b.1.hi.x - b.1.lo.x) * (b.1.hi.y - b.1.lo.y))))
+        })
         .map(|(_, o)| o.lo.mid(o.hi))
 }
 
