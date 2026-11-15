@@ -1451,8 +1451,8 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
                     Some(st) => {
                         let from = (!only.as_ref().is_some_and(|l| l.eq_ignore_ascii_case(&level))).then_some(level.as_str());
                         match st.place(e, from, true) {
-                            super::storey::Cut::Gone => continue,
-                            super::storey::Cut::Kept(c) => c.into_owned(),
+                            None => continue,
+                            Some(c) => c.into_owned(),
                         }
                     }
                     None => (**e).clone(),

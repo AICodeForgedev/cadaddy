@@ -702,10 +702,7 @@ pub(crate) fn display_summary_in(
     if let Some(st) = storey {
         let ctx: Vec<Handle> = out.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("hoistway")).map(|e| e.handle).collect();
         for h in ctx {
-            let cut = out.model.get(h).map(|e| match st.cut(e, true) {
-                super::storey::Cut::Gone => None,
-                super::storey::Cut::Kept(c) => Some(c.into_owned()),
-            });
+            let cut = out.model.get(h).map(|e| st.cut(e, true).map(std::borrow::Cow::into_owned));
             match cut {
                 Some(Some(c)) => {
                     out.model.replace(c);
@@ -767,7 +764,6 @@ pub(crate) fn compose_in(
     storey: Option<&super::storey::Storey>,
     keep: &dyn Fn(&Entity, &Class) -> bool,
 ) -> Drawing {
-    use super::storey::Cut;
     let offsets = if stack { stack_offsets(d) } else { Vec::new() };
     let offset_of = |level: &str| offsets.iter().find(|(n, _)| n.eq_ignore_ascii_case(level)).map(|o| o.1);
     let mut out = d.clone();
@@ -839,9 +835,9 @@ pub(crate) fn compose_in(
         // floor), carried onto the level's plan when not stacked.
         let placed = match storey {
             Some(st) => match st.place(shared, from.as_deref(), !stack) {
-                Cut::Gone => continue,
-                Cut::Kept(std::borrow::Cow::Owned(x)) => Some(x),
-                Cut::Kept(std::borrow::Cow::Borrowed(_)) => None,
+                None => continue,
+                Some(std::borrow::Cow::Owned(x)) => Some(x),
+                Some(std::borrow::Cow::Borrowed(_)) => None,
             },
             None => None,
         };

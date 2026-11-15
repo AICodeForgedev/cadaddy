@@ -55,14 +55,9 @@ pub(crate) struct Storey {
     view_move: Vec2,
 }
 
-/// What a storey does to an object.
-#[derive(Debug)]
-pub(crate) enum Cut<'a> {
-    /// Nothing of it stands in the storey.
-    Gone,
-    /// It, or the part of it in the storey.
-    Kept(Cow<'a, Entity>),
-}
+/// What a storey does to an object: it, or the part of it in the storey; none when nothing of
+/// it stands in the storey.
+pub(crate) type Cut<'a> = Option<Cow<'a, Entity>>;
 
 impl Storey {
     /// The storey of `level` in `d`'s building spec (none without a spec or that level, or when
@@ -139,38 +134,36 @@ impl Storey {
     pub fn cut<'a>(&self, e: &'a Entity, carried: bool) -> Cut<'a> {
         let lo = carried.then_some(self.lo);
         let hi = self.hi;
-        let Some((z0, z1)) = z_range(e) else { return Cut::Kept(Cow::Borrowed(e)) };
+        let Some((z0, z1)) = z_range(e) else { return Some(Cow::Borrowed(e)) };
         if lo.is_some_and(|lo| z1 <= lo) || hi.is_some_and(|hi| z0 >= hi) {
-            return Cut::Gone;
+            return None;
         }
         if lo.is_none_or(|lo| z0 >= lo) && hi.is_none_or(|hi| z1 <= hi) {
-            return Cut::Kept(Cow::Borrowed(e));
+            return Some(Cow::Borrowed(e));
         }
         match clip_kind(&e.kind, lo, hi) {
             Some(Some(kind)) => {
                 let mut c = e.clone();
                 c.kind = kind;
-                Cut::Kept(Cow::Owned(c))
+                Some(Cow::Owned(c))
             }
-            Some(None) => Cut::Gone,
+            Some(None) => None,
             // A kind with no cut (its height is one point): whole while that point is in.
-            None => Cut::Kept(Cow::Borrowed(e)),
+            None => Some(Cow::Borrowed(e)),
         }
     }
 
     /// [`Self::cut`] for an object of another level filed under `from` (none: this level's own),
     /// then, when `carry` (the level drawn on its own plan, not stacked), [`Self::carry_move`].
     pub fn place<'a>(&self, e: &'a Entity, from: Option<&str>, carry: bool) -> Cut<'a> {
-        match self.cut(e, from.is_some()) {
-            Cut::Gone => Cut::Gone,
-            Cut::Kept(c) => match from.filter(|_| carry).and_then(|l| self.carry_move(e, l)) {
-                Some(o) => {
-                    let mut c = c.into_owned();
-                    c.kind.transform(&Mat3::translate(o));
-                    Cut::Kept(Cow::Owned(c))
-                }
-                None => Cut::Kept(c),
-            },
+        let c = self.cut(e, from.is_some())?;
+        match from.filter(|_| carry).and_then(|l| self.carry_move(e, l)) {
+            Some(o) => {
+                let mut c = c.into_owned();
+                c.kind.transform(&Mat3::translate(o));
+                Some(Cow::Owned(c))
+            }
+            None => Some(c),
         }
     }
 }
@@ -308,7 +301,7 @@ fn clip_mesh(m: &Mesh, lo: Option<f64>, hi: Option<f64>) -> Option<Mesh> {
         }
         faces.push(MeshFace { v, hidden });
     }
-    (!faces.is_empty()).then(|| Mesh { vertices, faces, kind: m.kind })
+    (!faces.is_empty()).then_some(Mesh { vertices, faces, kind: m.kind })
 }
 
 /// The new mesh's index of a point: a mesh vertex once, a cut point each time.
