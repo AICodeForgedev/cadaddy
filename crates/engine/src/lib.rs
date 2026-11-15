@@ -2713,18 +2713,23 @@ impl Session {
     /// for everything around it: the passes after a command (constraints, associativity, groups)
     /// are as able to panic as the command, and a panic there restores the drawing the same way.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
-        let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        // The build records go back with the drawing (Q6464): a build the dead command made is
+        // gone with it, and is not settled by the next command.
+        let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid, s.model_records.clone()));
         let outer = self.journal.is_outer();
+        let depth = self.journal.depth();
         let r = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute_guarded(id, params))) {
             Ok(r) => r,
             Err(p) => {
                 let msg = crate::guard::message(&*p);
                 crash_report::record(self, id, &msg);
-                if let Some((doc, sel, uid)) = before
+                self.journal.unwind_to(depth);
+                if let Some((doc, sel, uid, records)) = before
                     && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
                 {
                     st.doc = doc;
                     st.selection = sel;
+                    st.model_records = records;
                 }
                 Err(EngineError::Internal(id.into(), msg))
             }
@@ -2952,6 +2957,7 @@ impl Session {
             cmd::wallgen::update_model(self);
         }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        let records_before = self.state().ok().map(|s| s.model_records.clone());
         let look_before = self.state().ok().map(DocState::model_look);
         let editing = self.state().is_ok_and(|s| s.block_edit.is_some());
         let run = spec.run;
@@ -2962,12 +2968,16 @@ impl Session {
                 let msg =
                     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
                 crash_report::record(self, id, &msg);
-                // Restore the drawing as it was.
+                // Restore the drawing as it was, and its build records with it: a build the command
+                // made died with it (Q6464).
                 if let Some((doc, sel, uid)) = &before
                     && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
                 {
                     st.doc = doc.clone();
                     st.selection = sel.clone();
+                    if let Some(records) = records_before {
+                        st.model_records = records;
+                    }
                 }
                 return Err(EngineError::Internal(id.into(), msg));
             }
@@ -3542,9 +3552,14 @@ impl Session {
             }
             Err(EngineError::Internal(id, m)) => {
                 self.multiple = None;
-                // Restore and end the command.
+                // Restore and end the command; a build it made died with it (Q6464). Not the one of
+                // a command a transparent one interrupted: that goes on.
+                let outermost = self.suspended.is_none();
                 if let Ok(st) = self.state_mut() {
                     st.doc = run.before.clone();
+                    if outermost {
+                        cmd::revise3d::drop_unsettled(st);
+                    }
                 }
                 self.echo(format!("Internal error in {id}: {m}"));
                 self.resume_suspended();
@@ -3596,9 +3611,13 @@ impl Session {
         if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.finish_guarded(run, cancelled))) {
             let msg = crate::guard::message(&*p);
             crash_report::record(self, &id, &msg);
+            let outermost = self.suspended.is_none();
             if let Ok(st) = self.state_mut() {
                 st.doc = before;
                 st.selection = selection;
+                if outermost {
+                    cmd::revise3d::drop_unsettled(st);
+                }
             }
             self.echo(format!("Internal error in {id}: {msg}"));
         }

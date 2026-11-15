@@ -146,6 +146,18 @@ impl Journal {
         self.depth = self.depth.saturating_sub(1);
     }
 
+    /// How deep the calls under way go (for [`Self::unwind_to`]).
+    pub(crate) fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// A call that panicked never reached its `leave`: the depth goes back to what it was when
+    /// the call began, or every later call is taken for one inside it (no command was the
+    /// outermost again, so nothing settled at the end of one).
+    pub(crate) fn unwind_to(&mut self, depth: u32) {
+        self.depth = depth;
+    }
+
     fn push(&mut self, line: String) {
         self.bytes = self.bytes.saturating_add(line.len());
         self.lines.push(line);
