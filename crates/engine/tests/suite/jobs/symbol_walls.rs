@@ -2,7 +2,8 @@
 //! under a window (its outline and grille), a tub (its front and basin) and a tag's frame round
 //! its number pair up like walls' faces. Walls join other walls or the shell; a symbol's lines
 //! are left out, and the window in the gap the unit stands in stays centred in it. A wall stub
-//! that joins its wall, fill and all, and a free-standing wall with nothing in it stay walls.
+//! that joins its wall, fill and all, stays a wall; a short piece standing free in the room (no
+//! end meeting a wall, the shell or a door) is the equipment drawn there, no wall (Q6637).
 
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::wallgen::made_as;
@@ -55,7 +56,8 @@ fn rect(d: &mut Drawing, drawn: Drawn, layer: &str, (x0, y0): (f64, f64), (x1, y
 /// its jambs and glazing; under the window a through-wall unit (3'-6" × 9", its grille drawn), a
 /// 5' × 2'-6" tub against the north wall (its basin a rounded outline, a drain), a room tag's
 /// 3' × 1'-3" frame round its number; a 4" closet partition from the north wall (filled), and a
-/// 4' free-standing wall. With `symbols` false, the room without the unit, the tub and the tag.
+/// 4' piece standing free (equipment: Q6637). With `symbols` false, the room without the unit,
+/// the tub and the tag.
 fn room(drawn: Drawn, symbols: bool) -> Session {
     let w = "A-WALL";
     let glaz = if drawn == Drawn::Print { w } else { "A-GLAZ" };
@@ -80,7 +82,7 @@ fn room(drawn: Drawn, symbols: bool) -> Session {
     }
     let c = |x: f64, y: f64| Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
     push(&mut d, EntityKind::Solid(Solid { corners: [c(8., 9.), c(8. + 4. / 12., 9.), c(8., 13.5), c(8. + 4. / 12., 13.5)] }), w);
-    // A free-standing 6" wall 4' long, nothing in it.
+    // A 6" piece 4' long standing free, nothing in it.
     rect(&mut d, drawn, w, (12., 7.), (16., 7.5));
     if symbols {
         // The through-wall unit against the inside of the gap, its grille a row of openings (each
@@ -159,11 +161,11 @@ fn symbol_outlines_are_no_walls_and_real_walls_stay() {
         let tag = walls.iter().filter(|w| within(w, (2.9, 5.9), (6.1, 7.35))).count();
         assert_eq!((unit, tub, tag), (0, 0, 0), "{drawn:?}: the unit, the tub and the tag are no walls: {walls:?}\n{}", plan["notes"]);
         assert!(plan["notes"].to_string().contains("symbols"), "{drawn:?}: the notes say so: {}", plan["notes"]);
-        // The walls that are walls: the partition joining the north wall (filled), the
-        // free-standing one (nothing in it), the shell.
+        // The walls that are walls: the partition joining the north wall (filled), the shell.
+        // The 4' piece standing free in the room joins nothing: equipment, no wall (Q6637).
         let partition = walls.iter().filter(|w| within(w, (7.9, 9.), (8.5, 14.)) && (w.2 - 4.0).abs() < 0.1).count();
         let free = walls.iter().filter(|w| within(w, (11.9, 7.), (16.1, 7.5)) && (w.2 - 6.0).abs() < 0.1).count();
-        assert_eq!((partition, free), (1, 1), "{drawn:?}: {walls:?}");
+        assert_eq!((partition, free), (1, 0), "{drawn:?}: {walls:?}");
         // The same as the room without the symbols.
         let (bare, _) = planned(&mut room(drawn, false));
         assert_eq!(walls.len(), bare.len(), "{drawn:?}: {walls:?} vs {bare:?}");
