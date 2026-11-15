@@ -1640,11 +1640,55 @@ fn place_of(room: &str, devs: &[&Dev]) -> String {
     if room.is_empty() { format!("(no room){on}") } else { format!("room {room}{on}") }
 }
 
+/// Rows a schedule set holds at most, read for the emergency circuits.
+const MAX_SCHEDULE_ROWS: usize = 200_000;
+
+/// Whether a text holds a phrase as whole words (`EM LTG` in `EM LTG - STAIR 2`, never `EM` in
+/// `ITEM`).
+fn has_words(text: &str, phrase: &str) -> bool {
+    let norm = |t: &str| {
+        let u: String = t.to_ascii_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+        format!(" {} ", u.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    let p = norm(phrase);
+    !p.trim().is_empty() && norm(text).contains(&p)
+}
+
+/// The panel-schedule circuits of the emergency system (NEC 700), by (panel, number), each with
+/// why: a row whose codes mark it emergency (`circuits.emergency_codes`, or a code its schedule's
+/// legend says is emergency) or whose description names an emergency load (`EM LTG`, `EGRESS
+/// LIGHTING`, `EXIT SIGNS`: `circuits.emergency_words`). A luminaire on one stays on: unswitched
+/// by design (NEC 700.21), whatever its fixture type.
+pub(crate) fn emergency_circuits(sp: &cadaddy_walk3d::BuildingSpec) -> BTreeMap<(String, String), String> {
+    let words = cadaddy_mepfix::wordrules::words("circuits.emergency_words");
+    let codes = cadaddy_mepfix::wordrules::words("circuits.emergency_codes");
+    let mut out = BTreeMap::new();
+    let rows = sp.mep.panel_schedules.iter().flat_map(|s| s.circuits.iter().map(move |c| (s, c))).take(MAX_SCHEDULE_ROWS);
+    for (s, c) in rows {
+        let (panel, number) = (s.panel.trim().to_ascii_uppercase(), c.number.trim());
+        if panel.is_empty() || number.is_empty() {
+            continue;
+        }
+        let legend_says =
+            |code: &str| s.legend.iter().any(|(k, meaning)| k.trim().eq_ignore_ascii_case(code) && words.iter().any(|w| has_words(meaning, w)));
+        let by_code = c.protection.iter().map(|p| p.trim()).find(|p| codes.iter().any(|k| k.eq_ignore_ascii_case(p)) || legend_says(p));
+        let said = match by_code {
+            Some(code) => code.to_string(),
+            None if words.iter().any(|w| has_words(&c.description, w)) => c.description.trim().to_string(),
+            None => continue,
+        };
+        out.insert((panel, number.to_string()), format!("panel {} circuit {number}: {said}", s.panel.trim()));
+    }
+    out
+}
+
 /// What the controls check reads besides the elements: each circuit's panel-schedule codes (`C`
-/// contactor, `TS` time switch, `EM`), and each fixture type's emergency/exit reason.
+/// contactor, `TS` time switch, `EM`), each fixture type's emergency/exit reason, and the
+/// emergency system's circuits ([`emergency_circuits`]).
 pub(crate) struct ControlDocs<'a> {
     pub codes: &'a BTreeMap<(String, String), Vec<String>>,
     pub emergency: &'a BTreeMap<String, Emergency>,
+    pub emergency_circuits: &'a BTreeMap<(String, String), String>,
     /// The plans' name for the conflicts' plan side (`the electrical plans`).
     pub plans: &'a str,
 }
@@ -1664,17 +1708,21 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
         let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
         let by_leg = leg_controls(l, ctrls, lums);
         let circuit_codes = docs.codes.get(&l.circuit).cloned().unwrap_or_default();
-        let em = docs.emergency.get(&l.mark).cloned().or_else(|| {
-            circuit_codes
-                .iter()
-                .any(|c| c == "EM")
-                .then(|| Emergency { why: format!("panel {} circuit {}: EM", l.circuit.0, l.circuit.1), switched: false })
-        });
+        // The emergency system's circuit: its `EM` code, or its row naming an emergency load.
+        let em_circuit = circuit_codes
+            .iter()
+            .any(|c| c == "EM")
+            .then(|| format!("panel {} circuit {}: EM", l.circuit.0, l.circuit.1))
+            .or_else(|| docs.emergency_circuits.get(&(l.circuit.0.clone(), l.circuit.1.trim().to_string())).cloned());
+        let em = docs.emergency.get(&l.mark).cloned().or_else(|| em_circuit.clone().map(|why| Emergency { why, switched: false }));
         if let Some(e) = &em {
             out.emergency.insert(l.h.clone(), e.why.clone());
         }
         // One that stays on by design: no control needed.
         let emergency = em.filter(|e| !e.switched).map(|e| e.why);
+        // With no leg or contactor of its own, a light on the emergency system's circuit stays on
+        // too, whatever its type (a battery unit's included: NEC 700.21).
+        let stays_on = emergency.clone().or(em_circuit);
         let list = |cs: &[&Dev]| cs.iter().map(|c| format!("{} {}", c.mark, c.h)).collect::<Vec<_>>().join(", ");
         let (control, kind, doc, how): (String, SourceKind, String, &'static str) = if !by_leg.is_empty() {
             (format!("switch leg {}: {}", l.leg, list(&by_leg)), SourceKind::Print, "switch leg letters on the plans".into(), "leg")
@@ -1691,7 +1739,7 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
                 "panel schedule codes".into(),
                 "contactor",
             )
-        } else if let Some(why) = &emergency {
+        } else if let Some(why) = &stays_on {
             out.unswitched.insert(l.h.clone(), why.clone());
             ("unswitched: emergency / exit".to_string(), SourceKind::Schedule, why.clone(), "emergency")
         } else if !in_room.is_empty() && l.leg.is_empty() {
@@ -2528,6 +2576,51 @@ mod tests {
     }
 
     #[test]
+    fn a_light_on_the_emergency_systems_circuit_is_unswitched() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        sp.mep.panel_schedules.push(
+            serde_json::from_value(serde_json::json!({"panel": "P", "source": "E-601", "legend": {"LS": "LIFE SAFETY BRANCH"}, "circuits": [
+                {"number": "9", "description": "EM LTG STAIR"},
+                {"number": "11", "description": "LIGHTS", "protection": ["LS"]},
+                {"number": "13", "description": "LIGHTS", "protection": ["EM"]},
+                {"number": "15", "description": "ITEM LIGHTS"},
+                {"number": "17", "description": "LIGHTS", "protection": ["GF"]}
+            ]}))
+            .unwrap(),
+        );
+        let em = emergency_circuits(&sp);
+        let keys: Vec<&str> = em.keys().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(keys, ["11", "13", "9"], "by its description, its legend's code, the EM code; never a word inside another: {em:?}");
+        assert!(em[&("P".to_string(), "9".to_string())].contains("EM LTG STAIR"));
+        // A stair light on circuit 9 with no switch: unswitched by design, no conflict raised.
+        let mut stair = dev("e9", "luminaire", "Q1", "S1", "", [0.0, 0.0]);
+        stair.circuit = ("P".into(), "9".into());
+        let mut plain = dev("p17", "luminaire", "Q1", "S2", "", [500.0, 0.0]);
+        plain.circuit = ("P".into(), "17".into());
+        // A stair light with a battery in it (its type switched like the others) on the EM-coded
+        // circuit 13: it stays on too, its type still its emergency reason.
+        let mut battery = dev("b13", "luminaire", "Q9", "S3", "", [900.0, 0.0]);
+        battery.circuit = ("P".into(), "13".into());
+        let mut types = BTreeMap::new();
+        types.insert("Q9".to_string(), Emergency { why: "E-9 type Q9: STAIR LIGHT WITH EMERGENCY BATTERY".into(), switched: true });
+        let links = link_controls(
+            &[stair, plain, battery],
+            &[],
+            &[],
+            &ControlDocs { codes: &BTreeMap::new(), emergency: &types, emergency_circuits: &em, plans: "the plans" },
+        );
+        assert_eq!(links.control["b13"].3, "emergency");
+        assert!(links.unswitched["b13"].contains("circuit 13"), "{:?}", links.unswitched);
+        assert!(links.emergency["b13"].contains("BATTERY"), "{:?}", links.emergency);
+        assert_eq!(links.control["e9"].3, "emergency");
+        assert!(links.unswitched["e9"].contains("EM LTG"), "{:?}", links.unswitched);
+        // An ordinary circuit's light with no control is still a conflict.
+        assert_eq!(links.control["p17"].3, "none");
+        assert_eq!(links.conflicts.len(), 1, "{:?}", links.conflicts);
+        assert_eq!(links.conflicts[0].elements, ["p17".to_string()]);
+    }
+
+    #[test]
     fn controls_link_both_ways_and_each_gap_is_a_conflict_citing_both_sides() {
         let mut dim = dev("d1", "luminaire", "Q4", "A1", "b", [5.0, 5.0]);
         dim.dimming = "phase".into();
@@ -2566,7 +2659,12 @@ mod tests {
         // room's 3-way (its letter lights this room).
         lums.push(dev("n4", "luminaire", "Q2", "A3S", "a", [12.0, -3.0]));
         ctrls.push(dev("n5", "switch", "S", "A3S", "b", [12.0, -6.0]));
-        let links = link_controls(&lums, &ctrls, &[], &ControlDocs { codes: &codes, emergency: &emergency, plans: "the plans" });
+        let links = link_controls(
+            &lums,
+            &ctrls,
+            &[],
+            &ControlDocs { codes: &codes, emergency: &emergency, emergency_circuits: &BTreeMap::new(), plans: "the plans" },
+        );
         assert_eq!(links.controlled_by["n1"], vec!["n2".to_string(), "n3".to_string()]);
         assert!(!links.controlled_by.contains_key("n4"), "{:?}", links.controlled_by.get("n4"));
         assert_eq!(links.three_way_with["n2"], vec!["n3".to_string()]);
