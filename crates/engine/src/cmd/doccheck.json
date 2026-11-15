@@ -50,7 +50,7 @@
     "datums_ft": [0.0, 100.0],
     "tolerance_in": 1.0,
     "max_difference_ft": 2.0,
-    "reach_heights": 4.5,
+    "reach_heights": 6.5,
     "_reach_heights": "A level name's elevation lies within this many text heights of the name's start (set under it, often to the right)."
   },
   "conditions": [

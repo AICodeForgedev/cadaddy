@@ -1194,8 +1194,8 @@ fn floor_kind(k: levels::DatumKind) -> bool {
     matches!(k, levels::DatumKind::Floor | levels::DatumKind::Basement)
 }
 
-/// A page's level marks: canonical name → (elevation as printed, the text).
-fn level_marks(texts: &[TextItem], reach: f64) -> BTreeMap<String, (f64, String)> {
+/// A page's level marks: canonical name → each elevation printed for it, its text and how often.
+fn level_marks(texts: &[TextItem], reach: f64) -> BTreeMap<String, Vec<(f64, String, usize)>> {
     let mut all: Vec<(String, f64, String)> = Vec::new();
     let mut used: BTreeSet<usize> = BTreeSet::new();
     for (i, t) in texts.iter().enumerate() {
@@ -1237,20 +1237,22 @@ fn level_marks(texts: &[TextItem], reach: f64) -> BTreeMap<String, (f64, String)
             all.push((name, v, format!("{} / {}", t.value, e.value)));
         }
     }
-    // Per name the most common value (a page marks a floor in several sections).
-    let mut out: BTreeMap<String, (f64, String)> = BTreeMap::new();
-    let mut names: BTreeSet<String> = all.iter().map(|x| x.0.clone()).collect();
-    for name in std::mem::take(&mut names) {
-        let mine: Vec<&(String, f64, String)> = all.iter().filter(|x| x.0 == name).collect();
-        let best = mine.iter().max_by_key(|x| mine.iter().filter(|y| (y.1 - x.1).abs() < 1.0 / 96.0).count());
-        if let Some(b) = best {
-            out.insert(name, (b.1, b.2.clone()));
+    // Per name each value it is marked at, the most common first (a page marks a floor in several
+    // sections; a bare floor name may sit by another height).
+    let mut out: BTreeMap<String, Vec<(f64, String, usize)>> = BTreeMap::new();
+    for (name, v, text) in &all {
+        let vals = out.entry(name.clone()).or_default();
+        match vals.iter_mut().find(|x| (x.0 - v).abs() < 1.0 / 96.0) {
+            Some(x) => x.2 += 1,
+            None => vals.push((*v, text.clone(), 1)),
         }
+    }
+    for vals in out.values_mut() {
+        vals.sort_by(|a, b| b.2.cmp(&a.2));
     }
     out
 }
 
-/// Each document's level marks against the levels the model is built on.
 fn level_datums(pages: &[Page], sp: &BuildingSpec, out: &mut Outcome) -> Vec<Rfi> {
     let lr = &rules().levels;
     // (discipline, level) → (difference ft, document's value, model's, each sheet and its text).
@@ -1258,17 +1260,20 @@ fn level_datums(pages: &[Page], sp: &BuildingSpec, out: &mut Outcome) -> Vec<Rfi
     let mut compared: BTreeSet<(String, String)> = BTreeSet::new();
     for p in pages {
         let marks = level_marks(&p.texts, lr.reach_heights);
-        // Matched to the model's levels: (model level name, document value, model value, text).
+        // Matched to the model's levels: (model level name, document value, model value, text),
+        // each level's most common value first.
         let mut matched: Vec<(String, f64, f64, String)> = marks
             .iter()
-            .filter_map(|(name, (v, text))| {
+            .filter_map(|(name, vals)| {
                 let l = sp.level_matching(name).and_then(|i| sp.levels.get(i))?;
-                Some((l.name.clone(), *v, l.elevation_ft, text.clone()))
+                Some(vals.iter().map(|(v, text, _)| (l.name.clone(), *v, l.elevation_ft, text.clone())).collect::<Vec<_>>())
             })
+            .flatten()
             .collect();
         if matched.is_empty() {
             continue;
         }
+        // Stable: a level's most common value stays first among its values.
         matched.sort_by(|a, b| a.2.total_cmp(&b.2));
         // The page's datum: the convention nearest its lowest level's difference.
         let Some(low) = matched.first() else { continue };
@@ -1287,6 +1292,9 @@ fn level_datums(pages: &[Page], sp: &BuildingSpec, out: &mut Outcome) -> Vec<Rfi
                 continue;
             }
             let e = found.entry((p.discipline.clone(), level.clone())).or_insert((diff, *v, model + datum, Vec::new()));
+            if diff.abs() > e.0.abs() {
+                (e.0, e.1) = (diff, *v);
+            }
             if e.3.len() < MAX_SHEETS && !e.3.iter().any(|(s, _)| *s == p.sheet) {
                 e.3.push((p.sheet.clone(), text.clone()));
             }
@@ -1966,12 +1974,16 @@ mod tests {
     fn a_level_name_over_its_elevation_is_a_mark() {
         let texts = vec![t("3RD FLOOR F.F.", 0.0, 10.0), t("121' - 4 1/2\"", 0.0, 8.5), t("LEVEL 2 = 10'-6\"", 50.0, 0.0)];
         let m = level_marks(&texts, 3.0);
-        let l3 = m.get("LEVEL 3").expect("level 3");
+        let l3 = m.get("LEVEL 3").and_then(|v| v.first()).expect("level 3");
         assert!((l3.0 - (121.0 + 4.5 / 12.0)).abs() < 1e-9, "{m:?}");
-        assert!((m.get("LEVEL 2").expect("level 2").0 - 10.5).abs() < 1e-9);
+        assert!((m.get("LEVEL 2").and_then(|v| v.first()).expect("level 2").0 - 10.5).abs() < 1e-9);
         // An elevation set under the name and to its right, over three heights from its start.
         let offset = vec![t("4TH FLOOR F.F.", 0.0, 10.0), t("131' - 2 1/2\"", 2.7, 8.2)];
-        assert!((level_marks(&offset, rules().levels.reach_heights).get("LEVEL 4").expect("level 4").0 - (131.0 + 2.5 / 12.0)).abs() < 1e-9);
+        assert!(
+            (level_marks(&offset, rules().levels.reach_heights).get("LEVEL 4").and_then(|v| v.first()).expect("level 4").0 - (131.0 + 2.5 / 12.0))
+                .abs()
+                < 1e-9
+        );
         // Lettering read off strokes is no mark.
         let junk = vec![t("1 / 1'", 0.0, 0.0), t("/////1////1'////-/", 40.0, 0.0), t(":1'-------:.===/:.1", 80.0, 0.0)];
         assert!(level_marks(&junk, 3.0).is_empty(), "{:?}", level_marks(&junk, 3.0));
@@ -2054,6 +2066,31 @@ mod tests {
         // 10 ft off: clear.
         let rep = check(&[], &[], &spec(192.0));
         assert!(rep.rfis.iter().all(|r| r.topic != "documents: site objects"), "{:?}", rep.rfis);
+    }
+
+    #[test]
+    fn a_floor_marked_off_the_model_is_found_beside_bare_names_by_other_heights() {
+        let sp = BuildingSpec::from_json(
+            &json!({"version": 1, "units_per_foot": 12.0, "levels": [
+                {"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0}, {"name": "L4", "elevation_ft": 30.0, "height_ft": 10.0}]})
+            .to_string(),
+        )
+        .expect("spec");
+        // Two sections mark the fourth floor 9" high; two bare floor names sit by other heights.
+        let mut texts = vec![t("1ST FLOOR F.F.", 0.0, 50.0), t("100'-0\"", 0.0, 48.5)];
+        for x in [0.0, 100.0] {
+            texts.push(t("4TH FLOOR F.F.", x, 80.0));
+            texts.push(t("130' - 9\"", x + 1.0, 78.5));
+        }
+        for x in [300.0, 400.0] {
+            texts.push(t("4TH FLOOR", x, 80.0));
+            texts.push(t("102'-0\"", x, 78.5));
+        }
+        let page = Page { sheet: "FP-1".into(), discipline: "FP".into(), levels: vec![], texts };
+        let rep = check(&[page], &[], &sp);
+        let found: Vec<&Rfi> = rep.rfis.iter().filter(|r| r.topic == "documents: level datums").collect();
+        assert_eq!(found.len(), 1, "{:?}", rep.rfis);
+        assert!(found[0].issue.contains("9\" above"), "{}", found[0].issue);
     }
 
     #[test]
