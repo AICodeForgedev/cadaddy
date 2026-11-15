@@ -2838,6 +2838,90 @@ mod tests {
         assert_eq!(sp2, sp);
     }
 
+    /// A one-page PDF `w` x `h` points around a content stream, with Helvetica as /F1.
+    fn pdf_page(content: &str, w: u32, h: u32) -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for off in offsets {
+            pdf.extend(format!("{off:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        pdf
+    }
+
+    /// Q6673: a one-building set's site plan, printed (PDF) at 1" = 20': the building, two pole
+    /// lights tagged with their type mark (each head drawn its own way, so the import's symbol step
+    /// finds no drawing they share), a buried run from the building's east wall to the first pole
+    /// and one on from it to the second. Each run's last piece lies inside its pole's symbol
+    /// cluster. The import kept that piece in the pole's symbol block, so the run lost its end and
+    /// the site step its run (a site plan's run gone, its poles fed by nothing). Read from the
+    /// import, the site plan keeps both runs and both poles with their bases.
+    #[test]
+    fn a_printed_site_plans_runs_and_poles_survive_the_imports_symbol_step() {
+        let mut c = String::from("q 0 0 0 RG 0.5 w ");
+        let seg = |c: &mut String, a: (i32, i32), b: (i32, i32)| c.push_str(&format!("{} {} m {} {} l S ", a.0, a.1, b.0, b.1));
+        // The building: 80 x 50 ft.
+        c.push_str("600 600 m 888 600 l 888 780 l 600 780 l h S ");
+        // The pole lights' heads: a square, a diamond.
+        c.push_str("1196 696 m 1204 696 l 1204 704 l 1196 704 l h S ");
+        c.push_str("1500 694 m 1506 700 l 1500 706 l 1494 700 l h S ");
+        for (x, y) in [(1206, 704), (1504, 686)] {
+            c.push_str(&format!("BT /F1 10 Tf {x} {y} Td (SL1) Tj ET "));
+        }
+        // The sheet's number, in its title block.
+        c.push_str("BT /F1 18 Tf 2450 60 Td (E-101) Tj ET ");
+        // The run from the east wall to the first pole, drawn in pieces a point apart (an
+        // underground line; touching, the import would join them into one).
+        seg(&mut c, (888, 700), (1169, 700));
+        seg(&mut c, (1170, 700), (1196, 700));
+        // The run on to the second pole: down, across, up.
+        seg(&mut c, (1200, 696), (1200, 670));
+        seg(&mut c, (1200, 669), (1200, 600));
+        seg(&mut c, (1200, 600), (1500, 600));
+        seg(&mut c, (1500, 600), (1500, 667));
+        seg(&mut c, (1500, 668), (1500, 694));
+        c.push('Q');
+        let opts = cadaddy_io::pdf_read::PdfOptions { scale: Some(240.0), images: false, ..Default::default() };
+        let page = cadaddy_io::pdf_read::read(&pdf_page(&c, 2592, 1728), &opts).unwrap_or_else(|e| panic!("{e}")).drawing;
+        let tagged = page
+            .model
+            .iter()
+            .filter(
+                |e| matches!(&e.kind, EntityKind::Insert(i) if i.block.starts_with("PDF-SYM-") && i.attribs.iter().any(|a| a.text.value == "SL1")),
+            )
+            .count();
+        assert_eq!(tagged, 2, "both poles are the import's symbols");
+        let types: BTreeSet<String> = ["SL1".to_string()].into_iter().collect();
+        let read = read("E-001", &page, [-1.0e7, -1.0e7, 1.0e7, 1.0e7], &types, 12.0);
+        assert_eq!(read.lights.len(), 2, "{:?}", read.lights);
+        let sp = spec_with_slab();
+        let fit = register(&read, &sp, "Level 1", true);
+        assert_eq!(fit.method, "building outline", "{}", fit.why);
+        let built = plan(&sp, &read, &fit, "Level 1", &mut Seq::default());
+        assert_eq!(built.poles, 2);
+        assert_eq!(built.concrete.iter().filter(|c| c.kind == "pole_base").count(), 2);
+        let lens: Vec<f64> = built.runs.iter().filter(|r| r.made == Made::Drawn && r.top_ft.is_none()).map(|r| path_len(&r.points) / 12.0).collect();
+        assert_eq!(built.drawn_runs, 2, "{lens:?}");
+        // Each whole: the wall to the first pole is 86 ft as printed, the first pole to the second
+        // 136 ft.
+        let mut lens = lens;
+        lens.sort_by(f64::total_cmp);
+        assert!(lens.len() == 2 && lens.iter().zip([86.0, 136.0]).all(|(l, want)| (l - want).abs() < 5.0), "{lens:?}");
+    }
+
     #[test]
     fn a_site_plan_whose_building_is_another_size_is_placed_by_its_centre_and_said_so() {
         let (d, area) = site_sheet();

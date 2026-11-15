@@ -1054,6 +1054,46 @@ fn a_door_swing_beside_every_copy_of_a_symbol_stays_the_doors() {
 }
 
 #[test]
+fn a_copy_drawn_like_no_other_keeps_only_its_symbol_and_the_run_beside_it_stays_loose() {
+    // Two copies of one type mark, each head drawn its own way (a square, a diamond), so they
+    // share no drawing, and each with the last piece of a run beside it, inside its cluster (a
+    // site plan's buried run reaching its pole light). Before Q6673 each copy was a block of its
+    // own holding its whole cluster: the run's piece went into the block, and the site step,
+    // reading the plan's linework, lost the run. A copy sharing its drawing with no other is
+    // measured by its own outline round the tag: a piece over twice it that no other copy draws
+    // is not the symbol's and stays loose where printed; the sheet draws the same strokes.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    // the square head, its run coming in from the left (a long piece, then the last one: an
+    // underground line drawn in pieces, apart, so the import doesn't join them)
+    content.extend_from_slice(b"196 296 m 204 296 l 204 304 l 196 304 l h S ");
+    content.extend_from_slice(b"100 300 m 169 300 l S 170 300 m 196 300 l S ");
+    content.extend_from_slice(b"BT /F1 10 Tf 206 302 Td (SL1) Tj ET ");
+    // the diamond head, its run coming down from above
+    content.extend_from_slice(b"450 295 m 455 300 l 450 305 l 445 300 l h S ");
+    content.extend_from_slice(b"450 400 m 450 330 l S 450 329 m 450 305 l S ");
+    content.extend_from_slice(b"BT /F1 10 Tf 456 304 Td (SL1) Tj ET ");
+    // the sheet's number, in its title block
+    content.extend_from_slice(b"BT /F1 14 Tf 720 40 Td (E-101) Tj ET ");
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d), ["SL1", "SL1"], "both copies are symbols with their TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let blocks = block_pieces(d);
+    assert_eq!(blocks.values().copied().collect::<Vec<_>>(), vec![4, 4], "each block is its head only: {blocks:?}");
+    // the runs' last pieces (26 and 24 points long, or the same in inches) are loose linework
+    let long = |v: f64| [26.0, 24.0].iter().any(|n: &f64| (v / n - 1.0).abs() < 0.02 || (v / (n / 72.0) - 1.0).abs() < 0.02);
+    let loose = drawn_pieces(&Drawing { blocks: Default::default(), ..d.clone() })
+        .0
+        .iter()
+        .filter(|s| long((((s[2] - s[0]) as f64).hypot((s[3] - s[1]) as f64)) / 1000.0))
+        .count();
+    assert_eq!(loose, 2, "both runs' last pieces stay loose where printed");
+}
+
+#[test]
 fn a_box_drawn_round_its_tags_letters_stays_the_symbols() {
     // Four labels of one type, each in a box drawn round its letters (as wide as the label is
     // long, so no two boxes are alike), with a small square on the box's top left corner that

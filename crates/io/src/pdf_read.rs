@@ -6193,12 +6193,23 @@ fn split_by_shared_drawing(group: Vec<SymbolInstance>, strokes: &[Stroke], fills
             (inst, pieces)
         })
         .collect();
+    // how many of the type's copies draw each shape (anywhere in their clusters): what a copy
+    // alone draws is the evidence a copy sharing its layout with none still has (Q6673)
+    let mut drawn_by: HashMap<(bool, StrokeKey), usize> = HashMap::new();
+    for (_, pieces) in &left {
+        let mut seen: HashSet<(bool, &StrokeKey)> = HashSet::new();
+        for p in pieces {
+            if seen.insert((p.fill, &p.key)) {
+                *drawn_by.entry((p.fill, p.key.clone())).or_default() += 1;
+            }
+        }
+    }
     let mut rounds = 0usize;
     while !left.is_empty() {
         rounds += 1;
         if rounds > MAX_SYMBOL_VARIANTS || left.len() == 1 {
             for (inst, pieces) in left.drain(..) {
-                out.push(vec![keep_pieces(inst, &pieces, &[], (0.0, 0.0), strokes, fills)]);
+                out.push(vec![lone_symbol(inst, &pieces, &drawn_by, strokes, fills)]);
             }
             break;
         }
@@ -6272,6 +6283,11 @@ fn split_by_shared_drawing(group: Vec<SymbolInstance>, strokes: &[Stroke], fills
                 members.push((i, mv, lands));
             }
         }
+        // no copy draws it the reference's way: it shares its drawing with none (Q6673)
+        if members.is_empty() {
+            out.push(vec![lone_symbol(reference, &ref_pieces, &drawn_by, strokes, fills)]);
+            continue;
+        }
         // the reference's centre: the middle of the shared drawing
         let shared_box = ref_pieces
             .iter()
@@ -6336,6 +6352,83 @@ fn tag_box_piece(inst: &SymbolInstance, pieces: &[Piece], strokes: &[Stroke]) ->
     })
 }
 
+/// A copy no other copy of its type draws alike: a block of its own, with no shared drawing to
+/// tell its symbol by. Its cluster can hold whatever passes by its tag: a piece of the buried run
+/// that feeds a site plan's pole light, a corner of the building's outline, the dots of a dotted
+/// line. Kept in its block, that piece left the plan's linework: the run broke and the site step
+/// lost the run, its poles fed by nothing (Q6673). Its symbol is measured by its
+/// own outline: the box round its tag's letters, else the outline nearest the tag (closed, about
+/// as wide as tall, no smaller than its letters), else a square [`LONE_SYMBOL_LETTERS`] letters
+/// wide on the tag. A piece whose middle stands farther than [`FOREIGN_STROKE_OVER`] times that
+/// size from it, or that is bigger than that while no other copy of its type draws its shape
+/// (wherever it lies), is not the symbol's and stays loose where printed, as for copies that
+/// share an outline ([`release_foreign_strokes`]); a shape the type's other copies draw too (the
+/// line between a mark and its circuit) stays the symbol's. None left: the copy is its tag
+/// alone. A copy with no tag height to measure by keeps its cluster.
+fn lone_symbol(
+    mut inst: SymbolInstance,
+    pieces: &[Piece],
+    drawn_by: &HashMap<(bool, StrokeKey), usize>,
+    strokes: &[Stroke],
+    fills: &[Fill],
+) -> SymbolInstance {
+    let Some((tag_at, letters)) = inst.nearby_text_at.filter(|t| t.1.is_finite() && t.1 > 0.0) else {
+        return keep_pieces(inst, pieces, &[], (0.0, 0.0), strokes, fills);
+    };
+    let box_of = |p: &Piece| {
+        if p.fill { fills.get(p.idx).and_then(|f| bbox(&f.loops)) } else { strokes.get(p.idx).and_then(|s| bbox(std::slice::from_ref(&s.pts))) }
+    };
+    let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
+    let gap_to_tag = |b: [f64; 4]| {
+        let dx = (b[0] - tag_at.0).max(tag_at.0 - b[2]).max(0.0);
+        let dy = (b[1] - tag_at.1).max(tag_at.1 - b[3]).max(0.0);
+        dx.hypot(dy)
+    };
+    let round_tag = tag_box_piece(&inst, pieces, strokes).and_then(|k| pieces.get(k)).and_then(box_of);
+    let nearest = || {
+        pieces
+            .iter()
+            .filter(|p| !p.fill && strokes.get(p.idx).is_some_and(is_outline))
+            .filter_map(box_of)
+            .filter(|b| {
+                let (w, h) = (b[2] - b[0], b[3] - b[1]);
+                w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))
+            })
+            .min_by(|a, b| gap_to_tag(*a).total_cmp(&gap_to_tag(*b)).then(extent(*a).total_cmp(&extent(*b))))
+    };
+    let symbol = round_tag.or_else(nearest).unwrap_or_else(|| {
+        let half = LONE_SYMBOL_LETTERS * letters / 2.0;
+        let c = (tag_at.0, tag_at.1 + letters / 2.0);
+        [c.0 - half, c.1 - half, c.0 + half, c.1 + half]
+    });
+    let reach = FOREIGN_STROKE_OVER * extent(symbol);
+    // a piece whose middle stands within reach of the symbol, no bigger than the reach unless a
+    // shape another copy of its type draws too (the line between a mark and its circuit, drawn
+    // at every copy): a hatch or dotted line passing farther off is never the symbol's
+    let near = |b: [f64; 4]| {
+        let c = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        c.0 >= symbol[0] - reach && c.0 <= symbol[2] + reach && c.1 >= symbol[1] - reach && c.1 <= symbol[3] + reach
+    };
+    let shared = |p: &Piece| drawn_by.get(&(p.fill, p.key.clone())).copied().unwrap_or(0) >= SHARED_STROKE_MIN;
+    let keep: Vec<usize> =
+        pieces.iter().enumerate().filter(|(_, p)| box_of(p).is_some_and(|b| near(b) && (extent(b) <= reach || shared(p)))).map(|(k, _)| k).collect();
+    if keep.len() == pieces.len() {
+        return keep_pieces(inst, pieces, &[], (0.0, 0.0), strokes, fills);
+    }
+    let kept_box =
+        keep.iter().filter_map(|&k| pieces.get(k)).filter_map(box_of).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+    match kept_box {
+        Some(b) => keep_pieces(inst, pieces, &keep, ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), strokes, fills),
+        None => {
+            let gone = std::mem::take(&mut inst.stroke_indices);
+            inst.released.extend(gone);
+            inst.fill_indices.clear();
+            inst.center = ((symbol[0] + symbol[2]) / 2.0, (symbol[1] + symbol[3]) / 2.0);
+            inst
+        }
+    }
+}
+
 /// `inst` keeping only the pieces at `keep` (positions in `pieces`) and centred at `centre`; with
 /// no `keep`, a block of its own: all its pieces, centred on their middle.
 fn keep_pieces(mut inst: SymbolInstance, pieces: &[Piece], keep: &[usize], centre: (f64, f64), strokes: &[Stroke], fills: &[Fill]) -> SymbolInstance {
@@ -6370,6 +6463,9 @@ const SHARED_STROKE_MIN: usize = 2;
 const SHARED_STROKE_SHARE: usize = 4;
 /// A stroke more than this many times the shared outline round the tag is not the symbol's.
 const FOREIGN_STROKE_OVER: f64 = 2.0;
+/// A copy that shares its drawing with no other and draws no outline round its tag is measured
+/// as a symbol this many of its tag's letters wide (a circle or box round a mark or two).
+const LONE_SYMBOL_LETTERS: f64 = 2.0;
 /// The outline round a tag is at least this wide for its height (and the other way round).
 const OUTLINE_MIN_ASPECT: f64 = 0.5;
 /// Most points of a stroke its shape is told by.
