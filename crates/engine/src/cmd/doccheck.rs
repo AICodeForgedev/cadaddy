@@ -1248,7 +1248,7 @@ fn level_marks(texts: &[TextItem], reach: f64) -> BTreeMap<String, Vec<(f64, Str
         }
     }
     for vals in out.values_mut() {
-        vals.sort_by(|a, b| b.2.cmp(&a.2));
+        vals.sort_by_key(|v| std::cmp::Reverse(v.2));
     }
     out
 }
