@@ -633,6 +633,18 @@ pub struct Drew {
 
 /// [`display_keep`] and what it drew, in the one pass over the model.
 pub fn display_summary(d: &Drawing, look: &Look, stack: bool, keep: &dyn Fn(&Entity, &Class) -> bool) -> Option<(Drawing, Drew)> {
+    display_summary_in(d, look, stack, keep, None)
+}
+
+/// [`display_summary`] of one storey ([`super::storey`], Q6660): `storey`, else the per-level
+/// view's level's.
+pub(crate) fn display_summary_in(
+    d: &Drawing,
+    look: &Look,
+    stack: bool,
+    keep: &dyn Fn(&Entity, &Class) -> bool,
+    storey: Option<&super::storey::Storey>,
+) -> Option<(Drawing, Drew)> {
     use super::bimviews::{self, Paint, Shown, View};
     if look.off || !has_model(d) {
         return None;
@@ -649,7 +661,9 @@ pub fn display_summary(d: &Drawing, look: &Look, stack: bool, keep: &dyn Fn(&Ent
     let faded = std::cell::RefCell::new(std::collections::HashSet::new());
     let paints = std::cell::RefCell::new(HashMap::new());
     let drawn = std::cell::Cell::new(0usize);
-    let mut out = compose(d, &shown, ghost, stack, &|e, c| {
+    let own = if storey.is_none() { shown.level.as_deref().and_then(|l| super::storey::Storey::of(d, l)) } else { None };
+    let storey = storey.or(own.as_ref());
+    let mut out = compose_in(d, &shown, ghost, stack, storey, &|e, c| {
         if !keep(e, c) {
             return false;
         }
@@ -684,6 +698,22 @@ pub fn display_summary(d: &Drawing, look: &Look, stack: bool, keep: &dyn Fn(&Ent
         bimviews::ghost_these(&mut out, &faded);
     }
     bimviews::add_context(&mut out, &scope);
+    // The view's context of a storey: the hoistways' part in it.
+    if let Some(st) = storey {
+        let ctx: Vec<Handle> = out.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("hoistway")).map(|e| e.handle).collect();
+        for h in ctx {
+            let cut = out.model.get(h).map(|e| st.cut(e, true).map(std::borrow::Cow::into_owned));
+            match cut {
+                Some(Some(c)) => {
+                    out.model.replace(c);
+                }
+                Some(None) => {
+                    out.model.remove(h);
+                }
+                None => {}
+            }
+        }
+    }
     Some((out, Drew { drawn: drawn.get(), legend }))
 }
 
@@ -716,8 +746,24 @@ pub(crate) fn stack_move(level_offset: Option<cadaddy_geom::Vec2>, e: &Entity) -
 
 /// `d` with only the built elements `keep` and `look` let through (and, with `look.sheet`, the
 /// sheet's own objects), coloured by trade; the ghosted trades see-through when `ghost`; the
-/// levels stacked ([`stack_offsets`]) when `stack`.
+/// levels stacked ([`stack_offsets`]) when `stack`. With a level in `look`, that level's storey
+/// ([`super::storey`], Q6660).
 pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn(&Entity, &Class) -> bool) -> Drawing {
+    let storey = look.level.as_deref().and_then(|l| super::storey::Storey::of(d, l));
+    compose_in(d, look, ghost, stack, storey.as_ref(), keep)
+}
+
+/// [`compose`] of one storey (Q6660): with `storey`, its level's objects cut at the floor above,
+/// and every other level's objects that stand in it (cut to it, on its level's plan) as its own;
+/// the rest of the building left out. `keep` and `look` see those as objects of its level.
+pub(crate) fn compose_in(
+    d: &Drawing,
+    look: &Look,
+    ghost: bool,
+    stack: bool,
+    storey: Option<&super::storey::Storey>,
+    keep: &dyn Fn(&Entity, &Class) -> bool,
+) -> Drawing {
     let offsets = if stack { stack_offsets(d) } else { Vec::new() };
     let offset_of = |level: &str| offsets.iter().find(|(n, _)| n.eq_ignore_ascii_case(level)).map(|o| o.1);
     let mut out = d.clone();
@@ -728,11 +774,22 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
     };
     let ghosted = |k: &str| ghost && trade(k).is_some_and(|t| t.ghost);
     // What each kept object is; each layer's trade when all its objects share one.
-    let mut kept: Vec<(&Arc<Entity>, Option<&'static str>, Option<cadaddy_geom::Vec2>)> = Vec::new();
+    // (object, trade, its stacking move, from another level of the storey).
+    let mut kept: Vec<(&Arc<Entity>, Option<&'static str>, Option<cadaddy_geom::Vec2>, Option<String>)> = Vec::new();
     let mut layer_trade: BTreeMap<String, Option<&'static str>> = BTreeMap::new();
     for e in d.model.iter().take(MAX_SCAN) {
         match classify(d, e) {
-            Some(c) => {
+            Some(mut c) => {
+                // Another level's object in the storey stands as one of its level's.
+                let from = match storey {
+                    Some(st) if !c.level.eq_ignore_ascii_case(&st.level) => {
+                        if !st.stands_in(e, &c.level) {
+                            continue;
+                        }
+                        Some(std::mem::replace(&mut c.level, st.level.clone()))
+                    }
+                    _ => None,
+                };
                 if !look.shows(&c) || !keep(e, &c) {
                     continue;
                 }
@@ -740,9 +797,12 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
                 if *slot != Some(c.key) {
                     *slot = None;
                 }
-                kept.push((e, Some(c.key), stack_move(offset_of(&c.level), e)));
+                // Stacked, each object moves by its own level's offset; on the level's plan,
+                // another level's object is carried onto it ([`super::storey::Storey::place`]).
+                let off = if stack { stack_move(offset_of(from.as_deref().unwrap_or(&c.level)), e) } else { None };
+                kept.push((e, Some(c.key), off, from));
             }
-            None if look.sheet => kept.push((e, None, None)),
+            None if look.sheet => kept.push((e, None, None, None)),
             None => {}
         }
     }
@@ -766,16 +826,28 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
         }
     }
     let mut items: Vec<Entity> = Vec::new();
-    for (e, key, off) in kept {
+    for (shared, key, off, from) in kept {
         let Some(k) = key else {
-            out.model.push_shared(Arc::clone(e));
+            out.model.push_shared(Arc::clone(shared));
             continue;
         };
+        // The storey's part of it: cut at the floor above (and, from another level, at its
+        // floor), carried onto the level's plan when not stacked.
+        let placed = match storey {
+            Some(st) => match st.place(shared, from.as_deref(), !stack) {
+                None => continue,
+                Some(std::borrow::Cow::Owned(x)) => Some(x),
+                Some(std::borrow::Cow::Borrowed(_)) => None,
+            },
+            None => None,
+        };
+        let changed = placed.is_some();
+        let e: &Entity = placed.as_ref().unwrap_or(shared);
         // Filled-in work apart from drawn: its own colour, solid.
         let apart = if look.apart { super::provenance::of_element(e).map(|x| x.0).filter(|m| !m.is_drawn()) } else { None };
         if let Some(m) = apart {
             let c3 = if m == cadaddy_walk3d::Made::Derived { DERIVED_RGB } else { INFERRED_RGB };
-            let mut c = (**e).clone();
+            let mut c = e.clone();
             c.common.color = Color::True(cadaddy_color::Rgb(c3[0], c3[1], c3[2]));
             c.common.material = Option::<String>::None.into();
             if let Some(o) = off {
@@ -786,10 +858,10 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
         }
         let on_layer = layer_trade.get(&e.common.layer.to_ascii_uppercase()).copied().flatten() == Some(k);
         let own_material = e.common.material.as_deref().map(str::trim).is_some_and(|m| !m.is_empty() && !m.eq_ignore_ascii_case("BYLAYER"));
-        if off.is_none() && on_layer && matches!(e.common.color, Color::ByLayer) && !(ghosted(k) && own_material) {
-            out.model.push_shared(Arc::clone(e));
+        if !changed && off.is_none() && on_layer && matches!(e.common.color, Color::ByLayer) && !(ghosted(k) && own_material) {
+            out.model.push_shared(Arc::clone(shared));
         } else {
-            let mut c = (**e).clone();
+            let mut c = e.clone();
             if !(on_layer && matches!(e.common.color, Color::ByLayer)) {
                 c.common.color = rgb(k);
             }
