@@ -145,6 +145,28 @@ fn a_copy_moved_up_a_storey_is_on_that_storey() {
     }
 }
 
+#[test]
+fn a_copy_given_a_rise_lands_on_the_storey_above() {
+    // Q6656: `copy {delta: [0, 0, storey]}` in one step (no 3dmove after it) raises the copy a
+    // storey: it is not left on top of the original, and it is filed under the level above.
+    for east in [0.0, 100.0] {
+        let mut s = building(2, 10.0, east);
+        let fan = *on_level(&s, "Equipment", "Level 1").first().expect("the level 1 exhaust fan");
+        let orig = element(&mut s, fan);
+        let aff = orig["aff_in"].as_f64().unwrap();
+        let cat = orig["category"].as_str().unwrap().to_string();
+        let on_2 = tree_count(&mut s, "Level 2", &cat);
+        let before: Vec<Handle> = s.doc().unwrap().model.iter().map(|e| e.handle).collect();
+        s.execute("copy", &json!({"handles": [fan.hex()], "delta": [0, 0, 120.0]})).unwrap();
+        let copy = s.doc().unwrap().model.iter().map(|e| e.handle).find(|h| !before.contains(h)).expect("the copy");
+        let r = element(&mut s, copy);
+        assert_eq!(r["level"], json!("Level 2"), "east {east}: {r}");
+        assert!((r["aff_in"].as_f64().unwrap() - aff).abs() < 0.5, "same height above its own floor: {r}");
+        assert_eq!(tree_count(&mut s, "Level 2", &cat), on_2 + 1, "the model tree files the copy under level 2 (east {east})");
+        assert_eq!(element(&mut s, fan)["level"], json!("Level 1"), "the original stays");
+    }
+}
+
 /// The duct elements `bim.takeoff` by level counts on `level`.
 fn takeoff_ducts(s: &mut Session, level: &str) -> u64 {
     let t = s.execute("bim.takeoff", &json!({"group_by": "level", "keep": false})).unwrap();

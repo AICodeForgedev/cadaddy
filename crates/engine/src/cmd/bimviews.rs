@@ -199,8 +199,13 @@ pub struct Rules {
     pub shell_floor_opacity: f64,
     pub shell_wall_rgb: [u8; 3],
     pub shell_interior_opacity: f64,
-    /// The Systems view's thinnest run on screen, pixels.
+    /// The Systems view's thinnest run on screen, pixels (a role [`Rules::systems_weights`]
+    /// doesn't name).
     pub systems_min_px: f64,
+    /// The Systems view's thinnest run on screen by its role ([`Role`]: `main` for mains,
+    /// feeders and risers, `branch`, `device` for devices, fixtures and fittings, `equipment`),
+    /// pixels. A run wider than this on screen draws true to scale.
+    pub systems_weights: BTreeMap<String, f64>,
     /// The colour of a system no palette row names (never grey).
     pub systems_other_rgb: [u8; 3],
     /// The Systems view's palette: the first row whose trades hold an element's trade and,
@@ -222,6 +227,10 @@ pub struct SystemColor {
     /// Words of the element's system, name or type, any of which it needs (none: any element
     /// of its trades).
     pub words: Vec<String>,
+    /// How much stronger its runs draw than their role's weight (none: 1), so a project can
+    /// make one trade read strongest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 impl Default for Rules {
@@ -264,6 +273,7 @@ impl Default for Rules {
             shell_wall_rgb: [150, 162, 180],
             shell_interior_opacity: 0.08,
             systems_min_px: 2.0,
+            systems_weights: BTreeMap::new(),
             systems_other_rgb: [212, 172, 0],
             systems_palette: Vec::new(),
         }
@@ -277,14 +287,20 @@ impl Rules {
     }
 
     /// The rules for `d`: the project's (in its building spec, over the built-in ones key by
-    /// key), and whether it has its own.
+    /// key; a map rule such as `systems_weights` entry by entry), and whether it has its own.
     pub fn of(d: &Drawing) -> (Rules, bool) {
         let Some(own) = project(d) else { return (Rules::defaults(), false) };
         let mut v = serde_json::to_value(Rules::defaults()).unwrap_or(Value::Null);
         if let (Some(o), Some(own)) = (v.as_object_mut(), own.as_object()) {
             for (k, x) in own {
-                if o.contains_key(k) {
-                    o.insert(k.clone(), x.clone());
+                match (o.get_mut(k), x) {
+                    (Some(Value::Object(base)), Value::Object(mine)) => {
+                        for (kk, xx) in mine {
+                            base.insert(kk.clone(), xx.clone());
+                        }
+                    }
+                    (Some(slot), _) => *slot = x.clone(),
+                    (None, _) => {}
                 }
             }
             o.insert("source".into(), json!("project"));
@@ -294,6 +310,16 @@ impl Rules {
 
     fn feet(&self, v: f64, d: f64) -> f64 {
         if v.is_finite() && v >= 0.0 { v } else { d }
+    }
+
+    /// How wide the Systems view draws a run of `role` painted by palette row `row` at the
+    /// least, pixels: the role's weight (else the thinnest run's) times the row's.
+    pub fn weight_px(&self, role: Role, row: Option<usize>) -> f64 {
+        let ok = |v: &f64| v.is_finite() && *v > 0.0;
+        let min = Some(self.systems_min_px).filter(ok).unwrap_or(2.0);
+        let base = self.systems_weights.get(role.key()).copied().filter(ok).unwrap_or(min);
+        let k = row.and_then(|i| self.systems_palette.get(i)).and_then(|r| r.weight).filter(ok).unwrap_or(1.0);
+        (base * k).clamp(1.0, cadaddy_render::bimview::MAX_WEIGHT_PX)
     }
 }
 
@@ -367,6 +393,31 @@ pub enum What {
     Light,
     Fixture,
     Other,
+}
+
+/// What a drawn system element is to the Systems view's weights ([`Rules::systems_weights`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// Mains, feeders, trays and risers (any run through a floor but branch circuits').
+    Main,
+    /// Branch circuits, branch ducts and pipes, wire.
+    Branch,
+    /// Devices, lights, fixtures, terminals, heads, boxes and fittings: small solids.
+    Device,
+    /// Gear, panels and equipment.
+    Equipment,
+}
+
+impl Role {
+    /// Its key in the rules' `systems_weights`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Role::Main => "main",
+            Role::Branch => "branch",
+            Role::Device => "device",
+            Role::Equipment => "equipment",
+        }
+    }
 }
 
 impl What {
@@ -975,6 +1026,27 @@ impl Scope {
             }
             _ => self.palette_row(e, c).map_or(Paint::Other, Paint::System),
         }
+    }
+
+    /// The weight role of a drawn system element (`None`: the shell, the site and what is not
+    /// a system). A run is a main by its kind (a feeder, a tray, a main duct), by its size
+    /// against the rules' main sizes, or by passing through a floor (a riser or a stack).
+    pub fn role(&self, e: &Entity, c: &Class, w: What) -> Option<Role> {
+        let r = &self.rules;
+        let crossing = || self.crosses(e, c);
+        let main = |m: bool| if m || crossing() { Role::Main } else { Role::Branch };
+        Some(match w {
+            What::Feeder { .. } | What::Tray => Role::Main,
+            What::Duct { main: m } => main(m),
+            What::Pipe { size } => main(size.is_some_and(|z| z >= r.plumbing_main_min_in)),
+            What::FirePipe { main: m, size } => main(m.or_else(|| size.map(|z| z >= r.fire_main_min_in)) == Some(true)),
+            What::Branch | What::Wire => Role::Branch,
+            What::Fitting | What::Box | What::Terminal | What::Head | What::Device | What::Light | What::Fixture | What::ElevatorDisconnect => {
+                Role::Device
+            }
+            What::Gear | What::Panel(_) | What::BigEquipment | What::Equipment | What::ExhaustFan | What::ElevatorEquipment => Role::Equipment,
+            What::Arch | What::Floor | What::Structure | What::Site | What::Piece | What::Cabinet | What::Furniture | What::Other => return None,
+        })
     }
 
     /// The palette row of a system element (`None`: no row names it).
@@ -1788,9 +1860,17 @@ pub const SHELL_INTERIOR: &str = "BIM Shell Interior";
 /// Paints the Systems view's drawing `out` (Q6617): the shell in the rules' pale colours and
 /// see-through (floor plates at their own opacity so they read on white; exterior walls, roofs
 /// and the facade at the look's ghost opacity; interior walls fainter), every system in its
-/// palette row's colour, solid and with no material of its own (never a grey box); what a
-/// followed system leaves out see-through in its colour.
-pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, paints: &HashMap<Handle, Paint>, faded: &HashSet<Handle>) {
+/// palette row's colour, solid and with no material of its own (never a grey box), at its
+/// role's and row's weight (Q6663: as its lineweight, [`Rules::weight_px`]); what a followed
+/// system leaves out see-through in its colour.
+pub fn paint_systems(
+    out: &mut Drawing,
+    s: &Scope,
+    look: &Look,
+    ghost: bool,
+    paints: &HashMap<Handle, (Paint, Option<Role>)>,
+    faded: &HashSet<Handle>,
+) {
     let r = &s.rules;
     let names = [SHELL_FLOOR, SHELL, SHELL_INTERIOR, bimlook::GHOST_MATERIAL];
     out.materials.retain(|m| !names.iter().any(|n| m.name.eq_ignore_ascii_case(n)));
@@ -1811,14 +1891,26 @@ pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, pai
         });
     }
     let mut list: Vec<Entity> = Vec::with_capacity(paints.len());
-    for (h, paint) in paints.iter().take(MAX_SCAN) {
+    for (h, (paint, role)) in paints.iter().take(MAX_SCAN) {
         let Some(e) = out.model.get(*h) else { continue };
+        let row = match paint {
+            Paint::System(k) => Some(*k),
+            _ => None,
+        };
+        let weight = role.map(|role| cadaddy_render::bimview::lineweight_px(r.weight_px(role, row)));
         let (rgb, material) = match paint {
             Paint::Floor => (r.shell_floor_rgb, ghost.then_some(SHELL_FLOOR)),
             Paint::Shell => (r.shell_wall_rgb, ghost.then_some(SHELL)),
             Paint::Interior => (r.shell_wall_rgb, ghost.then_some(SHELL_INTERIOR)),
-            // Filled-in work apart from drawn keeps its own colour.
-            Paint::System(_) | Paint::Other if look.apart => continue,
+            // Filled-in work apart from drawn keeps its own colour (and takes its weight).
+            Paint::System(_) | Paint::Other if look.apart => {
+                if let Some(lw) = weight {
+                    let mut c = (**e).clone();
+                    c.common.lineweight = lw;
+                    list.push(c);
+                }
+                continue;
+            }
             Paint::System(k) => (r.systems_palette.get(*k).map_or(r.systems_other_rgb, |row| row.rgb), None),
             Paint::Other => (r.systems_other_rgb, None),
         };
@@ -1826,6 +1918,9 @@ pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, pai
         let mut c = (**e).clone();
         c.common.color = cadaddy_doc::color::Color::True(cadaddy_color::Rgb(rgb[0], rgb[1], rgb[2]));
         c.common.material = material.map(str::to_string).into();
+        if let Some(lw) = weight {
+            c.common.lineweight = lw;
+        }
         list.push(c);
     }
     for c in list {
@@ -1930,7 +2025,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{view?: systems|architectural|mep|floor|room (one at a time; never every object; systems, the default whole-building view of a model with MEP: the shell a pale ghost (floor plates, exterior walls, roofs), every duct, pipe mains and risers, fire mains, feeders, tray and all equipment solid, coloured by system from the rules' palette, branch work left out), full?: bool (MEP: every duct, plumbing mains 2\" and up, fire mains, every panel and its feeder, what passes through floors; default mains and big gear), level?: name | null (the Floor and Room views' level; a level picks the Floor view), room?: number or name | null (the Room view's room on the level; a room picks the Room view), up?: bool (Room to Floor to the whole building, as Esc), enter?: handle (the next view down at an element: its level, then its room), switches?: {m?, e?, p?, cabinets?, furniture?, branches?, interior?, site?: bool} (branches, interior walls and site objects: the Systems view's, off by default), follow?: handle | null (highlight what it feeds and what feeds it across levels, the rest faded)} → {view, full, level, room, breadcrumb: [name], switches: {m, e, p, cabinets, furniture}, offered: [switch] (this view's), levels: [name], rooms: [{number, name}] (the level's), drawn (built elements this view draws), total (built elements), left_out: {pipe_unknown_size, fire_pipe_unknown, panel_role_unknown}, legend?: [{key, label, group, color, count}] (the Systems view's systems drawn), presentation (bim.look's), follow?: {handle, elements}}: what the 3D BIM view draws; counts, takeoff, query, clash, export and plot never depend on it",
         ),
         CommandSpec::new(RULES_CMD, "BIM View Rules", run_rules).params(
-            "{rules?: {key: value} (any of the rules data's keys, each in its own shape: systems_palette ([{key, label, group, rgb, trades, words?}]), shell_floor_rgb ([r, g, b]), shell_wall_rgb ([r, g, b]), systems_other_rgb ([r, g, b]), architectural_parts ([part]), context_parts ([part]), level_context_parts ([part]), shell_parts ([part]), cabinet_parts ([part]), furniture_parts ([part]), raceway_atoms ([part]), cabinet_words ([word]), furniture_words ([word]), gear_words ([word]), panel_words ([word]), big_equipment_words ([word]), exhaust_fan_words ([word]), elevator_words ([word]), disconnect_words ([word]), fire_main_words ([word]), fire_branch_words ([word]), shell_floor_opacity (number), shell_interior_opacity (number), site_margin_ft (number), exterior_wall_tolerance_ft (number), systems_min_px (number), big_equipment_min_extent_ft (number), main_duct_min_in (number), large_pipe_min_in (number), plumbing_main_min_in (number), fire_main_min_in (number), feeder_min_in (number), floor_tolerance_ft (number), hoistway_pad_ft (number), unit_panel_copies (count), max_follow (count), default_view (a view name); kept in the drawing), reset?: bool (back to the built-in rules)} → {source: project|default, rules}: what each BIM view draws, per project",
+            "{rules?: {key: value} (any of the rules data's keys, each in its own shape: systems_palette ([{key, label, group, rgb, trades, words?, weight? (× its role's weight)}]), shell_floor_rgb ([r, g, b]), shell_wall_rgb ([r, g, b]), systems_other_rgb ([r, g, b]), architectural_parts ([part]), context_parts ([part]), level_context_parts ([part]), shell_parts ([part]), cabinet_parts ([part]), furniture_parts ([part]), raceway_atoms ([part]), cabinet_words ([word]), furniture_words ([word]), gear_words ([word]), panel_words ([word]), big_equipment_words ([word]), exhaust_fan_words ([word]), elevator_words ([word]), disconnect_words ([word]), fire_main_words ([word]), fire_branch_words ([word]), shell_floor_opacity (number), shell_interior_opacity (number), site_margin_ft (number), exterior_wall_tolerance_ft (number), systems_min_px (number), systems_weights ({main, branch, device, equipment}: each role's thinnest run on screen, px; the roles named replace the built-in ones), big_equipment_min_extent_ft (number), main_duct_min_in (number), large_pipe_min_in (number), plumbing_main_min_in (number), fire_main_min_in (number), feeder_min_in (number), floor_tolerance_ft (number), hoistway_pad_ft (number), unit_panel_copies (count), max_follow (count), default_view (a view name); kept in the drawing), reset?: bool (back to the built-in rules)} → {source: project|default, rules}: what each BIM view draws, per project",
         ),
         CommandSpec::new(REPORT, "BIM View Report", run_report)
             .params("{width?: px (1600), height?: px (1000), level?: (the Floor view's; default the lowest), room?: (the Room view's; default the level's first)} → {total, views: {systems, architectural, mep, mep_full, floor, room: {drawn, all_switches_drawn, tris, build_ms, model_mb, gpu_mb_est, visible_ms, raster_ms}}}: what each view draws and costs on this model, measured (raster_ms: the CPU rasterizer drawing the whole view, a stand-in for a frame)")

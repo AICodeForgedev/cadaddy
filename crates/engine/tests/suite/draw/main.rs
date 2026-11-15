@@ -21,6 +21,7 @@ mod break_join_locked_layers;
 mod break_keeps_z;
 mod constraint_geometry;
 mod constraint_infer;
+mod copy_keeps_z;
 mod corpus_roundtrip;
 mod drafting_spacing;
 mod draw_prompts;

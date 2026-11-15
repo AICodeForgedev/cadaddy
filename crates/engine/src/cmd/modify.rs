@@ -24,12 +24,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("move", "Move", run_move)
             .menu(&["Modify", "Move"])
             .alias(&["m"])
-            .params("{handles?, from?: [x,y], to?: [x,y] | delta: [dx,dy]}")
+            .params("{handles?, from?: [x,y] | [x,y,z], to?: [x,y] | [x,y,z] | delta: [dx,dy] | [dx,dy,dz]} (a height moves objects up or down, as 3dmove)")
             .interactive(|_| Ok(Box::new(DisplaceM::new(Op::Move)))),
         CommandSpec::new("copy", "Copy", run_copy)
             .menu(&["Modify", "Copy"])
             .alias(&["co", "cp"])
-            .params("{handles?, delta: [dx,dy] | from,to, count?: n}")
+            .params("{handles?, delta: [dx,dy] | [dx,dy,dz] | from,to ([x,y] or [x,y,z]), count?: n} (a height copies up or down, as 3dmove: a device to the floor above)")
             .interactive(|_| Ok(Box::new(DisplaceM::new(Op::Copy)))),
         CommandSpec::new("rotate", "Rotate", run_rotate)
             .menu(&["Modify", "Rotate"])
@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("stretch", "Stretch", run_stretch)
             .menu(&["Modify", "Stretch"])
             .alias(&["s"])
-            .params("{window: [[x,y],[x,y]] | polygon: [[x,y],...] | fence: [[x,y],...], delta: [dx,dy]}")
+            .params("{window: [[x,y],[x,y]] | polygon: [[x,y],...] | fence: [[x,y],...], delta: [dx,dy] | from: [x,y], to: [x,y]} (in plan: a height is refused; 3dmove raises or lowers)")
             .interactive(|_| Ok(Box::new(StretchM::default()))),
         CommandSpec::new("offset", "Offset", run_offset)
             .menu(&["Modify", "Offset"])
@@ -309,31 +309,78 @@ fn run_erase(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "erased": n }))
 }
 
-fn delta_of(cmd: &str, p: &Value) -> Result<Vec2> {
-    if let Some(d) = point_param(p, "delta") {
-        return Ok(d);
+/// Objects without a height (a region, a spline, a wipeout, a viewport): a rise can't move them.
+fn holds_height(k: &EntityKind) -> bool {
+    !matches!(k, EntityKind::Region(_) | EntityKind::Spline(_) | EntityKind::Viewport(_) | EntityKind::Wipeout(_) | EntityKind::Unknown(_))
+}
+
+/// Raise (or lower) `hs` by `dz`, as 3DMOVE does: how many have no height and stayed where they
+/// were (Q6656).
+pub(crate) fn lift(s: &mut Session, hs: &[Handle], dz: f64) -> Result<usize> {
+    if dz == 0.0 || hs.is_empty() {
+        return Ok(0);
     }
-    let a = point_req(cmd, p, "from")?;
-    let b = point_req(cmd, p, "to")?;
-    Ok(b - a)
+    if !dz.is_finite() {
+        return Err(EngineError::Other("The rise must be a finite number.".into()));
+    }
+    let m = cadaddy_doc::translation(cadaddy_geom::Vec3::new(0.0, 0.0, dz));
+    let d = s.doc_mut()?;
+    let mut kept = 0;
+    for h in hs {
+        let Some(e) = d.entity(*h) else { continue };
+        let mut k = e.kind.clone();
+        if !holds_height(&k) || !k.transform3(&m) {
+            kept += 1;
+            continue;
+        }
+        d.modify_entity(*h, |e| e.kind = k)?;
+    }
+    Ok(kept)
+}
+
+/// Move (or copy) `hs` by `d` in space: the plan move, then the rise. The objects moved (or the
+/// copies) and how many of them have no height and kept theirs.
+pub(crate) fn displace(s: &mut Session, hs: &[Handle], d: cadaddy_geom::Vec3, copy: bool) -> Result<(Vec<Handle>, usize)> {
+    let out = transform_entities(s, hs, &Mat3::translate(d.xy()), copy)?;
+    let kept = lift(s, &out, d.z)?;
+    Ok((out, kept))
+}
+
+/// The note for objects a rise could not move (none: nothing to say).
+pub(crate) fn flat_note(kept: usize) -> Option<String> {
+    (kept > 0).then(|| format!("{kept} object(s) have no height (regions, splines, wipeouts, viewports) and stayed at theirs."))
+}
+
+fn with_flat(mut out: Value, s: &mut Session, kept: usize) -> Value {
+    if let Some(m) = flat_note(kept) {
+        s.echo(m.clone());
+        if let Some(o) = out.as_object_mut() {
+            o.insert("unraised".into(), json!(kept));
+            o.insert("message".into(), json!(m));
+        }
+    }
+    out
 }
 
 fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let d = delta_of("move", p)?;
-    let moved = transform_entities(s, &hs, &Mat3::translate(d), false)?;
-    Ok(json!({ "moved": moved.len() }))
+    let d = delta3_param("move", p)?;
+    let (moved, kept) = displace(s, &hs, d, false)?;
+    Ok(with_flat(json!({ "moved": moved.len() }), s, kept))
 }
 
 fn run_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
-    let d = delta_of("copy", p)?;
+    let d = delta3_param("copy", p)?;
     let n = count_param("copy", p, "count", 1, 10_000)?.unwrap_or(1);
     let mut out = Vec::new();
+    let mut kept = 0;
     for k in 1..=n {
-        out.extend(transform_entities(s, &hs, &Mat3::translate(d * k as f64), true)?.into_iter().map(|h| h.hex()));
+        let (made, flat) = displace(s, &hs, d * k as f64, true)?;
+        kept += flat;
+        out.extend(made.into_iter().map(|h| h.hex()));
     }
-    Ok(json!({ "handles": out }))
+    Ok(with_flat(json!({ "handles": out }), s, kept))
 }
 
 fn run_rotate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -446,7 +493,9 @@ fn stretch_entity(e: &mut Entity, wins: &[StretchArea], d: Vec2) {
 }
 
 fn run_stretch(s: &mut Session, p: &Value) -> Result<Value> {
-    let d = delta_of("stretch", p)?;
+    // A stretch moves vertices in plan: a height is refused, never dropped (Q6656).
+    refuse_rise("stretch", p)?;
+    let d = delta3_param("stretch", p)?.xy();
     let space = s.space();
     let listed = |key: &str, least: usize| -> Result<Option<Vec<Vec2>>> {
         let Some(pts) = points_param(p, key) else { return Ok(None) };
@@ -2160,6 +2209,10 @@ struct SelectThen {
     copies: Vec<Vec<Handle>>,
     /// JOIN of a single arc or elliptical arc: the prompt asks for arcs to join to it, or cLose.
     join_source: Option<Handle>,
+    /// MOVE/COPY: the base point's height (a point in space typed or snapped; 0 for a plan
+    /// point), and the height of the point just given (`None`: a plan point, no rise). Q6656.
+    base_z: f64,
+    next_z: Option<f64>,
 }
 
 /// Most items COPY Array makes in one go.
@@ -2183,7 +2236,13 @@ impl SelectThen {
             array_fit: false,
             copies: Vec::new(),
             join_source: None,
+            base_z: 0.0,
+            next_z: None,
         }
+    }
+    /// MOVE/COPY: how far the point just given stands above the base point.
+    fn rise(&self) -> f64 {
+        self.next_z.map_or(0.0, |z| z - self.base_z)
     }
     fn apply(&mut self, s: &mut Session) -> Result<Step> {
         // Immediate operations once selection is done.
@@ -2457,14 +2516,14 @@ impl Interactive for SelectThen {
             return self.rotate_reference_prompt();
         }
         match (self.op, k) {
-            (Op::Move | Op::Copy, 0) => Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]),
-            (Op::Move, _) => Prompt::new("Specify second point or <use first point as displacement>", Accept::POINT).base_opt(base),
+            (Op::Move | Op::Copy, 0) => Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]).point3(),
+            (Op::Move, _) => Prompt::new("Specify second point or <use first point as displacement>", Accept::POINT).base_opt(base).point3(),
             (Op::Copy, _) if self.copy_array == Some(None) => Prompt::new("Enter number of items to array", Accept::NUMBER),
             (Op::Copy, _) if self.copy_array.is_some() && !self.array_fit => {
                 Prompt::new("Specify second point", Accept::POINT).kw(&["Fit"]).base_opt(base)
             }
-            (Op::Copy, _) if self.copy_array.is_some() => Prompt::new("Specify second point", Accept::POINT).base_opt(base),
-            (Op::Copy, _) => Prompt::new("Specify second point", Accept::POINT).kw(&["Array", "Exit", "Undo"]).base_opt(base),
+            (Op::Copy, _) if self.copy_array.is_some() => Prompt::new("Specify second point", Accept::POINT).base_opt(base).point3(),
+            (Op::Copy, _) => Prompt::new("Specify second point", Accept::POINT).kw(&["Array", "Exit", "Undo"]).base_opt(base).point3(),
             (Op::Rotate | Op::Scale, 0) => Prompt::new("Specify base point", Accept::POINT),
             // ROTATE and SCALE offer the angle/factor used last time.
             (Op::Rotate, _) => {
@@ -2506,6 +2565,18 @@ impl Interactive for SelectThen {
             s.set_selection(Vec::new());
             return Ok(Step::Done);
         }
+        // MOVE/COPY take points in space: the height is kept beside the plan point (Q6656).
+        let i = match i {
+            Input::Point3(q) => {
+                self.next_z = Some(q.z);
+                Input::Point(q.xy())
+            }
+            Input::Point(p) => {
+                self.next_z = None;
+                Input::Point(p)
+            }
+            other => other,
+        };
         let k = self.pts.len();
         if self.op == Op::Scale && self.reference {
             return self.scale_reference(s, i);
@@ -2558,10 +2629,17 @@ impl Interactive for SelectThen {
                 let Some(Some(n)) = self.copy_array else { return Ok(Step::Continue) };
                 // The original is the first item: the second point places the second item, or
                 // with Fit the last one.
-                let step = if self.array_fit { (p - self.pts[0]) / f64::from(n - 1) } else { p - self.pts[0] };
+                let d = (p - self.pts[0]).to3(self.rise());
+                let step = if self.array_fit { d * (1.0 / f64::from(n - 1)) } else { d };
                 let mut made = Vec::new();
+                let mut kept = 0;
                 for i in 1..n {
-                    made.extend(transform_entities(s, &self.objs, &Mat3::translate(step * f64::from(i)), true)?);
+                    let (m, flat) = displace(s, &self.objs, step * f64::from(i), true)?;
+                    made.extend(m);
+                    kept += flat;
+                }
+                if let Some(note) = flat_note(kept) {
+                    s.echo(note);
                 }
                 self.copies.push(made);
                 self.copy_array = None;
@@ -2570,23 +2648,34 @@ impl Interactive for SelectThen {
             }
             (_, 0, Input::Point(p)) => {
                 self.pts.push(p);
+                self.base_z = self.next_z.unwrap_or(0.0);
                 Ok(Step::Continue)
             }
             (Op::Move, 1, Input::Point(p)) => {
-                let d = p - self.pts[0];
-                transform_entities(s, &self.objs, &Mat3::translate(d), false)?;
+                let d = (p - self.pts[0]).to3(self.rise());
+                let (_, kept) = displace(s, &self.objs, d, false)?;
+                if let Some(note) = flat_note(kept) {
+                    s.echo(note);
+                }
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
             }
             (Op::Move, 1, Input::Enter) => {
-                let d = self.pts[0];
-                transform_entities(s, &self.objs, &Mat3::translate(d), false)?;
+                // The first point is the displacement, its height the rise.
+                let d = self.pts[0].to3(self.base_z);
+                let (_, kept) = displace(s, &self.objs, d, false)?;
+                if let Some(note) = flat_note(kept) {
+                    s.echo(note);
+                }
                 s.set_selection(Vec::new());
                 Ok(Step::Done)
             }
             (Op::Copy, _, Input::Point(p)) => {
-                let d = p - self.pts[0];
-                let made = transform_entities(s, &self.objs, &Mat3::translate(d), true)?;
+                let d = (p - self.pts[0]).to3(self.rise());
+                let (made, kept) = displace(s, &self.objs, d, true)?;
+                if let Some(note) = flat_note(kept) {
+                    s.echo(note);
+                }
                 self.copies.push(made);
                 Ok(Step::Continue)
             }
@@ -3523,22 +3612,27 @@ impl Interactive for DisplaceM {
     }
     fn prompt(&self, s: &Session) -> Prompt {
         if self.displacement {
-            return Prompt::new("Specify displacement", Accept::POINT).default("0,0");
+            return Prompt::new("Specify displacement", Accept::POINT).default("0,0").point3();
         }
         if self.at_base() {
-            return Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]).default("Displacement");
+            return Prompt::new("Specify base point", Accept::POINT).kw(&["Displacement"]).default("Displacement").point3();
         }
         self.inner.prompt(s)
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if self.displacement {
+            // A displacement in space (`dx,dy,dz`) raises or lowers the objects (Q6656).
             let d = match i {
-                Input::Point(p) => p,
-                Input::Enter => Vec2::ZERO,
+                Input::Point(p) => p.to3(0.0),
+                Input::Point3(p) => p,
+                Input::Enter => cadaddy_geom::Vec3::ZERO,
                 _ => return Ok(Step::Continue),
             };
-            if d != Vec2::ZERO {
-                transform_entities(s, &self.inner.objs, &Mat3::translate(d), self.inner.op == Op::Copy)?;
+            if d != cadaddy_geom::Vec3::ZERO {
+                let (_, kept) = displace(s, &self.inner.objs, d, self.inner.op == Op::Copy)?;
+                if let Some(note) = flat_note(kept) {
+                    s.echo(note);
+                }
             }
             s.set_selection(Vec::new());
             return Ok(Step::Done);

@@ -2229,6 +2229,30 @@
     "NIGHTLIGHT"
    ]
   },
+  "circuits.emergency_words": {
+   "source": "NEC 700.2, 700.10 and 700.21: a panel-schedule circuit whose description names an emergency load (emergency, egress or exit lighting, life safety, night lights), or whose code the schedule's legend explains with one of these, is on the emergency system; its lights are not switched off by the ordinary controls. Matched as whole words.",
+   "words": [
+    "EMERGENCY",
+    "EMERG",
+    "EM LTG",
+    "EM LIGHTING",
+    "EM LIGHTS",
+    "EM LT",
+    "EGRESS",
+    "EXIT",
+    "LIFE SAFETY",
+    "NIGHT LIGHT",
+    "NIGHT LIGHTS",
+    "NIGHTLIGHT",
+    "NIGHT LTG"
+   ]
+  },
+  "circuits.emergency_codes": {
+   "source": "trade practice: the panel-schedule type code that marks a circuit of the emergency system (NEC 700) when the schedule's legend does not explain it",
+   "words": [
+    "EM"
+   ]
+  },
   "fixtures.exterior_words": {
    "source": "trade practice: a luminaire whose description has one of these is not interior lighting (moved from lighting.rs)",
    "words": [

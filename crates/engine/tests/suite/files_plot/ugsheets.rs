@@ -497,18 +497,19 @@ fn a_proposed_feeder_too_close_to_a_pipe_is_a_review_item_or_a_pothole_warning_n
     let errors_before = r["errors"].as_u64().unwrap();
     assert_eq!(r["reviews"], json!(1), "{r}");
     assert!(!r["findings"].as_array().unwrap().iter().any(|f| f["check"] == "crossing" && f["severity"] == "error"));
-    // Each review is an RFI (a review item), once: a second review adds none.
+    // The crossing is on CADaddy's own proposed route: a coordination item for that proposal,
+    // never a document RFI (Q6653), however often it is reviewed.
     let v = s.execute("ugsheets.review", &json!({})).unwrap();
     assert_eq!(v["errors"].as_u64(), Some(errors_before));
+    let coord = v["coordination"].as_array().unwrap();
+    assert_eq!(coord.len(), 1, "{v}");
+    assert!(coord[0]["message"].as_str().unwrap().contains("SAN-1"), "{}", coord[0]);
     let list = s.execute("rfi.list", &json!({})).unwrap();
-    let items: Vec<&Value> = list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").collect();
-    assert_eq!(items.len(), 1, "{list}");
-    assert!(items[0]["issue"].as_str().unwrap().contains("SAN-1"), "{}", items[0]);
-    assert_eq!(items[0]["status"], json!("open"));
+    assert_eq!(list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").count(), 0, "{list}");
     let again = s.execute("ugsheets.review", &json!({})).unwrap();
-    assert!(!again["rfis"].as_array().unwrap().iter().any(|id| v["rfis"].as_array().unwrap().contains(id)), "{again}");
+    assert_eq!(again["coordination"].as_array().map(Vec::len), Some(1), "{again}");
     let list = s.execute("rfi.list", &json!({})).unwrap();
-    assert_eq!(list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").count(), 1);
+    assert_eq!(list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").count(), 0);
     // On the sheet's notes for review, not as an RFI-before-the-slab error.
     let b = s.execute("ugsheets.build", &json!({})).unwrap();
     let layout = b["sheets"][0]["layout"].as_str().unwrap().to_string();

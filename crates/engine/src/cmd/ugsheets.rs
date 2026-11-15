@@ -17,7 +17,7 @@
 //!   the notes, in the project's title block when the drawing has one; optionally exported to
 //!   PDF and DWG.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_walk3d::{BuildingSpec, MepEquipment, MepKind, Service};
 use serde_json::{Value, json};
@@ -95,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → the job's underground plan (Q6148), as its last run left it: {slab_level, trades: {E|P: {callouts: [{trade, sheet, from: note|keynote|legend, mark, text, what, said_buried, count, size_in, material, cover_in, steel_ells, room}], plan_issued, sheet, placed: [{callout, status, runs, how}], takeoff}}, sheets, called_runs, stack_bases, proposed_runs, proposals: [{subject, from, to, copies, conduits, size_in, under_slab_ft, overhead_ft, decision, reasons, alternative, routed_under, routed_over, adds_route}], framing_above, below_slab_method, scale, rfis, sleeves, findings}")
             .noundo(),
         CommandSpec::new("ugsheets.review", "Review Underground", run_review)
-            .params("{} → {errors, rfis: [id], findings}: an RFI (service_entrance) for each required service not shown or unclear, and one (pour_hold) for each proposed route that crosses another trade's buried line too close (a review item, not an error)"),
+            .params("{} → {errors, rfis: [id], coordination: [finding], rfis_dropped_as_coordination, findings}: an RFI (service_entrance) for each required service not shown or unclear; a proposed route of CADaddy's own that crosses another trade's buried line too close is a coordination item for that proposal (listed in coordination, never a document RFI; an open pour_hold RFI an earlier review raised for it is dropped)"),
         CommandSpec::new("ugsheets.build", "Underground Sheets", run_build)
             .params("{trade?: E (default, conduit) | P (pipes below the slab), level?: name (default: every level with buried work: the slab level), number?: first sheet number (default \"E-001\"), title?: the sheet's title, scale?: the plan's scale when it fits (\"1/16\\\" = 1'-0\\\"\"), called?: [{sheet, level?, text}] (buried work the documents' notes call for that no plan locates: listed in the notes), sources?: [{sheet: how it is cited, level?, text}] (every callout of the documents for this sheet, listed in its notes), line_types?: [{sheet, text}] (the documents' legend line types for buried work, in the legend), alternatives?: [{subject, points: [[x, y]], size_in, conduits}] (underground alternatives to routes the model runs overhead, dashed), title_block?: block name (default: a block named like a title block), today?, clearance_in?, pdf?: path, dwg?: path} → {sheets: [{layout, number, title, trade, level, runs, stubups, dimensions, crossings, sleeves, alternatives, sources, sections, replaced, scale, registered}], files: [path]}: building again replaces the sheet's layout; each sheet is registered to its level in the set's sheet list"),
     ]
@@ -1410,20 +1410,28 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut sp = spec_of("ugsheets.review", s)?;
     let ug = study(&sp, &s.doc()?.bim_types, None, CLEARANCE_FT);
     let mut added = Vec::new();
-    for f in
-        ug.findings.iter().filter(|f| (f.severity == "error" && f.check.starts_with("service_")) || (f.severity == "review" && f.check == "crossing"))
-    {
-        // A crossing's id is its pair, not its number (numbers shift as runs change).
+    // A crossing's id is its pair, not its number (numbers shift as runs change).
+    let id_of = |f: &Finding| {
         let key = if f.check == "crossing" { f.data["items"].to_string() } else { f.about.clone() };
-        let id = format!("RFI-U{}", hash(&format!("{key}|{}", f.check)));
+        format!("RFI-U{}", hash(&format!("{key}|{}", f.check)))
+    };
+    // A crossing on CADaddy's own proposed route (severity `review`) is a coordination item for
+    // that proposal, not a question about the documents (Q6653): it goes with the route's own
+    // RFI, and one an earlier review raised as a pour hold, still open, goes.
+    let coordination: Vec<&Finding> = ug.findings.iter().filter(|f| f.severity == "review" && f.check == "crossing").collect();
+    let proposed_ids: BTreeSet<String> = coordination.iter().map(|f| id_of(f)).collect();
+    let before = sp.rfis.len();
+    sp.rfis.retain(|r| {
+        !(r.status == cadaddy_walk3d::RfiStatus::Open && r.kind == Some(cadaddy_walk3d::RfiKind::PourHold) && proposed_ids.contains(&r.id))
+    });
+    let dropped = before - sp.rfis.len();
+    for f in ug.findings.iter().filter(|f| f.severity == "error" && f.check.starts_with("service_")) {
+        let id = id_of(f);
         if sp.rfis.iter().any(|r| r.id == id) || sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
             continue;
         }
-        let (kind, assumed) = if f.check == "crossing" {
-            (cadaddy_walk3d::RfiKind::PourHold, "The proposed route is shown as drawn until its routing RFI is answered.")
-        } else {
-            (cadaddy_walk3d::RfiKind::ServiceEntrance, "Held: the slab isn't poured over this service's route until it is answered.")
-        };
+        let (kind, assumed) =
+            (cadaddy_walk3d::RfiKind::ServiceEntrance, "Held: the slab isn't poured over this service's route until it is answered.");
         sp.rfis.push(cadaddy_walk3d::Rfi {
             id: id.clone(),
             kind: Some(kind),
@@ -1438,12 +1446,16 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
         });
         added.push(id);
     }
-    if !added.is_empty() {
+    if !added.is_empty() || dropped > 0 {
         s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
-    Ok(
-        json!({ "errors": ug.findings.iter().filter(|f| f.severity == "error").count(), "rfis": added, "findings": ug.findings.iter().map(Finding::json).collect::<Vec<_>>() }),
-    )
+    Ok(json!({
+        "errors": ug.findings.iter().filter(|f| f.severity == "error").count(),
+        "rfis": added,
+        "coordination": coordination.iter().map(|f| f.json()).collect::<Vec<_>>(),
+        "rfis_dropped_as_coordination": dropped,
+        "findings": ug.findings.iter().map(Finding::json).collect::<Vec<_>>(),
+    }))
 }
 
 // ---------------- the sheets ----------------

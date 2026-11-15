@@ -41,6 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// A submittal's product for one type mark.
+#[derive(Clone)]
 struct Product {
     /// The submittal it is in (the file's name) and the page its data starts on.
     doc: String,
@@ -346,9 +347,12 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
                 .unwrap_or_default();
             marks.push(mark.to_string());
             let doc = if page.is_empty() { name.clone() } else { format!("{name} {page}") };
-            let same = out.products.entry(mark.to_ascii_uppercase()).or_default();
-            if !same.iter().any(|p| p.category == product.category) && same.len() < MAX_CATEGORIES {
-                same.push(Product { doc, ..product });
+            // A cut sheet for a list of types (`A/B`) is each type's product (Q6653).
+            for m in type_list(mark) {
+                let same = out.products.entry(m).or_default();
+                if !same.iter().any(|p| p.category == product.category) && same.len() < MAX_CATEGORIES {
+                    same.push(Product { doc: doc.clone(), ..product.clone() });
+                }
             }
         }
         for q in r.get("rfis").and_then(Value::as_array).into_iter().flatten() {
@@ -366,6 +370,34 @@ fn read_products(s: &mut Session, files: &[String]) -> Read {
         s.echo(format!("Apply Submittals: {}: {}", u["file"].as_str().unwrap_or(""), u["error"].as_str().unwrap_or("")));
     }
     out
+}
+
+/// Types one list names, at most.
+const MAX_LISTED_TYPES: usize = 12;
+
+/// The type marks a submittal's mark names, upper case: a list (`A/B`, `A, B`, `A & B`) is each
+/// of its types when every piece reads as a type mark (a short word of letters and digits with a
+/// letter in it); anything else is the one mark as written.
+pub(crate) fn type_list(mark: &str) -> Vec<String> {
+    let whole = mark.trim().to_ascii_uppercase();
+    let pieces: Vec<String> = whole.split(['/', ',', '&']).map(|p| p.trim().to_string()).collect();
+    let tag = |p: &String| {
+        (1..=6).contains(&p.len())
+            && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+            && p.chars().any(|c| c.is_ascii_alphabetic())
+            && p.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+    };
+    if pieces.len() >= 2 && pieces.len() <= MAX_LISTED_TYPES && pieces.iter().all(tag) {
+        let mut out: Vec<String> = Vec::new();
+        for p in pieces {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
+    } else {
+        vec![whole]
+    }
 }
 
 /// The type marks the submittals at `paths` give products for (upper case).
@@ -742,6 +774,34 @@ Model Number : WRAP 48 840
     /// Q6336: a type whose page header names a product its own cut sheet doesn't show gets neither
     /// that maker nor that catalog number (one an earlier reading put there goes); the header is
     /// said beside it, and the type is still a submitted product.
+    /// Q6653: a cut sheet whose type is a list (`K/ZX09`, `A, B`) is each listed type's product:
+    /// every element of either type takes it, and no type of the list is left uncovered.
+    #[test]
+    fn a_cut_sheet_for_a_list_of_types_covers_each() {
+        assert_eq!(type_list("k/zx09"), vec!["K".to_string(), "ZX09".to_string()]);
+        assert_eq!(type_list("A, B & C1"), vec!["A".to_string(), "B".to_string(), "C1".to_string()]);
+        assert_eq!(type_list("Q7"), vec!["Q7".to_string()]);
+        assert_eq!(type_list("1/2"), vec!["1/2".to_string()], "a fraction is no list");
+        assert_eq!(type_list("WALL / CEILING MOUNT"), vec!["WALL / CEILING MOUNT".to_string()], "words are no list");
+        for (sheet_type, marks) in [("W2/XL9", ["W2", "XL9"]), ("XL9, W2", ["XL9", "W2"])] {
+            let mut s = Session::new();
+            s.execute("new", &json!({})).unwrap();
+            let a = device(&mut s, marks[0], 0.0);
+            let b = device(&mut s, marks[1], 10.0);
+            let file = std::env::temp_dir().join(format!("cadaddy-submittal-list-{}-{}.txt", std::process::id(), marks[0]));
+            let text = format!("--- page 1 of 1 ---\nType : {sheet_type}\nManufacturer : ACME LIGHTING\nModel Number : QX200E1/TRIM\n");
+            std::fs::write(&file, text).unwrap();
+            let r = s.execute(CMD, &json!({"paths": [file.to_string_lossy()]})).unwrap();
+            std::fs::remove_file(&file).ok();
+            for (h, m) in [(a, marks[0]), (b, marks[1])] {
+                assert_eq!(r["applied"][m], 1, "{sheet_type}: {r}");
+                assert_eq!(prop(&s, h, "manufacturer").map(|p| p.text()).as_deref(), Some("ACME LIGHTING"), "{m}: {r}");
+            }
+            assert!(r["no_submittal"].as_object().is_none_or(|o| o.is_empty()), "{r}");
+            assert!(r["products"].get(sheet_type).is_none(), "the list is its types, not a type of its own: {r}");
+        }
+    }
+
     #[test]
     fn a_page_header_its_cut_sheet_contradicts_is_said_not_applied() {
         let mut s = Session::new();

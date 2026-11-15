@@ -12,6 +12,7 @@ mod helper;
 mod accuracytrend;
 mod bimsystems;
 mod bimviews;
+mod bimweights;
 mod clash_rerun;
 mod compare_export;
 mod covercheck;

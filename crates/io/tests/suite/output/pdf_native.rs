@@ -748,13 +748,14 @@ fn a_tag_drawn_beside_its_window_keeps_the_window_and_lends_it_to_no_other_tag()
 }
 
 #[test]
-fn a_tags_symbol_keeps_a_stroke_near_its_size_or_with_no_outline_round_the_tag() {
-    // Six tagged symbols of one type with one odd stroke at a single instance, beside the tag
-    // (a leader, a stub of wall). The odd stroke is the symbol's own as before Q6435 when it is
-    // under twice the outline round the tag (a crossed diamond) or when the instances share no
-    // outline at least as big as their letters (a dot and a stroke): only a stroke far bigger than
-    // the outline round its tag is foreign to the symbol.
-    let draw = |outline: bool, odd: i32| -> usize {
+fn a_stroke_at_one_copy_of_a_symbol_is_drawn_once_where_printed() {
+    // Six tagged symbols of one type with one odd stroke at the first instance, beside the tag
+    // (a leader, a stub of wall). Before Q6636 a stroke under twice the outline round the tag (a
+    // crossed diamond), or any when the instances share no outline as big as their letters (a dot
+    // and a stroke), went into the first instance's symbol and the block stamped it at all six
+    // copies. A block holds only what its copies share: the odd stroke stays loose where printed,
+    // drawn once, whatever its size and whether or not an outline is shared.
+    let draw = |outline: bool, odd: i32| -> (usize, usize) {
         let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
         for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
             let s = if outline { 6 } else { 1 };
@@ -770,13 +771,286 @@ fn a_tags_symbol_keeps_a_stroke_near_its_size_or_with_no_outline_round_the_tag()
         let r = pdf_read::read(&pdf_with(&content), &PdfOptions::default()).expect("PDF read failed");
         let d = &r.drawing;
         assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
-        // the odd stroke as loose linework (an upright line as long as it, in points or inches)
+        // the odd stroke (an upright line as long as it, in points or inches): loose, and drawn
+        // by the blocks at their inserts
         let long = |dy: f64| [f64::from(odd), f64::from(odd) / 72.0].iter().any(|n| (dy / n - 1.0).abs() < 0.05);
-        d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - l.b.x).abs() < 1e-3 && long((l.a.y - l.b.y).abs()))).count()
+        let odd_line = |e: &Entity| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - l.b.x).abs() < 1e-3 && long((l.a.y - l.b.y).abs()));
+        let loose = d.model.iter().filter(|e| odd_line(e)).count();
+        let stamped = d
+            .model
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EntityKind::Insert(i) => d.blocks.get(&i.block),
+                _ => None,
+            })
+            .map(|b| b.entities.iter().filter(|e| odd_line(e)).count())
+            .sum();
+        (loose, stamped)
     };
-    assert_eq!(draw(true, 18), 0, "a stroke 1.5 times the diamond stays the symbol's");
-    assert_eq!(draw(false, 18), 0, "no outline round the tag: the cluster is the symbol");
-    assert_eq!(draw(true, 30), 1, "a stroke 2.5 times the diamond is foreign: loose where printed");
+    assert_eq!(draw(true, 18), (1, 0), "a stroke 1.5 times the diamond at one copy is drawn once, where printed");
+    assert_eq!(draw(false, 18), (1, 0), "no outline round the tag: the same");
+    assert_eq!(draw(true, 30), (1, 0), "a stroke 2.5 times the diamond is foreign: loose where printed");
+}
+
+/// Every line piece and every filled loop a drawing shows, in drawing units rounded to a
+/// thousandth: loose objects where they are, a block's objects at each of its inserts.
+fn drawn_pieces(d: &Drawing) -> (Vec<[i64; 4]>, Vec<Vec<(i64, i64)>>) {
+    let q = |v: f64| (v * 1000.0).round() as i64;
+    let mut segs: Vec<[i64; 4]> = Vec::new();
+    let mut loops: Vec<Vec<(i64, i64)>> = Vec::new();
+    let take = |e: &Entity, at: (f64, f64), segs: &mut Vec<[i64; 4]>, loops: &mut Vec<Vec<(i64, i64)>>| {
+        let mut seg = |a: (f64, f64), b: (f64, f64)| {
+            let (a, b) = ((q(a.0 + at.0), q(a.1 + at.1)), (q(b.0 + at.0), q(b.1 + at.1)));
+            let (a, b) = if a <= b { (a, b) } else { (b, a) };
+            segs.push([a.0, a.1, b.0, b.1]);
+        };
+        match &e.kind {
+            EntityKind::Line(l) => seg((l.a.x, l.a.y), (l.b.x, l.b.y)),
+            EntityKind::LwPolyline(p) => {
+                let v: Vec<(f64, f64)> = p.vertices.iter().map(|v| (v.p.x, v.p.y)).collect();
+                for w in v.windows(2) {
+                    seg(w[0], w[1]);
+                }
+                if p.closed
+                    && let (Some(f), Some(l)) = (v.first(), v.last())
+                    && f != l
+                {
+                    seg(*l, *f);
+                }
+            }
+            EntityKind::Hatch(h) => {
+                for l in &h.loops {
+                    let mut pts: Vec<(i64, i64)> = l.vertices.iter().map(|v| (q(v.p.x + at.0), q(v.p.y + at.1))).collect();
+                    pts.sort_unstable();
+                    loops.push(pts);
+                }
+            }
+            _ => {}
+        }
+    };
+    for e in d.model.iter() {
+        match &e.kind {
+            EntityKind::Insert(i) => {
+                assert!(i.rotation == 0.0 && i.scale.x == 1.0 && i.scale.y == 1.0, "symbol inserts are placed, not turned or scaled");
+                if let Some(b) = d.blocks.get(&i.block) {
+                    for x in b.entities.iter() {
+                        take(x, (i.insert.x, i.insert.y), &mut segs, &mut loops);
+                    }
+                }
+            }
+            _ => take(e, (0.0, 0.0), &mut segs, &mut loops),
+        }
+    }
+    segs.sort_unstable();
+    loops.sort_unstable();
+    (segs, loops)
+}
+
+#[test]
+fn a_symbol_block_draws_only_what_its_copies_share_and_no_stroke_is_erased_or_invented() {
+    // Six tagged crossed diamonds of one type, each with a filled triangle inside and a leader
+    // from its top running up past twice the diamond's size. The first copy also has a short
+    // stroke of its own beside it, the fourth another, and the fifth a filled dot of its own:
+    // each under twice the diamond, so inside the symbol's cluster. Before Q6636 the block was
+    // the first copy drawn at every copy: its stroke was invented at the five others, the
+    // fourth copy's stroke and the fifth's dot were erased, every leader was taken into the
+    // symbol, and every fill was erased. The rule: the block holds what all copies share (the
+    // diamond and its triangle); a copy's own strokes and fills stay loose where printed; a
+    // stroke reaching beyond the symbol's size is never the symbol's; and the sheet draws the same
+    // pieces with or without the symbol step.
+    let mut content = b"q 0 0 0 RG 0 0 0 rg 0.5 w ".to_vec();
+    for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
+        let s = 6;
+        for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("{} {} m {} {} l {} {} l h f ", cx - 2, cy - 4, cx + 2, cy - 4, cx, cy - 2).as_bytes());
+        content.extend_from_slice(format!("{} {} m {} {} l S ", cx + 2, cy + 4, cx + 2, cy + 30).as_bytes());
+        match i {
+            0 => content.extend_from_slice(format!("{} {} m {} {} l S ", cx - 9, cy - 8, cx - 9, cy + 8).as_bytes()),
+            3 => content.extend_from_slice(format!("{} {} m {} {} l S ", cx - 8, cy - 9, cx + 8, cy - 9).as_bytes()),
+            4 => content.extend_from_slice(format!("{} {} m {} {} l {} {} l h f ", cx - 9, cy + 2, cx - 7, cy + 2, cx - 8, cy + 4).as_bytes()),
+            _ => {}
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R1) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    let (segs, loops) = drawn_pieces(d);
+    let (segs0, loops0) = drawn_pieces(&without.drawing);
+    assert_eq!(segs0.len(), 6 * 7 + 2, "the plain read draws every stroke");
+    assert_eq!(loops0.len(), 6 + 1, "the plain read draws every fill");
+    assert_eq!(segs, segs0, "the symbol step draws the same strokes, none erased or invented");
+    assert_eq!(loops, loops0, "the symbol step draws the same fills, none erased or invented");
+    // The blocks hold the diamond and its triangle only: no leader, no copy's own stroke or dot.
+    let inserts: Vec<&Insert> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Insert(i) if i.block.starts_with("PDF-SYM-") => Some(i),
+            _ => None,
+        })
+        .collect();
+    let names: std::collections::BTreeSet<&str> = inserts.iter().map(|i| i.block.as_str()).collect();
+    assert_eq!(names.len(), 1, "one symbol, one block: {names:?}");
+    for name in names {
+        let b = d.blocks.get(name).expect("the block an insert names");
+        let pieces = |e: &Entity| match &e.kind {
+            EntityKind::Line(_) => 1,
+            EntityKind::LwPolyline(p) => p.vertices.len().saturating_sub(1) + usize::from(p.closed),
+            _ => 0,
+        };
+        let lines: usize = b.entities.iter().map(|e| pieces(e)).sum();
+        let fills = b.entities.iter().filter(|e| matches!(e.kind, EntityKind::Hatch(_))).count();
+        assert_eq!((lines, fills), (6, 1), "the block {name} is the diamond and its triangle");
+    }
+    // so the leaders and the two copies' own strokes are loose, and so is the fifth copy's dot
+    let loose: usize = d
+        .model
+        .iter()
+        .map(|e| match &e.kind {
+            EntityKind::Line(_) => 1,
+            EntityKind::LwPolyline(p) => p.vertices.len().saturating_sub(1) + usize::from(p.closed),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(loose, 6 + 2, "six leaders and two copies' own strokes stay loose");
+}
+
+#[test]
+fn copies_of_one_tag_drawn_two_ways_are_two_blocks() {
+    // Six copies tagged alike: three crossed diamonds and three crossed squares. Before Q6636
+    // the first copy's diamond was drawn at all six and the squares were erased. Each way of
+    // drawing it is a block of its own, and the sheet draws the same strokes as without the
+    // symbol step.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for (i, (cx, cy)) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)].into_iter().enumerate() {
+        let s = 6;
+        let sides: [((i32, i32), (i32, i32)); 4] = if i % 2 == 0 {
+            [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s))]
+        } else {
+            [((-s, -s), (s, -s)), ((s, -s), (s, s)), ((s, s), (-s, s)), ((-s, s), (-s, -s))]
+        };
+        for (a, b) in sides.into_iter().chain([((-3, -3), (3, 3)), ((-3, 3), (3, -3))]) {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R2) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let mut per_block: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let EntityKind::Insert(i) = &e.kind {
+            *per_block.entry(i.block.as_str()).or_default() += 1;
+        }
+    }
+    assert_eq!(per_block.values().copied().collect::<Vec<_>>(), vec![3, 3], "two blocks of three: {per_block:?}");
+}
+
+/// The line pieces each symbol block draws (a polyline's sides one by one), by block name.
+fn block_pieces(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let EntityKind::Insert(i) = &e.kind
+            && i.block.starts_with("PDF-SYM-")
+            && let Some(b) = d.blocks.get(&i.block)
+        {
+            let n = b
+                .entities
+                .iter()
+                .map(|e| match &e.kind {
+                    EntityKind::Line(_) => 1,
+                    EntityKind::LwPolyline(p) => p.vertices.len().saturating_sub(1) + usize::from(p.closed),
+                    _ => 0,
+                })
+                .sum();
+            out.insert(i.block.clone(), n);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_dashed_line_through_every_copy_of_a_symbol_is_the_lines_not_the_symbols() {
+    // Six tagged crossed diamonds of one type, each on a dashed grid line that runs up the
+    // sheet through it (dashes 17 points long, 3 apart): every copy's cluster takes the dashes
+    // through it, drawn alike at every copy. Before this rework the block held the dash, so a block
+    // carried the grid line's pieces into the model as the symbol's drawing (on a plan they
+    // closed a corridor into two rooms). A straight stroke its line continues past both ends is
+    // that line's: the block is the diamond, the dashes stay loose, and the sheet draws the same
+    // strokes as without the symbol step.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        let s = 6;
+        for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R3) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    // the grid lines, one through each column of copies, dash by dash
+    for cx in [150, 250, 350] {
+        for k in 0..14 {
+            let y = 222 + 20 * k;
+            content.extend_from_slice(format!("{cx} {y} m {cx} {} l S ", y + 17).as_bytes());
+        }
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let blocks = block_pieces(d);
+    assert_eq!(blocks.values().copied().collect::<Vec<_>>(), vec![6], "one block, the diamond and its cross only: {blocks:?}");
+    let loose_dashes =
+        d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - l.b.x).abs() < 1e-6 && (l.a.y - l.b.y).abs() > 1e-6)).count();
+    assert_eq!(loose_dashes, 3 * 14, "every dash of the grid lines is loose");
+}
+
+#[test]
+fn a_door_swing_beside_every_copy_of_a_symbol_stays_the_doors() {
+    // Six tagged crossed diamonds of one type, each beside a door hung the same way: its leaf
+    // up from the hinge and its swing a quarter circle, both inside the copy's cluster and drawn
+    // alike at every copy. Before this rework the block held the swing and leaf, so the doors
+    // were in no reader's sight (no door built, the room open through its doorway). A door's
+    // swing and leaf are the door's: the block is the diamond, each swing and leaf stays loose,
+    // and the sheet draws the same strokes as without the symbol step.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    let k = 0.5523 * 14.0;
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        let s = 6;
+        for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R4) Tj ET ", cx + 10, cy).as_bytes());
+        // hinge at (cx - 12, cy - 8): the wall's face to it, the leaf up, the swing to the jamb
+        let (hx, hy) = (f64::from(cx) - 12.0, f64::from(cy) - 8.0);
+        content.extend_from_slice(format!("{} {hy} m {hx} {hy} l S ", hx - 40.0).as_bytes());
+        content.extend_from_slice(format!("{hx} {hy} m {hx} {} l S ", hy + 14.0).as_bytes());
+        content
+            .extend_from_slice(format!("{hx} {} m {} {} {} {} {} {hy} c S ", hy + 14.0, hx + k, hy + 14.0, hx + 14.0, hy + k, hx + 14.0).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let blocks = block_pieces(d);
+    assert_eq!(blocks.values().copied().collect::<Vec<_>>(), vec![6], "one block, the diamond and its cross only: {blocks:?}");
+    let swings = d.model.iter().filter(|e| matches!(&e.kind, EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 4)).count();
+    assert_eq!(swings, 6, "every door's swing is loose where printed");
 }
 
 #[test]

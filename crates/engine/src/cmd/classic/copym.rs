@@ -4,11 +4,11 @@
 //! displacement and whose size reaches a corner (Array).
 
 use cadaddy_doc::Handle;
-use cadaddy_geom::{Mat3, Vec2};
+use cadaddy_geom::{Mat3, Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::super::machines::{SelOutcome, SelectPhase};
-use super::super::modify::transform_entities;
+use super::super::modify::{displace, flat_note};
 use super::super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -19,27 +19,36 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("copym", "Copy Multiple", run_copym)
             .params(
-                "{handles?, base: [x,y], mode?: points (default) | repeat | divide | measure | array, to: [x,y] (points: also \
-                 [[x,y],...]), count? (repeat: copies by the displacement; divide: copies spread up to `to`), spacing? (measure), \
+                "{handles?, base: [x,y] | [x,y,z], mode?: points (default) | repeat | divide | measure | array, to: [x,y] | [x,y,z] (points: also \
+                 [[x,y(,z)],...]; a height raises the copies, as 3dmove; array mode is flat), count? (repeat: copies by the displacement; divide: copies spread up to `to`), spacing? (measure), \
                  corner?: [x,y] | rows?, columns? (array: `to` gives the column and row spacing)} → {handles, copies}",
             )
             .interactive(|_| Ok(Box::new(CopymM::default()))),
     ]
 }
 
-/// The displacements of the copies a mode makes, from the base point.
-fn displacements(mode: &str, base: Vec2, p: &Value) -> Result<Vec<Vec2>> {
+/// The displacements of the copies a mode makes, from the base point. Points in space carry
+/// their height: a copy to a point higher up is raised (Q6656); the Array mode's grid is flat,
+/// so a height there is refused, not dropped.
+fn displacements(mode: &str, base: Vec3, p: &Value) -> Result<Vec<Vec3>> {
     let cmd = "copym";
     let count = |key: &str| -> Result<usize> {
         let n = p.get(key).and_then(Value::as_u64).filter(|n| *n >= 1).ok_or_else(|| bad(cmd, format!("`{key}` (1 or more) is required")))?;
         usize::try_from(n).ok().filter(|n| *n <= MAX_COPIES).ok_or_else(|| bad(cmd, format!("at most {MAX_COPIES} copies")))
     };
-    let to = || point_req(cmd, p, "to");
-    let out: Vec<Vec2> = match mode {
+    let to = || point3_param_strict(cmd, p, "to")?.ok_or_else(|| bad(cmd, "`to` ([x, y] or [x, y, z]) is required"));
+    let out: Vec<Vec3> = match mode {
         "points" | "" => {
-            let pts = points_param(p, "to")
-                .or_else(|| point_param(p, "to").map(|q| vec![q]))
-                .ok_or_else(|| bad(cmd, "`to` (a point or points) is required"))?;
+            let pts: Vec<Vec3> = match p.get("to") {
+                Some(Value::Array(a)) if a.first().is_some_and(|v| v.is_array() || v.is_object() || v.is_string()) => {
+                    if a.len() > MAX_COPIES {
+                        return Err(bad(cmd, format!("at most {MAX_COPIES} copies")));
+                    }
+                    a.iter().map(|v| point3_strict(cmd, "to", v)).collect::<Result<_>>()?
+                }
+                Some(_) => vec![to()?],
+                None => return Err(bad(cmd, "`to` (a point or points) is required")),
+            };
             pts.into_iter().map(|q| q - base).collect()
         }
         "repeat" => {
@@ -62,14 +71,22 @@ fn displacements(mode: &str, base: Vec2, p: &Value) -> Result<Vec<Vec2>> {
             if !(n.is_finite() && n <= MAX_COPIES as f64) {
                 return Err(bad(cmd, format!("at most {MAX_COPIES} copies")));
             }
-            let u = d / len;
+            let u = d * (1.0 / len);
             (1..=n as usize).map(|k| u * (step * k as f64)).collect()
         }
         "array" => {
-            let d = to()? - base;
-            let (cols, rows) = match point_param(p, "corner") {
+            let to = to()?;
+            let corner = point3_param_strict(cmd, p, "corner")?;
+            if (to.z - base.z).abs() > 0.0 || corner.is_some_and(|c| (c.z - base.z).abs() > 0.0) {
+                return Err(bad(
+                    cmd,
+                    "the Array mode makes a flat grid: give `to` and `corner` at the base point's height (copy by points to raise copies)",
+                ));
+            }
+            let d = (to - base).xy();
+            let (cols, rows) = match corner {
                 Some(c) => {
-                    let span = c - base;
+                    let span = c.xy() - base.xy();
                     let fit = |span: f64, step: f64| if step.abs() < 1e-12 { 1.0 } else { ((span / step) + 1e-9).floor().max(0.0) + 1.0 };
                     (fit(span.x, d.x), fit(span.y, d.y))
                 }
@@ -82,7 +99,7 @@ fn displacements(mode: &str, base: Vec2, p: &Value) -> Result<Vec<Vec2>> {
             for r in 0..rows as usize {
                 for c in 0..cols as usize {
                     if r + c > 0 {
-                        v.push(Vec2::new(d.x * c as f64, d.y * r as f64));
+                        v.push(Vec3::new(d.x * c as f64, d.y * r as f64, 0.0));
                     }
                 }
             }
@@ -99,13 +116,17 @@ fn displacements(mode: &str, base: Vec2, p: &Value) -> Result<Vec<Vec2>> {
     Ok(out)
 }
 
-/// Copy `hs` by each displacement: the new handles.
-fn copy_by(s: &mut Session, hs: &[Handle], ds: &[Vec2]) -> Result<Vec<Handle>> {
+/// Copy `hs` by each displacement: the new handles, and how many copies have no height and kept
+/// their source's.
+fn copy_by(s: &mut Session, hs: &[Handle], ds: &[Vec3]) -> Result<(Vec<Handle>, usize)> {
     let mut out = Vec::new();
+    let mut kept = 0;
     for d in ds {
-        out.extend(transform_entities(s, hs, &Mat3::translate(*d), true)?);
+        let (made, flat) = displace(s, hs, *d, true)?;
+        kept += flat;
+        out.extend(made);
     }
-    Ok(out)
+    Ok((out, kept))
 }
 
 fn run_copym(s: &mut Session, p: &Value) -> Result<Value> {
@@ -113,14 +134,23 @@ fn run_copym(s: &mut Session, p: &Value) -> Result<Value> {
     if hs.is_empty() {
         return Err(bad("copym", "no objects selected"));
     }
-    let base = point_req("copym", p, "base")?;
+    let base = point3_param_strict("copym", p, "base")?.ok_or_else(|| bad("copym", "`base` ([x, y] or [x, y, z]) is required"))?;
     let mode = str_param(p, "mode").unwrap_or("points").trim().to_ascii_lowercase();
     let ds = displacements(&mode, base, p)?;
     if ds.len().saturating_mul(hs.len()) > MAX_COPIES * 10 {
         return Err(EngineError::Other(format!("too many objects to copy ({} × {})", hs.len(), ds.len())));
     }
-    let out = copy_by(s, &hs, &ds)?;
-    Ok(json!({ "handles": out.iter().map(|h| h.hex()).collect::<Vec<_>>(), "copies": ds.len() }))
+    let (out, kept) = copy_by(s, &hs, &ds)?;
+    let mut r = json!({ "handles": out.iter().map(|h| h.hex()).collect::<Vec<_>>(), "copies": ds.len() });
+    if let Some(note) = flat_note(kept) {
+        r["message"] = json!(note);
+    }
+    Ok(r)
+}
+
+/// The plan parts of displacements made from plan points (the prompts pick in plan).
+fn flat(ds: Vec<Vec3>) -> Vec<Vec2> {
+    ds.into_iter().map(Vec3::xy).collect()
 }
 
 /// What COPYM asks next.
@@ -158,7 +188,11 @@ struct CopymM {
 
 impl CopymM {
     fn copy(&mut self, s: &mut Session, ds: &[Vec2]) -> Result<()> {
-        copy_by(s, &self.hs, ds)?;
+        let ds3: Vec<Vec3> = ds.iter().map(|d| d.to3(0.0)).collect();
+        let (_, kept) = copy_by(s, &self.hs, &ds3)?;
+        if let Some(note) = flat_note(kept) {
+            s.echo(note);
+        }
         if let Some(d) = ds.last() {
             let before = if ds.len() >= 2 { ds.get(ds.len() - 2).copied() } else { self.last };
             self.step = Some(*d - before.unwrap_or(Vec2::ZERO));
@@ -252,7 +286,7 @@ impl Interactive for CopymM {
             (Ask::Count(Sub::Divide, to), Input::Text(t)) => {
                 match num(&t).filter(|n| n.fract() == 0.0 && *n <= MAX_COPIES as f64) {
                     Some(n) => {
-                        let ds = displacements("divide", base, &json!({ "to": [to.x, to.y], "count": n as u64 }))?;
+                        let ds = flat(displacements("divide", base.to3(0.0), &json!({ "to": [to.x, to.y], "count": n as u64 }))?);
                         self.copy(s, &ds)?;
                     }
                     None => s.echo(format!("Enter a whole number from 1 to {MAX_COPIES}.")),
@@ -266,13 +300,13 @@ impl Interactive for CopymM {
                     _ => None,
                 };
                 if let Some(step) = step {
-                    let ds = displacements("measure", base, &json!({ "to": [to.x, to.y], "spacing": step }))?;
+                    let ds = flat(displacements("measure", base.to3(0.0), &json!({ "to": [to.x, to.y], "spacing": step }))?);
                     self.copy(s, &ds)?;
                 }
                 Ok(Step::Continue)
             }
             (Ask::Count(Sub::Array, to), Input::Point(c)) => {
-                let ds = displacements("array", base, &json!({ "to": [to.x, to.y], "corner": [c.x, c.y] }))?;
+                let ds = flat(displacements("array", base.to3(0.0), &json!({ "to": [to.x, to.y], "corner": [c.x, c.y] }))?);
                 self.copy(s, &ds)?;
                 Ok(Step::Continue)
             }

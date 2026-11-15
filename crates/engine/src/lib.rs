@@ -3492,6 +3492,9 @@ impl Session {
             Some(i) => {
                 if let Input::Point(p) = &i {
                     self.last_point = *p;
+                    // A plan point is the last point in space too (at height 0): `@dx,dy,dz`
+                    // typed next is from it.
+                    self.last_point3 = p.to3(0.0);
                     if let Some(b) = base.filter(|b| b.is_finite() && p.is_finite() && b.dist(*p) > 1e-12) {
                         self.last_segment = Some((b, *p));
                     }

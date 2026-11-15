@@ -229,6 +229,7 @@ pub mod readers;
 pub mod redline;
 pub mod relevel;
 pub(crate) mod requirements;
+pub(crate) mod revcurrency;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub(crate) mod risercut;
@@ -1205,6 +1206,59 @@ pub(crate) fn point_req(cmd: &str, p: &Value, key: &str) -> Result<Vec2> {
 }
 pub(crate) fn points_param(p: &Value, key: &str) -> Option<Vec<Vec2>> {
     p.get(key)?.as_array()?.iter().map(point_value).collect()
+}
+/// A point that may be in space: `[x, y]` or `[x, y, z]`, `{x, y, z?}` or `"x,y[,z]"` (z 0 when
+/// left out). A height that is there but not a finite number, or a fourth coordinate, is an
+/// error: never dropped (Q6656).
+pub(crate) fn point3_strict(cmd: &str, key: &str, v: &Value) -> Result<cadaddy_geom::Vec3> {
+    let what = || bad(cmd, format!("`{key}` must be [x, y] or [x, y, z]"));
+    if let Some(t) = v.as_str()
+        && let Some(q) = crate::prompt::parse_point3(t, cadaddy_geom::Vec3::ZERO)
+    {
+        return Ok(q);
+    }
+    let p = point_value(v).ok_or_else(what)?;
+    let z = match v {
+        Value::Array(a) if a.len() > 3 => return Err(what()),
+        Value::Array(a) => a.get(2),
+        Value::Object(o) => o.get("z"),
+        _ => None,
+    };
+    let z = match z {
+        None => 0.0,
+        Some(z) => z.as_f64().filter(|z| z.is_finite()).ok_or_else(what)?,
+    };
+    Ok(p.to3(z))
+}
+/// [`point3_strict`] of `p[key]`; `None` when it is left out.
+pub(crate) fn point3_param_strict(cmd: &str, p: &Value, key: &str) -> Result<Option<cadaddy_geom::Vec3>> {
+    p.get(key).filter(|v| !v.is_null()).map(|v| point3_strict(cmd, key, v)).transpose()
+}
+/// A command whose displacement is a plan one (STRETCH, a grip): a height in `delta`, or a `to`
+/// at another height than `from`/`base`, is refused, never dropped (Q6656).
+pub(crate) fn refuse_rise(cmd: &str, p: &Value) -> Result<()> {
+    let z = |key: &str| -> Result<f64> { Ok(point3_param_strict(cmd, p, key)?.map_or(0.0, |q| q.z)) };
+    let rise = match point3_param_strict(cmd, p, "delta")? {
+        Some(d) => d.z,
+        None if p.get("to").is_some() => z("to")? - if p.get("from").is_some() { z("from")? } else { z("base")? },
+        None => 0.0,
+    };
+    if rise.abs() > 0.0 {
+        return Err(bad(cmd, "moves objects in plan only: a height can't be used here (3dmove raises or lowers objects)"));
+    }
+    Ok(())
+}
+/// A displacement in space: `delta` ([dx, dy] or [dx, dy, dz]), or `to` − `from` (points of two
+/// or three coordinates). Copies and moves take the height as 3DMOVE does (Q6656).
+pub(crate) fn delta3_param(cmd: &str, p: &Value) -> Result<cadaddy_geom::Vec3> {
+    if let Some(d) = point3_param_strict(cmd, p, "delta")? {
+        return Ok(d);
+    }
+    let need = |key: &str| {
+        point3_param_strict(cmd, p, key)?.ok_or_else(|| bad(cmd, format!("`delta` or `from` and `to` are required (`{key}` is missing)")))
+    };
+    let (a, b) = (need("from")?, need("to")?);
+    Ok(b - a)
 }
 /// Handles from `handles` (hex strings or numbers), `handle`, or else the current selection. A
 /// `handle`/`handles` that can't be read is an error, never a silent fall back to the selection.
