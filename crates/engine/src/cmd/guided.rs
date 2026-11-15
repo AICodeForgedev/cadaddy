@@ -3993,6 +3993,9 @@ struct DeviceCensus {
     not_device: BTreeMap<&'static str, usize>,
     /// Tag-shaped marks no legend lists, by tag.
     unlisted: BTreeMap<String, UnlistedTag>,
+    /// Unlisted marks printed once or twice: stray lettering, unless a legend on a sheet the job
+    /// doesn't load lists them (Q6638: a legend sheet's device schedule).
+    stray: BTreeSet<String>,
     /// Every type the loaded legends and schedules list, and how many tables listed them.
     legend_types: std::collections::BTreeSet<String>,
     legend_tables: usize,
@@ -4230,13 +4233,43 @@ fn device_census(
             (sheet, Legend { types: rows.keys().cloned().collect(), regions: Vec::new(), rows })
         })
         .collect();
-    for (sheet, l) in unloaded.iter().chain(answered.iter()) {
+    for (_, l) in unloaded.iter().chain(answered.iter()) {
         c.legend_tables += 1;
         c.legend_types.extend(l.types.iter().cloned());
-        for (k, row) in &l.rows {
-            every_row.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
-        }
         every_legend.merge(l.clone());
+    }
+    // A row that names a device kind before one that names none (a misread table's `C CONDENSER
+    // WATER` on a details sheet against the legend sheet's `C CLOCK OUTLET (RECEPTACLE)`, Q6638).
+    for kinded in [true, false] {
+        for (sheet, l) in unloaded.iter().chain(answered.iter()) {
+            for (k, row) in l.rows.iter().filter(|(_, r)| row_kind(r, false).is_some() == kinded) {
+                every_row.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+            }
+        }
+    }
+    // The set's legend sheet (titled a legend: no plan the job loads, Q6638) speaks for its own
+    // trade's sheets too, as it would loaded: a mechanical plan's marks are the MEP legend's.
+    let classified: Vec<&Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten().collect();
+    let legend_words = cadaddy_mepfix::wordrules::words("sheets.legend_notes_heading_words");
+    let legend_sheet_trade = |sheet: &str| -> Option<String> {
+        let entry =
+            classified.iter().find(|c| c.get("number").and_then(Value::as_str).is_some_and(|n| n.trim().eq_ignore_ascii_case(sheet.trim())))?;
+        let title = entry.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+        if !title.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| legend_words.contains(&w)) {
+            return None;
+        }
+        let d = entry.get("discipline").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        (!d.is_empty() && d != "G").then_some(d)
+    };
+    for kinded in [true, false] {
+        for (sheet, l) in unloaded {
+            let Some(trade) = legend_sheet_trade(sheet) else { continue };
+            let (tl, rows) = trade_legends.entry(trade).or_default();
+            for (k, row) in l.rows.iter().filter(|(_, r)| row_kind(r, false).is_some() == kinded) {
+                tl.types.insert(k.clone());
+                rows.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+            }
+        }
     }
     // A table whose heading names a trade speaks for that trade's sheets wherever it is printed
     // (a CASEWORK AND PLUMBING FIXTURE SCHEDULE on an architectural sheet types the plumbing
@@ -5058,6 +5091,7 @@ fn device_census(
         ));
     }
     let stray: usize = c.unlisted.values().filter(|u| u.count < MIN_REPEATED_TAG).map(|u| u.count).sum();
+    c.stray = c.unlisted.iter().filter(|(_, u)| u.count < MIN_REPEATED_TAG).map(|(t, _)| t.clone()).collect();
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
         *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
@@ -6806,19 +6840,26 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // when they list any. The marks are a symbol's tag, or lettering the electrical plans print
     // again and again by plain linework (`LA-1` over `P1-6` by a rectangle drawn loose, Q6639).
     let unread: Vec<&String> = census.unread_marks.iter().filter(|(_, n)| **n >= MIN_UNREAD_MARK_REPEATS).map(|(t, _)| t).collect();
-    if !census.unlisted.is_empty() || !unread.is_empty() {
-        let plan_tags: BTreeSet<String> =
-            census.by_type.keys().chain(census.unlisted.keys()).chain(unread.iter().copied()).map(|t| t.trim().to_ascii_uppercase()).collect();
+    if !census.unlisted.is_empty() || !unread.is_empty() || !census.stray.is_empty() {
+        let plan_tags: BTreeSet<String> = census
+            .by_type
+            .keys()
+            .chain(census.unlisted.keys())
+            .chain(census.stray.iter())
+            .chain(unread.iter().copied())
+            .map(|t| t.trim().to_ascii_uppercase())
+            .collect();
         let unloaded = schedule_legends_on(&unloaded_schedule_pages(job), &plan_tags);
         let listed: Vec<&String> = census
             .unlisted
             .keys()
+            .chain(census.stray.iter())
             .chain(unread.iter().copied())
             .filter(|t| unloaded.iter().any(|(_, l)| l.types.contains(t.trim().to_ascii_uppercase().as_str())))
             .collect();
         if !unloaded.is_empty() {
             progress_line(&format!(
-                "  luminaire schedules on sheets not loaded: {} on {:?}; the plans' unlisted marks they list: {:?}",
+                "  luminaire schedules and legends on sheets not loaded: {} on {:?}; the plans' unlisted marks they list: {:?}",
                 unloaded.len(),
                 unloaded.iter().map(|(n, _)| n.as_str()).collect::<BTreeSet<_>>(),
                 listed
@@ -21805,8 +21846,9 @@ fn unloaded_schedule_pages(job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing
 
 /// The luminaire schedules on sheets the job's drawing doesn't hold (`pages`, from
 /// [`unloaded_schedule_pages`]): each as a legend of its sheet, by number, its types checked
-/// against the tags the plans print (`plan_tags`). Their extents are another page's, so they
-/// carry none.
+/// against the tags the plans print (`plan_tags`); then each page's symbol legends and device
+/// schedules, the rows of the marks the plans print (a legend sheet is no plan the job loads,
+/// Q6638). Their extents are another page's, so they carry none.
 fn schedule_legends_on(
     pages: &[(String, cadaddy_doc::Drawing, bool)],
     plan_tags: &BTreeSet<String>,
@@ -21814,12 +21856,28 @@ fn schedule_legends_on(
     let mut out = Vec::new();
     for (number, d, electrical) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
+        let mut listed: BTreeSet<String> = BTreeSet::new();
         for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, *electrical) {
             let mut l = schedule_legend(&tb, plan_tags);
             l.regions.clear();
             if !l.types.is_empty() {
+                listed.extend(l.types.iter().map(|t| t.trim().to_ascii_uppercase()));
                 out.push((number.clone(), l));
             }
+        }
+        // The set's legend sheet (its symbol legends and device schedules: `OS1` CEILING
+        // OCCUPANCY SENSOR) speaks for the plans though it is no plan the job loads (Q6638): the
+        // rows of the marks the plans print, the luminaire schedules' first.
+        let mut l = cadaddy_mepfix::device_types::read_legend(&texts);
+        l.regions.clear();
+        let keep = |t: &str| {
+            let u = t.trim().to_ascii_uppercase();
+            plan_tags.contains(&u) && !listed.contains(&u)
+        };
+        l.types.retain(|t| keep(t));
+        l.rows.retain(|k, _| keep(k));
+        if !l.types.is_empty() {
+            out.push((number.clone(), l));
         }
     }
     out
@@ -38332,6 +38390,37 @@ mod tests {
         assert_eq!(census.unlisted.keys().collect::<Vec<_>>(), ["ZZ"], "the mark listed nowhere is still a question");
         // Kept in the stage's result and read back: the same legends.
         assert_eq!(schedule_legends_from(Some(&schedule_legends_json(&legends))), legends);
+    }
+
+    /// Q6638: the set's legend sheet, no plan the job loads, still speaks for the plans: its
+    /// device schedule's rows of the marks the plans print are read off its page; the rows of
+    /// marks no plan prints are not.
+    #[test]
+    fn a_legend_sheets_device_schedule_speaks_for_the_plans_it_is_not_one_of() {
+        let mut page = cadaddy_doc::Drawing::new_imperial();
+        let rows = [
+            ("DEVICE SCHEDULE", 100.0, 500.0, 8.0),
+            ("MARK", 100.0, 485.0, 5.0),
+            ("DESCRIPTION", 130.0, 485.0, 5.0),
+            ("OS1", 100.0, 472.0, 5.0),
+            ("CEILING OCCUPANCY SENSOR, DUAL TECHNOLOGY", 130.0, 472.0, 5.0),
+            ("VS1", 100.0, 460.0, 5.0),
+            ("WALL VACANCY SENSOR SWITCH", 130.0, 460.0, 5.0),
+            ("XQ", 100.0, 448.0, 5.0),
+            ("SAMPLE DEVICE NO PLAN PRINTS", 130.0, 448.0, 5.0),
+        ];
+        for (v, x, y, h) in rows {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, h))).ok();
+        }
+        let tags: BTreeSet<String> = ["OS1", "VS1", "ZZ"].iter().map(|t| t.to_string()).collect();
+        let legends = schedule_legends_on(&[("X-005".to_string(), page, false)], &tags);
+        let types: Vec<&String> = legends.iter().flat_map(|(_, l)| l.types.iter()).collect();
+        assert_eq!(types, ["OS1", "VS1"], "{legends:#?}");
+        let (sheet, l) = legends.first().expect("the legend sheet's rows");
+        assert_eq!(sheet, "X-005");
+        assert!(l.regions.is_empty(), "another page's extents");
+        assert!(l.rows.get("OS1").is_some_and(|r| r.description.contains("OCCUPANCY SENSOR")), "{l:?}");
+        assert!(!l.rows.contains_key("XQ"), "a row no plan prints: {l:?}");
     }
 
     /// Q6165: what a mark resolves to. A row's description (`legend_kind`), else its table (a
