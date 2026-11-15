@@ -595,7 +595,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let issues = validate(s.doc()?, &sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
-    if feeders.changed() {
+    if feeders.notable() {
         r["feeders"] = feeders.json();
     }
     if !walls.is_empty() {
