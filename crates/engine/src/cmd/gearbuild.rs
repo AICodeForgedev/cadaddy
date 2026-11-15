@@ -3402,8 +3402,8 @@ const LABEL_BASIS: &str = "the plan's breaker label";
 /// How [`record_typical_feeds`] says a copy's feed was proposed by the nearest stack.
 const PROPOSED_BASIS: &str = "proposed:";
 
-/// A recorded feed read: `G-206's feed-through lugs (…)`, `G-206`, `feeder 604 from DP1 circuit
-/// 3`, `DP1-3`, `DP1`. `copies`: the typical panel's copies with a tag of their own, by tag;
+/// A recorded feed read: `U-206's feed-through lugs (…)`, `U-206`, `feeder F6 from SB1 circuit
+/// 3`, `SB1-3`, `SB1`. `copies`: the typical panel's copies with a tag of their own, by tag;
 /// `sources`: the panels the typical panel's feeders come from.
 fn parse_recorded_feed(text: &str, copies: &BTreeMap<String, usize>, sources: &BTreeSet<String>) -> Option<RecordedFeed> {
     let words: Vec<String> = text
@@ -3428,7 +3428,7 @@ fn parse_recorded_feed(text: &str, copies: &BTreeMap<String, usize>, sources: &B
     if let Some(p) = words.iter().find(|w| sources.contains(*w)) {
         return Some(RecordedFeed::Source { panel: p.clone(), circuit, tag });
     }
-    // A breaker as a plan letters it: `DP1-3`.
+    // A breaker as a plan letters it: `SB1-3`.
     words.iter().filter_map(|w| breaker_label(w)).find(|(p, _)| sources.contains(p)).map(|(panel, n)| RecordedFeed::Source {
         panel,
         circuit: Some(n),
@@ -4503,7 +4503,7 @@ mod feeder_route_tests {
         sp.mep.feeders = ["P1", "P2"]
             .iter()
             .map(|p| cadaddy_walk3d::Feeder {
-                tag: "604".into(),
+                tag: "F6".into(),
                 from: (*p).into(),
                 to: "U".into(),
                 conduits: 1,
@@ -4530,15 +4530,15 @@ mod feeder_route_tests {
         runs.into_iter().map(|r| r.source_sheet).collect()
     }
 
-    const STACK_1_FROM_P1: &str = "feeder 604 P1→U-101→U-201→U-301";
-    const STACK_2_FROM_P2: &str = "feeder 604 P2→U-302→U-202→U-102";
+    const STACK_1_FROM_P1: &str = "feeder F6 P1→U-101→U-201→U-301";
+    const STACK_2_FROM_P2: &str = "feeder F6 P2→U-302→U-202→U-102";
 
     #[test]
     fn stacks_are_fed_and_chained_as_their_copies_recorded_feeds_say_not_by_the_nearest_source() {
         let mut sp = two_stacks();
         // Nothing recorded: the nearest stacks (P1 the second, bottom up; P2 the first, top down).
         let near = laid(&sp);
-        assert!(near.contains("feeder 604 P1→U-102→U-202→U-302") && near.contains("feeder 604 P2→U-301→U-201→U-101"), "{near:#?}");
+        assert!(near.contains("feeder F6 P1→U-102→U-202→U-302") && near.contains("feeder F6 P2→U-301→U-201→U-101"), "{near:#?}");
         // The panels' feed as a person or an agent enters it: U1a <- P1, U2a <- U1a, U3a <- U2a;
         // U3b <- P2, U2b <- U3b, U1b <- U2b.
         for (tag, from) in [("U-101", "P1"), ("U-201", "U-101"), ("U-301", "U-201"), ("U-302", "P2"), ("U-202", "U-302"), ("U-102", "U-202")] {
@@ -4559,8 +4559,8 @@ mod feeder_route_tests {
         assert_eq!((rep.recorded, rep.by_label, rep.proposed, rep.unfed), (6, 0, 0, 0), "{rep:?}");
         let fed_by =
             |sp: &cadaddy_walk3d::BuildingSpec, t: &str| sp.mep.equipment.iter().find(|e| e.tag == t).and_then(|e| e.properties.get(FED_BY)).cloned();
-        assert_eq!(fed_by(&sp, "U-201").as_deref(), Some("U-101's feed-through lugs (feeder 604 from P1 circuit 1)"));
-        assert_eq!(fed_by(&sp, "U-302").as_deref(), Some("feeder 604 from P2 circuit 1"));
+        assert_eq!(fed_by(&sp, "U-201").as_deref(), Some("U-101's feed-through lugs (feeder F6 from P1 circuit 1)"));
+        assert_eq!(fed_by(&sp, "U-302").as_deref(), Some("feeder F6 from P2 circuit 1"));
         // The recorded feed alone (FED BY, as a model made elsewhere carries it) gives the same.
         let mut only = sp.clone();
         only.mep.equipment.iter_mut().for_each(|e| {
@@ -4569,7 +4569,7 @@ mod feeder_route_tests {
         assert_eq!(laid(&only), BTreeSet::from([STACK_1_FROM_P1.to_string(), STACK_2_FROM_P2.to_string()]));
         // A rerun records the same, once.
         assert_eq!(record_typical_feeds(&mut only).recorded, 6);
-        assert_eq!(fed_by(&only, "U-102").as_deref(), Some("U-202's feed-through lugs (feeder 604 from P2 circuit 1)"));
+        assert_eq!(fed_by(&only, "U-102").as_deref(), Some("U-202's feed-through lugs (feeder F6 from P2 circuit 1)"));
 
         // A breaker as the plan letters it names the source too; the stack no feed names is fed
         // as before (the feeder left, its nearest end first).
@@ -4600,7 +4600,7 @@ mod feeder_route_tests {
         sp.mep.equipment[1] = gear("P2", "Level 3", [2900.0, 100.0], 2.0, 6.0);
         let moved = laid(&sp);
         let firsts = |v: &BTreeSet<String>| v.iter().map(|c| c.split('→').take(2).collect::<Vec<_>>().join("→")).collect::<BTreeSet<_>>();
-        assert!(firsts(&moved).contains("feeder 604 P1→U-102") && firsts(&moved).contains("feeder 604 P2→U-301"), "{moved:#?} (was {proposed:#?})");
+        assert!(firsts(&moved).contains("feeder F6 P1→U-102") && firsts(&moved).contains("feeder F6 P2→U-301"), "{moved:#?} (was {proposed:#?})");
         // A plan label lettered in stack 1 for P1's breaker: the document wins, both stacks are fed again.
         set_prop(&mut sp, "U-201", FEEDER_LABEL, "P1-1");
         let (feeds, notes) = typical_feeds(&sp);

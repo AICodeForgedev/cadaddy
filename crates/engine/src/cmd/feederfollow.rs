@@ -354,7 +354,7 @@ pub(crate) fn follow(sp: &mut BuildingSpec, mode: Mode) -> Followed {
 }
 
 /// The chains a feeder's runs lay: each run names its feeder's chain, source to last copy
-/// (`feeder 604 DP1→G-101→G-201`).
+/// (`feeder F6 SB1→U-101→U-201`).
 fn chains<'a>(runs: &[&'a MepRun]) -> BTreeSet<&'a str> {
     runs.iter().map(|r| r.source_sheet.trim()).collect()
 }
@@ -665,7 +665,7 @@ mod tests {
         sp.mep.feeders = ["P1", "P2"]
             .iter()
             .map(|p| cadaddy_walk3d::Feeder {
-                tag: "604".into(),
+                tag: "F6".into(),
                 from: (*p).into(),
                 to: "U".into(),
                 conduits: 1,
@@ -690,7 +690,7 @@ mod tests {
         sp.mep.runs.iter().filter(|r| super::super::ugplan::is_feeder_run(r)).map(|r| r.source_sheet.clone()).collect()
     }
 
-    const AS_FED: [&str; 2] = ["feeder 604 P1→U-101→U-201→U-301", "feeder 604 P2→U-302→U-202→U-102"];
+    const AS_FED: [&str; 2] = ["feeder F6 P1→U-101→U-201→U-301", "feeder F6 P2→U-302→U-202→U-102"];
 
     #[test]
     fn a_proposed_route_against_the_panels_recorded_feed_is_routed_again_as_the_feed_says() {
@@ -699,7 +699,7 @@ mod tests {
         // P2 stack 1 top down), each stack fed from the wrong source and the wrong end.
         sp.mep.runs = super::super::gearbuild::feeder_runs(&sp).0;
         let before = laid(&sp);
-        assert!(before.contains("feeder 604 P1→U-102→U-202→U-302"), "{before:#?}");
+        assert!(before.contains("feeder F6 P1→U-102→U-202→U-302"), "{before:#?}");
         record_feeds(&mut sp);
         // Each source's route lands on the other stack than its feed's.
         assert_eq!(check(&sp), (2, 0));
@@ -724,18 +724,18 @@ mod tests {
             .0
             .into_iter()
             .filter(|r| r.source_sheet == AS_FED[0])
-            .map(|r| MepRun { source_sheet: "E-2".into(), size_source: "drawn".into(), height_source: "drawn".into(), ..r })
+            .map(|r| MepRun { source_sheet: "SHEET-B".into(), size_source: "drawn".into(), height_source: "drawn".into(), ..r })
             .collect();
         assert!(!drawn.is_empty());
         sp.mep.runs = drawn.clone();
         let f = follow(&mut sp, Mode::All);
         // Stack 2 is routed; P1's feeder into stack 1 is not laid beside the drawn raceway.
         assert_eq!(f.rerouted.len(), 1, "{f:?}");
-        assert!(f.rerouted[0].0.starts_with("604 P2→U"), "{f:?}");
+        assert!(f.rerouted[0].0.starts_with("F6 P2→U"), "{f:?}");
         assert_eq!(f.disagree.len(), 1, "{f:?}");
-        assert!(f.disagree[0].0.starts_with("604 P1→U") && f.disagree[0].1.contains("already takes a route kept as given"), "{f:?}");
+        assert!(f.disagree[0].0.starts_with("F6 P1→U") && f.disagree[0].1.contains("already takes a route kept as given"), "{f:?}");
         assert!(f.line().is_some_and(|l| l.contains("route and feed data disagree")), "{:?}", f.line());
-        assert_eq!(laid(&sp), BTreeSet::from(["E-2".to_string(), AS_FED[1].to_string()]));
+        assert_eq!(laid(&sp), BTreeSet::from(["SHEET-B".to_string(), AS_FED[1].to_string()]));
         assert!(drawn.iter().all(|r| sp.mep.runs.contains(r)), "the drawn raceway is kept as given");
 
         // A listed feeder's route entered by hand along other chains: kept as given, and said.
