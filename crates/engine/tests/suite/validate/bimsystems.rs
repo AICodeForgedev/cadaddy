@@ -330,3 +330,118 @@ fn presentation_is_kept_in_the_look() {
     assert_eq!(r["presentation"], true);
     assert_eq!(view(&mut s, json!({}))["presentation"], true);
 }
+
+/// A floor plate as the build makes one (Q6665): rectangles (feet) facing up, meeting at
+/// T-junctions round a shaft, their undersides a foot below `z` (feet).
+fn rect_plate(rects: &[[f64; 4]], z: f64) -> cadaddy_engine::doc::Mesh {
+    use cadaddy_engine::doc::{Mesh, MeshFace, MeshKind};
+    use cadaddy_engine::geom::Vec3;
+    let mut m = Mesh { kind: MeshKind::Polyface, ..Mesh::default() };
+    for r in rects {
+        let [x0, y0, x1, y1] = r.map(|c| c * 12.0);
+        for (zz, up) in [(z * 12.0, true), ((z - 1.0) * 12.0, false)] {
+            let base = m.vertices.len() as u32;
+            m.vertices.extend([Vec3::new(x0, y0, zz), Vec3::new(x1, y0, zz), Vec3::new(x1, y1, zz), Vec3::new(x0, y1, zz)]);
+            let mut v = vec![base, base + 1, base + 2, base + 3];
+            if !up {
+                v.reverse();
+            }
+            m.faces.push(MeshFace { v, hidden: 0 });
+        }
+    }
+    m
+}
+
+/// A closed box from `lo` to `hi` (feet).
+fn box_mesh(lo: [f64; 3], hi: [f64; 3]) -> cadaddy_engine::doc::Mesh {
+    use cadaddy_engine::doc::{Mesh, MeshFace, MeshKind};
+    use cadaddy_engine::geom::Vec3;
+    let [a, b] = [lo, hi].map(|p| p.map(|c| c * 12.0));
+    let vertices = vec![
+        Vec3::new(a[0], a[1], a[2]),
+        Vec3::new(b[0], a[1], a[2]),
+        Vec3::new(b[0], b[1], a[2]),
+        Vec3::new(a[0], b[1], a[2]),
+        Vec3::new(a[0], a[1], b[2]),
+        Vec3::new(b[0], a[1], b[2]),
+        Vec3::new(b[0], b[1], b[2]),
+        Vec3::new(a[0], b[1], b[2]),
+    ];
+    let faces = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]]
+        .into_iter()
+        .map(|v| MeshFace { v: v.to_vec(), hidden: 0 })
+        .collect();
+    Mesh { vertices, faces, kind: MeshKind::Polyface }
+}
+
+#[test]
+fn the_systems_view_draws_the_same_elements_every_time_and_a_shaft_is_on_site() {
+    use cadaddy_engine::doc::{Common, EntityKind, RawTag};
+    // Two storeys 62' square, each slab cut into rectangles round a 6' shaft, as the build cuts
+    // a floor plate: one rectangle's side runs past two others'.
+    const PLATE: [[f64; 4]; 7] = [
+        [0.0, 0.0, 30.0, 62.0],
+        [30.0, 0.0, 36.0, 20.0],
+        [30.0, 26.0, 36.0, 62.0],
+        [36.0, 0.0, 62.0, 15.0],
+        [36.0, 15.0, 50.0, 40.0],
+        [50.0, 15.0, 62.0, 40.0],
+        [36.0, 40.0, 62.0, 62.0],
+    ];
+    let mut d = cadaddy_engine::sample::bim_building(2, 6);
+    let floors: Vec<_> = d
+        .model
+        .iter()
+        .filter(|e| made_as(e).as_deref() == Some("floor"))
+        .map(|e| (e.handle, cadaddy_engine::cmd::bspec::made_level(e).unwrap_or_default()))
+        .collect();
+    assert_eq!(floors.len(), 2);
+    for (h, level) in &floors {
+        let z = if level == "L1" { 0.0 } else { 12.0 };
+        d.modify_entity(*h, |e| e.kind = EntityKind::Mesh(rect_plate(&PLATE, z))).unwrap();
+    }
+    // 50 small units spread over each floor, and one standing over the shaft.
+    let mut units = BTreeSet::new();
+    for (k, level) in ["L1", "L2"].into_iter().enumerate() {
+        let z = k as f64 * 12.0;
+        let mut at: Vec<[f64; 2]> = (0..50).map(|n| [4.0 + 5.5 * (n % 10) as f64, 6.0 + 11.0 * (n / 10) as f64]).collect();
+        at.push([32.5, 22.5]);
+        for (n, [x, y]) in at.into_iter().enumerate() {
+            let tags = [
+                "mep".to_string(),
+                level.to_string(),
+                "0".to_string(),
+                "system:".to_string(),
+                "kind:equipment".to_string(),
+                "part:equipment:fan_coil".to_string(),
+                format!("tag:FC-{level}-{n}"),
+                "title:FAN COIL UNIT".to_string(),
+            ];
+            let mut x_data = vec![RawTag { code: 1001, value: cadaddy_engine::cmd::wallgen::APP.into() }];
+            x_data.extend(tags.into_iter().map(|value| RawTag { code: 1000, value }));
+            let common = Common { layer: "3D-MEP-EQUIPMENT".into(), xdata: x_data.into(), ..Common::default() };
+            let mesh = box_mesh([x, y, z + 8.0], [x + 1.5, y + 1.5, z + 9.0]);
+            units.insert(d.add(&Space::Model, common, EntityKind::Mesh(mesh)).unwrap());
+        }
+    }
+    assert_eq!(units.len(), 102);
+    let mut s = session_of(d);
+    assert_eq!(view(&mut s, json!({}))["view"], "systems");
+    let drawn = |s: &Session| -> BTreeSet<cadaddy_engine::doc::Handle> { shown(s).model.iter().map(|e| e.handle).collect() };
+    // The same model and view, computed again and again: the same elements, every unit on site.
+    let first = drawn(&s);
+    let missing: Vec<_> = units.iter().filter(|h| !first.contains(h)).collect();
+    assert!(missing.is_empty(), "{} of {} units judged off site", missing.len(), units.len());
+    let counts: Vec<Value> = (0..3).map(|_| view(&mut s, json!({}))["drawn"].clone()).collect();
+    for _ in 0..5 {
+        assert_eq!(drawn(&s), first, "the same input draws the same elements");
+    }
+    assert!(counts.iter().all(|c| *c == counts[0]), "bim.view drawn {counts:?}");
+    let renders: Vec<Value> = (0..3).map(|_| render(&mut s, json!({}))["drawn"].clone()).collect();
+    assert!(renders.iter().all(|c| *c == renders[0]), "model.render drawn {renders:?}");
+    // The site switch adds nothing of the building: every unit was already drawn.
+    view(&mut s, json!({"switches": {"site": true}}));
+    let with_site = drawn(&s);
+    assert_eq!(units.iter().filter(|h| with_site.contains(h)).count(), units.len());
+    assert_eq!(with_site, first, "nothing on the building waits for the site switch");
+}

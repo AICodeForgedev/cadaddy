@@ -480,8 +480,10 @@ struct Plates {
 }
 
 impl Plates {
-    fn add(&mut self, ring: Vec<Vec2>) {
-        for p in &ring {
+    /// A plate: its outer ring, and the box of its whole top (`top`: the ring's alone when
+    /// unknown); the box is what the off-site test reads, so a seam or hole never shrinks it.
+    fn add(&mut self, ring: Vec<Vec2>, top: Option<(Vec2, Vec2)>) {
+        for p in ring.iter().chain(top.iter().flat_map(|(lo, hi)| [lo, hi])) {
             self.lo = Some(self.lo.map_or(*p, |l| Vec2::new(l.x.min(p.x), l.y.min(p.y))));
             self.hi = Some(self.hi.map_or(*p, |h| Vec2::new(h.x.max(p.x), h.y.max(p.y))));
         }
@@ -517,10 +519,11 @@ fn plates_of(d: &Drawing) -> HashMap<String, Plates> {
         }
         let EntityKind::Mesh(m) = &e.kind else { continue };
         let Some(ring) = outer_ring(m) else { continue };
+        let tb = top_box(m);
         let level = super::bspec::made_level(e).unwrap_or_default().to_ascii_uppercase();
-        out.entry(String::new()).or_default().add(ring.clone());
+        out.entry(String::new()).or_default().add(ring.clone(), tb);
         if !level.is_empty() {
-            out.entry(level).or_default().add(ring);
+            out.entry(level).or_default().add(ring, tb);
         }
         if out.len() > MAX_LIST {
             break;
@@ -1577,45 +1580,119 @@ pub fn add_context(out: &mut Drawing, s: &Scope) {
     }
 }
 
-/// A floor mesh's outer edge on plan: its upward faces' edges that no other upward face shares,
-/// joined into rings; the ring with the most area.
-fn outer_ring(m: &cadaddy_doc::Mesh) -> Option<Vec<Vec2>> {
-    let key = |p: Vec3| ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64);
-    let mut edges: HashMap<((i64, i64), (i64, i64)), (Vec2, Vec2, i32)> = HashMap::new();
-    for f in m.faces.iter().take(MAX_SCAN) {
-        let pts: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+/// A mesh's faces that face up (a slab's top), as plan corners: Newell's normal points up.
+fn top_faces(m: &cadaddy_doc::Mesh) -> impl Iterator<Item = Vec<Vec3>> + '_ {
+    m.faces.iter().take(MAX_SCAN).filter_map(|f| {
+        let pts: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).filter(|p| p.is_finite()).collect();
         if pts.len() < 3 {
-            continue;
+            return None;
         }
-        // Upward (the top of the slab): the face's normal points up.
         let mut n = Vec3::new(0.0, 0.0, 0.0);
         for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
             n = n + Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
         }
-        if !(n.z > 0.0 && n.z.abs() > 0.9 * n.len()) {
-            continue;
-        }
+        (n.z > 0.0 && n.z.abs() > 0.9 * n.len()).then_some(pts)
+    })
+}
+
+/// The plan box of a floor mesh's top: the whole plate's extent (its outline's), holes and
+/// seams can't shrink it.
+fn top_box(m: &cadaddy_doc::Mesh) -> Option<(Vec2, Vec2)> {
+    let mut b: Option<(Vec2, Vec2)> = None;
+    for p in top_faces(m).flatten() {
+        let q = p.xy();
+        b = Some(b.map_or((q, q), |(lo, hi)| (Vec2::new(lo.x.min(q.x), lo.y.min(q.y)), Vec2::new(hi.x.max(q.x), hi.y.max(q.y)))));
+    }
+    b
+}
+
+/// Corners on a diagonal edge are looked for only while edges × corners stays under this.
+const MAX_SPLIT_WORK: usize = 4_000_000;
+
+/// A floor mesh's outer edge on plan: its upward faces' edges, each split where another upward
+/// face's corner lies on it (the build's rectangles meet at T-junctions: one's side runs past
+/// two others'), the pieces no other upward face shares (the outline and its holes) joined into
+/// rings end to start in the faces' direction; the ring with the most area. A pure function of
+/// the mesh: ordered maps throughout, so the same mesh always gives the same ring (Q6665: hash
+/// order picked a different, partial ring on every call).
+fn outer_ring(m: &cadaddy_doc::Mesh) -> Option<Vec<Vec2>> {
+    type K = (i64, i64);
+    let key = |p: Vec2| -> K { ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64) };
+    let mut corners: BTreeMap<K, Vec2> = BTreeMap::new();
+    let mut directed: Vec<(K, K)> = Vec::new();
+    for pts in top_faces(m) {
         for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
-            let (ka, kb) = (key(*a), key(*b));
-            if ka == kb {
-                continue;
+            let (ka, kb) = (key(a.xy()), key(b.xy()));
+            corners.entry(ka).or_insert(a.xy());
+            corners.entry(kb).or_insert(b.xy());
+            if ka != kb {
+                directed.push((ka, kb));
             }
-            let k = if ka < kb { (ka, kb) } else { (kb, ka) };
-            let slot = edges.entry(k).or_insert((a.xy(), b.xy(), 0));
-            slot.2 += 1;
         }
     }
-    let single: Vec<(Vec2, Vec2)> = edges.values().filter(|e| e.2 == 1).map(|e| (e.0, e.1)).collect();
+    // The corners on each horizontal line (by y) and each vertical line (by x), in order.
+    let mut rows: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    let mut cols: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for k in corners.keys() {
+        rows.entry(k.1).or_default().insert(k.0);
+        cols.entry(k.0).or_default().insert(k.1);
+    }
+    let diagonal = directed.iter().filter(|(a, b)| a.0 != b.0 && a.1 != b.1).count();
+    let split_diagonal = diagonal.saturating_mul(corners.len()) <= MAX_SPLIT_WORK;
+    // Each edge's pieces between the corners on it, counted by the pair (either direction).
+    let mut uses: BTreeMap<(K, K), (K, K, u32)> = BTreeMap::new();
+    let mut put = |a: K, b: K| {
+        let k = if a < b { (a, b) } else { (b, a) };
+        uses.entry(k).or_insert((a, b, 0)).2 += 1;
+    };
+    for &(a, b) in &directed {
+        let mut on: Vec<K> = if a.1 == b.1 {
+            let (lo, hi) = (a.0.min(b.0), a.0.max(b.0));
+            rows.get(&a.1).map(|xs| xs.range(lo + 1..hi).map(|x| (*x, a.1)).collect()).unwrap_or_default()
+        } else if a.0 == b.0 {
+            let (lo, hi) = (a.1.min(b.1), a.1.max(b.1));
+            cols.get(&a.0).map(|ys| ys.range(lo + 1..hi).map(|y| (a.0, *y)).collect()).unwrap_or_default()
+        } else if split_diagonal {
+            let (dx, dy) = (i128::from(b.0 - a.0), i128::from(b.1 - a.1));
+            let l2 = dx * dx + dy * dy;
+            corners
+                .keys()
+                .filter(|c| **c != a && **c != b)
+                .filter(|c| {
+                    let (px, py) = (i128::from(c.0 - a.0), i128::from(c.1 - a.1));
+                    let cross = dx * py - dy * px;
+                    let t = dx * px + dy * py;
+                    // Within a key unit of the line, strictly between its ends.
+                    cross * cross <= l2 && t > 0 && t < l2
+                })
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // In order from `a` to `b`.
+        on.sort_by_key(|c| {
+            let (px, py) = (i128::from(c.0 - a.0), i128::from(c.1 - a.1));
+            px * i128::from(b.0 - a.0) + py * i128::from(b.1 - a.1)
+        });
+        let mut from = a;
+        for c in on.into_iter().chain(std::iter::once(b)) {
+            if c != from {
+                put(from, c);
+            }
+            from = c;
+        }
+    }
+    let single: Vec<(K, K)> = uses.values().filter(|u| u.2 == 1).map(|u| (u.0, u.1)).collect();
     if single.len() < 3 {
         return None;
     }
-    // Join them into rings, end to start.
-    let k2 = |p: Vec2| ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64);
-    let mut from: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for (i, (a, b)) in single.iter().enumerate() {
-        from.entry(k2(*a)).or_default().push(i);
-        from.entry(k2(*b)).or_default().push(i);
+    // Join them into rings, each piece's end to the next one's start.
+    let mut out: BTreeMap<K, Vec<usize>> = BTreeMap::new();
+    for (i, (a, _)) in single.iter().enumerate() {
+        out.entry(*a).or_default().push(i);
     }
+    let at = |k: K| corners.get(&k).copied().unwrap_or(Vec2::new(k.0 as f64 / 1e3, k.1 as f64 / 1e3));
     let mut used = vec![false; single.len()];
     let mut best: Option<(f64, Vec<Vec2>)> = None;
     for start in 0..single.len() {
@@ -1626,29 +1703,51 @@ fn outer_ring(m: &cadaddy_doc::Mesh) -> Option<Vec<Vec2>> {
         if let Some(u) = used.get_mut(start) {
             *u = true;
         }
-        let mut ring = vec![a, b];
-        let mut at = b;
+        let mut ring = vec![at(a)];
+        let mut here = b;
         for _ in 0..single.len() {
-            let next = from.get(&k2(at)).and_then(|l| l.iter().copied().find(|i| !used.get(*i).copied().unwrap_or(true)));
+            if here == a {
+                break;
+            }
+            ring.push(at(here));
+            let next = out.get(&here).and_then(|l| l.iter().copied().find(|i| !used.get(*i).copied().unwrap_or(true)));
             let Some(i) = next else { break };
             if let Some(u) = used.get_mut(i) {
                 *u = true;
             }
-            let Some(&(p, q)) = single.get(i) else { break };
-            at = if k2(p) == k2(at) { q } else { p };
-            if k2(at) == k2(a) {
-                break;
-            }
-            ring.push(at);
+            let Some(&(_, q)) = single.get(i) else { break };
+            here = q;
         }
+        // Straight runs in one piece: drop corners on the line between their neighbours.
+        let ring = drop_collinear(ring);
         if ring.len() >= 3 {
             let area = cadaddy_geom::shoelace(&ring).abs();
-            if best.as_ref().is_none_or(|b| area > b.0) {
+            if best.as_ref().is_none_or(|b| area > b.0 + 1e-9) {
                 best = Some((area, ring));
             }
         }
     }
     best.map(|b| b.1)
+}
+
+/// `ring` without the corners that lie on the straight line between their neighbours.
+fn drop_collinear(ring: Vec<Vec2>) -> Vec<Vec2> {
+    let n = ring.len();
+    if n < 4 {
+        return ring;
+    }
+    let keep: Vec<Vec2> = (0..n)
+        .filter_map(|i| {
+            let p = *ring.get((i + n - 1) % n)?;
+            let c = *ring.get(i)?;
+            let q = *ring.get((i + 1) % n)?;
+            let (u, v) = (c - p, q - c);
+            let cross = u.x * v.y - u.y * v.x;
+            let scale = (u.x * u.x + u.y * u.y).sqrt() * (v.x * v.x + v.y * v.y).sqrt();
+            (cross.abs() > 1e-9 * scale.max(1e-12) || u.x * v.x + u.y * v.y < 0.0).then_some(c)
+        })
+        .collect();
+    if keep.len() >= 3 { keep } else { ring }
 }
 
 /// `out`'s objects in `ghost` (the view's see-through part) drawn see-through.
@@ -2231,5 +2330,49 @@ mod tests {
         let ring = outer_ring(&m).expect("a ring");
         assert_eq!(ring.len(), 4);
         assert!((cadaddy_geom::shoelace(&ring).abs() - 200.0).abs() < 1e-6);
+    }
+
+    /// A floor plate as the build makes one (Q6665): rectangles facing up, one rectangle's side
+    /// running past two others' (T-junctions), round a shaft (a hole), its underside below.
+    fn rect_plate(rects: &[[f64; 4]], z: f64) -> cadaddy_doc::Mesh {
+        let mut m = super::super::wallgen::empty_mesh();
+        for [x0, y0, x1, y1] in rects {
+            for (zz, up) in [(z, true), (z - 1.0, false)] {
+                let base = m.vertices.len() as u32;
+                m.vertices.extend([Vec3::new(*x0, *y0, zz), Vec3::new(*x1, *y0, zz), Vec3::new(*x1, *y1, zz), Vec3::new(*x0, *y1, zz)]);
+                let mut v = vec![base, base + 1, base + 2, base + 3];
+                if !up {
+                    v.reverse();
+                }
+                m.faces.push(cadaddy_doc::MeshFace { v, hidden: 0 });
+            }
+        }
+        m
+    }
+
+    /// 100 × 60 with a 6 × 6 shaft at (30..36, 20..26), cut into rectangles meeting at T-junctions.
+    const SHAFT_PLATE: [[f64; 4]; 7] = [
+        [0.0, 0.0, 30.0, 60.0],
+        [30.0, 0.0, 36.0, 20.0],
+        [30.0, 26.0, 36.0, 60.0],
+        [36.0, 0.0, 100.0, 15.0],
+        [36.0, 15.0, 70.0, 40.0],
+        [70.0, 15.0, 100.0, 40.0],
+        [36.0, 40.0, 100.0, 60.0],
+    ];
+
+    #[test]
+    fn a_plate_of_rectangles_round_a_shaft_has_its_whole_outline_every_time() {
+        let m = rect_plate(&SHAFT_PLATE, 0.0);
+        let first = outer_ring(&m).expect("a ring");
+        for _ in 0..60 {
+            let ring = outer_ring(&m).expect("a ring");
+            assert_eq!(ring, first, "the same plate, the same ring");
+        }
+        // The outline, holes and the rectangles' seams ignored.
+        assert!((cadaddy_geom::shoelace(&first).abs() - 6000.0).abs() < 1e-6, "{first:?}");
+        let mut p = Plates::default();
+        p.add(first, top_box(&m));
+        assert_eq!((p.lo, p.hi), (Some(Vec2::new(0.0, 0.0)), Some(Vec2::new(100.0, 60.0))));
     }
 }
