@@ -494,6 +494,11 @@ pub struct Assembly {
     /// How far past the ceiling an [`HeightRule::AboveCeiling`] wall goes, inches.
     #[serde(default = "six", skip_serializing_if = "is_six")]
     pub above_ceiling_in: f64,
+    /// The ceiling a [`HeightRule::Ceiling`] or [`HeightRule::AboveCeiling`] wall stops at is a
+    /// fire rated ceiling assembly (the head key says `TO UNDERSIDE OF FIRE RATED CEILING`): the
+    /// ceiling carries the rating on, so a rated wall stopping there is as designed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub to_rated_ceiling: bool,
     /// `1 HR`, `2 HR`; none = not rated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_rating: Option<String>,
@@ -1426,6 +1431,12 @@ pub struct Mep {
     /// the job kept them).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub wire_length_read: String,
+    /// The outputs the fire alarm's sequence of operations (its matrix, or a written sequence)
+    /// calls for (a shunt trip, a damper release, a fan shutdown, a door release, an elevator
+    /// recall), as read when the job read its pages: each needs a device or relay and its power
+    /// on the drawings, which the requirements check against the model.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fa_outputs: Vec<FaOutput>,
     /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
     /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1809,6 +1820,7 @@ impl Mep {
             && self.load_summaries.is_empty()
             && self.wire_length_tables.is_empty()
             && self.wire_length_read.is_empty()
+            && self.fa_outputs.is_empty()
             && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
@@ -1822,6 +1834,23 @@ impl Mep {
             && self.required_services.is_empty()
             && self.elevation_bands.is_empty()
     }
+}
+
+/// One output the fire alarm's sequence of operations calls for: its class in the rules data
+/// (`shunt_trip`, `damper_release`, `fan_control`, `door_release`, `elevator_recall`), the output
+/// as printed, the sheet, and how many of the matrix's inputs mark it (0: a written sequence).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FaOutput {
+    pub class: String,
+    pub text: String,
+    pub sheet: String,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub inputs: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A utility or service entrance: conduits from the property line or the utility's structure
@@ -2178,6 +2207,19 @@ pub struct EquipmentElectrical {
     /// light): built as objects where the drawings have none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_circuits: Vec<ExtraCircuit>,
+    /// What its submittal's notes ask of the wiring and the connections around it: copper
+    /// conductors only, the least conductor size (`4` for `4 AWG Wire Min.`), a disconnect that
+    /// comes with the unit (on or in it), a service receptacle and a data connection of its own.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub copper_only: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub min_wire: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unit_disconnect: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_receptacle: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_data: bool,
     /// Built instead of the drawings' where its submittal differs (`drawing_ocpd` and the feeder
     /// stay beside it): its protection, conductors and conduit, why, and the rule.
     #[serde(skip_serializing_if = "String::is_empty")]

@@ -37,6 +37,8 @@ const MAX_OPS: usize = 20_000_000;
 const MAX_STREAM_BYTES: usize = 256 << 20;
 /// Nesting of form XObjects.
 const MAX_DEPTH: usize = 12;
+/// About how many bytes of a content stream are decoded into operations at once ([`Operations`]).
+const CONTENT_PIECE_BYTES: usize = 1 << 20;
 /// Objects created.
 const MAX_OBJECTS: usize = 4_000_000;
 /// Points in one path.
@@ -483,6 +485,8 @@ struct Out {
     /// The next painting-order number.
     seq: usize,
     ops: usize,
+    /// Most operations decoded and held at once (one piece of a content stream, [`Operations`]).
+    ops_held: usize,
     clipped_ops: usize,
     /// Painting-order numbers of what Type3 glyph procedures drew (lettering, not linework).
     glyph_orders: HashSet<usize>,
@@ -1001,6 +1005,156 @@ struct Interp<'a> {
     want_images: bool,
     /// Everything drawn goes on this layer (annotations).
     force_layer: Option<String>,
+    /// About how many bytes of a content stream are decoded at once ([`CONTENT_PIECE_BYTES`]).
+    piece_bytes: usize,
+}
+
+/// The operations of a content stream, decoded a piece at a time ([`content_pieces`]) as they
+/// are read. Decoded whole, a dense sheet's stream (tens of MB) is millions of operations held
+/// at once, several times the size of the drawing read from them; a print set's dense civil
+/// sheet took 0.85 GB for a moment that way.
+///
+/// The operations are those of decoding the whole stream: where a piece doesn't decode to its
+/// end (damaged data), the stream ends with the operations before the damage, as it would.
+/// One difference: an inline image whose dictionary is damaged makes the library refuse the
+/// whole stream, and here the pieces before it are kept.
+struct Operations<'a> {
+    pieces: std::vec::IntoIter<&'a [u8]>,
+    ops: std::vec::IntoIter<lopdf::content::Operation>,
+    /// Operations of the piece decoded now.
+    held: usize,
+    /// A piece didn't decode to its end: nothing after it is read.
+    stopped: bool,
+}
+
+impl<'a> Operations<'a> {
+    fn new(data: &'a [u8], piece_bytes: usize) -> Self {
+        Operations { pieces: content_pieces(data, piece_bytes).into_iter(), ops: Vec::new().into_iter(), held: 0, stopped: false }
+    }
+}
+
+impl Iterator for Operations<'_> {
+    type Item = lopdf::content::Operation;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(op) = self.ops.next() {
+                return Some(op);
+            }
+            if self.stopped {
+                return None;
+            }
+            let piece = self.pieces.next()?;
+            let ops = match Content::decode_strict(piece) {
+                Ok(c) => c.operations,
+                Err(_) => {
+                    self.stopped = true;
+                    Content::decode(piece).map(|c| c.operations).unwrap_or_default()
+                }
+            };
+            self.held = ops.len();
+            self.ops = ops.into_iter();
+        }
+    }
+}
+
+/// A content stream cut into pieces of about `size` bytes that decode, one after another, to the
+/// operations the whole stream does: each cut comes after an operator and the white space after
+/// it, never inside a string, an array, a dictionary or a comment. Inline image data is binary,
+/// so from the first inline image on the rest of the stream is one piece.
+fn content_pieces(data: &[u8], size: usize) -> Vec<&[u8]> {
+    // PDF white space and delimiters; every other byte is a regular character.
+    let regular = |b: u8| !matches!(b, 0 | b'\t' | b'\n' | 12 | b'\r' | b' ' | b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%');
+    let mut pieces = Vec::new();
+    let (mut start, mut i, mut depth) = (0usize, 0usize, 0usize);
+    while let Some(&c) = data.get(i) {
+        match c {
+            // a comment, to the end of its line
+            b'%' => {
+                while data.get(i).is_some_and(|b| !matches!(b, b'\r' | b'\n')) {
+                    i += 1;
+                }
+            }
+            // a string: balanced parentheses, a backslash escapes the byte after it
+            b'(' => {
+                let mut open = 0usize;
+                while let Some(&b) = data.get(i) {
+                    i += 1;
+                    match b {
+                        b'\\' => i += 1,
+                        b'(' => open += 1,
+                        b')' => {
+                            open = open.saturating_sub(1);
+                            if open == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            b'<' if data.get(i + 1) == Some(&b'<') => {
+                depth += 1;
+                i += 2;
+            }
+            b'>' if data.get(i + 1) == Some(&b'>') => {
+                depth = depth.saturating_sub(1);
+                i += 2;
+            }
+            // a hex string
+            b'<' => {
+                while let Some(&b) = data.get(i) {
+                    i += 1;
+                    if b == b'>' {
+                        break;
+                    }
+                }
+            }
+            b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b']' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            // a name: the slash and its characters
+            b'/' => {
+                i += 1;
+                while data.get(i).is_some_and(|&b| regular(b)) {
+                    i += 1;
+                }
+            }
+            c if regular(c) => {
+                let from = i;
+                while data.get(i).is_some_and(|&b| regular(b)) {
+                    i += 1;
+                }
+                let word = data.get(from..i).unwrap_or_default();
+                if word == b"BI" {
+                    break;
+                }
+                // An operator as the library reads one (letters, `*`, `'` and `"`), not a word
+                // its operands start with (`true`, `false`, `null`).
+                let operator = depth == 0
+                    && word.iter().all(|b| b.is_ascii_alphabetic() || b"*'\"".contains(b))
+                    && ![&b"true"[..], b"false", b"null"].iter().any(|w| word.starts_with(w));
+                if operator
+                    && i - start >= size
+                    && data.get(i).is_some_and(|b| b" \t\r\n".contains(b))
+                    && let Some(piece) = data.get(start..=i)
+                {
+                    pieces.push(piece);
+                    start = i + 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    if let Some(rest) = data.get(start..).filter(|r| !r.is_empty()) {
+        pieces.push(rest);
+    }
+    pieces
 }
 
 struct TextState {
@@ -1049,7 +1203,7 @@ impl<'a> Interp<'a> {
         if depth > MAX_DEPTH {
             return;
         }
-        let Ok(content) = Content::decode(data) else { return };
+        let mut ops = Operations::new(data, self.piece_bytes);
         // lopdf drops filtered inline images: read them from the bytes (the n-th BI is the n-th)
         let inline = if self.want_images { crate::pdf_image::scan_inline(data, resources, self.doc) } else { Vec::new() };
         let mut inline_at = 0usize;
@@ -1059,8 +1213,9 @@ impl<'a> Interp<'a> {
         let mut ts = TextState::default();
         let mut ocg: Vec<Option<String>> = Vec::new();
         let mut clip_pending = false;
-        for op in &content.operations {
+        while let Some(op) = ops.next() {
             self.out.ops += 1;
+            self.out.ops_held = self.out.ops_held.max(ops.held);
             if self.out.ops > MAX_OPS {
                 return;
             }
@@ -5717,7 +5872,8 @@ fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke]) -> Vec<Vec<
 /// in fewer than [`SHARED_STROKE_MIN`] of its type's instances (or one in [`SHARED_STROKE_SHARE`]
 /// of them, if more) and more than [`FOREIGN_STROKE_OVER`] times the outline they share round
 /// the tag (its hexagon, circle or box: closed, about as wide as tall, no smaller than the tag's
-/// letters) is not the symbol's, and stays loose where printed. An instance sharing no such
+/// letters; beside it, a box drawn round the tag's own letters counts too, though its width
+/// follows them) is not the symbol's, and stays loose where printed. An instance sharing no such
 /// outline keeps all its strokes (a symbol drawn turned, a bare letter), and so does a stroke
 /// near the outline's size (a part of the symbol drawn its own way at one instance).
 fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
@@ -5735,25 +5891,28 @@ fn release_unshared_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
     }
     let extent = |b: [f64; 4]| (b[2] - b[0]).max(b[3] - b[1]);
     for (inst, of_inst) in group.iter_mut().zip(&keys) {
-        let Some(letters) = inst.nearby_text_at.map(|t| t.1).filter(|h| *h > 0.0) else { continue };
+        let Some((tag_at, letters)) = inst.nearby_text_at.filter(|t| t.1 > 0.0) else { continue };
         let shared: Vec<bool> = of_inst.iter().map(|k| k.as_ref().is_some_and(|k| count.get(k).copied().unwrap_or(0) >= need)).collect();
-        let size = inst
-            .stroke_indices
-            .iter()
-            .zip(&shared)
-            .filter(|(_, sh)| **sh)
-            .filter_map(|(&si, _)| strokes.get(si))
-            .filter(|s| is_outline(s))
-            .filter_map(|s| bbox(std::slice::from_ref(&s.pts)))
-            .filter(|b| {
-                let (w, h) = (b[2] - b[0], b[3] - b[1]);
-                w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))
-            })
-            .map(extent)
-            .fold(0.0f64, f64::max);
+        // A box drawn round the tag's own letters is the outline round it even where no other
+        // instance draws it alike: its width follows its lettering (a short label, a long one).
+        let encloses_tag = |s: &Stroke| {
+            let poly: Vec<Vec2> = s.pts.iter().map(|p| Vec2::new(p.0, p.1)).collect();
+            [tag_at, (tag_at.0, tag_at.1 + letters / 2.0)].iter().any(|p| cadaddy_geom::point_in_polygon(&poly, Vec2::new(p.0, p.1)))
+        };
+        // The outlines round the tag (closed, about as wide as tall, no smaller than its letters),
+        // by whether the instances share them.
+        let outline = |(&si, sh): (&usize, &bool)| {
+            let s = strokes.get(si).filter(|s| is_outline(s))?;
+            let b = bbox(std::slice::from_ref(&s.pts))?;
+            let (w, h) = (b[2] - b[0], b[3] - b[1]);
+            (w.min(h) >= letters.max(OUTLINE_MIN_ASPECT * w.max(h))).then_some((s, *sh, extent(b)))
+        };
+        let outlines: Vec<(&Stroke, bool, f64)> = inst.stroke_indices.iter().zip(&shared).filter_map(outline).collect();
+        let size = outlines.iter().filter(|o| o.1).map(|o| o.2).fold(0.0f64, f64::max);
         if size <= 0.0 {
             continue;
         }
+        let size = outlines.iter().filter(|o| !o.1 && encloses_tag(o.0)).map(|o| o.2).fold(size, f64::max);
         let kept: Vec<usize> = inst
             .stroke_indices
             .iter()
@@ -6065,6 +6224,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         want_text: opts.text,
         want_images: opts.images,
         force_layer: None,
+        piece_bytes: CONTENT_PIECE_BYTES,
     };
     it.run(&content, resources, Gs::default(), 0);
     let mut markups = 0usize;
@@ -9167,5 +9327,70 @@ mod tests {
         for pair in ["8\" 16'-8\"", "10\" 1'-9\"", "3\" 6'-2\"", "1/8\" 1'-1\"", "1\" 25'"] {
             assert_eq!(standard_pair_scale(pair), None, "{pair}");
         }
+    }
+
+    /// The operations of a content stream, as text to compare.
+    fn ops_text(ops: impl IntoIterator<Item = lopdf::content::Operation>) -> Vec<String> {
+        ops.into_iter().map(|op| format!("{op:?}")).collect()
+    }
+
+    #[test]
+    fn a_content_stream_read_in_pieces_gives_the_operations_read_whole() {
+        // Words that look like operators inside strings, arrays, dictionaries, names and
+        // comments; operands that start like operators; every cut point tried (pieces of 1 byte).
+        let stream: &[u8] = b"q 1 0 0 1 10 20 cm\n/OC <</MCID 3 /Name /S>> BDC\n0 0 m 10 10 l S\n\
+            BT /F1 12 Tf (a \\( Q q ( S ) f) Tj [(b) -120 (c S) 40] TJ <48 65> Tj ET\n\
+            % a comment: S f Q\n/GS0 gs true false null 3 ri\t1 1 1 rg 0 0 5 5 re f*\r\n\
+            1 0 0 RG 2 w 5 5 m 15 5 l 15 15 l h B EMC Q\n";
+        let whole = ops_text(Content::decode(stream).unwrap().operations);
+        assert!(whole.len() > 25, "{whole:?}");
+        for size in [1, 7, 40, 100_000] {
+            assert_eq!(ops_text(Operations::new(stream, size)), whole, "pieces of {size} bytes");
+        }
+        assert!(content_pieces(stream, 1).len() > 20);
+        // Damage half way: the operations before it, none after (as read whole).
+        let damaged = b"0 0 m 1 1 l S\n2 2 m 3 3 l S\n4 4 m ) 5 5 l S\n6 6 m 7 7 l S\n";
+        let whole = ops_text(Content::decode(damaged).unwrap().operations);
+        assert_eq!(ops_text(Operations::new(damaged, 1)), whole);
+        assert!(whole.len() < 9, "{whole:?}");
+        // From an inline image on (binary data) the stream is not cut.
+        let inline = b"0 0 m 1 1 l S\nBI /W 2 /H 1 /BPC 8 /CS /G ID \x00 S\nEI\n2 2 m 3 3 l S\n";
+        assert_eq!(content_pieces(inline, 1).len(), 4);
+        assert_eq!(ops_text(Operations::new(inline, 1)), ops_text(Content::decode(inline).unwrap().operations));
+    }
+
+    #[test]
+    fn a_dense_pages_operations_are_decoded_a_piece_at_a_time() {
+        // A dense sheet: 200,000 short strokes (600,000 operations, 4.6 MB of content).
+        let mut stream = Vec::new();
+        for i in 0..200_000u32 {
+            let (x, y) = (f64::from(i % 400) * 2.0, f64::from(i / 400) * 1.5);
+            stream.extend_from_slice(format!("{x} {y} m {} {} l S\n", x + 1.0, y + 1.0).as_bytes());
+        }
+        let doc = Document::with_version("1.5");
+        let read = |piece_bytes: usize| {
+            let mut it = Interp {
+                doc: &doc,
+                out: Out::default(),
+                fonts: HashMap::new(),
+                ocg_names: HashMap::new(),
+                want_text: true,
+                want_images: false,
+                force_layer: None,
+                piece_bytes,
+            };
+            it.run(&stream, None, Gs::default(), 0);
+            it.out
+        };
+        let out = read(CONTENT_PIECE_BYTES);
+        assert_eq!(out.ops, 600_000);
+        assert_eq!(out.strokes.len(), 200_000);
+        // Never more than a piece's operations held at once, not the page's.
+        assert!(out.ops_held * 4 <= out.ops, "{} of {} operations held at once", out.ops_held, out.ops);
+        // The drawing is the one the whole stream decoded at once gives.
+        let whole = read(usize::MAX);
+        assert_eq!(whole.ops_held, whole.ops);
+        let pts = |o: &Out| o.strokes.iter().map(|s| (s.pts.clone(), s.closed, s.order)).collect::<Vec<_>>();
+        assert!(pts(&out) == pts(&whole));
     }
 }

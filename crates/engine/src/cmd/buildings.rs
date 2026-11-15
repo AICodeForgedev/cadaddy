@@ -42,7 +42,7 @@ pub const STANDS_FOR: &str = "building_stands_for";
 /// On a copy: the handle of the element it copies.
 pub const COPY_OF: &str = "building_copy_of";
 /// The properties that name other elements by handle: a copy names the copies in its building.
-const REFERENCE_KEYS: [&str; 2] = ["box_of", "connects"];
+const REFERENCE_KEYS: [&str; 3] = ["box_of", "connects", "host_wall"];
 /// Most model objects looked at, copies made, texts read (hostile or huge drawings).
 const MAX_ELEMENTS: usize = 2_000_000;
 const MAX_COPIES: usize = 2_000_000;
@@ -838,7 +838,8 @@ mod tests {
         let wall_src = print_object(&mut d, [100.0, 100.0]);
         let wall = element(&mut d, Part::Wall, wall_src, [100.0, 100.0], &[]);
         let dev_b = element(&mut d, Part::Device, Handle(0), [200.0, 200.0], &[("sheet", "E-12")]);
-        let dev_shared = element(&mut d, Part::Device, Handle(0), [300.0, 300.0], &[("sheet", "E-13")]);
+        // Set in the floor plan's wall: each building's copy is in that building's copy of it.
+        let dev_shared = element(&mut d, Part::Device, Handle(0), [300.0, 300.0], &[("sheet", "E-13"), ("host_wall", &wall.hex())]);
         // A device's box: made from the device, it goes where the device goes.
         let box_b = element(&mut d, Part::Device, dev_b, [205.0, 200.0], &[("box_of", &dev_b.hex())]);
         let box_shared = element(&mut d, Part::Device, Handle(0), [305.0, 300.0], &[("box_of", &dev_shared.hex())]);
@@ -871,6 +872,14 @@ mod tests {
             .map(|e| e.handle.hex())
             .unwrap_or_default();
         assert_eq!(box_copy.get("box_of").map(Prop::text), Some(dev_copy_handle));
+        // ...and the copy of the shared device is set in the copy of the wall (Q6645: it named the
+        // first building's wall, so Validate found it on another wall than its symbol's).
+        let copy_of =
+            |h: Handle| d.model.iter().find(|e| props::read(&e.common.xdata).get(COPY_OF).map(Prop::text) == Some(h.hex())).map(|e| e.handle.hex());
+        let dev_copy =
+            copies.iter().find(|p| p.get(COPY_OF).map(Prop::text) == Some(dev_shared.hex())).unwrap_or_else(|| panic!("no copy of the device"));
+        assert_eq!(dev_copy.get("host_wall").map(Prop::text), copy_of(wall));
+        assert!(copy_of(wall).is_some_and(|w| w != wall.hex()));
         // B's shell is there too, so its elements are in a building.
         assert_eq!(sp.shells["Level 1"], vec![[0.0, 0.0, 480.0, 300.0], [720.0, 0.0, 1200.0, 300.0]]);
 

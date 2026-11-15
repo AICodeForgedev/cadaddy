@@ -415,9 +415,9 @@ fn job_items(agent: &Value, places: &Places, out: &mut Vec<Item>) {
 }
 
 /// The RFIs still open or sent (answered, closed, approved and rejected ones are settled).
-fn rfi_items(sp: &BuildingSpec, places: &Places, out: &mut Vec<Item>) {
+fn rfi_items(d: &Drawing, sp: &BuildingSpec, places: &Places, out: &mut Vec<Item>) {
     let r = rules();
-    for x in cadaddy_walk3d::rfi::list(sp).into_iter().take(MAX_ITEMS) {
+    for x in super::rfi::listed(Some(d), sp).into_iter().take(MAX_ITEMS) {
         let status = x.status.name();
         if !matches!(status, "open" | "sent") {
             continue;
@@ -672,7 +672,7 @@ fn gather(s: &mut Session, only: &[&str], prescreen: bool) -> Result<(Vec<Item>,
         out.retain(|i| want(i.source));
     }
     if want("rfi") {
-        rfi_items(&sp, &places, &mut out);
+        rfi_items(d, &sp, &places, &mut out);
     }
     if prescreen && (want("validate") || want("coverage")) {
         let screened = super::validate_prescreen::screen_session(s, &json!({}), &[])?;

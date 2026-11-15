@@ -511,6 +511,7 @@ pub fn find_rfis(p: &PrintRead) -> Vec<Rfi> {
         let rule = t.height.as_deref().unwrap_or_default();
         if let Some(rating) = &t.fire_rating
             && matches!(rule, "ceiling" | "above_ceiling")
+            && !t.to_rated_ceiling
         {
             let mut r = Rfi::new(
                 RfiKind::RatedToCeiling,
