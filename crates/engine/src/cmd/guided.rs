@@ -30168,7 +30168,7 @@ fn arch_placer(
         };
         let share = if planless || other.is_some() { None } else { lines_f.frame_share(i, m, &target_f(key)) };
         // Too little linework to tell: the frame, as drawn alike.
-        let holds = !planless && other.is_none() && share.is_none_or(|(a, b)| a.min(b) >= super::sheetreg::FRAME_SHARE);
+        let holds = !planless && other.is_none() && share.is_none_or(|(a, b)| super::sheetreg::frame_holds(a, b));
         let why_not = if planless {
             Some("its level has no plan to put it onto".to_string())
         } else if let Some(o) = &other {
@@ -40150,6 +40150,90 @@ mod tests {
         assert_eq!(entry("E-102", "linework")["used"], json!(true), "{l:#?}");
         assert!(entry("E-102", "linework")["score"].as_f64().is_some_and(|v| v >= super::super::sheetreg::FIT_F1), "{l:#?}");
         assert!(entry("E-102", "linework")["transform"]["tx"].as_f64().is_some_and(|v| (v + 6060.0).abs() < 15.0), "{l:#?}");
+    }
+
+    /// Q6644: a plumbing plan drawn over the whole floor plan (its background is building one's
+    /// walls, frame on frame) that adds more of its own than the background: pipe runs through
+    /// the rooms and a fixture schedule's table above the building. Most of its lines lie on no
+    /// wall, yet nearly all the plan's walls are on it: the frame holds, and its fixtures land.
+    #[test]
+    fn a_trade_sheet_drawing_more_of_its_own_than_its_underlay_is_placed_by_its_frame() {
+        let (mut s, mut sp) = frame_sheets();
+        // Two more sheets of nothing but the title block, so that building one's walls, drawn
+        // on five sheets in one place, are no part of the template (most sheets of the size).
+        for (x0, number) in [(12000.0, "G-001"), (14000.0, "G-002")] {
+            sp.sheets.push(
+                serde_json::from_value(json!({"number": number, "discipline": "G", "rect": [x0, 0.0, x0 + 1728.0, 1152.0]}))
+                    .unwrap_or_else(|e| panic!("{e}")),
+            );
+        }
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let mut line = |a: [f64; 2], b: [f64; 2]| {
+                d.add(
+                    &Space::Model,
+                    Common { layer: "PDF".into(), ..Common::default() },
+                    EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a[0], a[1], 0.0), b: Vec3::new(b[0], b[1], 0.0) }),
+                )
+                .ok();
+            };
+            for x0 in [12000.0, 14000.0] {
+                for (a, b) in [
+                    ([20.0, 20.0], [1708.0, 20.0]),
+                    ([1708.0, 20.0], [1708.0, 1132.0]),
+                    ([1708.0, 1132.0], [20.0, 1132.0]),
+                    ([20.0, 1132.0], [20.0, 20.0]),
+                    ([1500.0, 20.0], [1500.0, 1132.0]),
+                    ([1500.0, 300.0], [1708.0, 300.0]),
+                    ([1500.0, 700.0], [1708.0, 700.0]),
+                ] {
+                    line([x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+                }
+            }
+            // P-101's page (its left edge at 8000): building one's walls as A-101 draws them.
+            let x0 = 8000.0;
+            let mut walls = vec![
+                ([100.0, 150.0], [1300.0, 150.0]),
+                ([1300.0, 150.0], [1300.0, 900.0]),
+                ([1300.0, 900.0], [100.0, 900.0]),
+                ([100.0, 900.0], [100.0, 150.0]),
+            ];
+            walls.extend([270.0, 410.0, 620.0, 740.0, 950.0, 1100.0, 1210.0].iter().map(|x| ([*x, 150.0], [*x, 900.0])));
+            walls.extend([300.0, 420.0, 610.0, 760.0].iter().map(|y| ([100.0, *y], [1300.0, *y])));
+            let mut r = 7_u64;
+            let mut next = |n: f64| {
+                r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((r >> 33) as f64 / f64::from(1u32 << 31)) * n
+            };
+            for _ in 0..40 {
+                let (x, y, l) = (100.0 + next(1200.0), 150.0 + next(750.0), 40.0 + next(80.0));
+                if next(1.0) < 0.5 { walls.push(([x, y], [x + l, y])) } else { walls.push(([x, y], [x, y + l])) }
+            }
+            // The plumber's own: pipe runs along the rooms, and a schedule's table above the
+            // building (its rows 8 apart, its columns 130).
+            let mut own: Vec<([f64; 2], [f64; 2])> =
+                (0..8).map(|i| ([130.0, 180.0 + 95.0 * f64::from(i)], [1270.0, 200.0 + 95.0 * f64::from(i)])).collect();
+            own.extend((0..22).map(|i| ([120.0, 950.0 + 8.0 * f64::from(i)], [1420.0, 950.0 + 8.0 * f64::from(i)])));
+            own.extend((0..11).map(|i| ([120.0 + 130.0 * f64::from(i), 950.0], [120.0 + 130.0 * f64::from(i), 1118.0])));
+            for (a, b) in walls.iter().chain(own.iter()) {
+                line([x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+        }
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let l = || log.lock().map(|l| l.clone()).unwrap_or_default();
+        // A fixture drawn in a room on the plumbing plan lands in that room, by the frame exactly.
+        let p = place([8500.0, 400.0], "Level 1").map(|m| m.apply([8500.0, 400.0])).unwrap_or_else(|| panic!("P-101 not placed: {:#?}", l()));
+        assert!((p[0] - 500.0).abs() < 1.0 && (p[1] - 400.0).abs() < 1.0, "{p:?}");
+        let l = l();
+        let frame = l.iter().find(|v| v["sheet"] == "P-101" && v["method"] == "frame").cloned().unwrap_or(Value::Null);
+        // The case: little of the sheet on the plan, nearly all of the plan on the sheet.
+        let (on_plan, plan_on) = (frame["linework_on_plan"].as_f64().unwrap_or(1.0), frame["plan_on_linework"].as_f64().unwrap_or(0.0));
+        assert!(on_plan < super::super::sheetreg::FRAME_SHARE && plan_on >= 0.9, "{on_plan} {plan_on}: {l:#?}");
+        assert_eq!(frame["used"], json!(true), "{l:#?}");
+        // Another building's sheet in the same frame is still left out, and the mechanical plan
+        // still placed.
+        assert!(place([4500.0, 400.0], "Level 1").is_none(), "{l:#?}");
+        assert!(place([2500.0, 400.0], "Level 1").is_some(), "{l:#?}");
     }
 
     /// Four sheets of one title block, 4000 units apart: a level's plan whose sheet came in at
