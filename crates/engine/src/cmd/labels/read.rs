@@ -91,6 +91,7 @@ fn row(cols: &[Option<Col>], cells: &[String], source: &str) -> Option<PanelCirc
         wire: String::new(),
         load_va: None,
         design_load_va: None,
+        corrections: Vec::new(),
         source: source.to_string(),
     })
 }

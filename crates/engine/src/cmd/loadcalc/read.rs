@@ -190,7 +190,12 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, rules: &Rules) -> Vec<LoadSu
             let values: Vec<f64> = g.iter().filter_map(|t| number(&t.value)).collect();
             let text = g.iter().map(|t| t.value.trim()).collect::<Vec<_>>().join(" ");
             let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect();
-            lines.push(LoadSummaryLine { label: label.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect(), values, text });
+            lines.push(LoadSummaryLine {
+                label: label.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect(),
+                values,
+                text,
+                corrections: Vec::new(),
+            });
         }
         if lines.iter().all(|l| l.values.is_empty()) {
             continue;

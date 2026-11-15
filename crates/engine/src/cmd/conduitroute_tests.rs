@@ -1532,3 +1532,42 @@ fn a_change_of_tier_never_goes_through_a_joists_depth() {
         assert!(field.framing(*p, *q, *z, r, UPF, rules()).is_ok(), "{leg:?}");
     }
 }
+
+/// Q6662: the routing's own output check mends a run with one height per point (what the
+/// equipment whips used to be written with) and a riser with a height too many, keeps a
+/// segment of no length between other heights (a vertical leg: a floor box's drop, a stub-up),
+/// and drops a run with neither plan length nor rise; every run left passes the spec's check.
+#[test]
+fn routed_runs_are_checked_against_the_spec_shape() {
+    let run = |id: &str, pts: Vec<[f64; 2]>, bots: Vec<f64>, top: Option<f64>| -> MepRun {
+        serde_json::from_value(
+            json!({"system": BRANCH_SYSTEM, "level": "L1", "points": pts, "size_in": [0.75, 0.0], "bottoms_ft": bots, "top_ft": top, "id": id}),
+        )
+        .unwrap()
+    };
+    let mut runs = vec![
+        // One height per point, its last point repeated (the old whip's shape).
+        run("per-point", vec![[0.0, 0.0], [60.0, 0.0], [60.0, 0.0]], vec![5.0, 5.0, 1.5], None),
+        // One height per point, two points.
+        run("per-point-2", vec![[0.0, 12.0], [60.0, 12.0]], vec![5.0, 5.0], None),
+        // A floor box's drop and stub-up as segments of no length: as it is.
+        run("legs", vec![[0.0, 24.0], [0.0, 24.0], [48.0, 24.0], [48.0, 24.0]], vec![1.5, -1.0, 2.0], None),
+        // A riser with two heights.
+        run("riser", vec![[10.0, 10.0]], vec![1.0, 2.0], Some(4.0)),
+        // No plan length and no rise.
+        run("nothing", vec![[5.0, 5.0], [5.0, 5.0]], vec![3.0], None),
+        // A riser upside down: can't be mended.
+        run("upside-down", vec![[20.0, 20.0]], vec![6.0], Some(4.0)),
+    ];
+    let legs_before = runs.iter().find(|r| r.id == "legs").cloned().unwrap();
+    let report = check_runs(&mut runs, UPF);
+    assert_eq!((report["checked"].as_u64(), report["mended"].as_u64(), report["dropped"].as_u64()), (Some(6), Some(3), Some(2)), "{report:#}");
+    assert!(runs.iter().all(MepRun::shape_ok), "{runs:#?}");
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["per-point", "per-point-2", "legs", "riser"], "{report:#}");
+    assert_eq!(runs.iter().find(|r| r.id == "legs"), Some(&legs_before), "a vertical leg stays as it was");
+    assert_eq!(runs.first().map(|r| r.bottoms_ft.clone()), Some(vec![5.0, 5.0]));
+    let whats: Vec<String> = report["items"].as_array().unwrap().iter().map(|i| format!("{} {}", i["id"], i["what"])).collect();
+    assert!(whats.iter().any(|w| w.contains("nothing") && w.contains("no length")), "{whats:?}");
+    assert!(whats.iter().any(|w| w.contains("upside-down") && w.contains("dropped")), "{whats:?}");
+}

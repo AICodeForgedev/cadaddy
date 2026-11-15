@@ -199,6 +199,9 @@ fn role_and_palette_row_weights_are_project_rules() {
     assert!(after[1..].iter().all(|b| *b >= 3), "branches at 3 px: {before:?} → {after:?}");
     assert_eq!(after[0], before[0], "the feeder as it was: {before:?} → {after:?}");
     assert!(s.execute("bim.view.rules", &json!({"rules": {"systems_weights": {"branch": "thin"}}})).is_err());
+    // An agent sets them too (the doc names the map with its object note).
+    let r3 = s.execute_agent("bim.view.rules", &json!({"rules": {"systems_weights": {"device": 3}}})).unwrap();
+    assert_eq!(r3["rules"]["systems_weights"]["device"], json!(3.0), "{r3}");
     // The electrical power row twice as strong: its branches double.
     let mut s = building();
     let mut rows = serde_json::to_value(&r.systems_palette).unwrap();

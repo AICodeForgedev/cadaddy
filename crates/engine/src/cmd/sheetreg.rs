@@ -8,7 +8,9 @@
 //!   same place on the page; it says nothing of where a plan is and is left out of every
 //!   comparison ([`SheetLines`]);
 //! - a placement by the sheet frame holds when the sheet's own linework lies on the plan's
-//!   ([`SheetLines::frame_share`]): a sheet of another building in the same frame doesn't;
+//!   ([`SheetLines::frame_share`]): a sheet of another building in the same frame doesn't; or
+//!   when nearly all the plan's linework is on the sheet, however much the trade adds of its own
+//!   ([`frame_holds`], Q6644);
 //! - a sheet nothing else places is fitted onto its level's plan by its linework, at the ratio
 //!   of the scales the two sheets' plans print at (one to one when both came in at their
 //!   printed scales; a quarter for a trade's 1/4" roof plan onto a roof plan read at a tenth of
@@ -39,6 +41,20 @@ pub(crate) const MIN_POINTS: usize = 200;
 /// alone is no test: a dense electrical plan covers half of any plan by chance (a plan of another
 /// building in the same title block lay half on it), and a sparse plan lies on a dense one.
 pub(crate) const FRAME_SHARE: f64 = 0.4;
+/// ...or when this share of the plan's linework (under the sheet) lies on the sheet's, whatever
+/// share of the sheet's own lies on the plan (Q6644): a trade sheet drawn over the whole floor
+/// plan as its background adds its own pipes, fixtures, notes and schedules, often more than the
+/// background, so few of its lines lie on the plan, while nearly all the plan is on it. Chance
+/// covers about half of a plan (a dense electrical plan of another building), never nearly all.
+pub(crate) const UNDERLAY_SHARE: f64 = 0.9;
+
+/// Whether a placement by the sheet frame holds, from [`SheetLines::frame_share`]'s two shares:
+/// the sheet's lines on the plan's (`on_plan`), and the plan's lines on the sheet's (`on_sheet`).
+/// Both at [`FRAME_SHARE`], or the plan nearly all on the sheet ([`UNDERLAY_SHARE`]): the plan's
+/// lines missing from the sheet say another part of the site, the sheet's extra lines never do.
+pub(crate) fn frame_holds(on_plan: f64, on_sheet: f64) -> bool {
+    on_plan.min(on_sheet) >= FRAME_SHARE || on_sheet >= UNDERLAY_SHARE
+}
 /// A sheet this much wider than the plan it's laid on can't be weighed whole
 /// ([`super::grids::linework_fit_part`] won't try).
 const MAX_SHEET_OVER_PLAN: f64 = 1.2;
@@ -500,6 +516,43 @@ mod tests {
         // Onto sheet 1 by the frame (+2000), then where sheet 1 goes.
         assert_eq!(m.apply([10.0, 10.0]), [2510.0, 3.0]);
         assert!(lines.through_sibling(0, 2, &placed).is_none(), "another drawing is no sibling");
+    }
+
+    /// Q6644: a trade sheet of the floor drawn over the floor plan, frame on frame, with more
+    /// pipe runs and fixtures of its own than background: the frame holds on the plan's share
+    /// alone. Another floor plan in the same frame, with the same pipes, doesn't.
+    #[test]
+    fn a_frame_holds_when_the_plan_is_nearly_all_on_the_sheet_however_much_the_sheet_adds() {
+        let plan = floor(1.0, [200.0, 200.0]);
+        // Pipe runs 60" apart through the floor, clear of every wall by 40" (a fixture's lines).
+        let clear = |p: &Vec2| plan.iter().all(|q| q.dist(*p) > 40.0);
+        let pipes = |dx: f64| -> Vec<Vec2> {
+            (0..20)
+                .flat_map(|r| (0..120).map(move |c| Vec2::new(200.0 + 15.0 * f64::from(c), 230.0 + 60.0 * f64::from(r))))
+                .filter(|p| clear(p))
+                .map(|p| Vec2::new(p.x + dx, p.y))
+                .collect()
+        };
+        let mut trade = floor(1.0, [5200.0, 200.0]);
+        trade.extend(pipes(5000.0));
+        // Another floor (smaller, elsewhere on the page) under the same pipes.
+        let mut other = floor(0.55, [10500.0, 700.0]);
+        other.extend(pipes(10000.0));
+        let lines = SheetLines {
+            rects: vec![[0.0, 0.0, 2400.0, 1600.0], [5000.0, 0.0, 7400.0, 1600.0], [10000.0, 0.0, 12400.0, 1600.0]],
+            pts: vec![plan.clone(), trade, other],
+            stripped: vec![true, true, true],
+            k_in: 1.0,
+        };
+        let (on_plan, on_sheet) = lines.frame_share(1, &Sim::scale_offset(1.0, [-5000.0, 0.0]), &plan).expect("lines both sides");
+        assert!(on_plan < FRAME_SHARE && on_sheet >= UNDERLAY_SHARE, "{on_plan} {on_sheet}");
+        assert!(frame_holds(on_plan, on_sheet));
+        let (a, b) = lines.frame_share(2, &Sim::scale_offset(1.0, [-10000.0, 0.0]), &plan).expect("lines both sides");
+        assert!(!frame_holds(a, b), "{a} {b}");
+        // The rule itself: both shares at FRAME_SHARE, or the plan's nearly all on the sheet;
+        // the sheet's lines on the plan alone, or chance's half of the plan, never.
+        assert!(frame_holds(0.45, 0.5) && frame_holds(0.1, 0.95));
+        assert!(!frame_holds(0.95, 0.3) && !frame_holds(0.3, 0.6) && !frame_holds(0.2, 0.2));
     }
 
     /// A made-up floor's walls (inches, 150' by 100'), sampled every 6": an outline and
