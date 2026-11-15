@@ -7,16 +7,16 @@
 use crate::helper::serial;
 use cadaddy_engine::Session;
 use cadaddy_engine::cmd::wallgen::made_as;
-use cadaddy_engine::doc::{EntityKind, Space, entity_bounds};
+use cadaddy_engine::doc::{Entity, EntityKind, Space, entity_bounds};
 use cadaddy_engine::geom::Bounds2;
 use cadaddy_mepfix::hotel::HotelSize;
 use serde_json::{Value, json};
 
 const SEED: u64 = 42;
-const FLOOR: &str = "A-101";
-const LIGHTING: &str = "E-101";
+pub(crate) const FLOOR: &str = "A-101";
+pub(crate) const LIGHTING: &str = "E-101";
 
-fn pdf_reader() {
+pub(crate) fn pdf_reader() {
     cadaddy_engine::cmd::file::set_io(cadaddy_engine::cmd::file::IoHooks {
         read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
         write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
@@ -37,6 +37,11 @@ fn scale_lettering(t: &str) -> bool {
 /// that gives a scale taken off. The folder, and the floor plan's scale (drawing units a sheet
 /// inch).
 fn set(tag: &str, keep: &[&str], strip: &[&str]) -> (std::path::PathBuf, f64) {
+    set_lettering(tag, keep, strip, |e| matches!(&e.kind, EntityKind::Text(x) if scale_lettering(&x.value)))
+}
+
+/// [`set`], taking off the objects `gone` picks on the `strip` sheets.
+pub(crate) fn set_lettering(tag: &str, keep: &[&str], strip: &[&str], gone: fn(&Entity) -> bool) -> (std::path::PathBuf, f64) {
     let (t, st) = cadaddy_mepfix::hotel_planned(SEED, HotelSize::Small);
     let kinds: Vec<(String, cadaddy_mepfix::layout::Kind)> =
         cadaddy_mepfix::layout::hotel_sheet_list().into_iter().map(|(n, _, _, k)| (n, k)).collect();
@@ -49,8 +54,7 @@ fn set(tag: &str, keep: &[&str], strip: &[&str]) -> (std::path::PathBuf, f64) {
             floor_scale = 1.0 / sh.paper_from_model.scale;
         }
         if strip.contains(&sh.number.as_str()) {
-            let gone: Vec<_> =
-                d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Text(x) if scale_lettering(&x.value))).map(|e| e.handle).collect();
+            let gone: Vec<_> = d.model.iter().filter(|e| gone(e)).map(|e| e.handle).collect();
             for h in gone {
                 d.model.remove(h);
             }

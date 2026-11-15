@@ -25,6 +25,7 @@ mod legendsheet;
 mod levelregions;
 mod mepnoise;
 mod nonplanset;
+mod noroomtags;
 mod paperscale;
 mod pdf_underlay;
 mod planscale;

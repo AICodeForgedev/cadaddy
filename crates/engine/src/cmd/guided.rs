@@ -555,6 +555,14 @@ pub struct GuidedJob {
     /// Questions asked even in auto mode: a stage that should find things found none.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub always_ask: BTreeSet<String>,
+    /// Always-asked questions whose default leaves the model buildable (Q6668): a stage that
+    /// should find things found none, and its default ("none on these sheets") builds the rest
+    /// with that part empty and listed in the findings. Attended, they are asked like the rest of
+    /// [`Self::always_ask`]; in auto mode they take their default, recorded as an assumption
+    /// (`answered_by` [`ASSUMED`]) and listed in the report, instead of stopping the job.
+    /// Questions with no safe default (a plan's scale) are never here and still stop it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub assume_in_auto: BTreeSet<String>,
     /// Floor to floor (feet) given as an answer, over the sections' and the 10' guess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storey_ft: Option<f64>,
@@ -1317,6 +1325,7 @@ impl GuidedJob {
             sheet_picture_dpi: super::sheetcheck::DEFAULT_DPI,
             reimport: false,
             always_ask: BTreeSet::new(),
+            assume_in_auto: BTreeSet::new(),
             storey_ft: None,
             levels_given: Vec::new(),
             level_answers: BTreeMap::new(),
@@ -5502,6 +5511,17 @@ fn plan_sheets(job: &GuidedJob, discipline: &str) -> Vec<String> {
     out
 }
 
+/// Where room names may be when none were read on the architectural plans (Q6668), for review.
+fn zero_rooms_hints() -> Vec<String> {
+    vec![
+        "Room names or numbers may be tagged on another architectural sheet (an equipment, finish or furniture plan) rather than the floor plan"
+            .into(),
+        "Room names may be drawn as stroked lettering (lines, not text), which the reader can't read as names".into(),
+        "Room tags may sit outside the plan's view (in a schedule or a key plan); answer \"There should be rooms — re-check\" to read them again"
+            .into(),
+    ]
+}
+
 /// Evidence for a stage that read nothing: the plans it read (the first is the sheet to look at).
 fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
     let first = plans.first()?;
@@ -5789,21 +5809,29 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     // MUST 1: No empty success — 0 rooms is a finding.
     if room_count == 0 {
-        job.add_finding(
-            StageName::Rooms,
-            "Rooms stage found 0 rooms",
-            "The rooms reader found no room labels or outlines in the loaded sheets",
-            4,
-            vec!["Check that the loaded sheets contain room tags".into(), "Try rooms.list directly on individual sheets".into()],
-            None,
-            false,
-        );
         // Raise a question rather than silently proceeding. With architectural plans in the set
-        // there should be rooms: that is always asked, never taken as the default.
+        // there should be rooms: that is always asked when someone is there to answer. Its
+        // default ("no room tags") still builds the walls, slab and MEP, with no rooms, so an
+        // unattended job takes it as an assumption and goes on (Q6668).
         let plans = plan_sheets(job, "A");
+        let (title, detail, hints): (String, String, Vec<String>) = if plans.is_empty() {
+            (
+                "Rooms stage found 0 rooms".into(),
+                "The rooms reader found no room labels or outlines in the loaded sheets".into(),
+                vec!["Check that the loaded sheets contain room tags".into(), "Try rooms.list directly on individual sheets".into()],
+            )
+        } else {
+            (
+                format!("Rooms stage found 0 rooms on the architectural plans ({})", plans.join(", ")),
+                "No room names were read on these plans; the building is built with its walls, slab and MEP and no rooms, for review".into(),
+                zero_rooms_hints(),
+            )
+        };
+        job.add_finding(StageName::Rooms, &title, &detail, 4, hints, None, false);
         let qid = job.next_qid(StageName::Rooms);
         if !plans.is_empty() {
             job.always_ask.insert(qid.clone());
+            job.assume_in_auto.insert(qid.clone());
         }
         let q = Question {
             id: qid,
@@ -7004,7 +7032,10 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         );
         let qid = job.next_qid(StageName::Devices);
         if !e_plans.is_empty() {
+            // Asked when someone is there; its default ("no devices") builds the model with no
+            // devices, listed in the findings, so an unattended job assumes it (Q6668).
             job.always_ask.insert(qid.clone());
+            job.assume_in_auto.insert(qid.clone());
         }
         let q = Question {
             id: qid,
@@ -33643,14 +33674,29 @@ fn confirm_plan_level(job: &mut GuidedJob, q: &Question, text: &str) -> Option<S
     Some(format!("sheet {number} is level {level}"))
 }
 
+/// `answered_by` of an always-asked question an unattended job answered with its default, which
+/// leaves the model buildable (Q6668): an assumption, listed in the report for review.
+pub const ASSUMED: &str = "assumed";
+
 fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
     let (auto, always) = (job.auto, std::mem::take(&mut job.always_ask));
     let mut answered = Vec::new();
     let mut confirmed: Vec<Question> = Vec::new();
+    let assume = std::mem::take(&mut job.assume_in_auto);
     if let Some(st) = job.stage_mut(name) {
         let asked = st.questions.iter_mut().chain(st.completeness.iter_mut()).map(|q| (q, !auto));
         let samples = st.verify.iter_mut().enumerate().map(|(i, q)| (q, !auto && i < VERIFY_ASKED));
         for (q, asked) in asked.chain(samples) {
+            // Q6668: unattended, an always-asked question whose default leaves the model
+            // buildable takes it as an assumption (listed in the report) instead of stopping.
+            if auto && q.answer.is_none() && always.contains(&q.id) && assume.contains(&q.id) {
+                if let Some(def) = q.default.clone() {
+                    q.answer = Some(Value::String(def));
+                    q.answered_by = Some(ASSUMED.into());
+                    answered.push(q.id.clone());
+                }
+                continue;
+            }
             if q.answer.is_none() && !asked && !always.contains(&q.id) && q.default.is_some() {
                 if is_plausible_default(q) {
                     let def = q.default.clone().unwrap_or_default();
@@ -33666,6 +33712,7 @@ fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
         }
     }
     job.always_ask = always;
+    job.assume_in_auto = assume;
     // A default that is a plan's level is applied as the answer would be.
     for q in &confirmed {
         if let Some(def) = q.default.as_deref() {
@@ -33707,12 +33754,26 @@ fn answer_counts(job: &GuidedJob) -> (usize, usize, usize, usize) {
         match (&q.answer, q.answered_by.as_deref()) {
             (None, _) => open += 1,
             // (the sheet-index checkpoint a job was told to go on past: `go_on`)
-            (Some(_), Some("default" | "go_on")) => automatic += 1,
+            (Some(_), Some("default" | "go_on" | ASSUMED)) => automatic += 1,
             (Some(_), Some("auto_guard")) => rejected += 1,
             _ => by_you += 1,
         }
     }
     (automatic, by_you, rejected, open)
+}
+
+/// The always-asked questions an unattended job answered with their default (Q6668): id,
+/// question, the answer assumed and its stage.
+fn assumed_questions(job: &GuidedJob) -> Vec<Value> {
+    job.stages
+        .iter()
+        .flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter()))
+        .filter(|q| q.answered_by.as_deref() == Some(ASSUMED))
+        .map(|q| {
+            let answer = q.answer.as_ref().and_then(Value::as_str).unwrap_or("");
+            json!({"id": q.id, "stage": q.stage.label(), "question": q.question, "assumed": answer})
+        })
+        .collect()
 }
 
 /// The job's mode and how its questions were answered, in words too.
@@ -33721,6 +33782,10 @@ fn answers_value(job: &GuidedJob) -> Value {
     let mut note = format!("{automatic} answered automatically, {by_you} by you");
     if rejected > 0 {
         note.push_str(&format!(", {rejected} rejected by auto-guard (implausible defaults)"));
+    }
+    let assumed = assumed_questions(job).len();
+    if assumed > 0 {
+        note.push_str(&format!(" ({assumed} of them always-asked questions assumed with their default, for review)"));
     }
     if open > 0 {
         note.push_str(&format!(", {open} waiting for an answer"));
@@ -33732,7 +33797,7 @@ fn answers_value(job: &GuidedJob) -> Value {
             note.push_str(" (auto mode: every question with a default took it)");
         }
     }
-    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "by_you": by_you, "rejected": rejected, "open": open, "note": note})
+    json!({"mode": if job.auto { "auto" } else { "interactive" }, "automatic": automatic, "assumed": assumed, "by_you": by_you, "rejected": rejected, "open": open, "note": note})
 }
 
 /// A question as `job.next` gives it: with the sheet it is about and its picture, when known.
@@ -33897,6 +33962,9 @@ fn carry_answers(job: &mut GuidedJob, name: StageName) {
         job.worklist.retain(|w| w.id != *new);
         if job.always_ask.remove(new) {
             job.always_ask.insert(old_id.clone());
+        }
+        if job.assume_in_auto.remove(new) {
+            job.assume_in_auto.insert(old_id.clone());
         }
     }
     let mut gone = BTreeSet::new();
@@ -35871,6 +35939,17 @@ fn job_warnings(job: &GuidedJob, stats: Option<&ModelStats>) -> Vec<Value> {
     if !rejected.is_empty() {
         w.push(json!({"warning": "auto-guard rejections", "count": rejected.len(), "detail": format!("{} rejected: {}", rejected.len(), rejected.join("; "))}));
     }
+    // Always-asked questions an unattended job assumed with their default (Q6668).
+    let assumed = assumed_questions(job);
+    if !assumed.is_empty() {
+        let said: Vec<String> =
+            assumed.iter().map(|q| format!("{} → {}", q["question"].as_str().unwrap_or(""), q["assumed"].as_str().unwrap_or(""))).collect();
+        w.push(json!({
+            "warning": "assumed in auto mode",
+            "count": assumed.len(),
+            "detail": format!("{} question(s) a person is always asked, answered with their default to finish unattended, for review: {}", assumed.len(), said.join("; ")),
+        }));
+    }
 
     // Elements from the saved model: zero only from a count that saw all of it (Q6270).
     if let Some(ms) = stats {
@@ -35974,7 +36053,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
     for stage in &job.stages {
         for q in stage.questions.iter().chain(stage.verify.iter()).chain(stage.completeness.iter()) {
             if q.answer.is_some() {
-                if matches!(q.answered_by.as_deref(), Some("default" | "go_on")) {
+                if matches!(q.answered_by.as_deref(), Some("default" | "go_on" | ASSUMED)) {
                     automatic += 1;
                 } else {
                     confirmed += 1;
@@ -36150,6 +36229,10 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         .collect();
     if !rejected_qs.is_empty() {
         v["rejected_questions"] = json!(rejected_qs);
+    }
+    let assumed_qs = assumed_questions(job);
+    if !assumed_qs.is_empty() {
+        v["assumed_questions"] = json!(assumed_qs);
     }
     if let Some(from) = job.rerun_held {
         v["rerun_held"] = json!(from.label());
@@ -48683,13 +48766,15 @@ mod tests {
     }
 
     /// MUST 3: no rooms on architectural plans, or no device symbols on electrical plans, is
-    /// asked even in auto mode; with no such plans in the set it takes its default as before.
+    /// always asked when someone is there to answer; with no such plans in the set it takes its
+    /// default as before. Q6668: unattended, its default ("none on these sheets") still builds
+    /// the model, so the job takes it as an assumption, listed in the report, and goes on.
     #[test]
     fn a_stage_that_found_nothing_on_its_plans_is_always_asked() {
-        for with_plans in [true, false] {
+        for (with_plans, auto) in [(true, false), (true, true), (false, false), (false, true)] {
             let mut s = crate::Session::new();
             let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
-            job.auto = true;
+            job.auto = auto;
             job.sheets = Some(json!({"sheets": []}));
             job.sheets_loaded = true;
             job.sheet_regions = if with_plans {
@@ -48702,18 +48787,102 @@ mod tests {
             for stage in [StageName::Rooms, StageName::Devices] {
                 auto_answer(&mut job, stage);
                 let open: Vec<String> = job.stage(stage).map(|st| st.unanswered().iter().map(|q| q.question.clone()).collect()).unwrap_or_default();
-                if with_plans {
-                    assert_eq!(open.len(), 1, "{stage:?}: {open:?}");
-                    let sheet = if stage == StageName::Rooms { "A-101" } else { "E-101" };
-                    assert!(open[0].contains(&format!("({sheet})")), "{open:?}");
-                    let q = job.next_question().map(|q| question_value(&job, q)).unwrap_or_default();
-                    assert_eq!(q["always_asked"], true, "{q}");
-                    assert_eq!(q["sheet"], "A-101", "the sheet to look at: {q}");
-                } else {
-                    assert!(open.is_empty(), "{stage:?}: {open:?}");
+                let zero = job.stage(stage).and_then(|st| st.completeness.iter().find(|q| q.question.starts_with("No ")).cloned()).expect("asked");
+                let sheet = if stage == StageName::Rooms { "A-101" } else { "E-101" };
+                match (with_plans, auto) {
+                    (true, false) => {
+                        assert_eq!(open.len(), 1, "{stage:?}: {open:?}");
+                        assert!(open[0].contains(&format!("({sheet})")), "{open:?}");
+                        let q = job.next_question().map(|q| question_value(&job, q)).unwrap_or_default();
+                        assert_eq!(q["always_asked"], true, "{q}");
+                        assert_eq!(q["sheet"], "A-101", "the sheet to look at: {q}");
+                    }
+                    (true, true) => {
+                        assert!(open.is_empty(), "unattended, the safe default is assumed: {stage:?}: {open:?}");
+                        assert_eq!(zero.answered_by.as_deref(), Some(ASSUMED), "{zero:?}");
+                        assert_eq!(zero.answer.as_ref().and_then(Value::as_str), zero.default.as_deref());
+                        assert!(zero.question.contains(&format!("({sheet})")), "{zero:?}");
+                    }
+                    (false, false) => {
+                        assert_eq!(open.len(), 1, "attended, asked as any question: {stage:?}: {open:?}");
+                        assert!(!job.always_ask.contains(&zero.id), "{zero:?}");
+                    }
+                    (false, true) => {
+                        assert!(open.is_empty(), "{stage:?}: {open:?}");
+                        assert_eq!(zero.answered_by.as_deref(), Some("default"), "no plans: a plain default");
+                    }
                 }
             }
+            let assumed = assumed_questions(&job);
+            let warned = job_warnings(&job, None).into_iter().find(|w| w["warning"] == "assumed in auto mode");
+            if with_plans && auto {
+                assert_eq!(assumed.len(), 2, "{assumed:?}");
+                assert!(assumed.iter().any(|q| q["stage"] == "rooms" && q["assumed"] == "No room tags on these sheets"), "{assumed:?}");
+                let w = warned.expect("the report lists what was assumed");
+                assert!(w["detail"].as_str().unwrap_or("").contains("A-101"), "{w}");
+                assert_eq!(answers_value(&job)["assumed"], 2);
+                // The finding names the plans read and where room names might be.
+                let f = job
+                    .findings
+                    .iter()
+                    .find(|f| f.stage == StageName::Rooms && f.description.starts_with("Rooms stage found 0 rooms"))
+                    .expect("finding");
+                assert!(f.description.contains("(A-101)"), "{f:?}");
+                assert!(
+                    f.actions.iter().any(|a| a.contains("another architectural sheet")) && f.actions.iter().any(|a| a.contains("stroked")),
+                    "{f:?}"
+                );
+                assert!(!f.blocking, "a finding, never a stop");
+            } else {
+                assert!(assumed.is_empty() && warned.is_none(), "{assumed:?}");
+            }
         }
+    }
+
+    /// Q6668: an always-asked question with no safe default (a plan's scale) still stops an
+    /// unattended job; the safe-default one beside it is assumed.
+    #[test]
+    fn auto_mode_still_stops_on_an_always_asked_question_with_no_safe_default() {
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        job.auto = true;
+        let mut no_default = || {
+            let id = job.next_qid(StageName::Rooms);
+            job.always_ask.insert(id.clone());
+            id
+        };
+        let scale = no_default();
+        let left_out = no_default();
+        let rooms = job.next_qid(StageName::Rooms);
+        job.always_ask.insert(rooms.clone());
+        job.assume_in_auto.insert(rooms.clone());
+        let q = |id: &str, text: &str, default: Option<&str>| Question {
+            id: id.into(),
+            stage: StageName::Rooms,
+            question: text.into(),
+            why: String::new(),
+            choices: Vec::new(),
+            evidence: None,
+            default: default.map(str::to_string),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Completeness,
+        };
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.completeness.push(q(&scale, "Sample plan at what scale?", None));
+            st.completeness.push(q(&left_out, "Sample plan: more walls than the storey can hold?", Some("Build as read")));
+            st.completeness.push(q(
+                &rooms,
+                "No rooms read on the architectural plans (P-1). Are there room tags on them?",
+                Some("No room tags on these sheets"),
+            ));
+        }
+        assert_eq!(auto_answer(&mut job, StageName::Rooms), 1);
+        let open: Vec<String> = job.stage(StageName::Rooms).map(|st| st.unanswered().iter().map(|q| q.id.clone()).collect()).unwrap_or_default();
+        assert_eq!(open, vec![scale, left_out], "no default, or a default not marked safe: still asked");
+        assert_eq!(assumed_questions(&job).len(), 1);
+        assert!(job.always_ask.contains(&rooms) && job.assume_in_auto.contains(&rooms), "the sets are kept");
     }
 
     /// Q6324: room names come only from inside the architectural floor plans' views. A print set
