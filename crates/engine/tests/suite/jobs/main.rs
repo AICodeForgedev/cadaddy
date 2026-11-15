@@ -41,6 +41,7 @@ mod conduitjob;
 mod conduitroute;
 mod dimreader;
 mod doccheck;
+mod doorside;
 mod drywall_views;
 mod duct3d_truth;
 mod elemprops;

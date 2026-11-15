@@ -343,7 +343,7 @@ impl Items {
         self.add_path(&ring);
     }
 
-    fn add_text(&mut self, text: &str, insert: Vec2, align: Option<Vec2>, halign: HAlign, h: f64, rotation: f64, width_factor: f64) {
+    pub(crate) fn add_text(&mut self, text: &str, insert: Vec2, align: Option<Vec2>, halign: HAlign, h: f64, rotation: f64, width_factor: f64) {
         let text = text.trim();
         if text.is_empty() || text.chars().count() > MAX_VALUE_TEXT || !insert.is_finite() || !h.is_finite() || h <= 0.0 {
             return;

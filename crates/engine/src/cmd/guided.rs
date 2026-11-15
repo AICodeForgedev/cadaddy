@@ -9021,13 +9021,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let heights = typical_heights(s.doc()?, job, &mut stamped, &schedules);
                 if heights.notes + heights.elevations > 0 {
                     progress_line(&format!(
-                        "  typical rooms' height notes: {} read, {} stamped devices took theirs ({} from the architecture's plans first: {} sheets send locations or heights there {:?}; {} moved to the architecture's symbols); interior elevations: {} read, {} devices took their heights (at {:.1} s)",
+                        "  typical rooms' height notes: {} read, {} stamped devices took theirs ({} from the architecture's plans first: {} sheets send locations or heights there {:?}; {} moved to the architecture's symbols, {} of them to the spot its dimensions give (symbols already at their dimensioned spot {}, too far off it and left {})); interior elevations: {} read, {} devices took their heights (at {:.1} s)",
                         heights.notes,
                         heights.set,
                         heights.from_architecture,
                         heights.deferring_sheets.len(),
                         heights.deferring_sheets,
                         heights.moved,
+                        heights.dimensioned,
+                        heights.dimension_settled,
+                        heights.dimension_too_far,
                         heights.elevations,
                         heights.from_elevations,
                         stamp_clock.elapsed().as_secs_f64()
@@ -10597,6 +10600,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The electrical sheets were read for the gear, keynotes, dampers, site work, underground
     // and lighting: none of the steps after reads them.
     drop(pages);
+    // Door hardware devices (card readers, door contacts, door holders) on their door's latch
+    // side below the head, the drawn spot kept on each (Q6605), before they are set on their faces.
+    let mut late_moved = 0usize;
+    if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let sd = super::doorside::side(s.doc_mut()?, upf, true);
+        if sd.checked > 0 {
+            progress_line(&format!(
+                "  door hardware devices: {} looked at, {} moved to their door's latch side {:?}, {} brought below the head, {} already there; left as drawn: {} no door near, {} two doors as near, {} on a pair of doors",
+                sd.checked, sd.moved, sd.by_kind, sd.lowered, sd.right_side, sd.no_door, sd.ambiguous, sd.pair
+            ));
+        }
+        late_moved = sd.moved + sd.lowered;
+        if late_moved > 0 {
+            s.touch();
+        }
+        result["door_side"] = sd.report();
+    }
     // Each wall device placed relative to its named wall face (Q6174 walllayout).
     let t_layout = web_time::Instant::now();
     match super::walllayout::rehost(s, 0.0, None) {
@@ -10611,12 +10632,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             ));
             let dd = &v["drawn_dimensions"];
             progress_line(&format!(
-                "  drawn dimensions: {} read, {} placed on the model; {} devices' offsets documented by them, {} conflicts for review",
+                "  drawn dimensions: {} read, {} placed on the model; {} devices' offsets documented by them, {} conflicts for review ({} devices moved to their dimensioned spot)",
                 dd["read"].as_u64().unwrap_or(0),
                 dd["placed"].as_u64().unwrap_or(0),
                 dd["devices_documented"].as_u64().unwrap_or(0),
-                dd["conflicts"].as_u64().unwrap_or(0)
+                dd["conflicts"].as_u64().unwrap_or(0),
+                dd["moved_to_drawn"].as_u64().unwrap_or(0)
             ));
+            late_moved += dd["moved_to_drawn"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0));
             result["layout"] = v;
         }
         Err(e) => result["layout_error"] = json!(e.to_string()),
@@ -10634,7 +10657,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Devices moved since the build (set in their walls again, up to their ceilings, to their RCP
     // spots, a keynote's ceiling box raised): their boxes and drops are cut again where they are.
     let raised = result["keynotes_ceiling_boxes_raised"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0));
-    match super::conduitroute::follow_reseated(s, reseated + ceiling_moved + raised + in_reach) {
+    match super::conduitroute::follow_reseated(s, reseated + ceiling_moved + raised + in_reach + late_moved) {
         Some(Ok(v)) => {
             progress_line(&format!("  conduit rerouted to the reseated devices: {v}"));
             // The GFCI decisions follow the circuits as now wired (Q6551): load side only where
@@ -15083,6 +15106,7 @@ fn typical_heights(
                     words: words.clone(),
                     notes: vec![(at, *h, note, appliance, which)],
                     others: Vec::new(),
+                    dimensioned: BTreeMap::new(),
                 }),
             }
         }
@@ -15121,6 +15145,30 @@ fn typical_heights(
                     .map(|(_, (c, _))| cadaddy_geom::Vec2::new(c[0], c[1]))
                     .take(MAX_STAMPED)
                     .collect();
+            }
+        }
+        // A dimensioned enlarged plan (Q6605): each symbol its dimension strings measure from a
+        // wall face or an edge stands at the dimensioned spot, not where it is drawn.
+        if sh.discipline.eq_ignore_ascii_case("A") {
+            let rects: Vec<[f64; 4]> = noted.iter().map(|v| v.view).collect();
+            let items = super::dimreader::items_by_rect(&sub, &rects);
+            for (v, it) in noted.iter_mut().zip(&items) {
+                let strings = super::dimreader::read(it, Some(1.0 / k_in)).strings;
+                if strings.is_empty() {
+                    continue;
+                }
+                let spots: Vec<cadaddy_geom::Vec2> = v.notes.iter().map(|n| n.0).chain(v.others.iter().copied()).collect();
+                let found = super::dimspot::dimensioned_spots(&strings, &spots, k_in, DIMENSIONED_MOVE_MAX_IN);
+                out.dimension_settled += found.settled;
+                out.dimension_too_far += found.too_far;
+                let n = v.notes.len();
+                for ds in found.spots {
+                    let slot = if ds.spot < n { v.notes.get_mut(ds.spot).map(|x| &mut x.0) } else { v.others.get_mut(ds.spot - n) };
+                    if let Some(at) = slot {
+                        *at = ds.to;
+                        v.dimensioned.insert(ds.spot, format!("{} on {} ({})", ds.why, sh.number, v.title));
+                    }
+                }
             }
         }
         let objects = super::bspec::plan_objects(&sub);
@@ -15326,6 +15374,10 @@ fn typical_heights(
                                                     dv.at[0] / ft,
                                                     dv.at[1] / ft
                                                 );
+                                                if let Some(why) = v.dimensioned.get(ni) {
+                                                    dv.located.push_str(&format!("; at its dimensioned spot, not its drawn symbol: {why}"));
+                                                    out.dimensioned += 1;
+                                                }
                                                 let off = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]) - was;
                                                 dv.at = [q.x + off.x, q.y + off.y];
                                                 out.moved += 1;
@@ -15921,6 +15973,11 @@ struct TypicalNotes {
     from_architecture: usize,
     /// Devices moved to the architecture's symbol.
     moved: usize,
+    /// Of them, at the spot the architecture's plan dimensions (not where it draws the symbol);
+    /// symbols a dimension measures already at their spot, and ones too far off it (left).
+    dimensioned: usize,
+    dimension_settled: usize,
+    dimension_too_far: usize,
     /// Typical rooms' interior elevations read, and the devices that took a height from one.
     elevations: usize,
     from_elevations: usize,
@@ -15948,6 +16005,10 @@ struct NotedView {
     notes: Vec<(cadaddy_geom::Vec2, f64, String, bool, String)>,
     /// The architecture's other symbols in it drawn like the noted ones (no note: a spot only).
     others: Vec<cadaddy_geom::Vec2>,
+    /// The spots (index as paired: the notes', then `notes.len() + i` for `others[i]`) the view's
+    /// dimension strings put somewhere else than where the symbol is drawn (Q6605), and why: a
+    /// dimensioned enlarged plan's number outranks its drawn symbol.
+    dimensioned: BTreeMap<usize, String>,
 }
 
 /// A point a typical room's view marks on its sheet, and what it gives a device: `view_at` is
@@ -16303,6 +16364,10 @@ const AFF_DEVICE_FT: f64 = 2.5;
 /// How far (feet) an electrical sheet's device may be from the architecture's symbol it is paired
 /// with when the sheet sends its locations there (its spots are reference only).
 const AFF_DEFERRED_FT: f64 = 4.5;
+/// The largest correction a dimensioned enlarged plan makes to a drawn symbol's spot, inches
+/// (Q6605): farther than this, a value read onto the wrong chain is likelier than a symbol drawn
+/// that far off; the symbol's spot is kept and counted.
+const DIMENSIONED_MOVE_MAX_IN: f64 = 36.0;
 /// Devices this close (feet) to a paired one, on its wall, are ganged with it: they take its
 /// note too.
 const GANG_FT: f64 = 0.8;
@@ -44524,6 +44589,167 @@ mod tests {
         assert_eq!((heights.elevations, heights.from_elevations), (1, 1), "{heights:?}");
         assert!(get("D").located.is_empty(), "{stamped:?}");
         assert_eq!((heights.from_architecture, heights.moved), (2, 2), "{heights:?}");
+    }
+
+    #[test]
+    fn a_device_the_architectures_enlarged_plan_dimensions_takes_the_dimensioned_spot_not_its_drawn_symbol() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // The unit's linework (12' x 24', a cross wall every 4', stubs that tell its ends apart).
+        let unit = |s: &mut crate::Session, o: [f64; 2]| {
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let sheet = |s: &mut crate::Session, x0: f64| {
+            for (a, b) in
+                [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+            {
+                line(s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+        };
+        let text = |s: &mut crate::Session, at: [f64; 2], t: &str, h: f64| {
+            s.execute("text", &json!({"at": at, "text": t, "height": h})).unwrap();
+        };
+        // The electrical sheet: the unit with a receptacle by the west wall (its own "18\" AFF"
+        // by it) and a switch by the east wall, and a general note sending locations and heights
+        // to the architecture's drawings.
+        let (xe, xa) = (4234.0, 7000.0);
+        let lo_e = s.doc().unwrap().handseed;
+        sheet(&mut s, xe);
+        let v = [xe + 300.0, 200.0];
+        unit(&mut s, v);
+        s.execute("circle", &json!({"center": [v[0] + 8.0, v[1] + 20.0], "radius": 4.0})).unwrap();
+        text(&mut s, [v[0] + 15.0, v[1] + 18.0], "18\" AFF", 4.0);
+        text(&mut s, [v[0], v[1] - 19.0], "ENLARGED TWIN SUITE", 7.4);
+        text(&mut s, [v[0], v[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        text(&mut s, [xe + 1200.0, 900.0], "GENERAL NOTES", 6.0);
+        text(&mut s, [xe + 1200.0, 880.0], "1. SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND", 4.0);
+        text(&mut s, [xe + 1205.0, 872.0], "MOUNTING HEIGHTS.", 4.0);
+        let hi_e = s.doc().unwrap().handseed;
+        // The architecture's enlarged plan of the unit: the receptacle 40 in further north on its
+        // wall ("44\" AFF"), the switch 20 in further north on its wall ("38\" AFF"), and a noted
+        // symbol on the south wall nearer the receptacle than its own symbol is (another wall's).
+        let lo_a = s.doc().unwrap().handseed;
+        sheet(&mut s, xa);
+        let w = [xa + 300.0, 200.0];
+        unit(&mut s, w);
+        for (c, note, at) in
+            [([8.0, 60.0], "44\" AFF", [15.0, 58.0]), ([136.0, 150.0], "38\" AFF", [112.0, 148.0]), ([40.0, 8.0], "60\" AFF", [48.0, 10.0])]
+        {
+            s.execute("circle", &json!({"center": [w[0] + c[0], w[1] + c[1]], "radius": 4.0})).unwrap();
+            text(&mut s, [w[0] + at[0], w[1] + at[1]], note, 4.0);
+        }
+        // Q6605: a dimension string west of the unit from the south wall's face to the
+        // receptacle's symbol says 5'-6": the symbol (drawn 60 in up) is 6 in short of its spot.
+        let dl = w[0] - 30.0;
+        line(&mut s, [dl, w[1] - 3.0], [dl, w[1] + 63.0]);
+        for y in [0.0, 60.0] {
+            line(&mut s, [dl - 1.5, w[1] + y - 1.5], [dl + 1.5, w[1] + y + 1.5]);
+            line(&mut s, [dl - 3.0, w[1] + y], [w[0] - 2.0, w[1] + y]);
+        }
+        line(&mut s, [w[0] - 2.0, w[1] + 60.0], [w[0] + 3.0, w[1] + 60.0]);
+        s.execute("text", &json!({"at": [dl - 1.0, w[1] + 22.0], "text": "5'-6\"", "height": 4.0, "rotation": 90.0})).unwrap();
+        // A microwave's receptacle symbol right by the switch, its note a label line over the
+        // height with the leader from the label (a tick by the label, then down to the symbol):
+        // an appliance's height, never the switch's.
+        s.execute("circle", &json!({"center": [w[0] + 136.0, w[1] + 125.0], "radius": 4.0})).unwrap();
+        text(&mut s, [w[0] + 60.0, w[1] + 140.0], "MICROWAVE", 4.0);
+        text(&mut s, [w[0] + 60.0, w[1] + 133.6], "65\" AFF", 4.0);
+        s.execute("pline", &json!({"vertices": [[w[0] + 132.0, w[1] + 125.0], [w[0] + 52.0, w[1] + 142.0], [w[0] + 59.6, w[1] + 142.0]]})).unwrap();
+        // A reading of strokes as a giant "44\" AFF" by the north wall: no note.
+        text(&mut s, [w[0] + 70.0, w[1] + 270.0], "44\" AFF", 40.0);
+        text(&mut s, [w[0], w[1] - 19.0], "UNIT PLAN - TWIN SUITE", 7.4);
+        text(&mut s, [w[0], w[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        // Its interior elevation of the east wall (seen from inside: the north end at its left):
+        // the faceplates of the switch and of the microwave's receptacle, and the wall luminaire's
+        // bar 60 in up, 88 in from the north end, its tag's leader on it.
+        let el = [xa + 1000.0, 200.0];
+        for (a, b) in [
+            ((0.0, 0.0), (288.0, 0.0)),
+            ((288.0, 0.0), (288.0, 96.0)),
+            ((288.0, 96.0), (0.0, 96.0)),
+            ((0.0, 96.0), (0.0, 0.0)),
+            ((20.0, 30.0), (60.0, 30.0)),
+        ] {
+            line(&mut s, [el[0] + a.0, el[1] + a.1], [el[0] + b.0, el[1] + b.1]);
+        }
+        s.execute("circle", &json!({"center": [el[0] - 12.0, el[1]], "radius": 3.0})).unwrap();
+        text(&mut s, [el[0] - 20.0, el[1] + 4.0], "F.F.", 2.5);
+        let boxed = |s: &mut crate::Session, c: [f64; 2], w: f64, h: f64| {
+            let (x0, y0, x1, y1) = (c[0] - w / 2.0, c[1] - h / 2.0, c[0] + w / 2.0, c[1] + h / 2.0);
+            s.execute("pline", &json!({"vertices": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "closed": true})).unwrap();
+        };
+        boxed(&mut s, [el[0] + 138.0, el[1] + 38.0], 2.75, 4.5);
+        boxed(&mut s, [el[0] + 163.0, el[1] + 65.0], 2.75, 4.5);
+        boxed(&mut s, [el[0] + 88.0, el[1] + 60.0], 30.0, 2.0);
+        text(&mut s, [el[0] + 120.0, el[1] + 80.0], "X-1", 2.5);
+        line(&mut s, [el[0] + 119.0, el[1] + 80.5], [el[0] + 103.5, el[1] + 60.5]);
+        text(&mut s, [el[0], el[1] - 19.0], "TWIN SUITE - EAST WALL", 7.4);
+        text(&mut s, [el[0], el[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        let hi_a = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0]);
+        let region = |number: &str, discipline: &str, x0: f64| SheetRegion {
+            number: number.into(),
+            level: "T".into(),
+            discipline: discipline.into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        // The electrical sheet first: its own note must not win.
+        job.sheet_regions = vec![region("E-41", "E", xe), region("A-77", "A", xa)];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-41".into(), lo: lo_e, hi: hi_e }, SheetSpan { sheet: "A-77".into(), lo: lo_a, hi: hi_a }];
+        let room = |n: &str, x: f64| json!({"name": "TWIN SUITE", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 20_000.0)]}));
+        }
+        // (A second room of the type, not drawn on the floor: no fit there, nothing stamped.)
+        let device = |tag: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: "E-41".into(),
+            level: "T".into(),
+            ..Default::default()
+        };
+        // (And a data outlet the notes don't speak of, by the north wall, and a wall luminaire by
+        // the east wall.)
+        let mut sconce = device("F1", [v[0] + 140.0, v[1] + 205.0]);
+        sconce.kind = "wall luminaire".into();
+        let read =
+            [device("A", [v[0] + 8.0, v[1] + 20.0]), device("S", [v[0] + 136.0, v[1] + 130.0]), device("D", [v[0] + 72.0, v[1] + 280.0]), sconce];
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
+        stamped.retain(|d| d.room == "201");
+        assert_eq!(stamped.len(), 4, "{stamped:?}");
+        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped, &[]);
+        assert_eq!(heights.deferring_sheets, ["E-41"], "{heights:?}");
+        let get = |tag: &str| stamped.iter().find(|d| d.tag == tag).unwrap_or_else(|| panic!("{tag}: {stamped:?}"));
+        // The receptacle: the architecture's 44 in, at the dimensioned 66 in up the west wall (its
+        // symbol is drawn at 60), and it says so; the switch stays at its undimensioned symbol.
+        let a = get("A");
+        assert_eq!(a.aff_in, Some(44.0), "{a:?}");
+        // (Drawn, it would stand at ~61 in: the symbol plus the stamp's own offset of the device
+        // from its symbol.)
+        assert!((a.at[0] - 10_008.0).abs() < 4.0 && (a.at[1] - 66.0).abs() < 2.0, "{a:?} {heights:?}");
+        assert!(a.located.contains("dimensioned 5'-6\"") && a.located.contains("A-77"), "{a:?}");
+        let sw = get("S");
+        assert!((sw.at[1] - 150.0).abs() < 4.0 && !sw.located.contains("dimensioned"), "{sw:?}");
+        assert_eq!((heights.moved, heights.dimensioned), (2, 1), "{heights:?}");
     }
 
     #[test]

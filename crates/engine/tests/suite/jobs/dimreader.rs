@@ -389,18 +389,28 @@ fn a_dimension_to_a_door_edge_is_the_devices_reference() {
 }
 
 #[test]
-fn a_drawn_value_the_model_disagrees_with_is_a_conflict_for_review() {
+fn a_drawn_value_the_model_disagrees_with_moves_the_device_to_the_dimensioned_spot_and_is_kept_for_review() {
     let _g = serial();
     let mut s = job(false);
+    let h = handle_of(&mut s, "X");
+    let was = s.execute("bim.element", &json!({"handle": h})).expect("element")["at"].clone();
     let rh = s.execute("bim.layout.rehost", &json!({})).expect("rehost");
     let dd = &rh["drawn_dimensions"];
-    assert_eq!(dd["conflicts"], json!(1), "{dd:#}");
+    assert_eq!((dd["conflicts"].as_u64(), dd["moved_to_drawn"].as_u64()), (Some(1), Some(1)), "{dd:#}");
     let c = &dd["conflicts_first"][0];
     assert_eq!((c["drawn_in"].as_f64(), c["model_in"].as_f64(), c["band_in"].as_f64()), (Some(24.0), Some(34.0), Some(6.0)), "{c}");
     assert_eq!(c["from"], json!("1002/W"));
     let p = props(&mut s, "X");
     assert!(p["offset_conflict"]["value"].as_str().is_some_and(|t| t.contains("2 ft") && t.contains("2 ft 10 in")), "{p:#}");
-    // It is in the review queue, with both values and their sources.
+    // Q6605: the device stands at the dimensioned spot (10 in west, 2'-0" from 1002/W), its plan
+    // spot and the reason kept on it, sourced to the sheet.
+    let now = s.execute("bim.element", &json!({"handle": h})).expect("element")["at"].clone();
+    let dx = now[0].as_f64().unwrap_or(f64::NAN) - was[0].as_f64().unwrap_or(f64::NAN);
+    assert!((dx + 10.0 / 12.0).abs() < 0.02, "moved {dx} ft: {was} -> {now}");
+    let fixed = p["offset_corrected"]["value"].as_str().unwrap_or_default();
+    assert!(fixed.contains("drawn dimension") && fixed.contains("the plan had it 2 ft 10 in"), "{p:#}");
+    assert_eq!(p["offset_corrected"]["source"]["doc"], json!("E-950"));
+    // Still in the review queue, with both values and their sources.
     let q = s.execute("review.list", &json!({"kind": "conflict"})).expect("review");
     let items = q["items"].as_array().expect("items");
     assert_eq!(items.len(), 1, "{q:#}");
@@ -410,16 +420,20 @@ fn a_drawn_value_the_model_disagrees_with_is_a_conflict_for_review() {
     assert_eq!(vals[0]["value"].as_f64(), Some(24.0));
     assert_eq!(vals[0]["source"]["doc"], json!("E-950"));
     assert_eq!(vals[1]["value"].as_f64(), Some(34.0));
-    // The dims report says so too; the others pass.
+    // The model agrees now: the dims report and a second rehost find no conflict, the review
+    // item closes, the correction's record stays.
     let r = s.execute("bim.layout.dims", &json!({})).expect("dims");
-    assert_eq!(r["conflicts"], json!(1), "{r:#}");
-    // Once the model agrees (the device moved to the drawn spot), the conflict closes.
-    let h = handle_of(&mut s, "X");
-    s.execute("move", &json!({"handles": [h], "from": [0, 0], "to": [-10, 0]})).expect("move");
+    assert_eq!(r["conflicts"], json!(0), "{r:#}");
     let rh = s.execute("bim.layout.rehost", &json!({})).expect("rehost again");
-    assert_eq!(rh["drawn_dimensions"]["conflicts"], json!(0), "{:#}", rh["drawn_dimensions"]);
+    assert_eq!(
+        (rh["drawn_dimensions"]["conflicts"].as_u64(), rh["drawn_dimensions"]["moved_to_drawn"].as_u64()),
+        (Some(0), Some(0)),
+        "{:#}",
+        rh["drawn_dimensions"]
+    );
     let q = s.execute("review.list", &json!({"kind": "conflict"})).expect("review");
     assert_eq!(q["items"].as_array().map(Vec::len), Some(0), "{q:#}");
+    assert!(props(&mut s, "X")["offset_corrected"]["value"].as_str().is_some_and(|t| t.contains("2 ft 10 in")));
 }
 
 #[test]

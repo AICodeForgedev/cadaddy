@@ -859,6 +859,11 @@ fn place(cx: &Ctx, face_k: usize, dv: &Dev, dims: &[(Vec2, Vec2, f64)], doc: Opt
 /// How far a drawn dimension's reference may be off the device's face's ends (inches), and off
 /// its wall's line for an opening's edge or a casework edge.
 const DRAWN_REF_REACH_IN: f64 = 24.0;
+/// The largest move a drawn dimension makes to a device off its spot (inches, Q6605): farther,
+/// a dimension attached to the wrong device is likelier; it stays a conflict for review only.
+const DRAWN_MOVE_MAX_IN: f64 = 36.0;
+/// A device's record of the move a drawn dimension made (Q6605).
+pub(crate) const OFFSET_CORRECTED: &str = "offset_corrected";
 const DRAWN_EDGE_OFF_IN: f64 = 12.0;
 const DRAWN_CASEWORK_OFF_IN: f64 = 48.0;
 
@@ -1223,6 +1228,30 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             }
         }
     }
+    // A drawn dimension the model's spot is off by more than the kind's band (Q6605): the device
+    // takes the dimensioned spot (the drafter's number, not where the plan's symbol scaled), up
+    // to DRAWN_MOVE_MAX_IN; its plan spot and the reason are kept on it.
+    let mut corrected: HashMap<usize, Vec2> = HashMap::new();
+    for (j, (i, pl)) in placed.iter_mut().enumerate() {
+        let (Some(dv), Some(f)) = (devs.get(*i), cx.faces.get(pl.face)) else { continue };
+        let Some((measured_in, _)) = &pl.drawn else { continue };
+        let kind = band_kind(&dv.words, &rules);
+        let band = rules["along_band_in"][kind.as_str()].as_f64().or_else(|| rules["along_band_in"]["default"].as_f64()).unwrap_or(6.0);
+        let off_in = pl.offset / inch - measured_in;
+        if !off_in.is_finite() || off_in.abs() <= band + 1e-6 || off_in.abs() > DRAWN_MOVE_MAX_IN {
+            continue;
+        }
+        let dir = match &pl.reference {
+            Ref::Face { inward, .. } => *inward,
+            Ref::End { sign, .. } => f.u * *sign,
+        };
+        let delta = dir * (off_in * inch);
+        if !delta.is_finite() {
+            continue;
+        }
+        pl.t += dot(delta, f.u);
+        corrected.insert(j, delta);
+    }
     // Plates: devices side by side at one height on a face share one.
     let gang = &rules["gang"];
     let mut on_face: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -1312,6 +1341,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let mut agree: Vec<Handle> = Vec::new();
     let mut conflicts_first: Vec<Value> = Vec::new();
     let mut drawn_not_used: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut moved_to_drawn: Vec<(Handle, Vec2)> = Vec::new();
     for (j, (i, pl)) in placed.iter().enumerate() {
         let (Some(dv), Some(f)) = (devs.get(*i), cx.faces.get(pl.face)) else { continue };
         let floor = level_floor(&cx.sp, dv.level.as_deref(), cx.upf);
@@ -1479,6 +1509,33 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         } else {
             store.remove("offset_conflict");
         }
+        if let (Some(delta), Some((measured_in, src))) = (corrected.get(&j), &pl.drawn) {
+            let c = dv.c();
+            let note = format!(
+                "moved {} to the drawn dimension's spot: {} from {} (the plan had it {} from it, at [{:.2}, {:.2}] ft)",
+                ft_in(delta.len() / inch),
+                ft_in(pl.offset / inch),
+                pl.reference.name(),
+                ft_in(*measured_in),
+                c.x / cx.upf,
+                c.y / cx.upf
+            );
+            store.set(
+                OFFSET_CORRECTED,
+                Prop::new(note, src.clone())
+                    .with_note("corrected for the field: the document's dimension outranks the plan's scaled spot; the plan's spot is kept here"),
+            );
+            if store.get("location").is_some() {
+                let (q, z) = (c + *delta, (dv.z0 + dv.z1) / 2.0);
+                store.set(
+                    "location",
+                    Prop::new(format!("{:.2}, {:.2}, {:.2}", q.x / cx.upf, q.y / cx.upf, z / cx.upf), Source::computed())
+                        .with_unit("ft")
+                        .with_note("model coordinates: at its drawn dimension's spot"),
+                );
+            }
+            moved_to_drawn.push((dv.h, *delta));
+        }
         let (studs, obstacles) = framing_cache.entry(pl.face).or_insert_with(|| framing(&in_wall, f, inch)).clone();
         let box_w = rules["box"]["w_one_gang_in"].as_f64().unwrap_or(2.25)
             + rules["box"]["per_gang_in"].as_f64().unwrap_or(1.81) * (plate_of.get(&j).map_or(1, |p| p.2) as f64 - 1.0).max(0.0);
@@ -1520,6 +1577,12 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             let _ = dm.modify_entity(h, |x| x.common.xdata = xdata.into());
         }
     }
+    for (h, delta) in &moved_to_drawn {
+        let m = cadaddy_doc::translation(Vec3::new(delta.x, delta.y, 0.0));
+        let _ = dm.modify_entity(*h, |x| {
+            x.kind.transform3(&m);
+        });
+    }
     let conflict_ids = super::forms::raise_conflicts(s, "offset_along", &raised, &agree)?;
     let placed_n = placed.len();
     let drawn_read: usize = drawn_dims.by_sheet.values().map(|r| r.read).sum();
@@ -1547,6 +1610,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             "devices_documented": placed.iter().filter(|(_, pl)| pl.drawn.is_some()).count(),
             "measured_not_used": drawn_not_used,
             "conflicts": raised.len(),
+            "moved_to_drawn": moved_to_drawn.len(),
             "conflict_ids": conflict_ids.iter().take(MAX_LISTED).collect::<Vec<_>>(),
             "conflicts_first": conflicts_first,
             "report": format!("{DIMS} {{}}"),

@@ -1,0 +1,36 @@
+{
+  "source": "trade practice (door hardware and access control installation): powered door hardware works the leaf's free edge, never its hinges — a card reader is mounted on the wall beside the latch (strike) jamb, a door position contact in the frame's head at the latch side, a wall magnetic door holder where the open leaf's latch edge comes to rest; each below the door's head",
+  "door_reach_in": 36,
+  "wall_off_in": 18,
+  "head_clear_in": 2,
+  "ambiguous_in": 6,
+  "pair_ratio": 1.5,
+  "not_kinds": ["receptacle", "quad_receptacle", "duplex_receptacle", "switch", "dimmer", "junction_box", "equipment_connection", "data_outlet", "telephone_outlet"],
+  "items": [
+    {
+      "kind": "door_holder",
+      "kinds": ["door_holder", "mag_door_holder"],
+      "words": ["DOOR HOLDER", "DOOR HOLD", "HOLD OPEN", "HOLD-OPEN", "MAGNETIC DOOR"],
+      "marks": ["DH", "MDH"],
+      "place": "open_leaf_edge",
+      "backset_in": 3,
+      "basis": "a wall magnetic door holder is set where the open leaf's latch edge rests against the wall (its armature near the leaf's top latch corner), never at the hinge jamb (manufacturers' installation instructions)"
+    },
+    {
+      "kind": "card_reader",
+      "kinds": ["card_reader"],
+      "words": ["CARD READER", "PROXIMITY READER", "PROX READER", "ACCESS CONTROL READER", "KEYPAD"],
+      "marks": ["CR"],
+      "place": "latch_jamb",
+      "basis": "a card reader is mounted on the wall beside the latch (strike) jamb, the side a person reaches for the hardware from (access control practice; its operable part within reach, ICC A117.1 309)"
+    },
+    {
+      "kind": "door_contact",
+      "kinds": ["door_contact", "door_position_switch"],
+      "words": ["DOOR CONTACT", "DOOR POSITION SWITCH", "DOOR POSITION SENSOR", "DOOR SWITCH"],
+      "marks": ["DC", "DPS"],
+      "place": "latch_jamb",
+      "basis": "a door position contact is set in the frame's head at the latch side, where the leaf's free edge closes against it (security practice)"
+    }
+  ]
+}
