@@ -242,6 +242,7 @@ pub mod sitetakeoff;
 pub(crate) mod sitework;
 pub mod spell;
 pub mod stairs;
+pub(crate) mod storey;
 pub mod strokesheets;
 pub mod symbol;
 pub(crate) mod symbolshape;
