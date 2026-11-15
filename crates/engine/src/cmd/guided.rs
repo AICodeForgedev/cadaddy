@@ -10359,7 +10359,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "feeder routes", t);
     // The circuits routed again now their panels and feeders stand (Q6152), and what it found.
     let t = web_time::Instant::now();
-    match s.execute("conduit.reroute", &json!({})) {
+    // A step of the build: a model built with routing switched off stays unrouted (Q6657: only
+    // conduit.reroute asked for by name turns it on again).
+    match super::conduitroute::reroute(s) {
         Ok(v) => progress_line(&format!("  conduit rerouted with the gear placed: {v}")),
         Err(e) => result["conduit_reroute_error"] = json!(e.to_string()),
     }
@@ -27645,7 +27647,7 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     // The homeruns routed again under the slab (or back overhead) where the documents' word on them
     // changed.
     let homeruns_rerouted = if homeruns_changed && s.doc().is_ok_and(|d| d.model.iter().any(|e| super::mepatoms::is_atom(e))) {
-        match s.execute("conduit.reroute", &json!({})) {
+        match super::conduitroute::reroute(s) {
             Ok(_) => true,
             Err(e) => {
                 result["underground_reroute_error"] = json!(e.to_string());

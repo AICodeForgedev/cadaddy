@@ -7125,18 +7125,39 @@ pub(crate) fn cable_paths(d: &Drawing) -> HashMap<String, MepRun> {
 /// Route the circuits again over the model as it stands now (after the job placed its gear and
 /// feeders, the levels stacked): the routed runs into the stored spec (each level's own plan),
 /// the pieces cut again where the model's are (the stacking move kept on them), the report stored.
+///
+/// A step of a build (the job's, after its gear and feeders): a model built with routing switched
+/// off (`model.build {route: false}`) stays unrouted.
 pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
-    reroute_feeders(s, false)
+    reroute_feeders(s, false, Ask::BuildStep)
+}
+
+/// Who asked for the routing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Ask {
+    /// A step of a build: the drawing's routing switch (`model.build {route}`) decides.
+    BuildStep,
+    /// The `conduit.reroute` command itself (a person, an agent, a script): routes even when a
+    /// build switched routing off, and turns it on again (Q6657: a build's `route: false` is that
+    /// build's, never a silent "nothing routed" for a later routing asked for by name).
+    Command,
 }
 
 /// [`reroute`]; `all_feeders`: every feeder with placed gear routed (on demand), not only those
 /// whose gear moved since their route was made.
-pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool) -> Result<Value> {
+pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool, ask: Ask) -> Result<Value> {
     const C: &str = "conduit.reroute";
     let (mut sp, stored) = super::bspec::current(s, C)?;
     if !stored {
         // A state, not a parameter error (the menu starts it with none).
         return Ok(json!({"routed": false, "note": "the drawing has no building spec: model.build first"}));
+    }
+    // Asked for by name with routing switched off by a build: routing goes on again, and the
+    // reply says so.
+    let switched_on = ask == Ask::Command && !enabled(s.doc()?);
+    if switched_on {
+        set_enabled(s.doc_mut()?, true);
+        s.echo("routing was switched off by a model.build {route: false}: conduit.reroute turns it on again and routes");
     }
     // The feeders follow their gear as it stands now (Q6523): a route that no longer ends at its
     // gear is routed again; its pieces are cut again below with the rest.
@@ -7318,7 +7339,15 @@ fn run_reroute(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(v)) if v == "moved" => false,
         Some(_) => return Err(super::bad("conduit.reroute", "`feeders` is \"moved\" (the default) or \"all\"")),
     };
-    reroute_feeders(s, all)
+    let was_off = !enabled(s.doc()?);
+    let mut r = reroute_feeders(s, all, Ask::Command)?;
+    if was_off
+        && enabled(s.doc()?)
+        && let Some(o) = r.as_object_mut()
+    {
+        o.insert("routing_switched_on".into(), json!(true));
+    }
+    Ok(r)
 }
 
 /// After `moved` devices were set in their walls again (a merge removed the walls they were in):
@@ -7350,7 +7379,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand)} → {routed, removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, off_feed_before, off_feed_after (Q6664: routes whose chains differ from the panels' recorded feeds), disagree, rerouted_list: [{feeder, why}], dropped_list, disagree_list (routes kept as given that the feed data disagrees with; feeders not laid beside them)}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, equipment_connections: {loads, connected, drawn_disconnects, built, built_by_kind, removed, connection_boxes, took_circuit, built_list} (Q6624: each piece of equipment that carries its circuit, its connection), circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand). Asked for by name it routes even when a model.build {route: false} switched routing off, and turns routing on again (Q6657)} → {routed, routing_switched_on? (true: routing had been switched off by a build and is on again), removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, off_feed_before, off_feed_after (Q6664: routes whose chains differ from the panels' recorded feeds), disagree, rerouted_list: [{feeder, why}], dropped_list, disagree_list (routes kept as given that the feed data disagrees with; feeders not laid beside them)}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, equipment_connections: {loads, connected, drawn_disconnects, built, built_by_kind, removed, connection_boxes, took_circuit, built_list} (Q6624: each piece of equipment that carries its circuit, its connection), circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
