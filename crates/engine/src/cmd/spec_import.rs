@@ -1241,19 +1241,53 @@ fn is_mark_label(text: &str) -> bool {
     t.strip_suffix(':').is_some_and(|label| MARK_LABELS.contains(&label))
 }
 
-/// The mark a cut sheet's header names ("Type: A1", colon squashed).
+/// The mark a cut sheet's header names ("Type: A1", colon squashed); a list of marks ("Type:
+/// K/ZX09", "Type: A, B") as written, its separators closed up (each listed type is the cut
+/// sheet's, `bim.submittals`, Q6653).
 fn type_header(seg: &str) -> Option<String> {
     let lower = seg.to_ascii_lowercase();
     let rest = MARK_LABELS.iter().find_map(|l| lower.strip_prefix(l).and_then(|r| r.strip_prefix(':')))?;
-    let value = seg[seg.len() - rest.len()..].split_whitespace().next()?;
+    let value = closed_list(&seg[seg.len() - rest.len()..]);
+    let value = value.split_whitespace().next()?;
     mark_token(value).map(str::to_string)
 }
 
-/// `s` if it reads as a type mark: short, capitals and digits ("A1", "XB", "L4", "EM-2").
+/// A text with the spaces round its list separators (`/`, `,`, `&`) taken out (`A, B` → `A,B`).
+fn closed_list(text: &str) -> String {
+    let mut out = String::new();
+    let mut gap = false;
+    for c in text.trim().chars().take(200) {
+        if c == ' ' {
+            gap = true;
+            continue;
+        }
+        let sep = matches!(c, '/' | ',' | '&');
+        if gap && !sep && !out.ends_with(['/', ',', '&']) && !out.is_empty() {
+            out.push(' ');
+        }
+        gap = false;
+        out.push(c);
+    }
+    out
+}
+
+/// Marks one list may name.
+const MAX_LIST_MARKS: usize = 12;
+
+/// `s` if it reads as a type mark: short, capitals and digits ("A1", "XB", "L4", "EM-2"); or a
+/// list of them ("K/ZX09", "A,B", Q6653).
 fn mark_token(s: &str) -> Option<&str> {
-    let ok = (1..=8).contains(&s.chars().count())
-        && s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-        && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '.');
+    let one = |p: &str| {
+        (1..=8).contains(&p.chars().count())
+            && p.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+            && p.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '.')
+    };
+    let pieces: Vec<&str> = s.split(['/', ',', '&']).collect();
+    let ok = if pieces.len() == 1 {
+        one(s)
+    } else {
+        pieces.len() <= MAX_LIST_MARKS && pieces.iter().all(|p| one(p) && p.chars().any(|c| c.is_ascii_uppercase()))
+    };
     ok.then_some(s)
 }
 

@@ -8,8 +8,8 @@
 //!   AT-24-L40 series with other options. Passes; the build's maker RFI about it is `extra`.
 //! - T2 (in 12): the model says 26 VA at 277 V where the row says 13 VA at 120 V (the build's
 //!   stored schedule says what the model does: Validate doesn't read it). Fails, citing the row.
-//! - T3 (in 12): its latest submittal revision gives another maker's product. Fails, matched by
-//!   the build's catalog RFI.
+//! - T3 (in 12): its latest submittal revision, approved as noted, gives another maker's product:
+//!   an approved substitution (Q6653). Passes; a catalog RFI raised for it is `extra`.
 //! - T5: scheduled, on no plan, its only submittal rejected. Fails twice, no RFI: `missing`.
 //!   (A later revision of T1 sent back doesn't replace T1's.)
 //! - T9 (in 13): on the plan, no row. The luminaire is unsure; the type fails, matched by the
@@ -229,7 +229,7 @@ fn submittals(root: &Path) {
     );
     write(
         &root.join("Interior Lighting/Rev 2-0/Lighting Package.txt"),
-        "--- page 1 of 1 ---\nType : T3\nManufacturer : OTHER CO\nModel Number : ZX-500\n",
+        "--- page 1 of 1 ---\nType : T3\nManufacturer : OTHER CO\nModel Number : ZX-500\nAPPROVED AS NOTED\n",
     );
     // A later revision of T1 sent back: the earlier one stands.
     write(
@@ -482,19 +482,22 @@ fn a_va_and_voltage_mismatch_fails_citing_the_row_not_the_builds_copy() {
 }
 
 #[test]
-fn a_schedule_vs_submittal_mismatch_fails_and_matches_the_builds_rfi() {
+fn an_approved_substitution_passes_and_an_rfi_raised_for_it_is_disputed() {
+    // Q6653: the approved submittal's other product answers the schedule's basis of design.
     let mut j = job("catalog", true, true);
     let (r, fs) = screen(&mut j.s);
-    let f = of_type(&fs, "T3", "submittal", "fail");
+    let f = of_type(&fs, "T3", "submittal", "pass");
     let issue = f["issue"].as_str().unwrap();
+    assert!(issue.contains("an approved substitution") && issue.contains("recorded, not a conflict"), "{issue}");
     assert!(issue.contains("OTHER CO ZX-500") && issue.contains("X-601 LIGHT FIXTURE SCHEDULE, type T3"), "{issue}");
     assert!(issue.contains("NO SUBSTITUTIONS"), "the schedule's note said beside it: {issue}");
     // The latest revision wins; the earlier one is listed.
     assert_eq!(f["measured"]["submittal"]["revision"], "2-0", "{f}");
     assert!(f["measured"]["submittal"]["others"].to_string().contains("p.3"), "{f}");
-    assert_eq!(f["measured"]["rfi"], "RFI-L1", "the build's RFI confirms it: {f}");
     assert!(!fs.iter().any(|x| x["tag"] == "T3" && x["measured"]["check"] == "submittal" && x["verdict"] == "missing"));
-    assert!(r["fixtures"]["rfis"]["confirmed"].as_array().unwrap().contains(&json!("RFI-L1")), "{}", r["fixtures"]["rfis"]);
+    // An RFI an older build raised for it is disputed.
+    of_type(&fs, "T3", "submittal", "extra");
+    assert!(r["fixtures"]["rfis"]["disputed"].as_array().unwrap().contains(&json!("RFI-L1")), "{}", r["fixtures"]["rfis"]);
     // The luminaire itself carries its row: the documents disagree, not the model.
     assert_eq!(of_handle(&fs, &j.t3)["verdict"], "pass");
 }
@@ -536,11 +539,11 @@ fn every_lighting_rfi_is_confirmed_disputed_or_listed() {
     // The controls RFI isn't this rule's: counted, not matched.
     assert!(r["unmeasured"][RULE].to_string().contains("not a fixture type"), "{}", r["unmeasured"]);
     let rfis = &r["fixtures"]["rfis"];
-    assert_eq!(rfis["disputed"], json!(["RFI-L3"]), "{rfis}");
+    assert_eq!(rfis["disputed"], json!(["RFI-L1", "RFI-L3"]), "{rfis}");
     assert_eq!(rfis["not_recomputed"], json!(["RFI-L4"]), "{rfis}");
     let mut confirmed: Vec<&str> = rfis["confirmed"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     confirmed.sort_unstable();
-    assert_eq!(confirmed, ["RFI-L1", "RFI-L2"], "{rfis}");
+    assert_eq!(confirmed, ["RFI-L2"], "{rfis}");
 }
 
 #[test]
@@ -555,7 +558,7 @@ fn a_two_sided_schedule_on_a_page_the_drawing_does_not_hold_is_read() {
     assert_eq!(f["verdict"], "fail", "{f}");
     assert!(f["issue"].as_str().unwrap().contains("X-602 LUMINAIRE SCHEDULE, type T2"), "{f}");
     // T3 and T5 are on the page's right half.
-    assert_eq!(of_type(&fs, "T3", "submittal", "fail")["measured"]["row"]["source"], "X-602 LUMINAIRE SCHEDULE, type T3");
+    assert_eq!(of_type(&fs, "T3", "submittal", "pass")["measured"]["row"]["source"], "X-602 LUMINAIRE SCHEDULE, type T3");
     of_type(&fs, "T5", "on_plan", "fail");
     // This schedule gives no lamp or mounting: those fields aren't compared, T1 still passes.
     assert_eq!(of_handle(&fs, &j.t1[0])["verdict"], "pass");

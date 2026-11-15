@@ -1,0 +1,17 @@
+{
+  "_what": "Revision currency between disciplines (revcurrency.rs, Q6650): when one discipline's sheet carries a revision (a later row of its title block's revision table, its clouds) that moves or adds an object, every other discipline's sheet of that level that draws the object or its supports must carry the same revision (or a later one) or show the object at the same place; otherwise an RFI naming both sheets and the revision.",
+  "_basis": "Drafting practice: a revision is marked on every sheet it changes by a cloud and a delta carrying its mark, and listed in the title block's revision table (mark, description, date); a sheet the revision did not reach keeps its earlier rows. Coordination practice: equipment placed by one trade's plan is drawn by the others (the architect's curbs, walk pads and penetrations, the structure's supports, the electrical connections), so a revision of the one must reach the others.",
+  "header_date_words": ["DATE"],
+  "header_other_words": ["REV", "REV.", "REVISION", "REVISIONS", "DESCRIPTION", "NO", "NO.", "MARK", "ISSUE", "#"],
+  "mark_max_chars": 3,
+  "row_gap_h": 3.0,
+  "min_cloud_pieces": 8,
+  "scallop_max_share": 0.05,
+  "_equipment_prefixes": "Letter prefixes of equipment marks in common use across the trades (mechanical, plumbing, electrical): a clouded mark with one of these is an object other trades draw or support.",
+  "equipment_prefixes": ["AC", "ACCU", "AHP", "AHU", "ATS", "BFP", "BLR", "CH", "CRAC", "CT", "CU", "CUH", "DOAS", "DP", "EF", "ERV", "EUH", "EWH", "FC", "FCU", "FSD", "GEN", "GF", "GWH", "HP", "HRV", "HV", "HX", "KEF", "MAU", "MDP", "MUA", "PTAC", "PTHP", "RF", "RH", "RTU", "SF", "SWBD", "TF", "UH", "VAV", "VRF", "WH", "WSHP", "XFMR"],
+  "_support_words": "Words by which a sheet draws equipment or what carries it (curbs, pads, rails, supports, penetrations): a sheet with any in its drawing area draws the objects' supports.",
+  "support_words": ["CURB", "CONDENSING UNIT", "ROOFTOP UNIT", "HEAT PUMP", "MECHANICAL UNIT", "MECHANICAL EQUIPMENT", "EQUIPMENT PAD", "EQUIPMENT RAIL", "EQUIPMENT SUPPORT", "EQUIPMENT SCREEN", "WALK PAD", "WALKING PAD", "SLEEPER", "PENETRATION", "DUNNAGE"],
+  "same_place_h": 6.0,
+  "align_min_votes": 4,
+  "max_findings": 200
+}

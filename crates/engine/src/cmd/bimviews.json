@@ -36,6 +36,7 @@
   "shell_wall_rgb": [150, 162, 180],
   "shell_interior_opacity": 0.08,
   "systems_min_px": 2,
+  "systems_weights": {"main": 4, "branch": 1.5, "device": 2, "equipment": 2},
   "systems_other_rgb": [212, 172, 0],
   "systems_palette": [
     {"key": "supply_air", "label": "Supply Air", "group": "Mechanical Air", "rgb": [24, 112, 228], "trades": ["duct_supply", "terminals"]},

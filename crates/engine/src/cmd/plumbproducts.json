@@ -52,5 +52,7 @@
   ],
   "water_systems": ["CW", "HW", "HWR", "DCW", "DHW", "DHWR"],
   "water_systems_source": "the domestic water systems' usual abbreviations (cold, hot, hot water return) as plumbing legends letter them",
-  "water_derived": "its level's water lines are proposed (copied from a level whose layout matches, not drawn): its water connections are derived, not design-issued"
+  "water_derived": "its level's water lines are proposed (copied from a level whose layout matches, not drawn): its water connections are derived, not design-issued",
+  "maker_business_words": ["CO", "COMPANY", "CORP", "CORPORATION", "INC", "INCORPORATED", "LLC", "LTD", "LIMITED", "MFG", "MANUFACTURING", "INDUSTRIES", "GROUP", "THE"],
+  "maker_business_words_source": "trade practice: a maker's name is printed with or without its business form (Co., Company, Inc) and sometimes with its trade word; the name without them is the maker (Q6653)"
 }

@@ -6,10 +6,11 @@
 //! The view is orthographic ([`ShadeView`]); depth is larger nearer the viewer.
 
 use cadaddy_color::Rgb;
+use cadaddy_doc::Lineweight;
 use cadaddy_geom::Vec3;
 
 use crate::images::Raster;
-use crate::shade::{Scene, ShadeView, Tri};
+use crate::shade::{Line3, Scene, ShadeView, Tri};
 
 /// How the BIM view lights and draws a scene.
 #[derive(Clone, Copy, Debug)]
@@ -32,7 +33,7 @@ pub struct BimShade {
     /// colour.
     pub own_edges: bool,
     /// The thinnest an opaque surface's edge is drawn, pixels (with `own_edges`: the thinnest
-    /// run on screen).
+    /// run on screen, for a run whose line carries no weight of its own, [`Line3::weight`]).
     pub min_px: f64,
     /// How much a see-through surface's edge tints what is behind it (0 … 1).
     pub ghost_edge: f64,
@@ -67,6 +68,30 @@ impl BimShade {
             ghost_edge: 0.55,
             ..BimShade::default()
         }
+    }
+}
+
+/// The Systems view's weights travel on the painted elements as their lineweight (a CAD
+/// object's own display width, so every view that builds a scene from the drawing gets them):
+/// this many hundredths of a millimetre a pixel (0.2 mm: the standard lineweights 0.30, 0.40
+/// and 0.80 mm are 1.5, 2 and 4 px).
+pub const SYSTEMS_MM100_PER_PX: f64 = 20.0;
+
+/// The thickest a run is drawn on screen by its weight, pixels.
+pub const MAX_WEIGHT_PX: f64 = 8.0;
+
+/// The lineweight that shows `px` pixels wide in the Systems view (1 … [`MAX_WEIGHT_PX`]).
+pub fn lineweight_px(px: f64) -> Lineweight {
+    let px = if px.is_finite() { px.clamp(1.0, MAX_WEIGHT_PX) } else { 1.0 };
+    Lineweight::Mm100((px * SYSTEMS_MM100_PER_PX).round() as u16)
+}
+
+/// The width a line of an object with lineweight `lw` takes in the Systems view, quarter
+/// pixels (0: no lineweight of its own, the look's thinnest).
+pub fn weight_of(lw: Lineweight) -> u8 {
+    match lw {
+        Lineweight::Mm100(v) if v > 0 => (f64::from(v) / SYSTEMS_MM100_PER_PX * 4.0).round().clamp(1.0, 4.0 * MAX_WEIGHT_PX) as u8,
+        _ => 0,
     }
 }
 
@@ -134,24 +159,78 @@ fn cover(s: &[(f64, f64, f64); 3], w: usize, h: usize, mut f: impl FnMut(usize, 
     }
 }
 
-/// Each pixel of the segment `a`–`b` drawn `px` pixels wide (a square pen): `(index, depth)`.
-fn walk_wide(a: (f64, f64, f64), b: (f64, f64, f64), px: f64, w: usize, h: usize, mut f: impl FnMut(usize, f32)) {
-    let n = if px.is_finite() { px.round().clamp(1.0, 8.0) as i64 } else { 1 };
+/// Each pixel of the segment `a`–`b` drawn `px` pixels wide (a square pen, 1 … 8):
+/// `(index, depth, coverage)`. A part of a pixel is the pen's last row and column drawn at that
+/// coverage (1.5 px: one pixel solid and a half-strength fringe).
+fn walk_wide(a: (f64, f64, f64), b: (f64, f64, f64), px: f64, w: usize, h: usize, mut f: impl FnMut(usize, f32, f32)) {
+    let px = if px.is_finite() { px.clamp(1.0, MAX_WEIGHT_PX) } else { 1.0 };
+    let n = px.ceil() as i64;
     if n <= 1 {
-        return walk(a, b, w, h, f);
+        return walk(a, b, w, h, |k, z| f(k, z, 1.0));
     }
+    // The fringe's coverage: what is left of the width past the whole pixels.
+    let fringe = (px - (n - 1) as f64) as f32;
     let lo = -(n - 1) / 2;
+    let hi = lo + n - 1;
     walk(a, b, w, h, |k, z| {
         let (x, y) = ((k % w.max(1)) as i64, (k / w.max(1)) as i64);
-        for dy in lo..lo + n {
-            for dx in lo..lo + n {
+        for dy in lo..=hi {
+            for dx in lo..=hi {
                 let (px, py) = (x + dx, y + dy);
                 if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
-                    f(py as usize * w + px as usize, z);
+                    f(py as usize * w + px as usize, z, if dx == hi || dy == hi { fringe } else { 1.0 });
                 }
             }
         }
     });
+}
+
+/// Lines drawn at their weights over `color`: each pixel takes the line that covers it most
+/// (a pen's fringe never darkens another line's solid pixels, overlapping steps never add up),
+/// blended by that coverage. `pen`: a line's width, pixels; `ink`: its colour.
+#[allow(clippy::too_many_arguments)]
+fn draw_weighted<'a>(
+    lines: impl Iterator<Item = &'a Line3>,
+    v: &ShadeView,
+    w: usize,
+    h: usize,
+    depth: &[f32],
+    bias: f32,
+    color: &mut [[f64; 3]],
+    pen: impl Fn(&Line3) -> f64,
+    ink: impl Fn(&Line3) -> [f64; 3],
+) {
+    // Coverage and colour of the line at each pixel.
+    let mut layer: Vec<[f32; 4]> = vec![[0.0; 4]; w * h];
+    let mut any = false;
+    for l in lines {
+        let lc = ink(l);
+        walk_wide(v.screen(l.a), v.screen(l.b), pen(l), w, h, |k, z, cov| {
+            if depth.get(k).is_some_and(|d| z + bias >= *d)
+                && let Some(px) = layer.get_mut(k)
+                && cov >= px[0]
+            {
+                *px = [cov, lc[0] as f32, lc[1] as f32, lc[2] as f32];
+                any = true;
+            }
+        });
+    }
+    if !any {
+        return;
+    }
+    for (c, px) in color.iter_mut().zip(&layer) {
+        let a = f64::from(px[0]);
+        if a > 0.0 {
+            for (ch, l) in c.iter_mut().zip([px[1], px[2], px[3]]) {
+                *ch = *ch * (1.0 - a) + f64::from(l) * a;
+            }
+        }
+    }
+}
+
+/// A line's width in the Systems look: its own weight, else the look's thinnest.
+fn pen_of(l: &Line3, o: &BimShade) -> f64 {
+    if l.weight > 0 { f64::from(l.weight) / 4.0 } else { o.min_px }
 }
 
 /// Each pixel of the segment `a`–`b` (pixel x, y, depth): `(index, depth)`.
@@ -238,11 +317,15 @@ pub fn rasterize_bim(scene: &Scene, v: &ShadeView, bg: Rgb, o: &BimShade) -> Ras
     let bias = (range * 2e-3 + px * 1.5) as f32;
     // The opaque surfaces' edges, those behind a surface left out: the surface's own colour
     // darkened (a thin pipe's facets read as its colour, not as black).
-    if o.edges {
-        let (k_ink, px_pen) = if o.own_edges { (light(Vec3::Z, o, sun).min(1.0) * 0.92, o.min_px) } else { (EDGE_SHADE, 1.0) };
+    // In the Systems look each run at its own weight (its role's minimum, Q6663).
+    if o.edges && o.own_edges {
+        let k_ink = light(Vec3::Z, o, sun).min(1.0) * 0.92;
+        let ink = |l: &Line3| [f64::from(l.color.0) * k_ink, f64::from(l.color.1) * k_ink, f64::from(l.color.2) * k_ink];
+        draw_weighted(scene.lines.iter().filter(|l| l.edge && !l.faint), v, w, h, &depth, bias, &mut color, |l| pen_of(l, o), ink);
+    } else if o.edges {
         for l in scene.lines.iter().filter(|l| l.edge && !l.faint) {
-            let lc = [f64::from(l.color.0) * k_ink, f64::from(l.color.1) * k_ink, f64::from(l.color.2) * k_ink];
-            walk_wide(v.screen(l.a), v.screen(l.b), px_pen, w, h, |k, z| {
+            let lc = [f64::from(l.color.0) * EDGE_SHADE, f64::from(l.color.1) * EDGE_SHADE, f64::from(l.color.2) * EDGE_SHADE];
+            walk(v.screen(l.a), v.screen(l.b), w, h, |k, z| {
                 if depth.get(k).is_some_and(|d| z + bias >= *d)
                     && let Some(c) = color.get_mut(k)
                 {
@@ -291,8 +374,14 @@ pub fn rasterize_bim(scene: &Scene, v: &ShadeView, bg: Rgb, o: &BimShade) -> Ras
             });
         }
     }
-    // Line objects on top (behind a surface left out).
-    for l in scene.lines.iter().filter(|l| !l.edge) {
+    // Line objects on top (behind a surface left out); in the Systems look a run drawn as a
+    // line (a coarse fidelity tier) at its weight.
+    let weighted = |l: &Line3| o.own_edges && l.weight > 0;
+    if o.own_edges {
+        let ink = |l: &Line3| [f64::from(l.color.0), f64::from(l.color.1), f64::from(l.color.2)];
+        draw_weighted(scene.lines.iter().filter(|l| !l.edge && weighted(l)), v, w, h, &depth, bias, &mut color, |l| pen_of(l, o), ink);
+    }
+    for l in scene.lines.iter().filter(|l| !l.edge && !weighted(l)) {
         let lc = [f64::from(l.color.0), f64::from(l.color.1), f64::from(l.color.2)];
         walk(v.screen(l.a), v.screen(l.b), w, h, |k, z| {
             if depth.get(k).is_some_and(|d| z + bias >= *d)
@@ -318,7 +407,7 @@ mod tests {
         s.tris.push(Tri { p: [p[0], p[1], p[2]], color: c, mat, uv: [[0.0; 2]; 3] });
         s.tris.push(Tri { p: [p[0], p[2], p[3]], color: c, mat, uv: [[0.0; 2]; 3] });
         for k in 0..4 {
-            s.lines.push(Line3 { a: p[k], b: p[(k + 1) % 4], color: c, edge: true, faint: mat != crate::shade::NO_SURFACE });
+            s.lines.push(Line3 { a: p[k], b: p[(k + 1) % 4], color: c, edge: true, faint: mat != crate::shade::NO_SURFACE, weight: 0 });
         }
     }
 
@@ -368,7 +457,7 @@ mod tests {
         s.tris.push(Tri::plain([p[0], p[1], p[2]], c));
         s.tris.push(Tri::plain([p[0], p[2], p[3]], c));
         for k in 0..4 {
-            s.lines.push(Line3 { a: p[k], b: p[(k + 1) % 4], color: c, edge: true, faint: false });
+            s.lines.push(Line3 { a: p[k], b: p[(k + 1) % 4], color: c, edge: true, faint: false, weight: 0 });
         }
         let reddish = |r: &Raster, y: u32| {
             let q = at(r, 30, y);
@@ -384,12 +473,85 @@ mod tests {
         assert!(wide(&dflt) < 2, "{}", wide(&dflt));
     }
 
+    /// A thin run's width (Q6663): its line's own weight, whole or part pixels; no weight: the
+    /// look's thinnest.
+    fn run_at(weight: u8, y: f64) -> Scene {
+        let mut s = Scene::default();
+        let c = Rgb(230, 40, 30);
+        let p = [Vec3::new(0.0, y, 0.0), Vec3::new(10.0, y, 0.0), Vec3::new(10.0, y + 0.02, 0.0), Vec3::new(0.0, y + 0.02, 0.0)];
+        s.tris.push(Tri::plain([p[0], p[1], p[2]], c));
+        s.tris.push(Tri::plain([p[0], p[2], p[3]], c));
+        for k in 0..4 {
+            s.lines.push(Line3 { a: p[k], b: p[(k + 1) % 4], color: c, edge: true, faint: false, weight });
+        }
+        s
+    }
+
+    /// Rows of the middle column at least `share` as red as the reddest.
+    fn red_rows(r: &Raster, share: f64) -> usize {
+        let red = |y: u32| {
+            let q = at(r, 30, y);
+            f64::from(q[0]) - f64::from(q[1].max(q[2]))
+        };
+        let peak = (0..r.height).map(red).fold(0.0, f64::max);
+        (0..r.height).filter(|y| red(*y) > 20.0 && red(*y) >= share * peak).count()
+    }
+
+    #[test]
+    fn a_run_draws_at_its_own_weight_and_part_pixels_are_a_soft_fringe() {
+        let look = BimShade::systems(2.0);
+        let draw = |weight: u8| rasterize_bim(&run_at(weight, 5.05), &top_view(60), Rgb(255, 255, 255), &look);
+        // No weight: the look's thinnest (2 px); 4 px; 1 px.
+        assert_eq!(red_rows(&draw(0), 0.6), 2);
+        assert_eq!(red_rows(&draw(16), 0.6), 4);
+        assert_eq!(red_rows(&draw(4), 0.6), 1);
+        // 1.5 px: one solid row and a half-strength one beside it.
+        let half = draw(6);
+        assert_eq!(red_rows(&half, 0.6), 1, "one solid pixel");
+        assert_eq!(red_rows(&half, 0.3), 2, "and a soft fringe");
+        // Wider than the thickest weight: 8 px.
+        assert_eq!(red_rows(&draw(255), 0.6), 8);
+    }
+
+    #[test]
+    fn a_coarse_tier_run_line_draws_at_its_weight_in_the_systems_look() {
+        let mut s = Scene::default();
+        let c = Rgb(230, 40, 30);
+        s.lines.push(Line3 { a: Vec3::new(0.0, 5.05, 0.0), b: Vec3::new(10.0, 5.05, 0.0), color: c, edge: false, faint: false, weight: 12 });
+        quad(&mut s, -1.0, Rgb(250, 250, 250), crate::shade::NO_SURFACE);
+        let sys = rasterize_bim(&s, &top_view(60), Rgb(255, 255, 255), &BimShade::systems(2.0));
+        assert_eq!(red_rows(&sys, 0.6), 3);
+        let dflt = rasterize_bim(&s, &top_view(60), Rgb(255, 255, 255), &BimShade::default());
+        assert_eq!(red_rows(&dflt, 0.6), 1, "other looks draw a line object one pixel wide");
+    }
+
+    #[test]
+    fn lineweights_carry_the_systems_weights() {
+        assert_eq!(lineweight_px(4.0), Lineweight::Mm100(80));
+        assert_eq!(lineweight_px(1.5), Lineweight::Mm100(30));
+        assert_eq!(lineweight_px(f64::NAN), Lineweight::Mm100(20));
+        assert_eq!(lineweight_px(1e9), Lineweight::Mm100(160));
+        for px in [1.0, 1.5, 2.0, 2.25, 4.0, 8.0] {
+            assert_eq!(f64::from(weight_of(lineweight_px(px))) / 4.0, px);
+        }
+        assert_eq!(weight_of(Lineweight::ByLayer), 0);
+        assert_eq!(weight_of(Lineweight::Mm100(0)), 0);
+        assert_eq!(weight_of(Lineweight::Mm100(211)), 32);
+    }
+
     #[test]
     fn hostile_views_never_panic() {
         let mut s = Scene::default();
         quad(&mut s, 0.0, Rgb(1, 2, 3), crate::shade::NO_SURFACE);
         s.tris.push(Tri::plain([Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(1e300, 1.0, 0.0), Vec3::new(0.0, -1e300, 0.0)], Rgb(9, 9, 9)));
-        s.lines.push(Line3 { a: Vec3::new(-1e300, 0.0, 0.0), b: Vec3::new(1e300, 0.0, 0.0), color: Rgb(1, 1, 1), edge: false, faint: false });
+        s.lines.push(Line3 {
+            a: Vec3::new(-1e300, 0.0, 0.0),
+            b: Vec3::new(1e300, 0.0, 0.0),
+            color: Rgb(1, 1, 1),
+            edge: false,
+            faint: false,
+            weight: 255,
+        });
         for w in [1, 2, 300] {
             let r = rasterize_bim(&s, &top_view(w), Rgb(255, 255, 255), &BimShade { ao_reach: Some(f64::NAN), ..BimShade::default() });
             assert!(r.width >= 1);

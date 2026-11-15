@@ -2245,16 +2245,49 @@ struct Packing {
     physical: bool,
     layers: usize,
     extra: bool,
-    /// Opaque surfaces' edges in their own colour, drawn three times (as they are, a pixel to
-    /// the right, a pixel up: the shader nudges the copies), so every run is at least two
-    /// pixels wide on screen and none has a dark outline (the Systems view).
+    /// Opaque surfaces' edges in their own colour, drawn several times (as they are and copies
+    /// the shader nudges a pixel or two right, up, left and down, [`line_copies`]), so every run
+    /// is as wide on screen as its weight says (the role's minimum, Q6663; none: two pixels)
+    /// and none has a dark outline (the Systems view).
     own_edges: bool,
 }
 
 /// A line corner's alpha that tells the shader to nudge it a pixel along the view's right, and
-/// up (255: where it is).
+/// up (255: where it is); then left, down, and two pixels right, up, left, down.
 pub const LINE_NUDGE_RIGHT: u8 = 254;
 pub const LINE_NUDGE_UP: u8 = 253;
+pub const LINE_NUDGE_LEFT: u8 = 252;
+pub const LINE_NUDGE_DOWN: u8 = 251;
+pub const LINE_NUDGE_RIGHT2: u8 = 250;
+pub const LINE_NUDGE_UP2: u8 = 249;
+pub const LINE_NUDGE_LEFT2: u8 = 248;
+pub const LINE_NUDGE_DOWN2: u8 = 247;
+
+/// The copies of a Systems view edge of `weight` (quarter pixels, [`Line3::weight`]; 0: two
+/// pixels) that draw it that wide: 1 px one copy, 2 px three (right, up), 3 px five (and
+/// left, down), 4 px seven (two right, two up), 5 px and more nine.
+pub fn line_copies(weight: u8) -> &'static [u8] {
+    const ALL: [u8; 9] = [
+        255,
+        LINE_NUDGE_RIGHT,
+        LINE_NUDGE_UP,
+        LINE_NUDGE_LEFT,
+        LINE_NUDGE_DOWN,
+        LINE_NUDGE_RIGHT2,
+        LINE_NUDGE_UP2,
+        LINE_NUDGE_LEFT2,
+        LINE_NUDGE_DOWN2,
+    ];
+    let px = if weight == 0 { 2 } else { (u32::from(weight) + 2) / 4 };
+    let n = match px {
+        0 | 1 => 1,
+        2 => 3,
+        3 => 5,
+        4 => 7,
+        _ => 9,
+    };
+    ALL.get(..n).unwrap_or(&ALL)
+}
 
 /// One buffer being packed: its vertices (and their second stream), welded, and the 16- and
 /// 32-bit indices that draw them.
@@ -2484,7 +2517,7 @@ impl Pack {
                 (true, false) => dark,
                 _ => l.color,
             };
-            let copies: &[u8] = if own { &[255, LINE_NUDGE_RIGHT, LINE_NUDGE_UP] } else { &[255] };
+            let copies: &[u8] = if own { line_copies(l.weight) } else { &[255] };
             for a in copies {
                 ends.corner(&mut self.lines, seen_lines, &line_bytes_a(rel(l.a), c, *a), &[], weld);
                 ends.corner(&mut self.lines, seen_lines, &line_bytes_a(rel(l.b), c, *a), &[], weld);
@@ -3234,7 +3267,7 @@ mod tests {
         let red = Rgb(200, 30, 20);
         let mut sc = Scene::default();
         let corners = [p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(0.0, 1.0, 0.0)];
-        sc.lines = (0..4).map(|i| Line3 { a: corners[i], b: corners[(i + 1) % 4], color: red, edge: true, faint: i == 3 }).collect();
+        sc.lines = (0..4).map(|i| Line3 { a: corners[i], b: corners[(i + 1) % 4], color: red, edge: true, faint: i == 3, weight: 0 }).collect();
         let pack_with = |own_edges: bool| {
             let how = Packing { style: VisualStyle::ShadedEdges, bg: Rgb(255, 255, 255), physical: false, layers: 0, extra: false, own_edges };
             let mut pack = Pack::new(true, false);
@@ -3256,6 +3289,35 @@ mod tests {
         assert!(plain.iter().all(|c| c[3] == 255 && c[..3] != [red.0, red.1, red.2]), "Shaded with Edges: dark or faint ink");
     }
 
+    /// A Systems view edge's copies follow its weight (Q6663): a main's 4 px edge seven
+    /// copies, a 1 px branch edge one, an edge with no weight the three of two pixels; each
+    /// nudge code once.
+    #[test]
+    fn systems_edges_are_copied_as_wide_as_their_weight() {
+        use super::*;
+        use cadaddy_render::shade::Line3;
+        let p = Vec3::new;
+        let red = Rgb(200, 30, 20);
+        let copies_of = |weight: u8| {
+            let mut sc = Scene::default();
+            sc.lines = vec![Line3 { a: p(0.0, 0.0, 0.0), b: p(1.0, 0.0, 0.0), color: red, edge: true, faint: false, weight }];
+            let how = Packing { style: VisualStyle::ShadedEdges, bg: Rgb(255, 255, 255), physical: false, layers: 0, extra: false, own_edges: true };
+            let mut pack = Pack::new(true, false);
+            pack.emit(&how, &mut Materials::default(), &sc, 0, 0..0, 0..1, Vec3::ZERO);
+            let v = LINE_VERTEX_SIZE as usize;
+            let mut alphas: Vec<u8> = pack.lines.verts.chunks(v).filter_map(|c| c.get(15).copied()).collect();
+            alphas.sort_unstable();
+            alphas.dedup();
+            alphas
+        };
+        assert_eq!(copies_of(0).len(), 3, "no weight: two pixels");
+        assert_eq!(copies_of(4), vec![255], "1 px: the line alone");
+        assert_eq!(copies_of(16).len(), 7, "4 px");
+        assert_eq!(copies_of(12).len(), 5, "3 px");
+        assert_eq!(copies_of(255).len(), 9, "the widest");
+        assert_eq!(line_copies(16), &[255, LINE_NUDGE_RIGHT, LINE_NUDGE_UP, LINE_NUDGE_LEFT, LINE_NUDGE_DOWN, LINE_NUDGE_RIGHT2, LINE_NUDGE_UP2]);
+    }
+
     /// Corners weld only when every value is the same: a flat quad's two triangles share their
     /// diagonal (4 vertices, not 6), a triangle across a crease shares none (its normal differs),
     /// a line loop's ends are shared. Each run counts from its own first vertex (or, without a
@@ -3275,7 +3337,7 @@ mod tests {
             Tri::plain([p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(2.0, 0.5, 1.0)], red),
         ];
         let corners = [p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(0.0, 1.0, 0.0)];
-        sc.lines = (0..4).map(|i| Line3 { a: corners[i], b: corners[(i + 1) % 4], color: red, edge: false, faint: false }).collect();
+        sc.lines = (0..4).map(|i| Line3 { a: corners[i], b: corners[(i + 1) % 4], color: red, edge: false, faint: false, weight: 0 }).collect();
         let how = Packing { style: VisualStyle::Shaded, bg: Rgb(255, 255, 255), physical: false, layers: 0, extra: false, own_edges: false };
         let mut mats = Materials::default();
         let mut pack = Pack::new(true, true);

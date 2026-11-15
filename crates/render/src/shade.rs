@@ -119,6 +119,9 @@ pub struct Line3 {
     /// An edge of a see-through surface (a ghosted wall): the styles that draw edges draw it
     /// faint.
     pub faint: bool,
+    /// How wide the Systems view draws it on screen, quarter pixels, from its object's
+    /// lineweight ([`crate::bimview::weight_of`]); 0: the look's own thinnest run.
+    pub weight: u8,
 }
 
 /// What a shaded view draws.
@@ -257,9 +260,9 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
             }
         }
     };
-    let line = |out: &mut Scene, a: Vec3, b: Vec3, color: Rgb, edge: bool, faint: bool| {
+    let line = |out: &mut Scene, a: Vec3, b: Vec3, color: Rgb, edge: bool, faint: bool, weight: u8| {
         if let Some((a, b)) = crate::live::clip_segment(a, b, &planes) {
-            push_line(out, Line3 { a, b, color, edge, faint: edge && faint });
+            push_line(out, Line3 { a, b, color, edge, faint: edge && faint, weight });
         }
     };
     for e in store.iter() {
@@ -268,6 +271,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
         }
         let (color, surface) = colors.get(&e.handle).copied().unwrap_or((ink, Rgb(255, 255, 255)));
         let faint = d.material_of(e, None).is_some_and(|m| m.opacity < 0.99);
+        let weight = crate::bimview::weight_of(e.common.lineweight);
         out.owner_now = e.handle;
         match &e.kind {
             EntityKind::Mesh(m) => {
@@ -278,7 +282,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 }
                 for (a, b) in m.edges() {
                     if let (Some(a), Some(b)) = (m.vertices.get(a as usize), m.vertices.get(b as usize)) {
-                        line(&mut out, *a, *b, color, true, faint);
+                        line(&mut out, *a, *b, color, true, faint, weight);
                     }
                 }
             }
@@ -293,7 +297,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 for w in cut.wires(tol) {
                     for seg in w.windows(2) {
                         if let [a, b] = seg {
-                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint });
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint, weight });
                         }
                     }
                 }
@@ -308,7 +312,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 for w in so.wires(tol) {
                     for seg in w.windows(2) {
                         if let [a, b] = seg {
-                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint });
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint, weight });
                         }
                     }
                 }
@@ -322,7 +326,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                 for w in sf.wires(tol) {
                     for seg in w.windows(2) {
                         if let [a, b] = seg {
-                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint });
+                            push_line(&mut out, Line3 { a: *a, b: *b, color, edge: true, faint, weight });
                         }
                     }
                 }
@@ -342,7 +346,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                     if f.hidden_edges & (1 << i) == 0
                         && let (Some(p), Some(q)) = (corners.get(i), corners.get((i + 1) % n))
                     {
-                        line(&mut out, *p, *q, color, true, faint);
+                        line(&mut out, *p, *q, color, true, faint, weight);
                     }
                 }
             }
@@ -355,9 +359,9 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
                         if let (Some(p), Some(q)) = (pts.get(i), pts.get((i + 1) % n)) {
                             // A section plane's own outline isn't cut.
                             if matches!(k, EntityKind::SectionPlane(_)) {
-                                push_line(&mut out, Line3 { a: *p, b: *q, color, edge: false, faint: false });
+                                push_line(&mut out, Line3 { a: *p, b: *q, color, edge: false, faint: false, weight });
                             } else {
-                                line(&mut out, *p, *q, color, false, false);
+                                line(&mut out, *p, *q, color, false, false, weight);
                             }
                         }
                     }
@@ -385,7 +389,7 @@ pub fn scene_clipped(d: &Drawing, space: &Space, tol: f64, bg: Rgb, extra_planes
             Kind::Polyline => {
                 for w in pts.windows(2) {
                     if let [a, b] = w {
-                        push_line(&mut out, Line3 { a: lift(a), b: lift(b), color, edge: false, faint: false });
+                        push_line(&mut out, Line3 { a: lift(a), b: lift(b), color, edge: false, faint: false, weight: 0 });
                     }
                 }
             }
@@ -1400,7 +1404,7 @@ mod tests {
         assert_eq!((v.width_px, v.height_px), (1, MAX_SIDE));
         let s = Scene {
             tris: vec![Tri::plain([Vec3::ZERO; 3], Rgb(1, 2, 3))],
-            lines: vec![Line3 { a: Vec3::ZERO, b: Vec3::new(1e300, 0.0, 0.0), color: Rgb(1, 2, 3), edge: false, faint: false }],
+            lines: vec![Line3 { a: Vec3::ZERO, b: Vec3::new(1e300, 0.0, 0.0), color: Rgb(1, 2, 3), edge: false, faint: false, weight: 0 }],
             ..Scene::default()
         };
         let r = rasterize(&s, &ShadeView::new(None, Vec2::ZERO, 10.0, 32, 32), VisualStyle::ShadedEdges, Rgb(9, 9, 9));
