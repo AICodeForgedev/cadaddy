@@ -111,6 +111,52 @@ fn raster_draws_pixels() {
     assert!(pm.pixels().iter().any(|p| p.red() > 200 && p.green() < 60));
 }
 
+/// Q6635: model space built a part at a time and drawn part after part on one canvas is the
+/// whole list's image, with the whole list's bounds; runs of polylines carry on across parts.
+#[test]
+fn parts_drawn_one_after_another_are_the_whole_lists_image() {
+    let mut d = Drawing::new_imperial();
+    for i in 0..1500 {
+        let (x, y) = ((i % 40) as f64 * 3.0, (i / 40) as f64 * 3.0);
+        let color = Color::Index([7, 7, 7, 1, 3][i % 5]);
+        let kind = match i % 4 {
+            0 => EntityKind::Circle(cadaddy_doc::Circle { center: Vec3::new(x, y, 0.0), radius: 1.2 }),
+            1 => EntityKind::Text(cadaddy_doc::Text {
+                insert: Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: 0.8,
+                value: format!("T{i}"),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: Default::default(),
+                valign: Default::default(),
+            }),
+            _ => EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 2.0, y + 1.0, 0.0) }),
+        };
+        d.add(&Space::Model, Common { color, ..Default::default() }, kind).unwrap();
+    }
+    let opts = Options { tolerance: 0.05, ..Default::default() };
+    let whole = build(&d, &Space::Model, &opts);
+    let view = View::fit(&whole.bounds, 300, 200, 0.05);
+    let o = RasterOptions::default();
+    let expected = render(&whole, &view, &o).unwrap();
+    // Small parts (some serial, some on all cores), and one part bigger than the drawing.
+    for batch in [7, 600, 1000, 5000] {
+        let (mut bounds, mut parts) = (cadaddy_geom::Bounds2::EMPTY, 0);
+        let mut canvas = raster::Canvas::new(&view, &o).unwrap();
+        build_each(&d, &Space::Model, &opts, batch, |l| {
+            bounds = bounds.union(&l.bounds);
+            parts += 1;
+            canvas.draw(l);
+        });
+        assert_eq!(parts, 1500usize.div_ceil(batch).max(1), "batch {batch}");
+        assert_eq!(bounds, whole.bounds, "batch {batch}");
+        assert!(canvas.finish().data() == expected.data(), "batch {batch}: the parts drew another image");
+    }
+}
+
 #[test]
 fn raster_rejects_bad_size() {
     let l = DisplayList::default();
