@@ -48,6 +48,7 @@ mod emtsize;
 mod equip_mounting;
 mod equipcircuit;
 mod exterior;
+mod famatrix;
 mod fawiring;
 mod feederfollow;
 mod feederwire;
