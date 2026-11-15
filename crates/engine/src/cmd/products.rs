@@ -878,7 +878,7 @@ fn switch_config(mark: &str, kind: &str, name: &str, mates: usize) -> (&'static 
         },
     };
     let dimmer = letters.contains('D') || kind.to_ascii_lowercase().contains("dimmer") || name.to_ascii_uppercase().contains("DIMMER");
-    (config, dimmer, matches!(ways.as_str(), "1" | "2" | "3" | "4"))
+    (config, dimmer, ways.len() == 1 && ways.bytes().all(|b| (b'1'..=b'4').contains(&b)))
 }
 
 /// What an element's product is ([`product_kind`]).
