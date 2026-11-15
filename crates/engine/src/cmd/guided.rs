@@ -27230,7 +27230,8 @@ fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crat
             if fed.notes.is_empty() { String::new() } else { format!(" ({})", fed.notes.iter().take(6).cloned().collect::<Vec<_>>().join("; ")) }
         )
     };
-    result["typical_feeds"] = json!({"by_label": fed.by_label, "proposed": fed.proposed, "recorded": fed.recorded, "unfed": fed.unfed, "notes": fed.notes});
+    result["typical_feeds"] =
+        json!({"by_label": fed.by_label, "proposed": fed.proposed, "recorded": fed.recorded, "unfed": fed.unfed, "notes": fed.notes});
     let n = runs.len();
     build_new_mep(s, sp, runs, &BTreeSet::new())?;
     report_progress(s, json!({"step": "feeder routes"}), &line);

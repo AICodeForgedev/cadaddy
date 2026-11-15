@@ -3408,7 +3408,9 @@ const PROPOSED_BASIS: &str = "proposed:";
 fn parse_recorded_feed(text: &str, copies: &BTreeMap<String, usize>, sources: &BTreeSet<String>) -> Option<RecordedFeed> {
     let words: Vec<String> = text
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')' | ';' | ':' | '←' | '<'))
-        .map(|w| w.trim_end_matches("'s").trim_end_matches("\u{2019}s").trim_matches(|c: char| c == '\'' || c == '"' || c == '.').to_ascii_uppercase())
+        .map(|w| {
+            w.trim_end_matches("'s").trim_end_matches("\u{2019}s").trim_matches(|c: char| c == '\'' || c == '"' || c == '.').to_ascii_uppercase()
+        })
         .filter(|w| !w.is_empty())
         .take(64)
         .collect();
@@ -3427,11 +3429,11 @@ fn parse_recorded_feed(text: &str, copies: &BTreeMap<String, usize>, sources: &B
         return Some(RecordedFeed::Source { panel: p.clone(), circuit, tag });
     }
     // A breaker as a plan letters it: `DP1-3`.
-    words
-        .iter()
-        .filter_map(|w| breaker_label(w))
-        .find(|(p, _)| sources.contains(p))
-        .map(|(panel, n)| RecordedFeed::Source { panel, circuit: Some(n), tag })
+    words.iter().filter_map(|w| breaker_label(w)).find(|(p, _)| sources.contains(p)).map(|(panel, n)| RecordedFeed::Source {
+        panel,
+        circuit: Some(n),
+        tag,
+    })
 }
 
 /// The chains a typical panel's copies' recorded feeds make (Q6664), each with the feeder that
@@ -3450,7 +3452,8 @@ fn recorded_chains(sp: &cadaddy_walk3d::BuildingSpec, fam: &[usize], feeders: &[
     for &e in fam {
         *count.entry(tag_of(e).to_ascii_uppercase()).or_default() += 1;
     }
-    let copies: BTreeMap<String, usize> = fam.iter().map(|&e| (tag_of(e).to_ascii_uppercase(), e)).filter(|(t, _)| count.get(t) == Some(&1)).collect();
+    let copies: BTreeMap<String, usize> =
+        fam.iter().map(|&e| (tag_of(e).to_ascii_uppercase(), e)).filter(|(t, _)| count.get(t) == Some(&1)).collect();
     let sources: BTreeSet<String> = feeders.iter().filter_map(|&i| sp.mep.feeders.get(i)).map(|f| f.from.trim().to_ascii_uppercase()).collect();
     let mut said = 0usize;
     let mut say = |notes: &mut Vec<String>, n: String| {
@@ -3556,7 +3559,10 @@ fn recorded_chains(sp: &cadaddy_walk3d::BuildingSpec, fam: &[usize], feeders: &[
         .map(|(&e, _)| tag_of(e))
         .collect();
     if !stranded.is_empty() {
-        say(notes, format!("{}: recorded fed through a copy no recorded stack reaches", stranded.iter().take(6).copied().collect::<Vec<_>>().join(", ")));
+        say(
+            notes,
+            format!("{}: recorded fed through a copy no recorded stack reaches", stranded.iter().take(6).copied().collect::<Vec<_>>().join(", ")),
+        );
     }
     out
 }
@@ -4544,13 +4550,15 @@ mod feeder_route_tests {
         // One feeder per stack from its breaker, one link per feed-through in the feed's direction.
         assert_eq!(laid(&sp), BTreeSet::from([STACK_1_FROM_P1.to_string(), STACK_2_FROM_P2.to_string()]));
         let into = typical_feeder_in(&sp);
-        let feeder_of = |t: &str| sp.mep.equipment.iter().position(|e| e.tag == t).and_then(|i| into.get(&i)).map(|&f| sp.mep.feeders[f].from.clone());
+        let feeder_of =
+            |t: &str| sp.mep.equipment.iter().position(|e| e.tag == t).and_then(|i| into.get(&i)).map(|&f| sp.mep.feeders[f].from.clone());
         assert_eq!((feeder_of("U-301").as_deref(), feeder_of("U-102").as_deref()), (Some("P1"), Some("P2")));
 
         // Recorded on each copy in CADaddy's own words, kept as the model's feed data.
         let rep = record_typical_feeds(&mut sp);
         assert_eq!((rep.recorded, rep.by_label, rep.proposed, rep.unfed), (6, 0, 0, 0), "{rep:?}");
-        let fed_by = |sp: &cadaddy_walk3d::BuildingSpec, t: &str| sp.mep.equipment.iter().find(|e| e.tag == t).and_then(|e| e.properties.get(FED_BY)).cloned();
+        let fed_by =
+            |sp: &cadaddy_walk3d::BuildingSpec, t: &str| sp.mep.equipment.iter().find(|e| e.tag == t).and_then(|e| e.properties.get(FED_BY)).cloned();
         assert_eq!(fed_by(&sp, "U-201").as_deref(), Some("U-101's feed-through lugs (feeder 604 from P1 circuit 1)"));
         assert_eq!(fed_by(&sp, "U-302").as_deref(), Some("feeder 604 from P2 circuit 1"));
         // The recorded feed alone (FED BY, as a model made elsewhere carries it) gives the same.
@@ -4599,7 +4607,10 @@ mod feeder_route_tests {
         assert!(notes.is_empty(), "{notes:?}");
         let tags = |f: &TypicalFeed| f.chain.iter().map(|&e| sp.mep.equipment[e].tag.clone()).collect::<Vec<_>>();
         let by_label = feeds.iter().find(|f| f.label.is_some()).expect("by its label");
-        assert_eq!((sp.mep.feeders[by_label.feeder].from.as_str(), tags(by_label)), ("P1", vec!["U-101".to_string(), "U-201".into(), "U-301".into()]));
+        assert_eq!(
+            (sp.mep.feeders[by_label.feeder].from.as_str(), tags(by_label)),
+            ("P1", vec!["U-101".to_string(), "U-201".into(), "U-301".into()])
+        );
         let rest = feeds.iter().find(|f| f.label.is_none()).expect("the rest");
         assert_eq!(sp.mep.feeders[rest.feeder].from, "P2");
         assert!(!rest.recorded);

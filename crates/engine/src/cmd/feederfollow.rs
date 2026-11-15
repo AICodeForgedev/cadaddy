@@ -651,7 +651,9 @@ mod tests {
     fn two_stacks() -> BuildingSpec {
         let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
         for (k, n) in ["Level 1", "Level 2", "Level 3"].iter().enumerate() {
-            sp.levels.push(serde_json::from_value(json!({"name": n, "elevation_ft": 10.0 * k as f64, "height_ft": 10.0, "ceiling_ft": 9.0})).expect("level"));
+            sp.levels.push(
+                serde_json::from_value(json!({"name": n, "elevation_ft": 10.0 * k as f64, "height_ft": 10.0, "ceiling_ft": 9.0})).expect("level"),
+            );
         }
         sp.mep.equipment = vec![gear("P1", "Level 1", [3100.0, 100.0]), gear("P2", "Level 3", [900.0, 100.0])];
         for level in 1..=3 {

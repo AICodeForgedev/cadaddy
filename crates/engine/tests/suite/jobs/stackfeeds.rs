@@ -109,7 +109,8 @@ fn reroute_lays_one_feeder_per_stack_and_each_feed_through_in_the_feeds_directio
     assert_eq!(links, as_fed(), "{laid:#?}");
     // gear.list: each copy fed once, by the feeder of its own source.
     let g = s.execute("gear.list", &json!({})).expect("gear");
-    let fed: Vec<&Value> = g["gear"].as_array().map(|v| v.iter().filter(|e| e["tag"].as_str().is_some_and(|t| t.starts_with("U-"))).collect()).unwrap_or_default();
+    let fed: Vec<&Value> =
+        g["gear"].as_array().map(|v| v.iter().filter(|e| e["tag"].as_str().is_some_and(|t| t.starts_with("U-"))).collect()).unwrap_or_default();
     assert_eq!(fed.len(), 6);
     assert!(fed.iter().all(|e| e["feeders_in"].as_array().map_or(0, Vec::len) == 1), "{g}");
 }
