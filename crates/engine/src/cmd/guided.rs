@@ -27496,6 +27496,23 @@ fn equipment_step(
     panels: &[String],
     result: &mut Value,
 ) -> crate::Result<()> {
+    let read = |f: &str| {
+        crate::readfile::read(f).map_err(|e| e.to_string()).and_then(|b| super::spec_import::pdf_text(&b, f).map_err(|e| e.to_string())).ok()
+    };
+    equipment_step_reading(s, job, pages, types, panels, result, &read)
+}
+
+/// [`equipment_step`] with the submittals' text read by `read` (a file's path → its text, or
+/// none: unreadable).
+fn equipment_step_reading(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    types: &[super::gearbuild::FeederType],
+    panels: &[String],
+    result: &mut Value,
+    read: &dyn Fn(&str) -> Option<String>,
+) -> crate::Result<()> {
     use super::equipsub;
     let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
     let mut loads: Vec<equipsub::OnelineLoad> = Vec::new();
@@ -27513,14 +27530,33 @@ fn equipment_step(
     for root in &job.submittals {
         all_pdfs(std::path::Path::new(root.trim()), &mut files, 0);
     }
-    // And the equipment a panel schedule feeds by tag (`GUESTROOM PTAC-1` on 20A/2P, #12) that has
-    // a submittal: its breaker the drawings' protection, its branch wire the conductors.
-    let mut branch_wire: BTreeMap<String, String> = BTreeMap::new();
-    let has_submittal = |tag: &str| {
-        equipsub::stem(tag).is_some_and(|st| {
-            files.iter().any(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
-        })
+    // A load's submittals: those whose file name has its tag's letters (`LIFT-7` → `LIFT`: the
+    // whole file is its), then those whose name has its kind's words (`EXHAUST FAN` for an
+    // exhaust fan: a submittal of several units, only its own pages count). Latest revision first.
+    let kind_words = |tag: &str| -> Vec<String> {
+        let kind = sp.mep.equipment.iter().find(|q| q.tag.eq_ignore_ascii_case(tag)).map(|q| q.kind.to_ascii_lowercase()).unwrap_or_default();
+        match rule.submittal_kind_words.get(&kind) {
+            Some(w) => w.iter().map(|w| w.to_ascii_uppercase()).collect(),
+            None => kind.split('_').filter(|w| w.len() >= 3).map(str::to_ascii_uppercase).collect(),
+        }
     };
+    let file_name = |f: &str| std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().to_ascii_uppercase()).unwrap_or_default();
+    let candidates = |tag: &str| -> Vec<(String, bool)> {
+        let st = equipsub::stem(tag);
+        let words = kind_words(tag);
+        let mut own: Vec<&String> = files.iter().filter(|f| st.as_ref().is_some_and(|st| file_name(f).contains(st.as_str()))).collect();
+        let mut kind: Vec<&String> = files.iter().filter(|f| !own.contains(f) && words.iter().any(|w| file_name(f).contains(w.as_str()))).collect();
+        own.sort_by(|a, b| equipsub::revision(b).cmp(&equipsub::revision(a)).then(a.cmp(b)));
+        kind.sort_by(|a, b| equipsub::revision(b).cmp(&equipsub::revision(a)).then(a.cmp(b)));
+        own.into_iter().map(|f| (f.clone(), true)).chain(kind.into_iter().map(|f| (f.clone(), false))).take(MAX_GEAR_SUBMITTALS).collect()
+    };
+    // And the equipment a panel schedule feeds by tag (`UNIT PTAC-7` on 20A/2P, #12, `EF-9`
+    // on 20A/1P) that has a submittal: its breaker the drawings' protection, its branch wire the
+    // conductors, its panel and circuit.
+    let mut branch_wire: BTreeMap<String, String> = BTreeMap::new();
+    let mut branch_row: BTreeMap<String, (String, String)> = BTreeMap::new();
+    // The one-line's loads keep their record with or without a submittal (Validate reads them).
+    let on_oneline: BTreeSet<String> = loads.iter().map(|l| l.tag.to_ascii_uppercase()).collect();
     for p in sp.mep.panel_schedules.iter().take(MAX_EQUIPMENT_LOADS) {
         for c in &p.circuits {
             let up = c.description.to_ascii_uppercase();
@@ -27532,21 +27568,36 @@ fn equipment_step(
                 continue;
             };
             let breaker = c.breaker.trim().trim_end_matches(['A', 'a']).trim();
-            if breaker.parse::<f64>().is_err() || c.poles == 0 || loads.iter().any(|x| x.tag.eq_ignore_ascii_case(tag)) || !has_submittal(tag) {
+            if breaker.parse::<f64>().is_err() || c.poles == 0 || loads.iter().any(|x| x.tag.eq_ignore_ascii_case(tag)) || candidates(tag).is_empty()
+            {
                 continue;
             }
             loads.push(equipsub::OnelineLoad { tag: tag.to_string(), feeder: String::new(), ocpd: format!("{breaker}A/{}P", c.poles) });
             branch_wire.insert(tag.to_string(), c.wire.trim().trim_start_matches('#').to_string());
+            // Its circuit as the plans label it (`E-36,38`: a breaker of two poles takes two).
+            let circuit = c.number.trim().parse::<u32>().ok().map(|n| {
+                let ns: Vec<String> = (0..c.poles.clamp(1, 3)).map(|k| (n + 2 * k).to_string()).collect();
+                format!("{}-{}", p.panel, ns.join(","))
+            });
+            branch_row.insert(tag.to_string(), (p.panel.clone(), circuit.unwrap_or_default()));
         }
     }
     if loads.is_empty() {
         return Ok(());
     }
+    let cands: BTreeMap<String, Vec<(String, bool)>> = loads.iter().take(MAX_EQUIPMENT_LOADS).map(|l| (l.tag.clone(), candidates(&l.tag))).collect();
+    // Each submittal's text, read once.
+    let mut texts: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let disc = super::equipdisc::Rule::read();
     let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
     let mut asked = 0usize;
     let mut conflicts_all: Vec<(String, equipsub::Conflict)> = Vec::new();
+    // Each load's lacks (where on the plans) and what was built for them.
+    let mut lacks_of: BTreeMap<String, Vec<equipsub::Lack>> = BTreeMap::new();
+    let mut built_lacks: Vec<String> = Vec::new();
     for l in loads.iter().take(MAX_EQUIPMENT_LOADS) {
         let (description, source_panel) = equipsub::schedule_row(&sp, &l.tag).unwrap_or_default();
+        let source_panel = if source_panel.is_empty() { branch_row.get(&l.tag).map(|r| r.0.clone()).unwrap_or_default() } else { source_panel };
         let mut e = cadaddy_walk3d::EquipmentElectrical {
             tag: l.tag.clone(),
             description,
@@ -27555,33 +27606,46 @@ fn equipment_step(
             feeder: l.feeder.clone(),
             ..Default::default()
         };
-        // Its submittals, the latest revision first.
-        let Some(st) = equipsub::stem(&l.tag) else { continue };
-        let mut mine: Vec<&String> = files
-            .iter()
-            .filter(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
-            .collect();
-        mine.sort_by(|a, b| equipsub::revision(b).cmp(&equipsub::revision(a)).then(a.cmp(b)));
         let mut scanned: Vec<String> = Vec::new();
-        for f in mine.iter().take(MAX_GEAR_SUBMITTALS) {
+        let mut named = false;
+        let mut own_file = false;
+        for (f, own) in cands.get(&l.tag).cloned().unwrap_or_default() {
             let name = std::path::Path::new(f.as_str()).file_name().map_or_else(|| f.to_string(), |n| n.to_string_lossy().to_string());
-            let Ok(text) = crate::readfile::read(f.as_str())
-                .map_err(|e| e.to_string())
-                .and_then(|b| super::spec_import::pdf_text(&b, f).map_err(|e| e.to_string()))
-            else {
+            let text = texts.entry(f.clone()).or_insert_with(|| read(f.as_str())).clone();
+            let Some(text) = text else { continue };
+            // Its own pages (those naming it) first; the whole file only when it is its own.
+            let mine = equipsub::tag_pages(&text, &l.tag);
+            if mine.is_empty() && !own {
                 continue;
-            };
+            }
+            named = true;
+            own_file |= own;
             if e.status.is_empty() {
                 e.status = equipsub::review_status(&text);
             }
-            // A submittal of several models: the tag's own (its item line), else the text's data.
-            let got = equipsub::submittal_for_model(&text, &l.tag).filter(equipsub::has_data).unwrap_or_else(|| equipsub::text_electrical(&text));
+            // A submittal of several models: the tag's own (its item line), else the text's data:
+            // its pages', then (its own file) the whole text's for what they don't say.
+            let mut got = equipsub::submittal_for_model(&text, &l.tag).filter(equipsub::has_data).unwrap_or_else(|| equipsub::text_electrical(&mine));
+            if own {
+                equipsub::merge(&mut got, &equipsub::text_electrical(&text));
+            }
             if equipsub::has_data(&got) {
                 equipsub::merge(&mut e, &got);
+                equipsub::text_notes(&mut e, if own { &text } else { &mine }, &rule);
                 e.source = format!("submittal {name}");
                 break;
             }
-            scanned.push(name);
+            // Its own file with no data in its text: a scan, for an agent to read. A kind's
+            // submittal that names it with no data on its pages (a cover's list, a motor's own
+            // amps) is no scan.
+            if own {
+                scanned.push(name);
+            }
+        }
+        // A kind's submittal that names no page of it, or names it with no data, isn't one to
+        // check it against: nothing to say of it.
+        if !on_oneline.contains(&l.tag.to_ascii_uppercase()) && (!named || (!own_file && !equipsub::has_data(&e))) {
+            continue;
         }
         if !equipsub::has_data(&e) {
             let key = format!("equip:{}", l.tag.to_ascii_uppercase());
@@ -27620,6 +27684,19 @@ fn equipment_step(
         let sent_back = e.status.to_ascii_lowercase().contains("resubmit") || e.status.to_ascii_lowercase().contains("rejected");
         if !sent_back {
             equipsub::correct(&mut e, conductors, &rule);
+        }
+        // Around it on its plans (Q6646): its disconnect within sight, the service receptacle and
+        // data connection its submittal asks for; what is missing is built beside it.
+        if equipsub::has_data(&e) {
+            let lacks = equipsub::lacking(&sp, &e, &rule, &disc);
+            if !lacks.is_empty() {
+                conflicts_all.extend(equipsub::lack_conflicts(&e, &lacks, &rule).into_iter().map(|c| (l.tag.clone(), c)));
+                if !sent_back {
+                    let circuit = branch_row.get(&l.tag).map(|r| r.1.clone());
+                    built_lacks.extend(equipsub::build_lacking(&mut sp, &e, &lacks, circuit.as_deref(), &rule));
+                }
+                lacks_of.insert(l.tag.clone(), lacks);
+            }
         }
         rows.push(e);
     }
@@ -27687,13 +27764,31 @@ fn equipment_step(
             .map_or_else(|| " (change unpriced)".to_string(), |m| format!(" (change ${m:.2}, {:.2} h)", e.change_labor_hours.unwrap_or(0.0)));
         // Each of its conflicts the correction settles (all but a fault current study), counted
         // corrected (Q6216).
-        let n = conflicts_all.iter().filter(|(t, c)| *t == e.tag && c.check != "sccr").count().max(1);
+        let n = conflicts_all.iter().filter(|(t, c)| *t == e.tag && equipsub::CORRECTED_CHECKS.contains(&c.check)).count().max(1);
         job.add_conflict(
             StageName::BimBuild,
             &format!("Equipment {} built to its submittal: {}{cost}", e.tag, parts.join(", ")),
             &format!("{} [{}]", e.correction_reason, e.correction_rule),
             2,
             vec!["The drawings' values stay beside it on the schedule row and the record".into()],
+            n,
+            n,
+        );
+    }
+    // The connections missing around a unit, built beside it: each of its lacks counted corrected.
+    let lack_built = |tag: &str| lacks_of.contains_key(tag) && rows.iter().any(|e| e.tag == tag && !sent_back(e));
+    for (tag, lacks) in &lacks_of {
+        if !lack_built(tag) {
+            continue;
+        }
+        let n = conflicts_all.iter().filter(|(t, c)| t == tag && equipsub::LACK_CHECKS.contains(&c.check)).count().max(1);
+        let what: Vec<&str> = lacks.iter().map(|l| l.check).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        job.add_conflict(
+            StageName::BimBuild,
+            &format!("Equipment {tag}: {} built beside it ({} placed)", what.join(", "), lacks.len()),
+            "its submittal and the code call for them; the plans draw none within reach: built, inferred, the rule on each",
+            2,
+            vec!["Each object carries \"not on the drawings\" as its design value and the rule".into()],
             n,
             n,
         );
@@ -27770,11 +27865,14 @@ fn equipment_step(
             false,
         );
     }
-    // What can't be built (a fault current study): an RFI (once) and a finding.
+    // Every difference between a submittal and the drawings is an RFI (once) with both documents
+    // cited (Q6646), the corrected ones too: what the model is built to meanwhile is its
+    // assumption. What no correction settles (a fault current study) is a finding as well.
     let mut rfis = Vec::new();
-    for (tag, c) in
-        conflicts_all.iter().filter(|(tag, c)| c.check == "sccr" || !rows.iter().any(|e| e.tag == *tag && !e.correction_reason.is_empty()))
-    {
+    let corrected_tag = |tag: &str| rows.iter().any(|e| e.tag == tag && !e.correction_reason.is_empty());
+    for (tag, c) in &conflicts_all {
+        let settled =
+            (equipsub::CORRECTED_CHECKS.contains(&c.check) && corrected_tag(tag)) || (equipsub::LACK_CHECKS.contains(&c.check) && lack_built(tag));
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in format!("{tag}|{}|{}", c.check, c.message).bytes() {
             h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
@@ -27782,17 +27880,34 @@ fn equipment_step(
         let id = format!("RFI-E{:08x}", h as u32);
         if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
             let kind = cadaddy_walk3d::RfiKind::EquipmentElectrical;
+            let side = |w: &str| {
+                let (document, says) = w.split_once(": ").unwrap_or((w, ""));
+                cadaddy_walk3d::RfiSide { document: document.to_string(), says: says.to_string() }
+            };
+            // Where on the plans, for what is missing around a unit.
+            let at = lacks_of.get(tag).filter(|_| equipsub::LACK_CHECKS.contains(&c.check)).and_then(|ls| ls.iter().find(|l| l.check == c.check));
             sp.rfis.push(cadaddy_walk3d::Rfi {
                 id: id.clone(),
                 kind: Some(kind),
                 severity: kind.severity(),
+                level: at.map(|l| l.level.clone()).unwrap_or_default(),
+                at: at.map_or([0.0; 2], |l| [(l.lo[0] + l.hi[0]) / 2.0, (l.lo[1] + l.hi[1]) / 2.0]),
                 about: format!("{tag} ({})", c.check),
                 issue: format!("Submittal against the drawings: {}", c.message),
-                assumed: "The model follows the submittal; the drawings' value is kept beside it until answered.".into(),
+                assumed: if settled {
+                    format!("The model is built to the submittal meanwhile ({}); the drawings' value is kept beside it until answered.", c.fix)
+                } else {
+                    "The model follows the submittal; the drawings' value is kept beside it until answered.".into()
+                },
                 proposed: Some(c.fix.clone()),
+                topic: format!("equipment: {}", c.check),
+                sides: vec![side(&c.drawings), side(&c.submittal)],
                 ..cadaddy_walk3d::Rfi::default()
             });
             rfis.push(id);
+        }
+        if settled {
+            continue;
         }
         job.add_conflict(
             StageName::BimBuild,
@@ -27814,13 +27929,14 @@ fn equipment_step(
     );
     sp.mep.equipment_electrical = rows;
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
-    if !built_extra.is_empty() || !built_silent.is_empty() {
+    if !built_extra.is_empty() || !built_silent.is_empty() || !built_lacks.is_empty() {
         super::propfill::rebuild_devices(s, "bim_build")?;
     }
     report_progress(s, json!({"step": "equipment connections"}), &line);
     s.echo(line);
     let corrected = sp.mep.equipment_electrical.iter().filter(|e| !e.correction_reason.is_empty()).count();
-    result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "corrected": corrected, "rfis": rfis, "asked": asked});
+    result["equipment_electrical"] =
+        json!({"conflicts": conflicts_all.len(), "corrected": corrected, "rfis": rfis, "asked": asked, "built_beside": built_lacks});
     Ok(())
 }
 
@@ -27859,7 +27975,7 @@ fn equipment_question(job: &mut GuidedJob, tag: &str, e: &cadaddy_walk3d::Equipm
         id: qid,
         stage: StageName::BimBuild,
         question: format!(
-            "{text}: its submittal is scanned (no text). Read its electrical data from {} (the latest approved revision; the data sheet: volts/phase, nameplate or full-load amps, minimum circuit amps, the most protection it allows and fuse class, acceleration amps, HP/kW, the controller's SCCR) and answer {{volts, phase, nameplate_a, fla, mca, max_ocpd_a, fuse_class, accel_a, hp, kw, sccr_a, source: \"<file> p.<n>\"}}. The drawings give it {} on feeder {} from {}.",
+            "{text}: its submittal is scanned (no text). Read its electrical data from {} (the latest approved revision; the data sheet: volts/phase, nameplate or full-load amps, minimum circuit amps, the most protection it allows and fuse class, acceleration amps, HP/kW, the controller's SCCR; its notes: copper conductors only, the least wire size, a disconnect on or in the unit, a service receptacle or a data connection it asks for) and answer {{volts, phase, nameplate_a, fla, mca, max_ocpd_a, fuse_class, accel_a, hp, kw, sccr_a, copper_only, min_wire, unit_disconnect, needs_receptacle, needs_data, source: \"<file> p.<n>\"}}. The drawings give it {} on feeder {} from {}.",
             files.join("; "),
             if e.drawing_ocpd.is_empty() { "no protection read" } else { &e.drawing_ocpd },
             if e.feeder.is_empty() { "?" } else { &e.feeder },
@@ -27880,7 +27996,8 @@ fn equipment_question(job: &mut GuidedJob, tag: &str, e: &cadaddy_walk3d::Equipm
         answer_schema: Some(json!({"type": "object", "properties": {
             "volts": {"type": "number"}, "phase": {"type": "number"}, "nameplate_a": {"type": "number"}, "fla": {"type": "number"}, "mca": {"type": "number"},
             "max_ocpd_a": {"type": "number"}, "fuse_class": {"type": "string"}, "accel_a": {"type": "number"}, "hp": {"type": "number"}, "kw": {"type": "number"},
-            "sccr_a": {"type": "number"}, "source": {"type": "string"}}})),
+            "sccr_a": {"type": "number"}, "copper_only": {"type": "boolean"}, "min_wire": {"type": "string"}, "unit_disconnect": {"type": "boolean"},
+            "needs_receptacle": {"type": "boolean"}, "needs_data": {"type": "boolean"}, "source": {"type": "string"}}})),
         answer: None,
         answered_by: None,
         answered_at: None,
@@ -35818,6 +35935,102 @@ mod ckpt_tests {
 
 #[cfg(test)]
 mod tests {
+    /// fix-equipment-submittal-ratings-not-compared (Q6646): the job compared an equipment
+    /// submittal with the drawings only on its controller's SCCR, and only for tags of three
+    /// letters or more whose submittal's file name had them. A made-up set: panel QP feeds an
+    /// exhaust fan EF-9 on 20A/1P and a heat pump HP-9 on 25A/2P (and HP-8 beside it on 20A/2P,
+    /// which no submittal names); the fans' submittal names EF-9 in a list on its cover and on its
+    /// own page (MCA 4, MOP 15), the split systems' names HP-9 (MCA 19, MOPA 20); a disconnect
+    /// drawn for EF-9, and one for HP-8 beside HP-8 (none for HP-9). The RFI list must raise: EF-9
+    /// breaker above MOP, HP-9 breaker above MOPA, HP-9 no disconnect within sight; each with both
+    /// documents; HP-8 is asked nothing.
+    #[test]
+    fn equipment_submittals_are_checked_on_protection_and_disconnect_not_only_sccr() {
+        use super::*;
+        let spec = json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [
+                {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]},
+                {"name": "Roof", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}
+            ],
+            "mep": {
+                "panel_schedules": [{"panel": "QP", "source": "X-601", "circuits": [
+                    {"number": "9", "description": "EF-9", "breaker": "20", "poles": 1, "wire": "12", "source": "X-601"},
+                    {"number": "10", "description": "HP-9", "breaker": "25", "poles": 2, "wire": "10", "source": "X-601"},
+                    {"number": "14", "description": "HP-8", "breaker": "20", "poles": 2, "wire": "12", "source": "X-601"}
+                ]}],
+                "equipment": [
+                    {"tag": "EF-9", "kind": "exhaust_fan", "level": "L1", "min": [120, 120], "max": [132, 132], "height_ft": 1, "title": "FAN SCHEDULE"},
+                    {"tag": "HP-9", "kind": "heat_pump", "level": "Roof", "min": [600, 240], "max": [636, 276], "height_ft": 3, "title": "HEAT PUMP SCHEDULE"},
+                    {"tag": "HP-8", "kind": "heat_pump", "level": "Roof", "min": [672, 240], "max": [708, 276], "height_ft": 3, "title": "HEAT PUMP SCHEDULE"}
+                ]
+            },
+            "tags": [
+                {"id": "device:L1:11.5,10.5", "kind": "equipment_connection", "level": "L1", "at_ft": [11.5, 10.5],
+                 "fields": {"equipment": {"value": "EF-9", "source": "plan"}, "device_type": {"value": "disconnect", "source": "plan"}}},
+                {"id": "device:Roof:60.0,21.5", "kind": "equipment_connection", "level": "Roof", "at_ft": [60.0, 21.5],
+                 "fields": {"device_type": {"value": "disconnect", "source": "plan"}}}
+            ]
+        });
+        let mut s = Session::new();
+        let r = s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
+        assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{r}");
+        // The submittals folder (its files' text given to the step).
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6646-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["Exhaust Fans.pdf", "Split Systems.pdf", "Plumbing Fixtures.pdf"] {
+            std::fs::write(dir.join(f), b"%PDF-1.4").unwrap();
+        }
+        let texts = [
+            (
+                "Exhaust Fans.pdf",
+                "--- page 1 of 3 ---\nSUBMITTAL - PROJECT A\nX NO EXCEPTIONS TAKEN\nUnit Tags: EF-12, 9\n\
+                 --- page 2 of 3 ---\nMark: EF-9\nVoltage/Cycle/Phase   115/60/1\nFLA (Amps)   2.85\nMin. Circuit Ampacity (MCA)   4\nMax. Overcurrent Protection (MOP)   15\n\
+                 --- page 3 of 3 ---\nMark: EF-12\nMin. Circuit Ampacity (MCA)   9\nMax. Overcurrent Protection (MOP)   30\n",
+            ),
+            (
+                "Split Systems.pdf",
+                "--- page 1 of 1 ---\nOutdoor Unit Heat Pump   HP-9\nVoltage, Phase, Cycle   V/Ph/Hz   208-230/1/60\nMCA   A.   19\nMOPA   A.   20\n",
+            ),
+            ("Plumbing Fixtures.pdf", "--- page 1 of 1 ---\nWC-1 water closet\n"),
+        ];
+        let read = |f: &str| texts.iter().find(|(n, _)| f.ends_with(n)).map(|(_, t)| t.to_string());
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        job.submittals = vec![dir.to_string_lossy().to_string()];
+        let mut result = json!({});
+        equipment_step_reading(&mut s, &mut job, &[], &[], &[], &mut result, &read).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
+        let raised: Vec<&str> =
+            sp.rfis.iter().filter(|r| r.kind == Some(cadaddy_walk3d::RfiKind::EquipmentElectrical)).map(|r| r.about.as_str()).collect();
+        for want in ["EF-9 (protection)", "HP-9 (protection)", "HP-9 (disconnect)"] {
+            assert!(raised.contains(&want), "{want} raised: {raised:?} ({result})");
+        }
+        assert!(!raised.iter().any(|a| a.starts_with("HP-8") || a.starts_with("EF-9 (disconnect)")), "{raised:?}");
+        for r in sp.rfis.iter().filter(|r| r.kind == Some(cadaddy_walk3d::RfiKind::EquipmentElectrical)) {
+            assert_eq!(r.sides.len(), 2, "both documents cited: {r:?}");
+            assert!(r.sides.iter().any(|x| x.document.contains("Split Systems.pdf") || x.document.contains("Exhaust Fans.pdf")), "{r:?}");
+        }
+        let hp = sp.rfis.iter().find(|r| r.about == "HP-9 (protection)").unwrap();
+        assert!(hp.issue.contains("25A/2P") && hp.issue.contains("20 A"), "{hp:?}");
+        assert!(hp.sides.iter().any(|x| x.document == "panel QP schedule" && x.says.starts_with("25A/2P")), "{hp:?}");
+        // Corrected, the drawings' value beside it: the breakers, and a disconnect built for HP-9.
+        let row = |t: &str| sp.mep.equipment_electrical.iter().find(|e| e.tag == t).unwrap_or_else(|| panic!("{t} row"));
+        assert_eq!(row("EF-9").corrected_ocpd, "15A/1P");
+        assert_eq!(row("HP-9").corrected_ocpd, "20A/2P");
+        assert!(sp.mep.equipment_electrical.iter().all(|e| e.tag != "HP-8"), "no submittal names HP-8");
+        let built: Vec<&cadaddy_walk3d::tags::ElementTag> =
+            sp.tags.iter().filter(|t| t.fields.get("design_value").is_some_and(|f| f.value == "not on the drawings")).collect();
+        assert_eq!(built.len(), 1, "{built:?}");
+        assert_eq!((built[0].level.as_str(), built[0].fields["equipment"].value.as_str()), ("Roof", "HP-9"));
+        assert_eq!(built[0].fields["circuit"].value, "QP-10,12");
+        assert!(job.stages.iter().all(|st| st.questions.is_empty()), "nothing asked of the units no submittal page names");
+        // rfi.read {apply: true} lists them.
+        let r = s.execute("rfi.read", &json!({"apply": true})).unwrap();
+        assert!(r["counts"]["by_kind"]["equipment_electrical"].as_u64().is_some_and(|n| n >= 3), "{}", r["counts"]);
+    }
+
     /// fix-drawn-gear-placed-by-schedule-text (Q6437): a made-up 12 x 26 ft electrical room whose
     /// electrical plan draws four pieces of gear against its east wall, north to south, each
     /// labelled beside its rectangle (`SWBD MDP`, `PNLBD'DP4'`, `PNLBD 'A'`, `PANEL B`); every
