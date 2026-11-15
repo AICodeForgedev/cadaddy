@@ -199,8 +199,13 @@ pub struct Rules {
     pub shell_floor_opacity: f64,
     pub shell_wall_rgb: [u8; 3],
     pub shell_interior_opacity: f64,
-    /// The Systems view's thinnest run on screen, pixels.
+    /// The Systems view's thinnest run on screen, pixels (a role [`Rules::systems_weights`]
+    /// doesn't name).
     pub systems_min_px: f64,
+    /// The Systems view's thinnest run on screen by its role ([`Role`]: `main` for mains,
+    /// feeders and risers, `branch`, `device` for devices, fixtures and fittings, `equipment`),
+    /// pixels. A run wider than this on screen draws true to scale.
+    pub systems_weights: BTreeMap<String, f64>,
     /// The colour of a system no palette row names (never grey).
     pub systems_other_rgb: [u8; 3],
     /// The Systems view's palette: the first row whose trades hold an element's trade and,
@@ -222,6 +227,10 @@ pub struct SystemColor {
     /// Words of the element's system, name or type, any of which it needs (none: any element
     /// of its trades).
     pub words: Vec<String>,
+    /// How much stronger its runs draw than their role's weight (none: 1), so a project can
+    /// make one trade read strongest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 impl Default for Rules {
@@ -264,6 +273,7 @@ impl Default for Rules {
             shell_wall_rgb: [150, 162, 180],
             shell_interior_opacity: 0.08,
             systems_min_px: 2.0,
+            systems_weights: BTreeMap::new(),
             systems_other_rgb: [212, 172, 0],
             systems_palette: Vec::new(),
         }
@@ -277,14 +287,20 @@ impl Rules {
     }
 
     /// The rules for `d`: the project's (in its building spec, over the built-in ones key by
-    /// key), and whether it has its own.
+    /// key; a map rule such as `systems_weights` entry by entry), and whether it has its own.
     pub fn of(d: &Drawing) -> (Rules, bool) {
         let Some(own) = project(d) else { return (Rules::defaults(), false) };
         let mut v = serde_json::to_value(Rules::defaults()).unwrap_or(Value::Null);
         if let (Some(o), Some(own)) = (v.as_object_mut(), own.as_object()) {
             for (k, x) in own {
-                if o.contains_key(k) {
-                    o.insert(k.clone(), x.clone());
+                match (o.get_mut(k), x) {
+                    (Some(Value::Object(base)), Value::Object(mine)) => {
+                        for (kk, xx) in mine {
+                            base.insert(kk.clone(), xx.clone());
+                        }
+                    }
+                    (Some(slot), _) => *slot = x.clone(),
+                    (None, _) => {}
                 }
             }
             o.insert("source".into(), json!("project"));
@@ -294,6 +310,16 @@ impl Rules {
 
     fn feet(&self, v: f64, d: f64) -> f64 {
         if v.is_finite() && v >= 0.0 { v } else { d }
+    }
+
+    /// How wide the Systems view draws a run of `role` painted by palette row `row` at the
+    /// least, pixels: the role's weight (else the thinnest run's) times the row's.
+    pub fn weight_px(&self, role: Role, row: Option<usize>) -> f64 {
+        let ok = |v: &f64| v.is_finite() && *v > 0.0;
+        let min = Some(self.systems_min_px).filter(ok).unwrap_or(2.0);
+        let base = self.systems_weights.get(role.key()).copied().filter(ok).unwrap_or(min);
+        let k = row.and_then(|i| self.systems_palette.get(i)).and_then(|r| r.weight).filter(ok).unwrap_or(1.0);
+        (base * k).clamp(1.0, cadaddy_render::bimview::MAX_WEIGHT_PX)
     }
 }
 
@@ -367,6 +393,31 @@ pub enum What {
     Light,
     Fixture,
     Other,
+}
+
+/// What a drawn system element is to the Systems view's weights ([`Rules::systems_weights`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// Mains, feeders, trays and risers (any run through a floor but branch circuits').
+    Main,
+    /// Branch circuits, branch ducts and pipes, wire.
+    Branch,
+    /// Devices, lights, fixtures, terminals, heads, boxes and fittings: small solids.
+    Device,
+    /// Gear, panels and equipment.
+    Equipment,
+}
+
+impl Role {
+    /// Its key in the rules' `systems_weights`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Role::Main => "main",
+            Role::Branch => "branch",
+            Role::Device => "device",
+            Role::Equipment => "equipment",
+        }
+    }
 }
 
 impl What {
@@ -480,8 +531,10 @@ struct Plates {
 }
 
 impl Plates {
-    fn add(&mut self, ring: Vec<Vec2>) {
-        for p in &ring {
+    /// A plate: its outer ring, and the box of its whole top (`top`: the ring's alone when
+    /// unknown); the box is what the off-site test reads, so a seam or hole never shrinks it.
+    fn add(&mut self, ring: Vec<Vec2>, top: Option<(Vec2, Vec2)>) {
+        for p in ring.iter().chain(top.iter().flat_map(|(lo, hi)| [lo, hi])) {
             self.lo = Some(self.lo.map_or(*p, |l| Vec2::new(l.x.min(p.x), l.y.min(p.y))));
             self.hi = Some(self.hi.map_or(*p, |h| Vec2::new(h.x.max(p.x), h.y.max(p.y))));
         }
@@ -517,10 +570,11 @@ fn plates_of(d: &Drawing) -> HashMap<String, Plates> {
         }
         let EntityKind::Mesh(m) = &e.kind else { continue };
         let Some(ring) = outer_ring(m) else { continue };
+        let tb = top_box(m);
         let level = super::bspec::made_level(e).unwrap_or_default().to_ascii_uppercase();
-        out.entry(String::new()).or_default().add(ring.clone());
+        out.entry(String::new()).or_default().add(ring.clone(), tb);
         if !level.is_empty() {
-            out.entry(level).or_default().add(ring);
+            out.entry(level).or_default().add(ring, tb);
         }
         if out.len() > MAX_LIST {
             break;
@@ -972,6 +1026,27 @@ impl Scope {
             }
             _ => self.palette_row(e, c).map_or(Paint::Other, Paint::System),
         }
+    }
+
+    /// The weight role of a drawn system element (`None`: the shell, the site and what is not
+    /// a system). A run is a main by its kind (a feeder, a tray, a main duct), by its size
+    /// against the rules' main sizes, or by passing through a floor (a riser or a stack).
+    pub fn role(&self, e: &Entity, c: &Class, w: What) -> Option<Role> {
+        let r = &self.rules;
+        let crossing = || self.crosses(e, c);
+        let main = |m: bool| if m || crossing() { Role::Main } else { Role::Branch };
+        Some(match w {
+            What::Feeder { .. } | What::Tray => Role::Main,
+            What::Duct { main: m } => main(m),
+            What::Pipe { size } => main(size.is_some_and(|z| z >= r.plumbing_main_min_in)),
+            What::FirePipe { main: m, size } => main(m.or_else(|| size.map(|z| z >= r.fire_main_min_in)) == Some(true)),
+            What::Branch | What::Wire => Role::Branch,
+            What::Fitting | What::Box | What::Terminal | What::Head | What::Device | What::Light | What::Fixture | What::ElevatorDisconnect => {
+                Role::Device
+            }
+            What::Gear | What::Panel(_) | What::BigEquipment | What::Equipment | What::ExhaustFan | What::ElevatorEquipment => Role::Equipment,
+            What::Arch | What::Floor | What::Structure | What::Site | What::Piece | What::Cabinet | What::Furniture | What::Other => return None,
+        })
     }
 
     /// The palette row of a system element (`None`: no row names it).
@@ -1577,45 +1652,119 @@ pub fn add_context(out: &mut Drawing, s: &Scope) {
     }
 }
 
-/// A floor mesh's outer edge on plan: its upward faces' edges that no other upward face shares,
-/// joined into rings; the ring with the most area.
-fn outer_ring(m: &cadaddy_doc::Mesh) -> Option<Vec<Vec2>> {
-    let key = |p: Vec3| ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64);
-    let mut edges: HashMap<((i64, i64), (i64, i64)), (Vec2, Vec2, i32)> = HashMap::new();
-    for f in m.faces.iter().take(MAX_SCAN) {
-        let pts: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+/// A mesh's faces that face up (a slab's top), as plan corners: Newell's normal points up.
+fn top_faces(m: &cadaddy_doc::Mesh) -> impl Iterator<Item = Vec<Vec3>> + '_ {
+    m.faces.iter().take(MAX_SCAN).filter_map(|f| {
+        let pts: Vec<Vec3> = f.v.iter().filter_map(|i| m.vertices.get(*i as usize).copied()).filter(|p| p.is_finite()).collect();
         if pts.len() < 3 {
-            continue;
+            return None;
         }
-        // Upward (the top of the slab): the face's normal points up.
         let mut n = Vec3::new(0.0, 0.0, 0.0);
         for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
             n = n + Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
         }
-        if !(n.z > 0.0 && n.z.abs() > 0.9 * n.len()) {
-            continue;
-        }
+        (n.z > 0.0 && n.z.abs() > 0.9 * n.len()).then_some(pts)
+    })
+}
+
+/// The plan box of a floor mesh's top: the whole plate's extent (its outline's), holes and
+/// seams can't shrink it.
+fn top_box(m: &cadaddy_doc::Mesh) -> Option<(Vec2, Vec2)> {
+    let mut b: Option<(Vec2, Vec2)> = None;
+    for p in top_faces(m).flatten() {
+        let q = p.xy();
+        b = Some(b.map_or((q, q), |(lo, hi)| (Vec2::new(lo.x.min(q.x), lo.y.min(q.y)), Vec2::new(hi.x.max(q.x), hi.y.max(q.y)))));
+    }
+    b
+}
+
+/// Corners on a diagonal edge are looked for only while edges × corners stays under this.
+const MAX_SPLIT_WORK: usize = 4_000_000;
+
+/// A floor mesh's outer edge on plan: its upward faces' edges, each split where another upward
+/// face's corner lies on it (the build's rectangles meet at T-junctions: one's side runs past
+/// two others'), the pieces no other upward face shares (the outline and its holes) joined into
+/// rings end to start in the faces' direction; the ring with the most area. A pure function of
+/// the mesh: ordered maps throughout, so the same mesh always gives the same ring (Q6665: hash
+/// order picked a different, partial ring on every call).
+fn outer_ring(m: &cadaddy_doc::Mesh) -> Option<Vec<Vec2>> {
+    type K = (i64, i64);
+    let key = |p: Vec2| -> K { ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64) };
+    let mut corners: BTreeMap<K, Vec2> = BTreeMap::new();
+    let mut directed: Vec<(K, K)> = Vec::new();
+    for pts in top_faces(m) {
         for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
-            let (ka, kb) = (key(*a), key(*b));
-            if ka == kb {
-                continue;
+            let (ka, kb) = (key(a.xy()), key(b.xy()));
+            corners.entry(ka).or_insert(a.xy());
+            corners.entry(kb).or_insert(b.xy());
+            if ka != kb {
+                directed.push((ka, kb));
             }
-            let k = if ka < kb { (ka, kb) } else { (kb, ka) };
-            let slot = edges.entry(k).or_insert((a.xy(), b.xy(), 0));
-            slot.2 += 1;
         }
     }
-    let single: Vec<(Vec2, Vec2)> = edges.values().filter(|e| e.2 == 1).map(|e| (e.0, e.1)).collect();
+    // The corners on each horizontal line (by y) and each vertical line (by x), in order.
+    let mut rows: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    let mut cols: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for k in corners.keys() {
+        rows.entry(k.1).or_default().insert(k.0);
+        cols.entry(k.0).or_default().insert(k.1);
+    }
+    let diagonal = directed.iter().filter(|(a, b)| a.0 != b.0 && a.1 != b.1).count();
+    let split_diagonal = diagonal.saturating_mul(corners.len()) <= MAX_SPLIT_WORK;
+    // Each edge's pieces between the corners on it, counted by the pair (either direction).
+    let mut uses: BTreeMap<(K, K), (K, K, u32)> = BTreeMap::new();
+    let mut put = |a: K, b: K| {
+        let k = if a < b { (a, b) } else { (b, a) };
+        uses.entry(k).or_insert((a, b, 0)).2 += 1;
+    };
+    for &(a, b) in &directed {
+        let mut on: Vec<K> = if a.1 == b.1 {
+            let (lo, hi) = (a.0.min(b.0), a.0.max(b.0));
+            rows.get(&a.1).map(|xs| xs.range(lo + 1..hi).map(|x| (*x, a.1)).collect()).unwrap_or_default()
+        } else if a.0 == b.0 {
+            let (lo, hi) = (a.1.min(b.1), a.1.max(b.1));
+            cols.get(&a.0).map(|ys| ys.range(lo + 1..hi).map(|y| (a.0, *y)).collect()).unwrap_or_default()
+        } else if split_diagonal {
+            let (dx, dy) = (i128::from(b.0 - a.0), i128::from(b.1 - a.1));
+            let l2 = dx * dx + dy * dy;
+            corners
+                .keys()
+                .filter(|c| **c != a && **c != b)
+                .filter(|c| {
+                    let (px, py) = (i128::from(c.0 - a.0), i128::from(c.1 - a.1));
+                    let cross = dx * py - dy * px;
+                    let t = dx * px + dy * py;
+                    // Within a key unit of the line, strictly between its ends.
+                    cross * cross <= l2 && t > 0 && t < l2
+                })
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // In order from `a` to `b`.
+        on.sort_by_key(|c| {
+            let (px, py) = (i128::from(c.0 - a.0), i128::from(c.1 - a.1));
+            px * i128::from(b.0 - a.0) + py * i128::from(b.1 - a.1)
+        });
+        let mut from = a;
+        for c in on.into_iter().chain(std::iter::once(b)) {
+            if c != from {
+                put(from, c);
+            }
+            from = c;
+        }
+    }
+    let single: Vec<(K, K)> = uses.values().filter(|u| u.2 == 1).map(|u| (u.0, u.1)).collect();
     if single.len() < 3 {
         return None;
     }
-    // Join them into rings, end to start.
-    let k2 = |p: Vec2| ((p.x * 1e3).round() as i64, (p.y * 1e3).round() as i64);
-    let mut from: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for (i, (a, b)) in single.iter().enumerate() {
-        from.entry(k2(*a)).or_default().push(i);
-        from.entry(k2(*b)).or_default().push(i);
+    // Join them into rings, each piece's end to the next one's start.
+    let mut out: BTreeMap<K, Vec<usize>> = BTreeMap::new();
+    for (i, (a, _)) in single.iter().enumerate() {
+        out.entry(*a).or_default().push(i);
     }
+    let at = |k: K| corners.get(&k).copied().unwrap_or(Vec2::new(k.0 as f64 / 1e3, k.1 as f64 / 1e3));
     let mut used = vec![false; single.len()];
     let mut best: Option<(f64, Vec<Vec2>)> = None;
     for start in 0..single.len() {
@@ -1626,29 +1775,51 @@ fn outer_ring(m: &cadaddy_doc::Mesh) -> Option<Vec<Vec2>> {
         if let Some(u) = used.get_mut(start) {
             *u = true;
         }
-        let mut ring = vec![a, b];
-        let mut at = b;
+        let mut ring = vec![at(a)];
+        let mut here = b;
         for _ in 0..single.len() {
-            let next = from.get(&k2(at)).and_then(|l| l.iter().copied().find(|i| !used.get(*i).copied().unwrap_or(true)));
+            if here == a {
+                break;
+            }
+            ring.push(at(here));
+            let next = out.get(&here).and_then(|l| l.iter().copied().find(|i| !used.get(*i).copied().unwrap_or(true)));
             let Some(i) = next else { break };
             if let Some(u) = used.get_mut(i) {
                 *u = true;
             }
-            let Some(&(p, q)) = single.get(i) else { break };
-            at = if k2(p) == k2(at) { q } else { p };
-            if k2(at) == k2(a) {
-                break;
-            }
-            ring.push(at);
+            let Some(&(_, q)) = single.get(i) else { break };
+            here = q;
         }
+        // Straight runs in one piece: drop corners on the line between their neighbours.
+        let ring = drop_collinear(ring);
         if ring.len() >= 3 {
             let area = cadaddy_geom::shoelace(&ring).abs();
-            if best.as_ref().is_none_or(|b| area > b.0) {
+            if best.as_ref().is_none_or(|b| area > b.0 + 1e-9) {
                 best = Some((area, ring));
             }
         }
     }
     best.map(|b| b.1)
+}
+
+/// `ring` without the corners that lie on the straight line between their neighbours.
+fn drop_collinear(ring: Vec<Vec2>) -> Vec<Vec2> {
+    let n = ring.len();
+    if n < 4 {
+        return ring;
+    }
+    let keep: Vec<Vec2> = (0..n)
+        .filter_map(|i| {
+            let p = *ring.get((i + n - 1) % n)?;
+            let c = *ring.get(i)?;
+            let q = *ring.get((i + 1) % n)?;
+            let (u, v) = (c - p, q - c);
+            let cross = u.x * v.y - u.y * v.x;
+            let scale = (u.x * u.x + u.y * u.y).sqrt() * (v.x * v.x + v.y * v.y).sqrt();
+            (cross.abs() > 1e-9 * scale.max(1e-12) || u.x * v.x + u.y * v.y < 0.0).then_some(c)
+        })
+        .collect();
+    if keep.len() >= 3 { keep } else { ring }
 }
 
 /// `out`'s objects in `ghost` (the view's see-through part) drawn see-through.
@@ -1689,9 +1860,17 @@ pub const SHELL_INTERIOR: &str = "BIM Shell Interior";
 /// Paints the Systems view's drawing `out` (Q6617): the shell in the rules' pale colours and
 /// see-through (floor plates at their own opacity so they read on white; exterior walls, roofs
 /// and the facade at the look's ghost opacity; interior walls fainter), every system in its
-/// palette row's colour, solid and with no material of its own (never a grey box); what a
-/// followed system leaves out see-through in its colour.
-pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, paints: &HashMap<Handle, Paint>, faded: &HashSet<Handle>) {
+/// palette row's colour, solid and with no material of its own (never a grey box), at its
+/// role's and row's weight (Q6663: as its lineweight, [`Rules::weight_px`]); what a followed
+/// system leaves out see-through in its colour.
+pub fn paint_systems(
+    out: &mut Drawing,
+    s: &Scope,
+    look: &Look,
+    ghost: bool,
+    paints: &HashMap<Handle, (Paint, Option<Role>)>,
+    faded: &HashSet<Handle>,
+) {
     let r = &s.rules;
     let names = [SHELL_FLOOR, SHELL, SHELL_INTERIOR, bimlook::GHOST_MATERIAL];
     out.materials.retain(|m| !names.iter().any(|n| m.name.eq_ignore_ascii_case(n)));
@@ -1712,14 +1891,26 @@ pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, pai
         });
     }
     let mut list: Vec<Entity> = Vec::with_capacity(paints.len());
-    for (h, paint) in paints.iter().take(MAX_SCAN) {
+    for (h, (paint, role)) in paints.iter().take(MAX_SCAN) {
         let Some(e) = out.model.get(*h) else { continue };
+        let row = match paint {
+            Paint::System(k) => Some(*k),
+            _ => None,
+        };
+        let weight = role.map(|role| cadaddy_render::bimview::lineweight_px(r.weight_px(role, row)));
         let (rgb, material) = match paint {
             Paint::Floor => (r.shell_floor_rgb, ghost.then_some(SHELL_FLOOR)),
             Paint::Shell => (r.shell_wall_rgb, ghost.then_some(SHELL)),
             Paint::Interior => (r.shell_wall_rgb, ghost.then_some(SHELL_INTERIOR)),
-            // Filled-in work apart from drawn keeps its own colour.
-            Paint::System(_) | Paint::Other if look.apart => continue,
+            // Filled-in work apart from drawn keeps its own colour (and takes its weight).
+            Paint::System(_) | Paint::Other if look.apart => {
+                if let Some(lw) = weight {
+                    let mut c = (**e).clone();
+                    c.common.lineweight = lw;
+                    list.push(c);
+                }
+                continue;
+            }
             Paint::System(k) => (r.systems_palette.get(*k).map_or(r.systems_other_rgb, |row| row.rgb), None),
             Paint::Other => (r.systems_other_rgb, None),
         };
@@ -1727,6 +1918,9 @@ pub fn paint_systems(out: &mut Drawing, s: &Scope, look: &Look, ghost: bool, pai
         let mut c = (**e).clone();
         c.common.color = cadaddy_doc::color::Color::True(cadaddy_color::Rgb(rgb[0], rgb[1], rgb[2]));
         c.common.material = material.map(str::to_string).into();
+        if let Some(lw) = weight {
+            c.common.lineweight = lw;
+        }
         list.push(c);
     }
     for c in list {
@@ -1831,7 +2025,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{view?: systems|architectural|mep|floor|room (one at a time; never every object; systems, the default whole-building view of a model with MEP: the shell a pale ghost (floor plates, exterior walls, roofs), every duct, pipe mains and risers, fire mains, feeders, tray and all equipment solid, coloured by system from the rules' palette, branch work left out), full?: bool (MEP: every duct, plumbing mains 2\" and up, fire mains, every panel and its feeder, what passes through floors; default mains and big gear), level?: name | null (the Floor and Room views' level; a level picks the Floor view), room?: number or name | null (the Room view's room on the level; a room picks the Room view), up?: bool (Room to Floor to the whole building, as Esc), enter?: handle (the next view down at an element: its level, then its room), switches?: {m?, e?, p?, cabinets?, furniture?, branches?, interior?, site?: bool} (branches, interior walls and site objects: the Systems view's, off by default), follow?: handle | null (highlight what it feeds and what feeds it across levels, the rest faded)} → {view, full, level, room, breadcrumb: [name], switches: {m, e, p, cabinets, furniture}, offered: [switch] (this view's), levels: [name], rooms: [{number, name}] (the level's), drawn (built elements this view draws), total (built elements), left_out: {pipe_unknown_size, fire_pipe_unknown, panel_role_unknown}, legend?: [{key, label, group, color, count}] (the Systems view's systems drawn), presentation (bim.look's), follow?: {handle, elements}}: what the 3D BIM view draws; counts, takeoff, query, clash, export and plot never depend on it",
         ),
         CommandSpec::new(RULES_CMD, "BIM View Rules", run_rules).params(
-            "{rules?: {key: value} (any of the rules data's keys: systems_palette ([{key, label, group, rgb, trades, words?}]), shell_floor_rgb, shell_floor_opacity, shell_wall_rgb, shell_interior_opacity, site_margin_ft, systems_min_px, architectural_parts, gear_words, panel_words, big_equipment_words, main_duct_min_in, large_pipe_min_in, plumbing_main_min_in (2), fire_main_min_in (2.5), feeder_min_in (1), fire_main_words, fire_branch_words, unit_panel_copies, …; kept in the drawing), reset?: bool (back to the built-in rules)} → {source: project|default, rules}: what each BIM view draws, per project",
+            "{rules?: {key: value} (any of the rules data's keys, each in its own shape: systems_palette ([{key, label, group, rgb, trades, words?, weight? (× its role's weight)}]), shell_floor_rgb ([r, g, b]), shell_wall_rgb ([r, g, b]), systems_other_rgb ([r, g, b]), architectural_parts ([part]), context_parts ([part]), level_context_parts ([part]), shell_parts ([part]), cabinet_parts ([part]), furniture_parts ([part]), raceway_atoms ([part]), cabinet_words ([word]), furniture_words ([word]), gear_words ([word]), panel_words ([word]), big_equipment_words ([word]), exhaust_fan_words ([word]), elevator_words ([word]), disconnect_words ([word]), fire_main_words ([word]), fire_branch_words ([word]), shell_floor_opacity (number), shell_interior_opacity (number), site_margin_ft (number), exterior_wall_tolerance_ft (number), systems_min_px (number), systems_weights ({main, branch, device, equipment}: each role's thinnest run on screen, px; the roles named replace the built-in ones), big_equipment_min_extent_ft (number), main_duct_min_in (number), large_pipe_min_in (number), plumbing_main_min_in (number), fire_main_min_in (number), feeder_min_in (number), floor_tolerance_ft (number), hoistway_pad_ft (number), unit_panel_copies (count), max_follow (count), default_view (a view name); kept in the drawing), reset?: bool (back to the built-in rules)} → {source: project|default, rules}: what each BIM view draws, per project",
         ),
         CommandSpec::new(REPORT, "BIM View Report", run_report)
             .params("{width?: px (1600), height?: px (1000), level?: (the Floor view's; default the lowest), room?: (the Room view's; default the level's first)} → {total, views: {systems, architectural, mep, mep_full, floor, room: {drawn, all_switches_drawn, tris, build_ms, model_mb, gpu_mb_est, visible_ms, raster_ms}}}: what each view draws and costs on this model, measured (raster_ms: the CPU rasterizer drawing the whole view, a stand-in for a frame)")
@@ -2231,5 +2425,49 @@ mod tests {
         let ring = outer_ring(&m).expect("a ring");
         assert_eq!(ring.len(), 4);
         assert!((cadaddy_geom::shoelace(&ring).abs() - 200.0).abs() < 1e-6);
+    }
+
+    /// A floor plate as the build makes one (Q6665): rectangles facing up, one rectangle's side
+    /// running past two others' (T-junctions), round a shaft (a hole), its underside below.
+    fn rect_plate(rects: &[[f64; 4]], z: f64) -> cadaddy_doc::Mesh {
+        let mut m = super::super::wallgen::empty_mesh();
+        for [x0, y0, x1, y1] in rects {
+            for (zz, up) in [(z, true), (z - 1.0, false)] {
+                let base = m.vertices.len() as u32;
+                m.vertices.extend([Vec3::new(*x0, *y0, zz), Vec3::new(*x1, *y0, zz), Vec3::new(*x1, *y1, zz), Vec3::new(*x0, *y1, zz)]);
+                let mut v = vec![base, base + 1, base + 2, base + 3];
+                if !up {
+                    v.reverse();
+                }
+                m.faces.push(cadaddy_doc::MeshFace { v, hidden: 0 });
+            }
+        }
+        m
+    }
+
+    /// 100 × 60 with a 6 × 6 shaft at (30..36, 20..26), cut into rectangles meeting at T-junctions.
+    const SHAFT_PLATE: [[f64; 4]; 7] = [
+        [0.0, 0.0, 30.0, 60.0],
+        [30.0, 0.0, 36.0, 20.0],
+        [30.0, 26.0, 36.0, 60.0],
+        [36.0, 0.0, 100.0, 15.0],
+        [36.0, 15.0, 70.0, 40.0],
+        [70.0, 15.0, 100.0, 40.0],
+        [36.0, 40.0, 100.0, 60.0],
+    ];
+
+    #[test]
+    fn a_plate_of_rectangles_round_a_shaft_has_its_whole_outline_every_time() {
+        let m = rect_plate(&SHAFT_PLATE, 0.0);
+        let first = outer_ring(&m).expect("a ring");
+        for _ in 0..60 {
+            let ring = outer_ring(&m).expect("a ring");
+            assert_eq!(ring, first, "the same plate, the same ring");
+        }
+        // The outline, holes and the rectangles' seams ignored.
+        assert!((cadaddy_geom::shoelace(&first).abs() - 6000.0).abs() < 1e-6, "{first:?}");
+        let mut p = Plates::default();
+        p.add(first, top_box(&m));
+        assert_eq!((p.lo, p.hi), (Some(Vec2::new(0.0, 0.0)), Some(Vec2::new(100.0, 60.0))));
     }
 }

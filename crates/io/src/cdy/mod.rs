@@ -26,6 +26,11 @@ pub const THUMBNAIL_SIZE: (u32, u32) = (256, 192);
 /// The preview a .cdy file embeds: model space as a PNG, `None` when it is empty. Built at the
 /// preview's own pixel size (as the screen is): sub-pixel hatch lines and dashes are left out, so a
 /// densely hatched plan doesn't spend seconds drawing millions of lines into 256 × 192 pixels.
+///
+/// Drawn as it is built, a part of the display list at a time ([`cadaddy_render::build_each`]),
+/// twice: once for the list's bounds (the view), once to draw. The whole list of a print set's
+/// 1.3 million objects held over a gigabyte, on top of the drawing, for every full save (Q6635).
+/// The pixels are the ones the whole list draws.
 pub fn preview(d: &Drawing) -> Option<Vec<u8>> {
     if d.model.is_empty() {
         return None;
@@ -40,7 +45,12 @@ pub fn preview(d: &Drawing) -> Option<Vec<u8>> {
         min_dash: if px.is_finite() && px > 0.0 { px * 2.0 } else { 0.0 },
         ..cadaddy_render::Options::default()
     };
-    crate::png_with(d, &Space::Model, w, h, &opts).ok()
+    let mut bounds = cadaddy_geom::Bounds2::EMPTY;
+    cadaddy_render::build_each(d, &Space::Model, &opts, cadaddy_render::BUILD_EACH_OBJECTS, |l| bounds = bounds.union(&l.bounds));
+    let view = crate::png_view(&bounds, w, h, None);
+    let mut canvas = cadaddy_render::raster::Canvas::new(&view, &cadaddy_render::raster::RasterOptions::default())?;
+    cadaddy_render::build_each(d, &Space::Model, &opts, cadaddy_render::BUILD_EACH_OBJECTS, |l| canvas.draw(l));
+    canvas.finish().encode_png().ok()
 }
 
 /// The drawing as a .cdy file, with a preview of model space.
@@ -86,13 +96,19 @@ pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
 
 /// The agent state of a .cdy file (a guided job's state, notes, review decisions), read without
 /// reading the drawing: `Ok(None)` when the file holds none, an error when it isn't a readable .cdy
-/// file (read the whole file then).
+/// file (read the whole file then). A save cut short while appending (a job's checkpoint the
+/// machine stopped writing) leaves the save before it, whose state this reads.
 pub fn agent(bytes: &[u8]) -> std::result::Result<Option<String>, String> {
     container::header(bytes)?;
-    if container::index(bytes).is_none() {
-        return Err("the file's index is damaged".into());
-    }
-    Ok(container::find(bytes, b"AGNT").and_then(|c| String::from_utf8(c.data).ok()))
+    let whole = if container::index(bytes).is_some() {
+        bytes
+    } else {
+        container::trailing_bytes(bytes)
+            .and_then(|t| bytes.get(..bytes.len().checked_sub(usize::try_from(t).ok()?)?))
+            .filter(|b| container::index(b).is_some())
+            .ok_or("the file's index is damaged")?
+    };
+    Ok(container::find(whole, b"AGNT").and_then(|c| String::from_utf8(c.data).ok()))
 }
 
 /// Most chunk and unreadable-span entries `verify` lists.

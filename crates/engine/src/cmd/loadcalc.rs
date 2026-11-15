@@ -21,6 +21,7 @@
 //!   schedule's beyond tolerance) — each saying which side is likely wrong and why.
 //! - **Report**: per panel and the service, CSV and text, a source on every line.
 
+pub(crate) mod arith;
 mod read;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -132,6 +133,8 @@ pub(crate) struct Rules {
     pub kitchen_cite: String,
     pub largest_motor_factor: f64,
     pub largest_motor_cite: String,
+    /// The tables' own arithmetic (feeder rows, per-unit counts: [`arith`]).
+    pub arithmetic: arith::Arithmetic,
 }
 
 pub(crate) fn rules() -> Rules {
@@ -784,6 +787,8 @@ struct Calc {
     feeders: Vec<Feeder>,
     summaries: Vec<LoadSummary>,
     ampacity: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Each feeder row against the panel it feeds.
+    rows: Vec<arith::RowCheck>,
 }
 
 /// The circuits of one schedule, with the model's devices on them.
@@ -1029,7 +1034,19 @@ impl Calc {
             });
         }
         let ampacity = super::coderules::rules().into_iter().find(|r| !r.ampacity_75c.is_empty()).map(|r| r.ampacity_75c).unwrap_or_default();
-        Calc { rules, occ, occ_from, commercial, panels, by_tag, feeders: sp.mep.feeders.clone(), summaries: sp.mep.load_summaries.clone(), ampacity }
+        let rows = arith::feeder_rows(sp, &rules);
+        Calc {
+            rules,
+            occ,
+            occ_from,
+            commercial,
+            panels,
+            by_tag,
+            feeders: sp.mep.feeders.clone(),
+            summaries: sp.mep.load_summaries.clone(),
+            ampacity,
+            rows,
+        }
     }
 
     fn panel(&self, tag: &str) -> Option<&Panel> {
@@ -1157,6 +1174,7 @@ fn summary_units(s: &LoadSummary, rules: &Rules) -> Option<u32> {
 /// The calculation and its checks: the report as JSON, CSV and text.
 fn calculate(c: &Calc) -> (Value, String, String) {
     let rules = &c.rules;
+    let rows = &c.rows;
     let mut findings: Vec<Finding> = Vec::new();
     let mut csv = String::from(
         "level,panel,circuit,description,breaker_a,poles,schedule_va,model_va,used_va,used_from,category,continuous_va,amps,rating_a,percent_of_rating,demand_va,demand_a,findings,sources\n",
@@ -1335,43 +1353,29 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                     cite: rules.tolerance_cite.clone(),
                 });
             }
-            // E-LOAD-SCHEDULE: a feeder row against its panel's own total.
-            if let Some((child, n)) = &cc.feeds
-                && let (Some(row), Some(cp)) = (cc.schedule_va, c.panel(child))
-            {
-                let child_total = cp.printed.get("connected_va").copied().or_else(|| {
-                    let s: f64 = cp.circuits.iter().filter_map(|x| x.schedule_va).sum();
-                    (s > 0.0).then_some(s)
+            // E-LOAD-SCHEDULE: a feeder row against its panel's own total (the rule rfi.read
+            // raises: arith::feeder_rows).
+            if let Some(r) = rows.iter().find(|r| r.panel == p.tag && r.circuit == cc.number && !r.agrees) {
+                let child = &r.child;
+                let swapped = r.swapped_with.as_ref().map(|(n, oc)| format!(" - it is {oc}'s total: rows {} and {n} look swapped", cc.number));
+                notes.push(format!("row {} VA vs {child}'s {} VA", va(r.row), va(r.expected)));
+                findings.push(Finding {
+                    rule: "E-LOAD-SCHEDULE",
+                    level: "feeder",
+                    panel: p.tag.clone(),
+                    circuit: cc.number.clone(),
+                    message: format!(
+                        "{} {} feeds {child}{}: its row gives {} VA, {child}'s schedule totals {} VA{}",
+                        p.tag,
+                        cc.number,
+                        if r.units > 1 { format!(" ({} units)", r.units) } else { String::new() },
+                        va(r.row),
+                        va(r.expected),
+                        swapped.unwrap_or_default()
+                    ),
+                    likely: "schedule",
+                    cite: format!("{}'s row against {child}'s own schedule ({})", p.tag, r.child_sheet),
                 });
-                if let Some(ct) = child_total.map(|t| t * f64::from(*n))
-                    && (row - ct).abs() > rules.tolerance(row, ct)
-                {
-                    // Another feeder row of this panel that carries this panel's total: swapped.
-                    let swapped = p.circuits.iter().filter(|o| o.number != cc.number).find_map(|o| {
-                        let (oc, on) = o.feeds.as_ref()?;
-                        let ot = c.panel(oc)?.printed.get("connected_va").copied()? * f64::from(*on);
-                        ((row - ot).abs() <= rules.tolerance(row, ot))
-                            .then(|| format!(" - it is {oc}'s total: rows {} and {} look swapped", cc.number, o.number))
-                    });
-                    notes.push(format!("row {} VA vs {child}'s {} VA", va(row), va(ct)));
-                    findings.push(Finding {
-                        rule: "E-LOAD-SCHEDULE",
-                        level: "feeder",
-                        panel: p.tag.clone(),
-                        circuit: cc.number.clone(),
-                        message: format!(
-                            "{} {} feeds {child}{}: its row gives {} VA, {child}'s schedule totals {} VA{}",
-                            p.tag,
-                            cc.number,
-                            if *n > 1 { format!(" ({n} units)") } else { String::new() },
-                            va(row),
-                            va(ct),
-                            swapped.unwrap_or_default()
-                        ),
-                        likely: "schedule",
-                        cite: format!("{}'s row against {child}'s own schedule ({})", p.tag, cp.sheet),
-                    });
-                }
             }
             // E-LOAD-RATING: the feeder's demand against its breaker and conductors.
             let mut amps_cell = String::new();

@@ -219,26 +219,37 @@ pub fn salvage_list(bytes: &[u8]) -> Option<Vec<Value>> {
 /// equal bytes) with the key before its value; keys numbered in the order first met. A stack of
 /// work items instead of recursion.
 fn keyed_tokens<'a>(v: &'a Value, out: &mut PackedRef<'a>) {
+    let mut ids: HashMap<&'a str, u32> = HashMap::new();
+    let PackedRef { keys, toks } = out;
+    walk(
+        v,
+        &mut |k| {
+            let next = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+            *ids.entry(k).or_insert_with(|| {
+                keys.push(k);
+                next
+            })
+        },
+        &mut |t| toks.push(t),
+    );
+}
+
+/// The pre-order walk of [`keyed_tokens`]: each token of `v` to `emit`, each key numbered by `key`.
+fn walk<'a>(v: &'a Value, key: &mut dyn FnMut(&'a str) -> u32, emit: &mut dyn FnMut(TokRef<'a>)) {
     enum Work<'a> {
         Value(&'a Value),
         Key(&'a str),
     }
-    let mut ids: HashMap<&'a str, u32> = HashMap::new();
     let mut stack = vec![Work::Value(v)];
     while let Some(w) = stack.pop() {
         let v = match w {
             Work::Key(k) => {
-                let next = u32::try_from(out.keys.len()).unwrap_or(u32::MAX);
-                let id = *ids.entry(k).or_insert_with(|| {
-                    out.keys.push(k);
-                    next
-                });
-                out.toks.push(TokRef::Key(id));
+                emit(TokRef::Key(key(k)));
                 continue;
             }
             Work::Value(v) => v,
         };
-        out.toks.push(match v {
+        emit(match v {
             Value::Null => TokRef::Null,
             Value::Bool(b) => TokRef::Bool(*b),
             Value::Number(n) => {
@@ -268,6 +279,75 @@ fn keyed_tokens<'a>(v: &'a Value, out: &mut PackedRef<'a>) {
     }
 }
 
+/// [`encode`] of a list given an item at a time: the same bytes, without the whole list as one
+/// value tree. A model space chunk's objects as values held ~10 times its encoded size, on each
+/// thread encoding one: a full save of a print set held over a gigabyte for them (Q6635). Each
+/// item's tokens are written as it comes and its value let go.
+pub struct ListWriter {
+    keys: Vec<String>,
+    ids: HashMap<String, u32>,
+    toks: Vec<u8>,
+    count: u64,
+    failed: bool,
+}
+
+/// A byte vector postcard writes on the end of.
+struct Tail<'a>(&'a mut Vec<u8>);
+
+impl Extend<u8> for Tail<'_> {
+    fn extend<I: IntoIterator<Item = u8>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+impl ListWriter {
+    /// A list of `len` items.
+    pub fn new(len: usize) -> Self {
+        let mut w = ListWriter { keys: Vec::new(), ids: HashMap::new(), toks: Vec::new(), count: 0, failed: false };
+        let n = u32::try_from(len).unwrap_or(u32::MAX);
+        Self::emit(&mut w.toks, &mut w.count, &mut w.failed, TokRef::List(n));
+        w
+    }
+
+    fn emit(toks: &mut Vec<u8>, count: &mut u64, failed: &mut bool, t: TokRef<'_>) {
+        *failed |= postcard::to_extend(&t, Tail(toks)).is_err();
+        *count = count.saturating_add(1);
+    }
+
+    /// The next item.
+    pub fn push(&mut self, v: &Value) {
+        let ListWriter { keys, ids, toks, count, failed } = self;
+        walk(
+            v,
+            &mut |k| {
+                if let Some(id) = ids.get(k) {
+                    return *id;
+                }
+                let id = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+                keys.push(k.to_string());
+                ids.insert(k.to_string(), id);
+                id
+            },
+            &mut |t| Self::emit(toks, count, failed, t),
+        );
+    }
+
+    /// The bytes [`encode`] makes of the whole list.
+    pub fn finish(self) -> Result<Vec<u8>, String> {
+        if self.failed {
+            return Err("an object could not be encoded".into());
+        }
+        let len = usize::try_from(self.count).map_err(|_| "too many tokens")?;
+        let mut out = postcard::to_allocvec(&self.keys).map_err(|e| e.to_string())?;
+        // The token list's length, as postcard writes a sequence's: a varint.
+        let head = postcard::to_allocvec(&len).map_err(|e| e.to_string())?;
+        out.reserve_exact(head.len().saturating_add(self.toks.len()));
+        out.extend_from_slice(&head);
+        out.extend_from_slice(&self.toks);
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +366,32 @@ mod tests {
         // Floats keep every bit.
         let f = 1.0f64 / 3.0;
         assert_eq!(decode(&encode(&json!(f))).and_then(|v| v.as_f64()).map(f64::to_bits), Some(f.to_bits()));
+    }
+
+    /// Q6635: a list written an item at a time is the bytes of the whole list's value: the same
+    /// key table (keys numbered as first met, across items) and tokens.
+    #[test]
+    fn a_list_written_item_by_item_is_the_whole_lists_bytes() {
+        let items = [
+            json!({"b": 1, "a": [1.5, -2, null, true], "c": {"z": "text", "a": 18_446_744_073_709_551_615u64}}),
+            json!({"a": [], "d": {}, "b": -9_223_372_036_854_775_808i64}),
+            json!("a string"),
+            json!([{"c": 0.1}, {"e": [[], [1]]}]),
+            json!({"é": "ünïcode", "b": false}),
+        ];
+        for n in 0..=items.len() {
+            let part = items.get(..n).unwrap().to_vec();
+            let mut w = ListWriter::new(part.len());
+            for v in &part {
+                w.push(v);
+            }
+            assert_eq!(w.finish().unwrap(), encode(&Value::Array(part)), "{n} items");
+        }
+        // Many tokens: the token count's varint takes several bytes.
+        let big: Vec<Value> = (0..5000).map(|i| json!({"i": i, "s": format!("item {i}")})).collect();
+        let mut w = ListWriter::new(big.len());
+        big.iter().for_each(|v| w.push(v));
+        assert_eq!(w.finish().unwrap(), encode(&Value::Array(big)));
     }
 
     #[test]

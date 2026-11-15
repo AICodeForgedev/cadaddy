@@ -162,6 +162,17 @@ fn head_rule(words: &str) -> Option<(HeightRule, f64)> {
     }
 }
 
+/// Whether a head condition's words stop the wall at a fire rated ceiling assembly (`TO UNDERSIDE
+/// OF FIRE RATED CEILING ASSEMBLY`): the ceiling carries the wall's rating on.
+fn head_to_rated_ceiling(words: &str) -> bool {
+    let u = words.to_ascii_uppercase();
+    matches!(head_rule(&u), Some((HeightRule::Ceiling | HeightRule::AboveCeiling, _)))
+        && u.split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|w| matches!(w, [r, c] if r.starts_with("RATED") && (c.starts_with("CEILING") || c.starts_with("CLG"))))
+}
+
 /// Every inch dimension in a line (`5/8"`, `3 1/2"`, `3-1/2"`, `16"`), in order.
 pub(crate) fn inches_in(s: &str) -> Vec<f64> {
     let mut out = Vec::new();
@@ -660,7 +671,7 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, fr
         return out;
     }
     // The head condition key, with each key's words run on onto the lines under it.
-    let mut heads: BTreeMap<char, (HeightRule, f64)> = BTreeMap::new();
+    let mut heads: BTreeMap<char, (HeightRule, f64, bool)> = BTreeMap::new();
     for l in &lines {
         let Some((letter, mut words)) = head_key(&l.s) else { continue };
         let mut y = l.at.y;
@@ -675,8 +686,8 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, fr
             words.push_str(&next.s.to_ascii_uppercase());
             y = next.at.y;
         }
-        if let Some(rule) = head_rule(&words) {
-            heads.entry(letter).or_insert(rule);
+        if let Some((rule, above)) = head_rule(&words) {
+            heads.entry(letter).or_insert((rule, above, head_to_rated_ceiling(&words)));
         }
     }
     // Each family's schedule rows: marks of its letter under its title, and the cells on each
@@ -984,6 +995,7 @@ pub(crate) fn read_legend(d: &Drawing, region: Option<[f64; 4]>, sheet: &str, fr
                     layers,
                     height: head.map(|h| h.0),
                     above_ceiling_in: head.map_or(6.0, |h| h.1),
+                    to_rated_ceiling: head.is_some_and(|h| h.2),
                     fire_rating: r.fire.clone(),
                     acoustic_rating: r.stc.clone(),
                     external: layers_external,
@@ -1393,6 +1405,11 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!((a.fire_rating.as_deref(), a.acoustic_rating.as_deref()), (Some("1 HR"), Some("STC 52")));
         assert_eq!(a.height, Some(HeightRule::Ceiling), "B: up to the rated ceiling");
+        assert!(a.to_rated_ceiling, "B's ceiling is a fire rated ceiling assembly");
+        // Q6652: a rated wall to the rated ceiling is as designed, not an RFI.
+        let rated: Vec<String> =
+            cadaddy_walk3d::rfi::list(&sp).into_iter().filter(|r| r.kind == Some(cadaddy_walk3d::RfiKind::RatedToCeiling)).map(|r| r.about).collect();
+        assert!(rated.is_empty(), "{rated:?}");
         assert!(a.notes.contains(&"side 1: HALL SIDE".to_string()) && a.notes.contains(&"tested assembly UL U999".to_string()), "{:?}", a.notes);
         assert_eq!(a.description, "TYPE Q PARTITION - SUITE SEPARATION WALL");
         // What a box has to reach through on each face.
@@ -1624,6 +1641,10 @@ mod tests {
         assert_eq!(head_key("C - PARTITION TO EXTEND 6\" ABOVE SUSPENDED CEILING").map(|k| k.0), Some('C'));
         assert_eq!(head_rule("PARTITION TO EXTEND 6\" ABOVE SUSPENDED CEILING"), Some((HeightRule::AboveCeiling, 6.0)));
         assert_eq!(head_rule("PARTIAL HEIGHT PARTITION REF. ELEVATION"), None);
+        assert!(head_to_rated_ceiling("PARTITION TO EXTEND TO UNDERSIDE OF FIRE RATED CEILING ASSEMBLY"));
+        assert!(!head_to_rated_ceiling("PARTITION TO EXTEND 6\" ABOVE SUSPENDED CEILING"));
+        assert!(!head_to_rated_ceiling("RATED PARTITION TO EXTEND TO UNDERSIDE OF DECK"), "a rated wall to the deck");
+        assert!(!head_to_rated_ceiling("RATED PARTITION TO EXTEND TO THE CEILING"), "the wall is rated, not the ceiling");
         assert_eq!(inches_in("3 1/2\" & 5 1/2\""), vec![3.5, 5.5]);
         assert_eq!(inches_in("5/8\" TYPE-X GYP. BD. ON 7/8\" FURRING CHANNELS 16\" O.C."), vec![0.625, 0.875, 16.0]);
         assert_eq!(says("ACOUSTICAL SEALANT @ EACH SIDE - ON TOP & BOTTOM OF WALL"), None);

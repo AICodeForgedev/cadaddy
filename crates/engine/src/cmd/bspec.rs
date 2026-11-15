@@ -190,6 +190,36 @@ pub(crate) fn centre(d: &Drawing, e: &Entity) -> Option<Vec2> {
     (!b.is_empty()).then(|| b.center())
 }
 
+/// The runs of `sp` the software made (not drawn) that `issues` holds an error of (`mep.runs[i]`
+/// or one of its fields): taken out of `sp`, each as a row (its id, system, level, how it was
+/// made and the errors).
+pub(crate) fn skip_bad_made_runs(sp: &mut BuildingSpec, issues: &[Issue]) -> Vec<Value> {
+    let index = |path: &str| -> Option<usize> {
+        let rest = path.strip_prefix("mep.runs[")?;
+        let (n, tail) = rest.split_once(']')?;
+        (tail.is_empty() || tail.starts_with('.')).then_some(())?;
+        n.parse().ok()
+    };
+    let mut bad: std::collections::BTreeMap<usize, Vec<String>> = std::collections::BTreeMap::new();
+    for i in issues.iter().filter(|i| i.error) {
+        if let Some(k) = index(&i.path).filter(|k| sp.mep.runs.get(*k).is_some_and(|r| !r.made.is_drawn())) {
+            let msgs = bad.entry(k).or_default();
+            if msgs.len() < 8 {
+                msgs.push(i.message.clone());
+            }
+        }
+    }
+    let mut rows = Vec::with_capacity(bad.len());
+    for (k, msgs) in bad.iter().rev() {
+        if *k < sp.mep.runs.len() {
+            let r = sp.mep.runs.remove(*k);
+            rows.push(json!({"run": k, "id": r.id, "system": r.system, "level": r.level, "made": r.made.as_str(), "errors": msgs}));
+        }
+    }
+    rows.reverse();
+    rows
+}
+
 /// The spec checked alone and against the drawing.
 pub(crate) fn validate(d: &Drawing, sp: &BuildingSpec) -> Vec<Issue> {
     let mut out = sp.check();
@@ -595,7 +625,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let issues = validate(s.doc()?, &sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
-    if feeders.changed() {
+    if feeders.notable() {
         r["feeders"] = feeders.json();
     }
     if !walls.is_empty() {
@@ -640,7 +670,14 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(stack) = p.get("stack").and_then(Value::as_bool) {
         sp.stack = stack;
     }
-    let issues = validate(s.doc()?, &sp);
+    let mut issues = validate(s.doc()?, &sp);
+    // A run the software made (derived or inferred: a routing's, a reader's) with a spec error
+    // is reported and left out of this build; it doesn't stop the rest (Q6662). A drawn or
+    // hand-entered run's error still refuses the build.
+    let skipped_runs = skip_bad_made_runs(&mut sp, &issues);
+    if !skipped_runs.is_empty() {
+        issues = validate(s.doc()?, &sp);
+    }
     let errors: Vec<String> = issues.iter().filter(|i| i.error).map(|i| format!("{}: {}", i.path, i.message)).collect();
     if !errors.is_empty() {
         return Err(bad("model.build", format!("the building spec has errors — {}", errors.iter().take(5).cloned().collect::<Vec<_>>().join("; "))));
@@ -707,6 +744,15 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
         r["notes"] = json!(r["notes"].as_array().cloned().unwrap_or_default().into_iter().chain([json!(note)]).collect::<Vec<_>>());
     }
     r["warnings"] = json!(issues.iter().filter(|i| !i.error).map(issue_json).collect::<Vec<_>>());
+    if !skipped_runs.is_empty() {
+        let n = skipped_runs.len();
+        let note = format!(
+            "{n} run(s) the software made were left out of this build: the spec's check refuses their shape (each listed in skipped_runs; routing again or bspec.edit mends them)."
+        );
+        s.echo(note.clone());
+        r["notes"] = json!(r["notes"].as_array().cloned().unwrap_or_default().into_iter().chain([json!(note)]).collect::<Vec<_>>());
+        r["skipped_runs"] = json!(skipped_runs);
+    }
     // The counts are of what the model holds when the build is done (steps after the walls
     // took some away again: the summary said 2,977 walls of 2,794 built).
     recount_built(s.doc()?, &mut r);

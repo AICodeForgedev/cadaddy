@@ -151,6 +151,13 @@ fn the_legend_wording_varies_and_parses() {
     );
     assert_eq!((a.height.as_deref(), a.fire_rating.as_deref(), a.stc, a.printed_in), (Some("above_ceiling"), Some("1 HR"), Some(50), Some(6.125)));
     assert_eq!(a.layers.get(2).and_then(|l| l.gauge), Some(20));
+    assert!(!a.to_rated_ceiling, "a rated wall to an ordinary ceiling");
+    // Q6652: a head that stops at a rated ceiling assembly says so (the ceiling carries the rating).
+    let r = wall_reader::parse_type(
+        "1C",
+        &lines(&["1 HOUR RATED PARTITION", "EXTEND TO UNDERSIDE OF 1 HR RATED CEILING ASSEMBLY", "1-HOUR RATED ASSEMBLY"]),
+    );
+    assert_eq!((r.height.as_deref(), r.fire_rating.as_deref(), r.to_rated_ceiling), (Some("ceiling"), Some("1 HR"), true));
     assert_eq!(a.layers.get(2).and_then(|l| l.spacing_in), Some(16.0));
     let b = wall_reader::parse_type(
         "W-4",

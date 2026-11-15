@@ -41,6 +41,9 @@ pub struct ReadType {
     pub printed_in: Option<f64>,
     /// `ceiling`, `above_ceiling`, `deck`, `full`.
     pub height: Option<String>,
+    /// The ceiling it stops at is a fire rated ceiling assembly (`TO UNDERSIDE OF RATED
+    /// CEILING`): the ceiling carries a rated wall's rating on.
+    pub to_rated_ceiling: bool,
     pub fire_rating: Option<String>,
     pub stc: Option<u32>,
     pub external: bool,
@@ -382,6 +385,11 @@ pub fn parse_type(tag: &str, lines: &[String]) -> ReadType {
         } else if u.contains("CEILING") || u.contains("CLG") {
             let above = u.contains("ABOVE") || u.contains('+');
             t.height = Some(if above { "above_ceiling" } else { "ceiling" }.into());
+            t.to_rated_ceiling = u
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|w| matches!(w, [r, c] if r.starts_with("RATED") && (c.starts_with("CEILING") || c.starts_with("CLG"))));
         } else if u.contains("DECK") || u.contains("STRUCTURE") || u.contains("U/S") {
             t.height = Some("deck".into());
         } else if u.contains("STC") {
@@ -1335,6 +1343,9 @@ pub fn spec_patch(r: &WallResult, to_plan: &dyn Fn(&str, [f64; 2]) -> Option<[f6
             let mut a = json!({"tag": t.tag, "description": t.name, "layers": layers, "external": t.external});
             if let Some(h) = &t.height {
                 a["height"] = json!(h);
+            }
+            if t.to_rated_ceiling {
+                a["to_rated_ceiling"] = json!(true);
             }
             if let Some(f) = &t.fire_rating {
                 a["fire_rating"] = json!(f);

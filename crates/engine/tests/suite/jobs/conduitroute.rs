@@ -320,6 +320,38 @@ fn routing_can_be_switched_off_and_hostile_params_never_panic() {
 }
 
 #[test]
+fn a_builds_route_false_never_silently_blocks_a_reroute_asked_for_by_name() {
+    // Q6657: a build's `route: false` (to rebuild a part without routing) is that build's; a
+    // later conduit.reroute asked for by name routes, says routing is on again, and later builds
+    // route too.
+    let (mut s, built) = building(|_| {});
+    let routed_before = sticks(&s).len();
+    assert!(routed_before > 0, "{}", built["conduitRoute"]);
+    for off in [json!({"route": false}), json!({"route": false, "parts": ["ceiling"]})] {
+        s.execute("model.build", &off).expect("build without routing");
+        // A part-only build keeps the pieces it doesn't build; the whole rebuild drops them.
+        let r = s.execute("conduit.reroute", &json!({})).expect("reroute");
+        assert_eq!(r["routed"], json!(true), "{off}: {r}");
+        assert_eq!(r["routing_switched_on"], json!(true), "{off}: {r}");
+        assert!(r["note"].is_null(), "{off}: {r}");
+        assert_eq!(sticks(&s).len(), routed_before, "{off}: the same conduit as the routed build");
+        assert!(count(&mut s, json!({"kind": "conduit", "circuit": "LP1-1,3"}))["count"].as_u64().is_some_and(|n| n > 0));
+    }
+    // On again: a second reroute doesn't claim to switch anything, `feeders: all` routes too.
+    let again = s.execute("conduit.reroute", &json!({"feeders": "all"})).expect("again");
+    assert_eq!(again["routed"], json!(true), "{again}");
+    assert!(again["routing_switched_on"].is_null(), "{again}");
+    // A whole rebuild after it routes (the switch is on).
+    let rebuilt = s.execute("model.build", &json!({"force": true})).expect("rebuild");
+    assert_eq!(rebuilt["conduitRoute"]["circuits"], json!(3), "{}", rebuilt["conduitRoute"]);
+    // A build switched off and no reroute: its rebuild stays unrouted (the switch is kept for
+    // builds), and the routing report says so.
+    s.execute("model.build", &json!({"route": false, "force": true})).expect("off");
+    s.execute("model.build", &json!({"force": true})).expect("rebuild off");
+    assert_eq!(count(&mut s, json!({"kind": "conduit", "circuit": "LP1-1,3"}))["count"], json!(0));
+}
+
+#[test]
 fn rerouting_after_the_build_works_on_stacked_levels_and_is_stable() {
     // Two storeys drawn side by side (L2's plan 200' east), stacked by the build: L2's circuit
     // and panel move onto L1's plan; the reroute routes on L2's own plan and cuts the pieces where

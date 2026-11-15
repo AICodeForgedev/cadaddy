@@ -100,6 +100,7 @@ fn run_grip_stretch(s: &mut Session, p: &Value) -> Result<Value> {
         return stretch(s, "grip.stretch", p);
     }
     let cmd = "grip.stretch";
+    refuse_rise(cmd, p)?;
     let list = p.get("grips").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`grips` must be an array of [handle, index] pairs"))?;
     let mut hot = Vec::new();
     for g in list.iter().take(MAX_GRIPS) {
@@ -262,8 +263,17 @@ fn run_grip_move(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let base = base_point(s, "grip.move", p, &hs)?;
     let to = point_req("grip.move", p, "to")?;
+    // A `to` at another height than `base` raises or lowers the objects, as 3DMOVE (Q6656).
+    let z = |key: &str| -> Result<f64> { Ok(point3_param_strict("grip.move", p, key)?.map_or(0.0, |q| q.z)) };
+    let rise = z("to")? - z("base")?;
     let m = mode_matrix(GripMode::Move, base, to).unwrap_or(Mat3::IDENTITY);
-    apply(s, &hs, &m, bool_or(p, "copy", false))
+    let r = super::modify::transform_entities(s, &hs, &m, bool_or(p, "copy", false))?;
+    let kept = super::modify::lift(s, &r, rise)?;
+    let mut out = json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() });
+    if let Some(note) = super::modify::flat_note(kept) {
+        out["message"] = json!(note);
+    }
+    Ok(out)
 }
 
 fn run_grip_rotate(s: &mut Session, p: &Value) -> Result<Value> {

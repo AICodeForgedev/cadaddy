@@ -1,5 +1,8 @@
-//! Opening a large .cdy file: where the time and the memory go, and that opening never holds the
-//! drawing's data twice (Q6398). Before, every chunk of the file was inflated first and all of
+//! Opening and saving a large .cdy file: where the time and the memory go. Opening never holds
+//! the drawing's data twice (Q6398); a full save's memory over the drawing's is bounded, whatever
+//! the drawing's size (Q6635, at the end).
+//!
+//! Opening (Q6398). Before, every chunk of the file was inflated first and all of
 //! it was held while the objects were built from it: on a print-set model the inflated element
 //! data (about 1.1 KB an object) sat beside the finished objects until the read was over.
 //!
@@ -170,4 +173,63 @@ fn a_million_object_model_opens_with_its_breakdown() {
     );
     println!("{:#?}", rep.profile);
     assert!(peak.saturating_sub(held) < raw as usize / 4, "opening held {} MB over the drawing", peak.saturating_sub(held) / MB);
+}
+
+// Saving (Q6635). A print set's full save with its preview took 1-2 GB over the model: the preview
+// built the whole display list for a 256 × 192 image; each compressed chunk kept room for half its
+// raw size until the file was made; each chunk being encoded was its objects as one value tree.
+
+/// A full save holds the file it makes and a few chunks being encoded: four times the model adds
+/// the bigger file and nothing more.
+#[test]
+fn a_full_save_holds_a_bounded_working_set_besides_the_file_it_makes() {
+    let _g = serial();
+    let mut runs = Vec::new();
+    for n in [10_000, 40_000] {
+        let d = model(n);
+        let (bytes, peak, _) = measured(|| cadaddy_io::cdy::write_cdy_checkpoint(&d).unwrap());
+        // What the save held besides the file it returns.
+        let extra = peak.saturating_sub(bytes.capacity());
+        assert_eq!(cadaddy_io::cdy::read_cdy(&bytes).unwrap().model.len(), d.model.len());
+        runs.push((bytes.len(), extra));
+    }
+    let [(small_file, small), (big_file, big)] = runs[..] else { panic!("two sizes") };
+    eprintln!("full save: {small_file} B file, {small} B besides it; {big_file} B file, {big} B besides it");
+    assert!(big_file > 3 * small_file, "the bigger model's file: {big_file} bytes, the smaller's {small_file}");
+    assert!(big < small + 4 * MB, "{} MB besides the file for a model, {} MB for four times it", small / MB, big / MB);
+    // The few chunks in flight as tokens: as value trees, four of them held ~50 MB here.
+    assert!(big < 16 * MB, "the save held {} MB besides its file", big / MB);
+}
+
+/// The preview is drawn a part of the display list at a time: four times the model adds a little
+/// (the drawing's object list, and the stroke path of a run of polylines drawn alike, which the
+/// whole list's image joins too), not four times the list (the whole list of the bigger model here
+/// is over 50 MB).
+#[test]
+fn a_saves_preview_is_drawn_without_the_whole_display_list() {
+    let _g = serial();
+    let mut held = Vec::new();
+    for n in [10_000, 40_000] {
+        let d = model(n);
+        let (png, peak, _) = measured(|| cadaddy_io::cdy::preview(&d));
+        assert!(png.unwrap().starts_with(b"\x89PNG"));
+        held.push(peak);
+    }
+    let [small, big] = held[..] else { panic!("two sizes") };
+    eprintln!("preview: {small} B for a model, {big} B for four times it");
+    assert!(big < small + 8 * MB, "{} MB for a model, {} MB for four times it", small / MB, big / MB);
+}
+
+/// Drawn a part at a time, the preview is the image the whole display list draws.
+#[test]
+fn the_preview_is_the_one_the_whole_display_list_draws() {
+    let _g = serial();
+    let d = model(20_000);
+    let png = cadaddy_io::cdy::preview(&d).unwrap();
+    let (w, h) = cadaddy_io::cdy::THUMBNAIL_SIZE;
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    let px = (ext.width() / f64::from(w)).max(ext.height() / f64::from(h)) * 1.1;
+    let opts = cadaddy_render::Options { transparency: true, tolerance: px * 0.5, min_dash: px * 2.0, ..cadaddy_render::Options::default() };
+    let whole = cadaddy_io::png_with(&d, &cadaddy_doc::Space::Model, w, h, &opts).unwrap();
+    assert!(png == whole, "the preview drawn a part at a time differs from the whole list's");
 }

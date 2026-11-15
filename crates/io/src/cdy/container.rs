@@ -27,7 +27,13 @@ pub struct Packed {
 /// `data` as a chunk stores it: deflated (when `deflate` and that makes it smaller), else as is.
 pub fn pack(data: &[u8], deflate: bool) -> Packed {
     match deflate.then(|| miniz_oxide::deflate::compress_to_vec(data, 3)) {
-        Some(p) if p.len() < data.len() => Packed { stored: p, deflated: true },
+        // The compressor starts with room for half the input and only truncates: a save holding
+        // its compressed chunks (all of a full save's, until they are written) held half their
+        // raw size each instead of their stored size (Q6635).
+        Some(mut p) if p.len() < data.len() => {
+            p.shrink_to_fit();
+            Packed { stored: p, deflated: true }
+        }
         _ => Packed { stored: data.to_vec(), deflated: false },
     }
 }

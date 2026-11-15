@@ -496,6 +496,70 @@ fn an_edit_appends_only_its_chunk_and_reads_back_exactly() {
     assert_eq!(state.len as usize, file.len());
 }
 
+/// Q6635: a compressed chunk keeps its stored size, not the room the compressor started with
+/// (half the raw size): a full save holds its compressed chunks until they are written.
+#[test]
+fn a_compressed_chunk_holds_only_its_stored_bytes() {
+    let raw: Vec<u8> = (0..400_000u32).flat_map(|i| (i % 97).to_le_bytes()).collect();
+    let p = super::container::pack(&raw, true);
+    assert!(p.deflated);
+    assert!(p.stored.len() < raw.len() / 20, "{} of {}", p.stored.len(), raw.len());
+    assert!(p.stored.capacity() < raw.len() / 10, "{} bytes held for {} stored", p.stored.capacity(), p.stored.len());
+}
+
+/// Q6635: object chunks are encoded a window at a time as the writer reaches them. A drawing of
+/// many windows saves whole and reads back exactly; edits scattered among unchanged chunks (fresh
+/// chunks between reused ones, more than a window of them) append and read back exactly.
+#[test]
+fn many_windows_of_chunks_save_whole_and_appended_exactly() {
+    let mut d = lines(60 * 1024 + 17);
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    let (back, rep) = model::read(&file).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(back, d);
+    // An object edited in every third chunk.
+    let handles: Vec<_> = d.model.iter().map(|e| e.handle).step_by(3 * 1024 + 5).collect();
+    assert!(handles.len() > 16);
+    for h in handles {
+        d.model.modify(h, |e| e.common.layer = "Edited".into());
+    }
+    let (out, state) = save(&d, Some(&state), &no_thumb).unwrap();
+    assert!(matches!(out, Output::Append { .. }));
+    let file = stored(&file, &out);
+    let (back, rep) = model::read(&file).unwrap();
+    assert!(rep.notes.is_empty(), "{:?}", rep.notes);
+    assert_eq!(back, d);
+    assert_eq!(state.len as usize, file.len());
+    // The same drawing written whole in one go is the same bytes as written from scratch again.
+    let (a, _) = super::save::write_full(&d, None).unwrap();
+    let (b, _) = super::save::write_full(&d, None).unwrap();
+    assert!(a == b);
+}
+
+/// fix-job-checkpoint-full-rewrite (Q6576): a job's checkpoint is appended to; one the machine
+/// stopped appending to still gives the state of the save before it without reading the drawing.
+#[test]
+fn the_agent_state_of_a_save_cut_short_is_the_one_before_it() {
+    let mut d = lines(5000);
+    d.agent = Some(r#"{"guided_job":{"id":"first"}}"#.to_string()).into();
+    let (out, state) = save(&d, None, &no_thumb).unwrap();
+    let file = stored(&[], &out);
+    d.agent = Some(r#"{"guided_job":{"id":"second"}}"#.to_string()).into();
+    for i in 0..3000 {
+        let x = i as f64;
+        d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, 5.0, 0.0), b: Vec3::new(x, 6.0, 0.0) })).unwrap();
+    }
+    let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
+    assert!(matches!(out, Output::Append { .. }));
+    let whole = stored(&file, &out);
+    assert_eq!(agent(&whole), Ok(Some(r#"{"guided_job":{"id":"second"}}"#.to_string())));
+    for cut in [file.len() + 1, (file.len() + whole.len()) / 2, whole.len() - 1] {
+        let part = whole.get(..cut).unwrap();
+        assert_eq!(agent(part), Ok(Some(r#"{"guided_job":{"id":"first"}}"#.to_string())), "cut at {cut} of {}", whole.len());
+    }
+}
+
 #[test]
 fn a_file_read_back_saves_incrementally() {
     let d = every_kind();

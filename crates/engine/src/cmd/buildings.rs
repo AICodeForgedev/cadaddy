@@ -8,7 +8,15 @@
 //! - an element built from a sheet that names none (the floor plan the set draws once) stands for
 //!   every building the set names, so it is copied into each;
 //! - an element with no sheet of its own (a device's box, an atom) goes where the element it
-//!   serves goes.
+//!   serves goes;
+//! - the site's work stands once (Q6643): an element built from a site sheet (a civil sheet, a
+//!   trade's plan of the site: pole lights and their bases, site equipment, buried runs), the
+//!   equipment the spec marks as standing on the site (`sources.site`), or one
+//!   of no sheet naming buildings that lies wholly beyond the first building's footprint and a
+//!   small margin, is placed once where the site plan puts it. It is in no building (`building`
+//!   is left off) and says why (`building_site`); what serves it (a pole's base, a box) stays with
+//!   it. A building's own work up to its walls (a stub-up, the service entering it) is copied with
+//!   the building.
 //!
 //! Every element says which building it is in (`building`, read from the titles that name it or
 //! assumed from the rule above) and, on the first building's, which buildings it stands for
@@ -41,8 +49,10 @@ pub const BUILDING: &str = "building";
 pub const STANDS_FOR: &str = "building_stands_for";
 /// On a copy: the handle of the element it copies.
 pub const COPY_OF: &str = "building_copy_of";
+/// On a site element (Q6643): why it stands once, on the site, in no building.
+pub const ON_SITE: &str = "building_site";
 /// The properties that name other elements by handle: a copy names the copies in its building.
-const REFERENCE_KEYS: [&str; 2] = ["box_of", "connects"];
+const REFERENCE_KEYS: [&str; 3] = ["box_of", "connects", "host_wall"];
 /// Most model objects looked at, copies made, texts read (hostile or huge drawings).
 const MAX_ELEMENTS: usize = 2_000_000;
 const MAX_COPIES: usize = 2_000_000;
@@ -54,6 +64,12 @@ const MAX_TITLE_CHARS: usize = 90;
 /// The clear space left between buildings the documents give no distance for, feet: room to
 /// walk between them, never a dimension of the job (the place is marked inferred).
 const GAP_FT: f64 = 20.0;
+/// How far beyond the first building's shell an element of no building-naming sheet may lie and
+/// still be that building's, feet (Q6643): work attached to or set against a building (a wall
+/// pack, a condensing unit's pad, the service entering it) lies within a few feet of its walls; a
+/// pole, a site pull box or a buried run across the site lies farther out. Wholly beyond it, the
+/// element is the site's and stands once (trade practice; never a dimension of the job).
+pub const SITE_MARGIN_FT: f64 = 5.0;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Place Buildings", run).long().params(
@@ -84,6 +100,9 @@ pub struct Applied {
     pub by_building: BTreeMap<String, usize>,
     /// Elements that stand for every building (no sheet naming fewer).
     pub shared: usize,
+    /// Elements of the site (Q6643): placed once where the site plan puts them, copied into no
+    /// building.
+    pub site: usize,
 }
 
 impl Applied {
@@ -109,6 +128,7 @@ impl Applied {
             "moved": self.moved,
             "removed": self.removed,
             "shared": self.shared,
+            "site": self.site,
         })
     }
 }
@@ -382,6 +402,92 @@ struct Item {
     /// The buildings its sheet names (none: no sheet of its own, or one naming none).
     sheet: Option<String>,
     refs: Vec<Handle>,
+    /// What it serves (the element it was made from, the device a box is of): a site element's
+    /// serving parts stand with it on the site (Q6643).
+    serves: Vec<Handle>,
+    /// Why it is the site's (Q6643): built from a site sheet, or wholly beyond the first
+    /// building's footprint. `None`: a building's.
+    site: Option<String>,
+    /// It stands for every building (no sheet or placing naming fewer): only such can be the site's.
+    for_all: bool,
+    /// The run it is a piece of (an atom's `run`): a run is the site's or a building's whole.
+    run: Option<String>,
+}
+
+/// The first building's footprint (drawing units), each box grown by [`SITE_MARGIN_FT`]: its
+/// levels' shells (not the boxes added for the other buildings), else its walls' extent. Empty:
+/// no footprint known, so nothing is judged by where it lies.
+fn own_footprint(d: &Drawing, sp: &BuildingSpec, upf: f64) -> Vec<[f64; 4]> {
+    let mut out: Vec<[f64; 4]> = shells_grown(sp, upf).into_values().flatten().collect();
+    let m = SITE_MARGIN_FT * upf;
+    let grow = |r: &[f64; 4]| [r[0].min(r[2]) - m, r[1].min(r[3]) - m, r[0].max(r[2]) + m, r[1].max(r[3]) + m];
+    if out.is_empty() {
+        let mut b = cadaddy_geom::Bounds2::EMPTY;
+        for e in d.model.iter().take(MAX_ELEMENTS).filter(|e| super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("wall"))) {
+            if props::has_store(&e.common.xdata) && props::read(&e.common.xdata).get(COPY_OF).is_some() {
+                continue;
+            }
+            b = b.union(&cadaddy_doc::entity_bounds(d, e, 0));
+        }
+        if !b.is_empty() && [b.min.x, b.min.y, b.max.x, b.max.y].iter().all(|v| v.is_finite()) {
+            out.push(grow(&[b.min.x, b.min.y, b.max.x, b.max.y]));
+        }
+    }
+    out
+}
+
+/// Each level's shell boxes of the first building (not the boxes added for the others), grown by
+/// [`SITE_MARGIN_FT`], drawing units.
+fn shells_grown(sp: &BuildingSpec, upf: f64) -> BTreeMap<String, Vec<[f64; 4]>> {
+    let m = SITE_MARGIN_FT * upf;
+    let added: Vec<&[f64; 4]> = sp.buildings.added_shells.values().flatten().collect();
+    sp.shells
+        .iter()
+        .map(|(level, boxes)| {
+            let v: Vec<[f64; 4]> = boxes
+                .iter()
+                .filter(|r| r.iter().all(|v| v.is_finite()) && !added.contains(r))
+                .take(MAX_ELEMENTS)
+                .map(|r| [r[0].min(r[2]) - m, r[1].min(r[3]) - m, r[0].max(r[2]) + m, r[1].max(r[3]) + m])
+                .collect();
+            (level.clone(), v)
+        })
+        .filter(|(_, v)| !v.is_empty())
+        .collect()
+}
+
+/// Whether the box `b` (`[x0, y0, x1, y1]`) lies wholly outside every footprint box. Never with no
+/// footprint, or a box that isn't finite.
+fn beyond(footprint: &[[f64; 4]], b: [f64; 4]) -> bool {
+    if footprint.is_empty() || !b.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    !footprint.iter().any(|r| b[0] <= r[2] && b[2] >= r[0] && b[1] <= r[3] && b[3] >= r[1])
+}
+
+/// The box around some points (`[x0, y0, x1, y1]`), NaN for none.
+fn box_of_points(pts: &[[f64; 2]]) -> [f64; 4] {
+    if pts.is_empty() {
+        return [f64::NAN; 4];
+    }
+    pts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
+        [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
+    })
+}
+
+/// The site sheet an element was built from (Q6643): its `sheet`, its own sheet, or a sheet a
+/// property was read from on the print, when that is one of the site's.
+fn site_sheet_of(b: &Buildings, ps: &Props, sheet: Option<&str>) -> Option<String> {
+    if b.site_sheets.is_empty() {
+        return None;
+    }
+    ps.get("sheet")
+        .map(Prop::text)
+        .into_iter()
+        .chain(sheet.map(str::to_string))
+        .chain(ps.iter().filter(|(_, p)| p.source.kind == SourceKind::Print).filter_map(|(_, p)| p.source.doc.clone()))
+        .find(|s| b.is_site_sheet(s))
+        .map(|s| s.trim().to_string())
 }
 
 /// Place the spec's buildings in the model: copies of an earlier placing out, then every element
@@ -431,7 +537,19 @@ pub fn apply(d: &mut Drawing, sp: &mut BuildingSpec) -> Applied {
         (!v.is_empty()).then_some(v)
     };
 
-    // Each element: where it was placed before, its sheet, what it serves.
+    // The site's work stands once (Q6643): what lies wholly beyond this, of no sheet naming
+    // buildings, is the site's.
+    let footprint = own_footprint(d, sp, upf);
+    // The equipment the spec says stands on the site (site gear, a pole, a site pull box).
+    let site_equipment: BTreeSet<String> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|x| super::utilityxfmr::is_site(x))
+        .map(|x| x.tag.trim().to_ascii_uppercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    // Each element: where it was placed before, its sheet, what it serves, whether it is the site's.
     let mut items: Vec<Item> = Vec::new();
     for e in d.model.iter().take(MAX_ELEMENTS) {
         if super::elemprops::element_kind(e).is_none() {
@@ -446,16 +564,56 @@ pub fn apply(d: &mut Drawing, sp: &mut BuildingSpec) -> Applied {
             let stands = if stands.is_empty() { vec![b.clone()] } else { stands };
             (b, stands)
         });
-        let sheet = if placed.is_some() { None } else { element_sheet(d, e, &ps, &sheets) };
+        let own_sheet = element_sheet(d, e, &ps, &sheets);
+        let named_sheet = own_sheet.as_deref().and_then(named).is_some();
+        // Only what stands for every building can be the site's: a sheet naming buildings, or a
+        // placing that gave it fewer, says whose it is.
+        let for_all = !named_sheet && placed.as_ref().is_none_or(|(_, st)| st.len() >= names.len());
+        let site = if !for_all {
+            None
+        } else if let Some(sh) = site_sheet_of(&sp.buildings, &ps, own_sheet.as_deref()) {
+            Some(format!("built from the site sheet {sh}: the site's work is placed once, where the site plan puts it, in no building"))
+        } else if let Some(t) = super::bimlook::made_tag(e, "tag").filter(|t| site_equipment.contains(&t.trim().to_ascii_uppercase())) {
+            Some(format!("{t} stands on the site by the building's spec: placed once, where it is drawn, in no building"))
+        } else {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            beyond(&footprint, [b.min.x, b.min.y, b.max.x, b.max.y]).then(|| {
+                format!(
+                    "lies wholly beyond the first building's footprint and {SITE_MARGIN_FT} ft around it: the site's work is placed once, where it is drawn, in no building (trade practice)"
+                )
+            })
+        };
+        let sheet = if placed.is_some() { None } else { own_sheet };
         let mut refs = references(&ps);
+        let mut serves: Vec<Handle> =
+            ps.get("box_of").map(|p| p.text().split([',', ' ']).filter_map(|t| Handle::parse_hex(t.trim())).take(64).collect()).unwrap_or_default();
         if let Some(src) = made_from(d, e).filter(|h| d.entity(*h).is_some_and(|x| super::elemprops::element_kind(x).is_some())) {
             refs.insert(0, src);
+            serves.insert(0, src);
         }
-        items.push(Item { h: e.handle, placed, sheet, refs });
+        let run = ps.get("run").map(Prop::text).map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+        items.push(Item { h: e.handle, placed, sheet, refs, serves, site, for_all, run });
+    }
+    // A run with a piece on the site is the site's whole, up to its stub at the wall: the site
+    // plan's route stands once; a building it doesn't reach gets no shifted piece of it.
+    let site_runs: BTreeSet<String> = items.iter().filter(|i| i.site.is_some()).filter_map(|i| i.run.clone()).collect();
+    for it in items.iter_mut().filter(|i| i.site.is_none() && i.for_all) {
+        if let Some(r) = it.run.as_ref().filter(|r| site_runs.contains(*r)) {
+            it.site = Some(format!("a piece of the run {r}, which runs out onto the site: the run is placed once, whole, in no building"));
+        }
+    }
+    // What serves a site element (its pole's base, its box) stands with it.
+    for _ in 0..2 {
+        let on_site: HashMap<Handle, ()> = items.iter().filter(|i| i.site.is_some()).map(|i| (i.h, ())).collect();
+        for it in items.iter_mut().filter(|i| i.site.is_none() && i.for_all) {
+            if let Some(src) = it.serves.iter().find(|h| on_site.contains_key(h)) {
+                it.site = Some(format!("serves {}, the site's: placed once with it, in no building", src.hex()));
+            }
+        }
     }
     // Which buildings each element is in: its own placing, its sheet's, the element it serves'.
     let mut of: HashMap<Handle, Vec<String>> = HashMap::new();
-    for it in &items {
+    for it in items.iter().filter(|i| i.site.is_none()) {
         if let Some((_, stands)) = &it.placed {
             of.insert(it.h, stands.clone());
         } else if let Some(v) = it.sheet.as_deref().and_then(named) {
@@ -463,7 +621,7 @@ pub fn apply(d: &mut Drawing, sp: &mut BuildingSpec) -> Applied {
         }
     }
     for _ in 0..2 {
-        for it in items.iter().filter(|i| i.placed.is_none() && i.sheet.as_deref().and_then(named).is_none()) {
+        for it in items.iter().filter(|i| i.site.is_none() && i.placed.is_none() && i.sheet.as_deref().and_then(named).is_none()) {
             if of.contains_key(&it.h) {
                 continue;
             }
@@ -476,6 +634,18 @@ pub fn apply(d: &mut Drawing, sp: &mut BuildingSpec) -> Applied {
     let mut copies: Vec<(Entity, String)> = Vec::new();
     let mut copy_of: HashMap<(Handle, String), Handle> = HashMap::new();
     for it in &items {
+        // The site's: once, where it is, in no building (Q6643).
+        if let Some(why) = &it.site {
+            done.site += 1;
+            let _ = d.modify_entity(it.h, |e| {
+                let mut ps = props::read(&e.common.xdata);
+                ps.remove(BUILDING);
+                ps.remove(STANDS_FOR);
+                ps.set(ON_SITE, Prop::new("site", Source::from_doc(SourceKind::Rule, why)));
+                e.common.xdata = props::write(&e.common.xdata, &ps).into();
+            });
+            continue;
+        }
         let stands = of.get(&it.h).cloned().unwrap_or_else(|| names.clone());
         if stands.len() == names.len() {
             done.shared += 1;
@@ -496,6 +666,7 @@ pub fn apply(d: &mut Drawing, sp: &mut BuildingSpec) -> Applied {
                 let mut ps = props::read(&e.common.xdata);
                 ps.set(BUILDING, Prop::new(own.clone(), why));
                 ps.set(STANDS_FOR, Prop::new(stands_text, Source::computed()));
+                ps.remove(ON_SITE);
                 e.common.xdata = props::write(&e.common.xdata, &ps).into();
             });
             if moved {
@@ -576,6 +747,9 @@ pub fn apply(d: &mut Drawing, sp: &mut BuildingSpec) -> Applied {
 /// buildings is there once per building (moved to that building's place; a copy's id ends in
 /// `@<building>`); one read off a plan naming one building is there once. The model's elements are
 /// already one per building, the spec's items are read once: this is what counts them alike.
+/// The site's work is there once (Q6643): an item read off a site sheet, or one of no sheet
+/// naming buildings that lies wholly beyond the first building's footprint and
+/// [`SITE_MARGIN_FT`], as `apply` leaves the model's.
 /// `None`: one building.
 pub fn per_building(sp: &BuildingSpec) -> Option<BuildingSpec> {
     if !sp.buildings.several() {
@@ -598,9 +772,23 @@ pub fn per_building(sp: &BuildingSpec) -> Option<BuildingSpec> {
         let o = ft(&own);
         stands.into_iter().filter(|b| *b != own).map(|b| (b.clone(), [ft(&b)[0] - o[0], ft(&b)[1] - o[1]])).collect()
     };
+    // The site's items (Q6643): once, not per building. `pts` in its level's plan units (judged
+    // against that level's shell, else every level's); no points: by its sheet only.
+    let by_level = shells_grown(sp, upf);
+    let all: Vec<[f64; 4]> = by_level.values().flatten().copied().collect();
+    let on_site = |sheet: &str, level: &str, pts: &[[f64; 2]]| -> bool {
+        if sp.buildings.sheets.keys().any(|k| k.eq_ignore_ascii_case(sheet.trim())) {
+            return false;
+        }
+        let footprint = by_level.get(level).unwrap_or(&all);
+        sp.buildings.is_site_sheet(sheet) || beyond(footprint, box_of_points(pts))
+    };
     let mut out = sp.clone();
     let budget = |n: usize| n < MAX_COPIES;
     for r in &sp.mep.runs {
+        if on_site(&r.source_sheet, &r.level, &r.points) {
+            continue;
+        }
         for (b, d) in others(&r.source_sheet) {
             if !budget(out.mep.runs.len()) {
                 break;
@@ -613,6 +801,9 @@ pub fn per_building(sp: &BuildingSpec) -> Option<BuildingSpec> {
         }
     }
     for t in &sp.mep.terminals {
+        if on_site(&t.source_sheet, &t.level, &[t.at]) {
+            continue;
+        }
         for (_, d) in others(&t.source_sheet) {
             if !budget(out.mep.terminals.len()) {
                 break;
@@ -629,6 +820,9 @@ pub fn per_building(sp: &BuildingSpec) -> Option<BuildingSpec> {
             .cloned()
             .or_else(|| e.sources.get("position").and_then(|p| p.split_whitespace().next()).map(str::to_string))
             .unwrap_or_default();
+        if super::utilityxfmr::is_site(e) || on_site(&sheet, &e.level, &[e.min, e.max]) {
+            continue;
+        }
         for (_, d) in others(&sheet) {
             if !budget(out.mep.equipment.len()) {
                 break;
@@ -641,6 +835,9 @@ pub fn per_building(sp: &BuildingSpec) -> Option<BuildingSpec> {
     }
     for t in &sp.tags {
         let sheet = t.fields.get("sheet").map(|f| f.value.clone()).unwrap_or_default();
+        if on_site(&sheet, &t.level, &[]) {
+            continue;
+        }
         for (b, d) in others(&sheet) {
             if !budget(out.tags.len()) {
                 break;
@@ -688,7 +885,7 @@ pub fn footprint_ft(d: &Drawing, sp: &BuildingSpec) -> [f64; 2] {
 
 /// The buildings a set names, for a spec: the list placed, the sheets naming them.
 pub fn to_spec(set: &SetBuildings, list: Vec<SiteBuilding>) -> Buildings {
-    Buildings { list, sheets: set.sheets.clone(), added_shells: BTreeMap::new() }
+    Buildings { list, sheets: set.sheets.clone(), added_shells: BTreeMap::new(), site_sheets: Vec::new() }
 }
 
 /// What the model holds per building (copies included), from the elements' `building`.
@@ -838,7 +1035,8 @@ mod tests {
         let wall_src = print_object(&mut d, [100.0, 100.0]);
         let wall = element(&mut d, Part::Wall, wall_src, [100.0, 100.0], &[]);
         let dev_b = element(&mut d, Part::Device, Handle(0), [200.0, 200.0], &[("sheet", "E-12")]);
-        let dev_shared = element(&mut d, Part::Device, Handle(0), [300.0, 300.0], &[("sheet", "E-13")]);
+        // Set in the floor plan's wall: each building's copy is in that building's copy of it.
+        let dev_shared = element(&mut d, Part::Device, Handle(0), [300.0, 300.0], &[("sheet", "E-13"), ("host_wall", &wall.hex())]);
         // A device's box: made from the device, it goes where the device goes.
         let box_b = element(&mut d, Part::Device, dev_b, [205.0, 200.0], &[("box_of", &dev_b.hex())]);
         let box_shared = element(&mut d, Part::Device, Handle(0), [305.0, 300.0], &[("box_of", &dev_shared.hex())]);
@@ -871,6 +1069,14 @@ mod tests {
             .map(|e| e.handle.hex())
             .unwrap_or_default();
         assert_eq!(box_copy.get("box_of").map(Prop::text), Some(dev_copy_handle));
+        // ...and the copy of the shared device is set in the copy of the wall (Q6645: it named the
+        // first building's wall, so Validate found it on another wall than its symbol's).
+        let copy_of =
+            |h: Handle| d.model.iter().find(|e| props::read(&e.common.xdata).get(COPY_OF).map(Prop::text) == Some(h.hex())).map(|e| e.handle.hex());
+        let dev_copy =
+            copies.iter().find(|p| p.get(COPY_OF).map(Prop::text) == Some(dev_shared.hex())).unwrap_or_else(|| panic!("no copy of the device"));
+        assert_eq!(dev_copy.get("host_wall").map(Prop::text), copy_of(wall));
+        assert!(copy_of(wall).is_some_and(|w| w != wall.hex()));
         // B's shell is there too, so its elements are in a building.
         assert_eq!(sp.shells["Level 1"], vec![[0.0, 0.0, 480.0, 300.0], [720.0, 0.0, 1200.0, 300.0]]);
 
@@ -885,6 +1091,133 @@ mod tests {
         let one = apply(&mut d, &mut sp);
         assert_eq!((one.removed, d.model.len()), (3, before));
         assert_eq!(sp.shells["Level 1"].len(), 1);
+    }
+
+    fn site_of(d: &Drawing, h: Handle) -> Option<String> {
+        d.entity(h).and_then(|e| props::read(&e.common.xdata).get(ON_SITE).map(|p| p.source.doc.clone().unwrap_or_default()))
+    }
+
+    fn copies_of(d: &Drawing, h: Handle) -> usize {
+        d.model.iter().filter(|e| props::read(&e.common.xdata).get(COPY_OF).map(Prop::text) == Some(h.hex())).count()
+    }
+
+    /// Q6643: one plan built as two buildings copied the site's pole lights, their bases, the site
+    /// equipment and the buried runs into the second building's place, out on the site. The site's
+    /// work stands once; a building's own work, to just outside its walls, is copied with it.
+    #[test]
+    fn the_sites_work_is_placed_once_not_copied_with_a_building() {
+        let mut d = Drawing::default();
+        // The first building's shell: 40' x 25' at the origin (inch drawing).
+        let wall_src = print_object(&mut d, [100.0, 100.0]);
+        let wall = element(&mut d, Part::Wall, wall_src, [100.0, 100.0], &[]);
+        // A pole light read off the site sheet, standing just beyond the wall (inside the margin:
+        // its sheet says it is the site's), and the pole's base made for it.
+        let pole = element(&mut d, Part::Device, Handle(0), [490.0, 100.0], &[("sheet", "S-1")]);
+        let base = element(&mut d, Part::Device, Handle(0), [490.0, 100.0], &[("box_of", &pole.hex())]);
+        // A site pull box and a buried run's piece far out on the site, of no sheet of their own.
+        let pull_box = element(&mut d, Part::Device, Handle(0), [-2000.0, -1000.0], &[]);
+        let buried = element(&mut d, Part::Device, Handle(0), [-200.0, 100.0], &[]);
+        // The service's last piece, 4' from the wall: the building's own, copied with it.
+        let stub = element(&mut d, Part::Device, Handle(0), [-58.0, 100.0], &[]);
+        // A buried run from the site to the wall: its piece at the wall goes with the run.
+        let run_far = element(&mut d, Part::Device, Handle(0), [-300.0, 200.0], &[("run", "R7")]);
+        let run_wall = element(&mut d, Part::Device, Handle(0), [-10.0, 200.0], &[("run", "R7")]);
+        // A run wholly in the building: copied whole.
+        let run_in = element(&mut d, Part::Device, Handle(0), [200.0, 200.0], &[("run", "R8")]);
+        // Equipment built from the spec, just beside the wall: one the spec marks as standing on
+        // the site stands once; the building's own is copied with it.
+        let tagged = |d: &mut Drawing, tag: &str| {
+            let h = element(d, Part::Device, Handle(0), [-20.0, 150.0], &[]);
+            let _ = d.modify_entity(h, |e| {
+                let mut x: Vec<cadaddy_doc::RawTag> = e.common.xdata.to_vec();
+                x.insert(4, cadaddy_doc::RawTag { code: 1000, value: format!("tag:{tag}") });
+                e.common.xdata = x.into();
+            });
+            h
+        };
+        let site_gear = tagged(&mut d, "SG-1");
+        let own_gear = tagged(&mut d, "EQ-2");
+        // A plan naming building B places its device where it is drawn, wherever that is.
+        let dev_b = element(&mut d, Part::Device, Handle(0), [-900.0, 100.0], &[("sheet", "E-12")]);
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        sp.sheets = vec![link("A-1", [0.0, 0.0, 1000.0, 1000.0]), link("E-12", [2000.0, 0.0, 3000.0, 1000.0])];
+        sp.shells.insert("Level 1".into(), vec![[0.0, 0.0, 480.0, 300.0]]);
+        let gear = |tag: &str, site: bool| cadaddy_walk3d::MepEquipment {
+            tag: tag.into(),
+            sources: if site { BTreeMap::from([("site".to_string(), "outside the building".to_string())]) } else { BTreeMap::new() },
+            ..Default::default()
+        };
+        sp.mep.equipment = vec![gear("SG-1", true), gear("EQ-2", false)];
+        let set = two();
+        sp.buildings = to_spec(&set, place(&set, footprint_ft(&d, &sp), &BTreeMap::new()));
+        sp.buildings.site_sheets = vec!["S-1".into()];
+        let before = d.model.len();
+        let done = apply(&mut d, &mut sp);
+        // Copied: the wall and the stub. The site's four stand once, where they are.
+        assert_eq!((done.copied, done.site, done.moved), (4, 7, 1), "{done:?}");
+        assert_eq!(d.model.len(), before + 4);
+        assert_eq!((copies_of(&d, site_gear), copies_of(&d, own_gear)), (0, 1));
+        assert!(site_of(&d, site_gear).is_some_and(|w| w.contains("SG-1")), "{:?}", site_of(&d, site_gear));
+        assert!(site_of(&d, run_wall).is_some_and(|w| w.contains("R7")), "{:?}", site_of(&d, run_wall));
+        assert_eq!((copies_of(&d, run_in), copies_of(&d, run_far)), (1, 0));
+        for h in [pole, base, pull_box, buried, run_far, run_wall] {
+            assert_eq!(copies_of(&d, h), 0, "{} copied", h.hex());
+            assert_eq!(building_of(&d, h), "", "the site's is in no building");
+        }
+        assert_eq!((copies_of(&d, wall), copies_of(&d, stub)), (1, 1));
+        assert!(site_of(&d, pole).is_some_and(|w| w.contains("S-1")), "{:?}", site_of(&d, pole));
+        assert!(site_of(&d, base).is_some_and(|w| w.contains(&pole.hex())), "{:?}", site_of(&d, base));
+        assert!(site_of(&d, buried).is_some_and(|w| w.contains("beyond")), "{:?}", site_of(&d, buried));
+        assert!((x_of(&d, pull_box) + 2000.0).abs() < 1e-9 && (x_of(&d, pole) - 490.0).abs() < 1e-9, "never moved");
+        assert_eq!(building_of(&d, dev_b), "B");
+        assert!((x_of(&d, dev_b) - (-900.0 + 720.0)).abs() < 1e-9, "the named building's device moves with it");
+        assert_eq!(site_of(&d, stub), None);
+
+        // Placed again: the same.
+        let again = apply(&mut d, &mut sp);
+        assert_eq!((again.copied, again.site, again.removed, again.moved), (4, 7, 4, 0), "{again:?}");
+        assert_eq!(d.model.len(), before + 4);
+        // A model an earlier placing copied the site into (before the fix): the site's elements
+        // said they stood for every building; placed anew, they stand once.
+        let _ = d.modify_entity(pull_box, |e| {
+            let mut ps = props::read(&e.common.xdata);
+            ps.remove(ON_SITE);
+            ps.set(BUILDING, Prop::new("A", Source::computed()));
+            ps.set(STANDS_FOR, Prop::new("A,B", Source::computed()));
+            e.common.xdata = props::write(&e.common.xdata, &ps).into();
+        });
+        let third = apply(&mut d, &mut sp);
+        assert_eq!((third.copied, third.site), (4, 7), "{third:?}");
+        assert_eq!((copies_of(&d, pull_box), building_of(&d, pull_box)), (0, String::new()));
+    }
+
+    #[test]
+    fn the_bill_of_materials_counts_the_sites_work_once() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        let run = |id: &str, sheet: &str, x: f64| -> cadaddy_walk3d::MepRun {
+            serde_json::from_value(json!({"system": "E-UG", "level": "Level 1", "points": [[x, 100.0], [x + 120.0, 100.0]], "size_in": [1.0, 0.0], "bottoms_ft": [-2.0, -2.0], "objects": [], "id": id, "source_sheet": sheet}))
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        // Inside the building; off the site sheet beside it; far out on the site; the B plan's.
+        sp.mep.runs = vec![run("IN", "P-1", 100.0), run("SITE", "S-1", 100.0), run("FAR", "P-1", -3000.0), run("B", "E-12", -3000.0)];
+        sp.shells.insert("Level 1".into(), vec![[0.0, 0.0, 480.0, 300.0]]);
+        sp.buildings = to_spec(&two(), place(&two(), [40.0, 25.0], &BTreeMap::new()));
+        sp.buildings.site_sheets = vec!["S-1".into()];
+        // Equipment beside the wall: the site's (by the spec's mark) once, the building's twice.
+        let gear = |tag: &str, site: bool| cadaddy_walk3d::MepEquipment {
+            tag: tag.into(),
+            level: "Level 1".into(),
+            min: [-30.0, 100.0],
+            max: [-10.0, 120.0],
+            sources: if site { BTreeMap::from([("site".to_string(), "outside the building".to_string())]) } else { BTreeMap::new() },
+            ..Default::default()
+        };
+        sp.mep.equipment = vec![gear("SG-1", true), gear("EQ-2", false)];
+        let pb = per_building(&sp).unwrap_or_else(|| panic!("two buildings"));
+        let ids: Vec<&str> = pb.mep.runs.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["IN", "SITE", "FAR", "B", "IN@B"], "the site's runs once, the building's twice");
+        let tags: Vec<&str> = pb.mep.equipment.iter().map(|e| e.tag.as_str()).collect();
+        assert_eq!(tags, ["SG-1", "EQ-2", "EQ-2"]);
     }
 
     #[test]

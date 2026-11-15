@@ -14,10 +14,18 @@
 //!
 //! The model read back from the drawing ([`model_of`]): devices are the plan's device and
 //! fixture blocks as Walk derives them (kind = their type attribute, else the block name, in
-//! lower case; mark = their BIM type mark; height and mounting from the device rules), walls
-//! the walls the last build made (else the plan's wall faces), openings its doors and
-//! windows, runs the lines on run layers and lines or polylines whose BIM type is a raceway,
-//! duct or pipe. Coordinates are building feet on each level's plan, as the prints'.
+//! lower case; mark = their BIM type mark; height and mounting from the device rules), and the
+//! devices the build made that Walk has no block for (a PDF job's: kind and type as the build
+//! wrote them), walls the walls the last build made (else the plan's wall faces), openings its
+//! doors and windows, runs the lines on run layers and lines or polylines whose BIM type is a
+//! raceway, duct or pipe. Coordinates are building feet on each level's plan, as the prints'.
+//!
+//! A guided job's prints for Walk's checks ([`placed_prints_from_job`], Q6645): each read device is a symbol where the
+//! build put it: through the registration its sheet was placed onto its level's plan by (kept
+//! with the job, [`super::guided::DevicePlacement`]) and into each building its sheet stands
+//! for, never at the sheet's own place beside the floor plan; on the spec's level, with the kind
+//! the build gives its element and its mark. A sheet no registration placed (or a typical
+//! room's plan, stamped into the rooms of its type) is one finding with its symbols' count.
 //!
 //! The gate ([`gate_before`], [`gate_after`]): an agent's edit (MCP, the control channel) of a
 //! drawing whose prints have `settings.gate` warn or refuse is re-checked round what it
@@ -211,6 +219,27 @@ impl Frame {
     /// The spec's name of a level (any case), else the name as given.
     fn level_name(&self, level: &str) -> String {
         self.spec_levels.iter().find(|l| l.name.eq_ignore_ascii_case(level.trim())).map_or_else(|| level.trim().to_string(), |l| l.name.clone())
+    }
+    /// The spec's name of a level as a job names it (`1`, `L1`, `Level 01` are `Level 1`, `R` is
+    /// `Roof`: Q6645),
+    /// when one spec level is it; else [`Self::level_name`]'s.
+    fn spec_level(&self, level: &str) -> String {
+        if self.spec_levels.iter().any(|l| l.name.eq_ignore_ascii_case(level.trim())) || level.trim().is_empty() {
+            return self.level_name(level);
+        }
+        // By its number (`2` is `Level 2`), else by its canonical name (`R` is `Roof`).
+        let key = super::crossdisc::level_key(level);
+        let canon = |n: &str| super::guided::level_name(n).to_ascii_uppercase();
+        let want = canon(level);
+        for same in [&|l: &&cadaddy_walk3d::Level| super::crossdisc::level_key(&l.name) == key, &|l: &&cadaddy_walk3d::Level| canon(&l.name) == want]
+            as [&dyn Fn(&&cadaddy_walk3d::Level) -> bool; 2]
+        {
+            let mut it = self.spec_levels.iter().filter(same);
+            if let (Some(l), None) = (it.next(), it.next()) {
+                return l.name.clone();
+            }
+        }
+        self.level_name(level)
     }
     /// How far `model.build` moved `level`'s built objects to stack the levels (zero when it
     /// didn't).
@@ -507,6 +536,92 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
     m.walls = distinct_walls(std::mem::take(&mut m.walls));
     m.wall_spans = distinct_spans(std::mem::take(&mut m.wall_spans));
     (m.capped(), frame)
+}
+
+/// The devices the build made that Walk has no block for (a PDF job's: its read devices put in
+/// and built), added to `m` as Walk's are (Q6645: without them every symbol of a job's prints
+/// was missing from the model). A built device made from a device Walk has is that device's
+/// body, never a second device. For Walk's own checks (`bim.validate`, its picture, the gate);
+/// the prescreen reads the built devices itself.
+pub(crate) fn with_built_devices(d: &Drawing, m: &mut Model, frame: &Frame) {
+    let walk: BTreeSet<String> = m.elements.iter().map(|e| e.id.to_ascii_uppercase()).collect();
+    let types = types(d);
+    for e in d.model.iter().take(MAX_ENTITIES) {
+        if m.elements.len() >= v::MAX_ITEMS {
+            break;
+        }
+        if super::wallgen::made_as(e).as_deref() != Some("device") || made_source(e).is_some_and(|h| walk.contains(&h.hex().to_ascii_uppercase())) {
+            continue;
+        }
+        if let Some(el) = built_device(d, e, frame, &types) {
+            m.elements.push(el);
+        }
+    }
+}
+
+/// The object a built object was made from (its build tag's source handle).
+fn made_source(e: &Entity) -> Option<Handle> {
+    let x = &e.common.xdata;
+    let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP))?;
+    x.get(at + 3).filter(|t| t.code == 1000).and_then(|t| Handle::parse_hex(t.value.trim()))
+}
+
+/// A device the build made, as Validate's element (Q6645): its kind and type as the build wrote
+/// them, its plan point (the middle of its box, back on its own level's plan) and its height
+/// (a wall device's middle, a ceiling device's face, above its floor).
+fn built_device(d: &Drawing, e: &Entity, frame: &Frame, types: &BTreeMap<String, BTreeMap<String, String>>) -> Option<Element> {
+    let b = cadaddy_doc::entity_bounds(d, e, 0);
+    if b.is_empty() {
+        return None;
+    }
+    let (level, at) = frame.built_ft(e, b.center());
+    if !fin(at) {
+        return None;
+    }
+    let prov = provenance(e);
+    let props = cadaddy_doc::props::read(&e.common.xdata);
+    let kind = prov
+        .get("kind")
+        .cloned()
+        .unwrap_or_else(|| super::elemprops::reported_kind(e, super::elemprops::element_kind(e).unwrap_or_else(|| "device".into())));
+    let kind = super::validate_kind::words(&kind);
+    let mark = cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata)
+        .map(str::to_string)
+        .or_else(|| ["type_mark", "type"].iter().find_map(|k| props.get(k).map(|p| p.text())))
+        .filter(|m| !m.trim().is_empty());
+    let mounting = v::mounting_of(&kind);
+    let z_in = match (&e.kind, frame.floor_z(&level)) {
+        (EntityKind::Mesh(mesh), Some(floor)) => {
+            let (lo, hi) = mesh.vertices.iter().take(100_000).fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
+            let z = if mounting == Mounting::Ceiling { hi } else { 0.5 * (lo + hi) };
+            Some((z - floor) / frame.upf() * 12.0).filter(|z| z.is_finite() && lo <= hi)
+        }
+        _ => None,
+    };
+    let mut fields = mark.as_ref().and_then(|mk| types.iter().find(|(k, _)| k.eq_ignore_ascii_case(mk))).map(|(_, f)| f.clone()).unwrap_or_default();
+    for (k, val) in prov.iter().filter(|(k, _)| k.starts_with("field.")) {
+        fields.insert(k.trim_start_matches("field.").to_string(), val.clone());
+    }
+    Some(Element {
+        id: e.handle.hex(),
+        kind,
+        mark,
+        tag: prov.get("tag").cloned(),
+        level,
+        at,
+        z_in,
+        mounting,
+        box_depth_in: prov.get("boxdepth").and_then(|v| v::parse_inches(v)),
+        wall: stored_host(e),
+        status: if has_override(e) { Some(Status::Override) } else { prov.get("status").and_then(|s| Status::parse(s)) },
+        // Where it was read: its provenance's, else the sheet the build says it is from.
+        source: prov.get("source").cloned().or_else(|| props.get("sheet").map(|p| p.text()).filter(|t| !t.trim().is_empty())),
+        fields,
+    })
+}
+
+fn fin(p: [f64; 2]) -> bool {
+    p[0].is_finite() && p[1].is_finite()
 }
 
 /// The framing depth of each wall type (lower-case name → inches).
@@ -1049,10 +1164,11 @@ fn failure_json(f: &v::Failure, frame: &Frame) -> Value {
 /// Validate the active drawing.
 pub(crate) fn report(s: &Session, cmd: &str, p: &Value) -> Result<(Report, Frame)> {
     let (sp, _) = current(s, cmd)?;
-    let (model, frame) = model_of(s.doc()?, &sp);
+    let (mut model, frame) = model_of(s.doc()?, &sp);
+    with_built_devices(s.doc()?, &mut model, &frame);
     let prints: Prints = if let Some(p) = prints_of(&sp) {
         p.clone()
-    } else if let Some(p) = prints_from_job(s, &frame) {
+    } else if let Some(p) = placed_prints_from_job(s, &frame) {
         p
     } else {
         return Err(bad(
@@ -1140,6 +1256,174 @@ pub(crate) fn prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
     Some(prints.capped())
 }
 
+/// [`prints_from_job`] with each read device where the build put it (Q6645), for Walk's checks
+/// (`bim.validate` and its picture): through the registration its sheet was placed by, into each
+/// building its sheet stands for, on the spec's level, as the kind the build gives its element and
+/// with its mark; a sheet nothing placed is one [`v::UncheckedSheet`]; the marks the legends
+/// define are documented types. The other callers read the devices as the sheets draw them (they
+/// place them themselves).
+///
+/// Try to build [`Prints`] from a guided job's data when `sp.prints` is empty.
+///
+/// The guided job's Devices stage reads device symbols from the plan sheets and stores them in
+/// `job.devices`. Its Rooms stage stores rooms in the stage result. Neither writes `sp.prints`,
+/// so `bim.validate` needs to find them here.
+pub(crate) fn placed_prints_from_job(s: &Session, frame: &Frame) -> Option<Prints> {
+    let job = super::guided::load_job(s).ok()??;
+    let mut prints = Prints::default();
+    // Sheets from the job's classified sheet regions.
+    for r in &job.sheet_regions {
+        if !prints.sheets.iter().any(|s| s.number.eq_ignore_ascii_case(&r.number)) {
+            prints.sheets.push(PrintSheet {
+                number: r.number.clone(),
+                title: String::new(),
+                level: if r.level.is_empty() { None } else { Some(r.level.clone()) },
+                kinds: Vec::new(),
+            });
+        }
+    }
+    // Symbols from the job's confirmed devices, each where the build put it: through the
+    // registration its sheet was placed by (Q6645), never at the sheet's own position (a trade
+    // sheet imported beside the floor plan lies hundreds of feet off the building).
+    let placement = job.device_placement.as_ref();
+    let fresh = placement.filter(|p| p.devices == job.devices.len());
+    let mut through: Vec<Option<&super::guided::PlacedSheet>> = vec![None; job.devices.len()];
+    for r in fresh.map_or(&[][..], |p| p.sheets.as_slice()) {
+        for i in &r.devices {
+            if let Some(slot) = usize::try_from(*i).ok().and_then(|i| through.get_mut(i)) {
+                *slot = Some(r);
+            }
+        }
+    }
+    // Several buildings from one set of plans (Q6292): a sheet's contents go to the buildings it
+    // names, else to every building, each shifted from the first as the build shifted them.
+    let buildings = super::bspec::current(s, "bim.validate").ok().map(|(sp, _)| sp.buildings).filter(|b| b.several());
+    let upf = frame.upf();
+    let shifts_of = |sheet: &str| -> Vec<[f64; 2]> {
+        let Some(b) = &buildings else { return vec![[0.0, 0.0]] };
+        // A site sheet's contents stand once, where it puts them (Q6643).
+        if b.is_site_sheet(sheet) {
+            return vec![[0.0, 0.0]];
+        }
+        let at = |n: &str| b.list.iter().find(|x| x.name == n).map_or([0.0, 0.0], |x| x.offset_ft);
+        let first = b.list.first().map_or([0.0, 0.0], |x| x.offset_ft);
+        let named: Vec<&str> = b
+            .sheets
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(sheet))
+            .map(|(_, v)| b.list.iter().filter(|x| v.contains(&x.name)).map(|x| x.name.as_str()).collect())
+            .unwrap_or_default();
+        let stands: Vec<&str> = if named.is_empty() { b.list.iter().map(|x| x.name.as_str()).collect() } else { named };
+        stands
+            .into_iter()
+            .take(super::buildings::MAX_BUILDINGS)
+            .map(|n| {
+                let o = at(n);
+                [(o[0] - first[0]) * upf, (o[1] - first[1]) * upf]
+            })
+            .filter(|d| d[0].is_finite() && d[1].is_finite())
+            .collect()
+    };
+    // The sheets whose symbols have no plan point, by (sheet, level, why): how many, of what kinds.
+    let mut unchecked: BTreeMap<(String, String, String), (usize, BTreeSet<String>)> = BTreeMap::new();
+    for (i, dev) in job.devices.iter().enumerate() {
+        let level = if !dev.level.is_empty() {
+            dev.level.clone()
+        } else {
+            job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(&dev.sheet)).map(|r| r.level.clone()).unwrap_or_default()
+        };
+        // As the model names it (its elements are on the spec's levels).
+        let level = frame.spec_level(&level);
+        let sheet = if dev.sheet.is_empty() { "PLAN".to_string() } else { dev.sheet.clone() };
+        let placed = match (placement, fresh) {
+            // Placed by no registration: the devices stand where their sheets draw them.
+            (None, _) => Ok(dev.at),
+            (Some(_), None) => Err("the devices were read again after the build placed them: build again"),
+            (Some(_), Some(_)) => match through.get(i).copied().flatten() {
+                Some(r) => r.apply(dev.at).ok_or(if r.why.is_empty() { super::guided::UNREGISTERED_WHY } else { r.why.as_str() }),
+                None => Err("the build placed no device of it"),
+            },
+        };
+        // Its kind as the build names its element (`junction_box`, not its mark `J` or the
+        // legend's words: Q6645), its mark the type it is tagged with.
+        let kind = super::validate_kind::words(super::guided::device_kind_of(dev));
+        let p = match placed {
+            Ok(p) => p,
+            Err(why) => {
+                let e = unchecked.entry((sheet, level, why.to_string())).or_default();
+                e.0 += 1;
+                e.1.insert(kind);
+                continue;
+            }
+        };
+        for d in shifts_of(&sheet) {
+            let q = Vec2::new(p[0] + d[0], p[1] + d[1]);
+            let at_ft = if level.is_empty() { frame.to_ft(q).1 } else { frame.to_ft_on(&level, q) };
+            prints.symbols.push(Symbol {
+                sheet: sheet.clone(),
+                level: level.clone(),
+                kind: kind.clone(),
+                mark: (!dev.tag.trim().is_empty()).then(|| dev.tag.clone()),
+                tag: if dev.tag.is_empty() { None } else { Some(dev.tag.clone()) },
+                at: at_ft,
+                mounting_in: None,
+            });
+        }
+    }
+    // Rooms from the Rooms stage result, when the stage ran.
+    if let Some(st) = job.stages.iter().find(|s| s.name == super::guided::StageName::Rooms)
+        && let Some(rooms_arr) = st.result.as_ref().and_then(|r| r.get("rooms")).and_then(Value::as_array)
+    {
+        for room in rooms_arr.iter().take(v::MAX_ITEMS) {
+            let number = room.get("number").or_else(|| room.get("name")).and_then(Value::as_str).unwrap_or("").to_string();
+            let name = room.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            let level = frame.spec_level(room.get("level").and_then(Value::as_str).unwrap_or(""));
+            let sheet = room.get("sheet").and_then(Value::as_str).unwrap_or("").to_string();
+            let unit_type = room.get("unit_type").and_then(Value::as_str).map(String::from);
+            let exterior = room.get("exterior").and_then(Value::as_bool).unwrap_or(false);
+            let ceiling_ft = room.get("ceiling_ft").and_then(Value::as_f64).filter(|v| v.is_finite());
+            let outline: Vec<[f64; 2]> = room
+                .get("outline")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| {
+                            let arr = p.as_array()?;
+                            let x = arr.first()?.as_f64()?;
+                            let y = arr.get(1)?.as_f64()?;
+                            Some(frame.to_ft(Vec2::new(x, y)).1)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !number.is_empty() || !name.is_empty() {
+                prints.rooms.push(v::PrintRoom { level, number, name, outline, unit_type, exterior, ceiling_ft, sheet });
+            }
+        }
+    }
+    // The marks the sets' legends define (a device read as its legend row says): documented
+    // types, as a schedule's are.
+    for dev in job.devices.iter().filter(|d| !d.kind_source.trim().is_empty() && !d.tag.trim().is_empty()) {
+        if prints.legend.len() < v::MAX_ITEMS && !prints.legend.iter().any(|r| r.mark.eq_ignore_ascii_case(dev.tag.trim())) {
+            prints.legend.push(v::ScheduleRow {
+                sheet: dev.sheet.clone(),
+                schedule: "legend".into(),
+                mark: dev.tag.trim().to_string(),
+                kind: Some(super::validate_kind::words(super::guided::device_kind_of(dev))),
+                ..v::ScheduleRow::default()
+            });
+        }
+    }
+    prints.unchecked = unchecked
+        .into_iter()
+        .map(|((sheet, level, why), (symbols, kinds))| v::UncheckedSheet { sheet, level, symbols, kinds: kinds.into_iter().collect(), why })
+        .collect();
+    if prints.sheets.is_empty() && prints.symbols.is_empty() && prints.rooms.is_empty() && prints.unchecked.is_empty() {
+        return None;
+    }
+    Some(prints.capped())
+}
+
 fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.validate";
     let start = web_time::Instant::now();
@@ -1176,10 +1460,11 @@ fn run_overlay(s: &mut Session, p: &Value) -> Result<Value> {
     let h = p.get("height").and_then(Value::as_u64).map_or(700, |v| v.clamp(16, u64::from(MAX_PX)) as u32);
     let around = p.get("around").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(12.0).min(1_000.0);
     let (sp, _) = current(s, CMD)?;
-    let (model, frame) = model_of(s.doc()?, &sp);
+    let (mut model, frame) = model_of(s.doc()?, &sp);
+    with_built_devices(s.doc()?, &mut model, &frame);
     let prints: Prints = if let Some(p) = prints_of(&sp) {
         p.clone()
-    } else if let Some(p) = prints_from_job(s, &frame) {
+    } else if let Some(p) = placed_prints_from_job(s, &frame) {
         p
     } else {
         return Err(bad(CMD, "the drawing has no prints to check against yet"));
@@ -1378,7 +1663,9 @@ pub(crate) fn gate_after(s: &mut Session, g: Gate, r: Result<Value>) -> Result<V
     let parts = |d: &Drawing| -> Option<(Prints, Model)> {
         let sp = BuildingSpec::from_json(d.building_spec.as_deref()?).ok()?;
         let prints = sp.prints.as_deref()?.clone();
-        Some((prints, model_of(d, &sp).0))
+        let (mut m, frame) = model_of(d, &sp);
+        with_built_devices(d, &mut m, &frame);
+        Some((prints, m))
     };
     let (Some((p0, m0)), Some((p1, m1))) = (parts(&g.before), parts(now)) else { return Ok(result) };
     let scope = gate_scope(&changed, &m0, &m1);

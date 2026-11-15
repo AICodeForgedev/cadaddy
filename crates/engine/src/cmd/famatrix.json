@@ -1,0 +1,128 @@
+{
+  "about": "What the fire alarm's sequence of operations calls for (Q6647): each output of its matrix (or of a written sequence) and each schedule note tying equipment to the fire alarm needs a device or relay that performs it, and its power, on the drawings. Rules data, never job values: the words a page, an output, a mark and a tie are read by, each output class's objects and devices, and the code behind it.",
+  "page_words": [["SEQUENCE"], ["MATRIX"], ["EVENTS"]],
+  "mark_texts": ["X", "x", "•", "●", "■", "✓", "✔", "*", "O", "○"],
+  "min_marks": 2,
+  "max_text_chars": 120,
+  "char_width": 0.6,
+  "row_reach": 1.0,
+  "column_reach": 1.5,
+  "relay_words": [["RELAY"], ["CONTROL", "MODULE"], ["CONTROL", "RELAY"], ["INTERFACE", "MODULE"]],
+  "relay_reach_ft": 10.0,
+  "rule_statuses": ["inferred", "proposed"],
+  "rule_keys": ["RULE"],
+  "describe_keys": ["DESC", "SERV", "LOAD", "NAME", "EQUIP", "TYPE", "REMARK", "NOTE"],
+  "skip_keys": ["FOR", "RULE", "SEQUENCE", "BASIS", "NOT_DRAWN", "STATUS", "FA_MODULES", "FA_OUTPUT", "WHY", "CIRCUIT_BASIS"],
+  "own_kind_prefixes": ["fa_"],
+  "own_kind_suffixes": ["_damper", "_module"],
+  "tie": {
+    "words": [["FIRE", "ALARM"], ["FACP"], ["F", "A", "C", "P"], ["ALARM", "SYSTEM"]],
+    "actions": ["INTERLOCK", "INTERLOCKED", "SHUTDOWN", "SHUT", "STOP", "START", "RELEASE", "CONTROL", "CONTROLLED", "CONNECT", "CONNECTED", "TIE"],
+    "class": "equipment_interlock"
+  },
+  "module": {
+    "kind": "fa_control_module",
+    "name": "fire alarm addressable control (relay) module",
+    "box_in": [4.0, 4.0, 2.125],
+    "source": "trade practice: one addressable control (relay) module beside each unit the fire alarm controls, on the signaling line circuit (NFPA 72 21.2.4, 21.3, 21.7)"
+  },
+  "outputs": [
+    {
+      "id": "shunt_trip",
+      "name": "shunt trip of the elevator's power",
+      "words": [["SHUNT"]],
+      "actions": [],
+      "targets": [{"words": [["ELEVATOR"], ["ELEVATORS"], ["ELEV"], ["HOISTWAY"]], "kinds": ["elevator", "elevator_disconnect", "elevator_machine", "elevator_controller"]}],
+      "per": "output",
+      "device": "shunt",
+      "device_words": [["SHUNT"]],
+      "power_words": [["SHUNT"]],
+      "severity": "high",
+      "basis": "NEC 620.51(B) and ASME A17.1 2.8.3.3: where sprinklers protect the hoistway or machine room, the elevator's main line is disconnected by a shunt trip ahead of water; NFPA 72 21.4: the fire alarm trips it, and its control power is monitored for integrity (21.4.4)",
+      "ask": "Which breaker or switch shunt-trips the elevator's power, and which circuit gives its control power?",
+      "proposal": "a shunt-trip breaker on the elevator's feeder (a shunt-trip fused switch is the alternative) with 120 V control power the fire alarm monitors, tripped by a fire alarm control relay set beside it"
+    },
+    {
+      "id": "elevator_recall",
+      "name": "elevator recall",
+      "words": [["RECALL"], ["CAPTURE"]],
+      "actions": [],
+      "targets": [{"words": [["ELEVATOR"], ["ELEVATORS"], ["ELEV"]], "kinds": ["elevator", "elevator_controller", "elevator_machine"]}],
+      "per": "output",
+      "device": "relay",
+      "device_kinds": ["elevator_recall"],
+      "severity": "medium",
+      "basis": "NFPA 72 21.3 and ASME A17.1 2.27.3: the fire alarm recalls the elevators by relays at the elevator controller (primary and alternate recall, flashing hat)",
+      "ask": "Which relays at the elevator controller recall the cars?",
+      "proposal": "fire alarm control relays at the elevator controller (primary recall, alternate recall, flashing hat)"
+    },
+    {
+      "id": "damper_release",
+      "name": "damper release",
+      "words": [["DAMPER"], ["DAMPERS"]],
+      "actions": ["RELEASE", "CLOSE", "CLOSURE", "SHUT", "ACTUATE", "OPERATE", "OPEN", "DROP"],
+      "targets": [{"words": [], "kinds": ["fire_smoke_damper", "smoke_damper"]}],
+      "per": "target",
+      "device": "relay",
+      "severity": "medium",
+      "basis": "NFPA 72 21.7 and IMC 607.3.3.2: the fire alarm closes each smoke and combination damper through a relay that drops its actuator's power",
+      "ask": "Which relay drops each damper's actuator circuit?",
+      "proposal": "one fire alarm control relay per damper (or one relay dropping the dampers' circuit), set beside it"
+    },
+    {
+      "id": "door_release",
+      "name": "door release",
+      "words": [["DOOR"], ["DOORS"], ["HOLDER"], ["HOLDERS"]],
+      "actions": ["RELEASE", "RELEASED", "UNLOCK", "CLOSE", "DROP"],
+      "targets": [{"words": [], "kinds": ["door_holder", "mag_door_holder"]}],
+      "per": "target",
+      "device": "relay",
+      "severity": "medium",
+      "basis": "NFPA 72 21.8 and IBC 716.2.6.6: the fire alarm releases the door holders through a relay (or by dropping their supply)",
+      "ask": "Which relay or supply releases the door holders?",
+      "proposal": "a fire alarm control relay dropping the door holders' 24 V supply"
+    },
+    {
+      "id": "fan_control",
+      "name": "fan shutdown or start",
+      "words": [["FAN"], ["FANS"], ["AHU"], ["AHUS"], ["RTU"], ["RTUS"], ["HVAC"], ["UNIT"], ["UNITS"]],
+      "actions": ["SHUTDOWN", "SHUT", "STOP", "START", "INTERLOCK", "INTERLOCKED", "DE", "OFF"],
+      "targets": [
+        {"words": [["EXHAUST"]], "kinds": ["exhaust_fan"]},
+        {"words": [["SUPPLY", "FAN"], ["SUPPLY", "FANS"]], "kinds": ["supply_fan"]},
+        {"words": [["RETURN", "FAN"], ["RETURN", "FANS"]], "kinds": ["return_fan"]},
+        {"words": [["AHU"], ["AHUS"], ["AIR", "HANDLING"], ["AIR", "HANDLER"], ["AIR", "HANDLERS"]], "kinds": ["air_handling_unit"]},
+        {"words": [["RTU"], ["RTUS"], ["ROOFTOP"], ["ROOF", "TOP"]], "kinds": ["rooftop_unit"]},
+        {"words": [["ENERGY", "RECOVERY"], ["ERV"], ["ERVS"]], "kinds": ["energy_recovery_unit"]},
+        {"words": [["OUTDOOR", "AIR"], ["DOAS"]], "kinds": ["outdoor_air_unit"]},
+        {"words": [], "kinds": ["exhaust_fan", "supply_fan", "return_fan", "air_handling_unit", "rooftop_unit", "energy_recovery_unit", "outdoor_air_unit"]}
+      ],
+      "per": "target",
+      "device": "relay",
+      "severity": "medium",
+      "basis": "NFPA 72 21.7 and IMC 606.2: the fire alarm stops (or starts, for smoke control) each unit it controls through a relay in the unit's control circuit",
+      "ask": "Which relay in each unit's control circuit does the fire alarm drive?",
+      "proposal": "one fire alarm control relay per unit, wired into its control circuit, set beside it"
+    },
+    {
+      "id": "equipment_interlock",
+      "name": "equipment interlocked with the fire alarm",
+      "words": [],
+      "actions": [],
+      "targets": [],
+      "per": "target",
+      "device": "relay",
+      "severity": "medium",
+      "basis": "NFPA 72 21.2.4 and 21.3: equipment the fire alarm controls is driven by a fire alarm control relay within 3 ft of the controlled circuit",
+      "ask": "Which relay ties each unit to the fire alarm?",
+      "proposal": "one fire alarm control relay per unit, within 3 ft of its control circuit"
+    }
+  ],
+  "actuator_load": {
+    "box_kind": "damper_power_box",
+    "va_keys": ["ACTUATOR_VA", "VA", "WATTS"],
+    "tolerance": 0.1,
+    "basis": "NEC 220.14(A) and 408.4(A): a branch circuit's schedule row carries the loads on it; a circuit feeding N damper actuators carries their N loads",
+    "ask": "What load do the dampers' actuators put on the circuit?"
+  }
+}

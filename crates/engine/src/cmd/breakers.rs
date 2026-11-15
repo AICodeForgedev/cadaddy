@@ -540,7 +540,7 @@ pub(crate) fn layout(s: &PanelSchedule, hints: &BTreeSet<Vec<u32>>) -> Layout {
 // ─── The model's facts ───────────────────────────────────────────────────────
 
 /// A value of a build tag `prop:KEY=value` (equipment's schedule properties).
-fn made_prop(e: &Entity, key: &str) -> Option<String> {
+pub(crate) fn made_prop(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tags(e)?.iter().filter(|t| t.code == 1000).find_map(|t| {
         let (k, v) = t.value.strip_prefix("prop:")?.split_once('=')?;
         k.trim().eq_ignore_ascii_case(key).then(|| v.trim().to_string())

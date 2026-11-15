@@ -2737,7 +2737,9 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                     unit: "each",
                     net: 1.0,
                     status: if damper { "firm" } else { "rule" },
-                    rule: (!damper).then(|| prop("RULE")).filter(|r| !r.is_empty()),
+                    rule: (!damper).then(|| if prop("RULE").is_empty() { prop("BASIS") } else { prop("RULE") }).filter(|r| !r.is_empty()),
+                    // A module the drawings show none of, set by the build (Q6647): inferred work.
+                    made: if !damper && prop("STATUS") == "inferred" { "inferred" } else { "" },
                     level: st(&e, "level"),
                     elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
                     circuit: match (prop("PANEL"), prop("CIRCUIT")) {

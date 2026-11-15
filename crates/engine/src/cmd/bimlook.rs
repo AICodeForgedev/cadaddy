@@ -671,7 +671,8 @@ pub(crate) fn display_summary_in(
         if s != Shown::No {
             drawn.set(drawn.get() + 1);
             if systems {
-                paints.borrow_mut().insert(e.handle, scope.paint_what(e, c, w));
+                let paint = scope.paint_what(e, c, w);
+                paints.borrow_mut().insert(e.handle, (paint, scope.role(e, c, w)));
             }
         }
         match s {
@@ -683,13 +684,13 @@ pub(crate) fn display_summary_in(
             }
         }
     });
-    let paints: HashMap<Handle, Paint> = paints.into_inner();
+    let paints: HashMap<Handle, (Paint, Option<bimviews::Role>)> = paints.into_inner();
     let faded = faded.into_inner();
     let mut legend = Vec::new();
     if systems {
         bimviews::paint_systems(&mut out, &scope, look, ghost, &paints, &faded);
         let mut counts: HashMap<Paint, usize> = HashMap::new();
-        for p in paints.values() {
+        for (p, _) in paints.values() {
             *counts.entry(*p).or_default() += 1;
         }
         legend = bimviews::legend(&scope.rules, &counts);

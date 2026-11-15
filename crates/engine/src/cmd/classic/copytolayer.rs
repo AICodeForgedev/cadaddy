@@ -2,7 +2,7 @@
 //! objects on another layer, in place or moved by a displacement.
 
 use cadaddy_doc::Handle;
-use cadaddy_geom::{Mat3, Vec2};
+use cadaddy_geom::{Vec2, Vec3};
 use serde_json::{Value, json};
 
 use super::super::machines::{SelOutcome, SelectPhase};
@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Format", "Layer Tools", "Copy Objects to New Layer"])
             .params(
                 "{handles? (default: selection), layer: destination layer, create?: bool (default true: a missing layer is made), \
-                 delta?: [dx,dy] | from?: [x,y] + to?: [x,y] (default: in place)} → {handles, layer}",
+                 delta?: [dx,dy] | [dx,dy,dz] | from?: [x,y(,z)] + to?: [x,y(,z)] (default: in place; a height copies up or down)} → {handles, layer}",
             )
             .interactive(|_| Ok(Box::new(CopyToLayerM::default()))),
     ]
@@ -33,19 +33,21 @@ fn run_copytolayer(s: &mut Session, p: &Value) -> Result<Value> {
     if hs.is_empty() {
         return Err(bad(cmd, "nothing to copy: give `handles` or select objects"));
     }
-    let delta = match (point_param(p, "delta"), point_param(p, "from"), point_param(p, "to")) {
-        (Some(d), _, _) => d,
-        (None, Some(a), Some(b)) => b - a,
-        (None, None, None) => Vec2::ZERO,
-        _ => return Err(bad(cmd, "give `delta`, or both `from` and `to`")),
+    // A height copies up or down, as COPY does (Q6656).
+    let delta = if ["delta", "from", "to"].iter().all(|k| p.get(*k).is_none()) {
+        Vec3::ZERO
+    } else if p.get("delta").is_none() && (p.get("from").is_none() || p.get("to").is_none()) {
+        return Err(bad(cmd, "give `delta`, or both `from` and `to`"));
+    } else {
+        delta3_param(cmd, p)?
     };
-    if !delta.is_finite() || delta.x.abs() > 1e15 || delta.y.abs() > 1e15 {
+    if !delta.is_finite() || delta.x.abs() > 1e15 || delta.y.abs() > 1e15 || delta.z.abs() > 1e15 {
         return Err(bad(cmd, "the displacement must be finite"));
     }
     copy_to_layer(s, &hs, layer, delta, bool_or(p, "create", true))
 }
 
-fn copy_to_layer(s: &mut Session, hs: &[Handle], layer: &str, delta: Vec2, create: bool) -> Result<Value> {
+fn copy_to_layer(s: &mut Session, hs: &[Handle], layer: &str, delta: Vec3, create: bool) -> Result<Value> {
     let d = s.doc_mut()?;
     let name = match d.layer(layer) {
         Some(l) => l.name.clone(),
@@ -56,7 +58,7 @@ fn copy_to_layer(s: &mut Session, hs: &[Handle], layer: &str, delta: Vec2, creat
             layer.to_string()
         }
     };
-    let copies = super::super::modify::transform_entities(s, hs, &Mat3::translate(delta), true)?;
+    let (copies, _) = super::super::modify::displace(s, hs, delta, true)?;
     let d = s.doc_mut()?;
     for h in &copies {
         d.modify_entity(*h, |e| e.common.layer = name.as_str().into())?;
@@ -93,7 +95,7 @@ struct CopyToLayerM {
 
 impl CopyToLayerM {
     fn finish(&self, s: &mut Session, delta: Vec2) -> Result<Step> {
-        let r = copy_to_layer(s, &self.picked, &self.layer, delta, true)?;
+        let r = copy_to_layer(s, &self.picked, &self.layer, delta.to3(0.0), true)?;
         if let Some(m) = r.get("message").and_then(Value::as_str) {
             s.echo(m.to_string());
         }

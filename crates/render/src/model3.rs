@@ -562,6 +562,7 @@ fn mesh_key(e: &Entity, m: &cadaddy_doc::Mesh) -> Option<(u64, Vec3)> {
     e.common.layer.to_ascii_lowercase().hash(&mut h);
     e.common.color.hash(&mut h);
     format!("{:?}|{:?}", e.common.material, e.common.transparency).hash(&mut h);
+    e.common.lineweight.hash(&mut h);
     m.vertices.len().hash(&mut h);
     for v in &m.vertices {
         let q = |x: f64| (x / 1e-4).round();
@@ -854,9 +855,10 @@ fn build_impl(
                 continue;
             }
             let Some((a, b)) = run_line(&el.bounds) else { continue };
-            let color = store.get(el.handle).map_or(Rgb(160, 160, 160), |e| own_rgb(e));
+            let (color, weight) =
+                store.get(el.handle).map_or((Rgb(160, 160, 160), 0), |e| (own_rgb(e), crate::bimview::weight_of(e.common.lineweight)));
             base.owner_now = el.handle;
-            crate::shade::push_line(&mut base, Line3 { a, b, color, edge: false, faint: false });
+            crate::shade::push_line(&mut base, Line3 { a, b, color, edge: false, faint: false, weight });
             if line_show.len() < base.lines.len() {
                 line_show.push(Show { from, to: below });
                 runs += 1;

@@ -215,6 +215,8 @@ enum Payload {
 /// Threads encoding a save's object chunks at most.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_ENCODING_THREADS: usize = 4;
+/// Object chunks encoded ahead of the writer, per encoding thread.
+const CHUNKS_PER_THREAD: usize = 4;
 
 /// What a save wrote besides the chunks: the sheet each object chunk was filed under.
 struct Written {
@@ -270,10 +272,10 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
     };
     let reused_stored = |c: &Arc<StoredChunk>| earlier.stored.get(&(Arc::as_ptr(c) as usize)).copied();
     let origin = |c: &ChunkRef| d.sheet_store.origin_of(c).cloned();
-    // The object chunks to write, encoded and compressed on all cores: most of a large drawing's
-    // save. Only the compressed bytes are kept until they are written. A chunk decoded from a
-    // stored one and not changed since is written as it was stored.
-    let fresh: Vec<(&ChunkRef, usize, usize)> = parts
+    // The object chunks to write, in file order, encoded and compressed a window at a time on a
+    // few cores: most of a large drawing's save. A chunk decoded from a stored one and not changed
+    // since is written as it was stored.
+    let fresh: Vec<(ChunkRef, usize, usize)> = parts
         .iter()
         .filter_map(|p| if let Part::Objects(c) = p { Some(c) } else { None })
         .filter(|c| origin(c).is_none())
@@ -283,26 +285,46 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
             pieces
                 .into_iter()
                 .filter(move |(_, from, to)| if whole { reused_objects(c).is_none() } else { reused_piece(c, *from, *to).is_none() })
-                .map(move |(_, from, to)| (c, from, to))
+                .map(move |(_, from, to)| (c.clone(), from, to))
         })
         .collect();
-    let encode = || -> Vec<Result<((usize, usize), u16, usize, container::Packed), String>> {
-        crate::par_map(&fresh, |(c, from, to)| {
-            let items = c.items().get(*from..*to).unwrap_or_default();
-            model::entities(items).map(|(v, raw)| ((c.key(), *from), v, raw.len(), container::pack(&raw, true)))
-        })
-    };
     // On a few cores at most: each chunk is its objects as JSON values while it is encoded, and a
     // 10-core machine held ten (a job's checkpoint was its peak memory).
     #[cfg(not(target_arch = "wasm32"))]
-    let packed = match rayon::ThreadPoolBuilder::new().num_threads(rayon::current_num_threads().clamp(1, MAX_ENCODING_THREADS)).build() {
-        Ok(pool) => pool.install(encode),
-        Err(_) => encode(),
-    };
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(rayon::current_num_threads().clamp(1, MAX_ENCODING_THREADS)).build().ok();
+    #[cfg(not(target_arch = "wasm32"))]
+    let window = pool.as_ref().map_or(1, rayon::ThreadPool::current_num_threads).saturating_mul(CHUNKS_PER_THREAD);
     #[cfg(target_arch = "wasm32")]
-    let packed = encode();
-    let mut packed: HashMap<(usize, usize), (u16, usize, container::Packed)> =
-        packed.into_iter().map(|r| r.map(|(k, v, n, p)| (k, (v, n, p)))).collect::<Result<_, _>>()?;
+    let window = CHUNKS_PER_THREAD;
+    // The next `window` chunks of `fresh` from `next` on, encoded and compressed side by side.
+    // A window is encoded when the writer reaches its first chunk: only the compressed bytes of
+    // one window wait to be written. Encoding all of them first held every compressed chunk
+    // beside the file being made (Q6635).
+    let encode_window = |packed: &mut HashMap<(usize, usize), (u16, usize, container::Packed)>, next: &mut usize| -> Result<(), String> {
+        let end = next.saturating_add(window).min(fresh.len());
+        let todo = fresh.get(*next..end).unwrap_or_default();
+        let encode = || {
+            crate::par_map(todo, |(c, from, to)| {
+                let items = c.items().get(*from..*to).unwrap_or_default();
+                model::entities(items).map(|(v, raw)| ((c.key(), *from), v, raw.len(), container::pack(&raw, true)))
+            })
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let done = match &pool {
+            Some(pool) => pool.install(encode),
+            None => encode(),
+        };
+        #[cfg(target_arch = "wasm32")]
+        let done = encode();
+        for r in done {
+            let (k, v, n, p) = r?;
+            packed.insert(k, (v, n, p));
+        }
+        *next = end;
+        Ok(())
+    };
+    let mut packed: HashMap<(usize, usize), (u16, usize, container::Packed)> = HashMap::new();
+    let mut next_fresh = 0usize;
     let mut saved = Vec::new();
     let mut put = |w: &mut Writer,
                    source: Source,
@@ -384,6 +406,13 @@ fn write_parts(d: &Drawing, w: &mut Writer, earlier: &Earlier<'_>, thumbnail: bo
                         } else {
                             (Source::Piece(c.clone(), from, to), reused_piece(&c, from, to))
                         };
+                        // The writer reached the next window's first chunk: encode the window.
+                        if reused.is_none()
+                            && !packed.contains_key(&(c.key(), from))
+                            && fresh.get(next_fresh).is_some_and(|(fc, f, _)| fc.key() == c.key() && *f == from)
+                        {
+                            encode_window(&mut packed, &mut next_fresh)?;
+                        }
                         let pre = std::cell::RefCell::new(packed.remove(&(c.key(), from)));
                         put(w, source, reused, *b"ENTS", true, &|| match pre.borrow_mut().take() {
                             Some((version, raw_len, p)) => Ok(Payload::Packed(version, raw_len, p)),

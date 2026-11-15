@@ -45,7 +45,7 @@ const MAX_OBJECTS: usize = 100_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("elev.read", "Read Elevation", run_elev).params(
-            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, the roof level's parapet height)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, parapet?: {level, height_ft, applied, roofs (given it), kept (roofs keeping their roof-plan note)}, parapets: [{height_ft, start_ft?, end_ft?}] (every top of parapet the elevation marks, lowest first, over the stretch of the facade where the silhouette's top stands at it; none = the whole facade; applied, they replace only this facade's), parapets_unplaced: [height_ft] (tops the silhouette meets nowhere while another's does), windows: {count, sill_ft, head_ft}, bands: [...], assumed: [{item, value, assumed, why}], conflicts: [...], applied}",
+            "{region: [x0,y0,x1,y1] (the elevation on the sheet), facade?: north|south|east|west (else from its title), apply?: bool (into the spec: level elevations and heights, window sill and head, the facade's bands, the roof level's parapet height)} → {facade, levels: [{label, name, y, elevation_ft, matched?}], roof_ft?, parapet_ft?, parapet?: {level, height_ft, applied, roofs (given it), kept (roofs keeping their roof-plan note)}, parapets: [{height_ft, start_ft?, end_ft?}] (every top of parapet the elevation marks, lowest first, over the stretch of the facade where the silhouette's top stands at it, feet from the roof level's left end (its tall edges that reach the roof line, not a lower wing's); none = the whole facade; applied, they replace only this facade's), parapets_unplaced: [height_ft] (tops the silhouette meets nowhere while another's does), windows: {count, sill_ft, head_ft}, bands: [...], assumed: [{item, value, assumed, why}], conflicts: [...], applied}",
         ),
         CommandSpec::new("roof.read", "Read Roof Plan", run_roof).params(
             "{region: [x0,y0,x1,y1] (the roof plan on the sheet), level?: the roof level's name (default: one named ROOF), apply?: bool} → {roofs: [{name, outline, slope?: {down, rise_per_ft, direction_status?}, parapet_ft?, parapet_status?, parapet_from?}], crickets, equipment, drains, assumed: [{item, value, assumed, why}] (each default put in), conflicts: [...] (roof-plan parapet notes the elevation disagrees with), applied}",
@@ -253,8 +253,8 @@ fn settle_parapet(r: &mut Roof, elevation_ft: f64, conflicts: &mut Vec<Value>) -
 const MAX_PARAPET_TOPS: usize = 64;
 
 /// The tops of parapet an elevation marks: for each PARAPET level line (its y and its height
-/// over the roof line, feet), the stretches of the facade (from `ends.0` to `ends.1`, the
-/// building's ends) where the silhouette's top lies on it: horizontal pieces of the drawing at
+/// over the roof line, feet), the stretches of the facade (from `ends.0` to `ends.1`, the roof
+/// level's ends) where the silhouette's top lies on it: horizontal pieces of the drawing at
 /// its height other than the level lines (`datum`). A line the silhouette meets nowhere while
 /// another one's does is no top of this facade (another facade's, marked for reference): it is
 /// left out, by its height. With no line met anywhere, each marks the whole facade. A stretch
@@ -403,6 +403,20 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
     let left = if left.is_finite() { left } else { lines.first().map_or(region.min.x, |l| l.1) };
     let right = tall.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let right = if right > left { right } else { lines.first().map_or(region.max.x, |l| l.2) };
+    // The roof level's ends: its tall edges that reach the roof line. A lower wing, podium or
+    // canopy the elevation also shows stops below it; the build measures a parapet's stretches
+    // along the roof level's own roofs, so they are measured from the same ends here.
+    let roof_y = levels.iter().find(|l| has(l, "ROOF")).map(|l| l.y);
+    let up: Vec<f64> = segs
+        .iter()
+        .filter(|(a, b, _)| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() >= 4.0 * upf)
+        .filter(|(a, b, _)| roof_y.is_some_and(|ry| a.y.max(b.y) >= ry - upf / 48.0))
+        .map(|(a, _, _)| a.x)
+        .collect();
+    let roof_ends = match (up.iter().copied().reduce(f64::min), up.iter().copied().reduce(f64::max)) {
+        (Some(a), Some(b)) if b > a => (a, b),
+        _ => (left, right),
+    };
     // The tops of parapet: each one where the silhouette's top lies on its line (a parapet that
     // steps along the facade), lowest first.
     let datum_lines: Vec<Handle> = ents
@@ -416,7 +430,7 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .map(|e| e.handle)
         .collect();
-    let (tops, unplaced) = parapet_tops(&parapet_lines, &segs, &datum_lines, (left, right), upf);
+    let (tops, unplaced) = parapet_tops(&parapet_lines, &segs, &datum_lines, roof_ends, upf);
     let parapet = tops.iter().map(|t| t.height_ft).reduce(f64::min);
     let hatched: Vec<Bounds2> = ents.iter().filter(|e| matches!(e.kind, EntityKind::Hatch(_))).map(|e| cadaddy_doc::entity_bounds(d, e, 0)).collect();
     for (b, _) in &rects {

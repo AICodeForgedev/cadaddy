@@ -110,6 +110,8 @@ pub(crate) struct Rules {
     powered: Vec<Powered>,
     water_derived: String,
     water_systems: Vec<String>,
+    /// A maker name's business words (`CO`, `COMPANY`, `INC`): not part of who the maker is.
+    maker_business_words: Vec<String>,
 }
 
 /// The rules data (empty lists when it can't be read: nothing classified, nothing powered).
@@ -179,14 +181,28 @@ fn edits(a: &str, b: &str) -> usize {
     prev.last().copied().unwrap_or(0)
 }
 
+/// A maker's name without its business words (`Maker Pump Co.` → `MAKERPUMP`, `Maker Company`
+/// → `MAKER`): the rules data's `maker_business_words`.
+fn maker_core(m: &str) -> String {
+    static WORDS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let business = WORDS.get_or_init(|| rules().maker_business_words.iter().map(|w| w.to_ascii_uppercase()).collect());
+    m.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .take(20)
+        .map(str::to_ascii_uppercase)
+        .filter(|w| !business.contains(w))
+        .collect()
+}
+
 /// Whether two makers are one: the same letters, one the other's start (`ACME` and `Acme
-/// Plumbing`, `ACME` and `Acme Co`), or a misspelling of it (two letters off in six or more).
+/// Plumbing`, `ACME` and `Acme Co`), or a misspelling of it (two letters off in six or more); each
+/// also without its business words (`Maker Pump Co.` and `Maker Company`, Q6653).
 pub(crate) fn same_maker(a: &str, b: &str) -> bool {
-    let (x, y) = (maker_key(a), maker_key(b));
-    if x.is_empty() || y.is_empty() {
-        return false;
-    }
-    x == y || x.starts_with(&y) || y.starts_with(&x) || (x.len().min(y.len()) >= 6 && edits(&x, &y) <= 2)
+    let one = |x: &str, y: &str| {
+        !x.is_empty() && !y.is_empty() && (x == y || x.starts_with(y) || y.starts_with(x) || (x.len().min(y.len()) >= 6 && edits(x, y) <= 2))
+    };
+    let (ca, cb) = (maker_core(a), maker_core(b));
+    one(&maker_key(a), &maker_key(b)) || (ca.len() >= 3 && cb.len() >= 3 && one(&ca, &cb))
 }
 
 /// A catalog number compared without case, spaces or punctuation.
@@ -1173,6 +1189,11 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
             )),
             Some((sb, it)) => {
                 let p = it.products.first();
+                // An approved submittal answers the schedule's basis of design (Q6653): the
+                // product it names in place of the scheduled one is a substitution, recorded with
+                // the design value beside it, never a question.
+                let approved = it.status == Status::Approved;
+                let at = conflicts.len();
                 if let (Some(row), Some(p)) = (row, p)
                     && !row.manufacturer.is_empty()
                     && !same_maker(&row.manufacturer, &p.vendor)
@@ -1199,6 +1220,12 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                         handles,
                     ));
                 }
+                if approved {
+                    for c in conflicts.iter_mut().skip(at) {
+                        c.topic = format!("approved substitution ({})", c.topic);
+                        c.record = true;
+                    }
+                }
             }
             None => {}
         }
@@ -1214,20 +1241,34 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         if q.makers.iter().any(|x| same_maker(x, &m)) || q.substitution.contains("or equal") {
             continue;
         }
+        // A maker the approved submittal gives was accepted by the design team's review: a
+        // substitution recorded, not a question (Q6653).
+        let by_submittal = st.get("manufacturer").is_some_and(|p| p.source.kind == SourceKind::Submittal);
+        let approved = by_submittal && chosen(&docs.submittals, &f.tag).is_some_and(|(_, it)| it.status == Status::Approved);
         let about = format!("plumbing fixture {}", if f.tag.is_empty() { k.clone() } else { f.tag.clone() });
-        if conflicts.iter().any(|c| c.about == about && c.topic == "approved makers") {
+        if conflicts.iter().any(|c| c.about == about && c.topic.contains("approved makers")) {
             continue;
         }
         let handles = by_tag.get(&tag_key(&f.tag)).cloned().unwrap_or_else(|| vec![f.handle]);
         let spec = format!("spec {} p.{} ({})", q.section, q.page, q.product);
-        conflicts.push(conflict(
+        let mut c = conflict(
             "approved makers",
             &about,
             format!("{about}: its maker {m} is not among the specification's approved makers ({})", q.makers.join("; ")),
             "Confirm the maker with the design team (a substitution request), or supply a listed maker".to_string(),
             &[(spec, q.makers.join("; ")), (st.get("manufacturer").and_then(|p| p.source.doc.clone()).unwrap_or_default(), m.clone())],
             &handles,
-        ));
+        );
+        if approved {
+            c.topic = "approved substitution (approved makers)".into();
+            c.issue = format!(
+                "{about}: its maker {m}, approved by the submittal review, in place of the specification's listed makers ({})",
+                q.makers.join("; ")
+            );
+            c.fix = String::new();
+            c.record = true;
+        }
+        conflicts.push(c);
     }
     // What settles each: a sent-back submittal never; the others the review that approved the
     // item with no condition.
@@ -1237,7 +1278,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         }
         c.about.strip_prefix("plumbing fixture ").and_then(answer_of)
     };
-    let answered = conflicts.iter().filter(|c| settled_by(c).is_some()).count();
+    let answered = conflicts.iter().filter(|c| !c.record && settled_by(c).is_some()).count();
     // The electrical connections: a box beside each powered fixture in the spec (the electrical
     // takeoff counts it), its panel and circuit where a panel schedule names its tag.
     let mut boxes = 0usize;
@@ -1309,7 +1350,19 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
             *by_basis.entry((*how).to_string()).or_default() += 1;
         }
         let mut ids: Vec<String> = Vec::new();
-        for c in &conflicts {
+        // A record is no RFI (Q6653): one an earlier build raised under its old topic, still
+        // open, goes.
+        let recorded: BTreeSet<String> = conflicts
+            .iter()
+            .filter(|c| c.record)
+            .flat_map(|c| {
+                let old = c.topic.strip_prefix("approved substitution (").and_then(|t| t.strip_suffix(')')).unwrap_or(&c.topic);
+                let was = super::lighting::Conflict { topic: old.to_string(), ..c.clone() };
+                [c.to_rfi("plumbing").id, was.to_rfi("plumbing").id]
+            })
+            .collect();
+        sp.rfis.retain(|r| !(r.status == cadaddy_walk3d::RfiStatus::Open && recorded.contains(&r.id)));
+        for c in conflicts.iter().filter(|c| !c.record) {
             let mut rfi = c.to_rfi("plumbing");
             if let Some(a) = settled_by(c) {
                 rfi.status = cadaddy_walk3d::RfiStatus::Answered;
@@ -1365,9 +1418,10 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         "elements_by_tag": by_tag.iter().map(|(t, hs)| (t.clone(), hs.len())).collect::<BTreeMap<_, _>>(),
         "connection_boxes": boxes,
         "connections_by": by_basis,
-        "conflicts": conflicts.len(),
+        "conflicts": conflicts.iter().filter(|c| !c.record).count(),
         "conflicts_answered_by_review": answered,
-        "conflicts_by_topic": super::lighting::by_topic(&conflicts),
+        "conflicts_by_topic": super::lighting::by_topic(&conflicts.iter().filter(|c| !c.record).cloned().collect::<Vec<_>>()),
+        "records_by_topic": super::lighting::by_topic(&conflicts.iter().filter(|c| c.record).cloned().collect::<Vec<_>>()),
         "types": typed,
     }))
 }
@@ -1543,6 +1597,10 @@ mod tests {
         assert_eq!(plumbing_kind("PEX TUBING"), None, "TUB is a word, not part of TUBING");
         assert!(same_maker("ACME", "Acme Co"));
         assert!(same_maker("MAKERTON PUMPS", "Makertin Pumps"), "a misspelt maker is the same maker");
+        // Q6653: a maker's business words aren't who it is.
+        assert!(same_maker("Makerton Pump Co.", "Makerton Company"));
+        assert!(same_maker("Makerton Industries, Inc", "MAKERTON"));
+        assert!(!same_maker("Makerton Co.", "Otherton Company"));
         assert!(!same_maker("MAKER ONE", "Other Works"));
     }
 
@@ -1646,17 +1704,17 @@ mod tests {
         assert!(prop(&s, bare, "manufacturer").is_none());
         assert!(prop(&s, bare, "product_gap").is_some_and(|p| p.text().contains("ZZ-1")));
         assert!(prop(&s, untagged, "product_gap").is_some_and(|p| p.text().starts_with("no tag")));
-        // The disagreements are review items: the maker, the sent-back sink, the pump's unlisted maker.
+        // The sent-back sink is a review item. The approved toilet's other maker and the approved
+        // pump's maker off the specification's list are substitutions the review answered:
+        // recorded, never RFIs (Q6653).
         let topics = &v["conflicts_by_topic"];
-        assert_eq!(topics["maker"], 1, "{v}");
         assert_eq!(topics["submittal sent back"], 1, "{v}");
-        assert_eq!(topics["approved makers"], 1, "{v}");
-        assert!(sp.rfis.iter().any(|r| r.topic == "plumbing: maker" && r.sides.len() == 2), "{:?}", sp.rfis);
-        // The maker's disagreement is settled by the review that took no exception; the sent-back
-        // sink's stays open.
+        assert!(topics.get("maker").is_none() && topics.get("approved makers").is_none(), "{v}");
+        let records = &v["records_by_topic"];
+        assert_eq!(records["approved substitution (maker)"], 1, "{v}");
+        assert_eq!(records["approved substitution (approved makers)"], 1, "{v}");
+        assert!(!sp.rfis.iter().any(|r| r.topic.contains("maker")), "{:?}", sp.rfis);
         let rfi = |t: &str| sp.rfis.iter().find(|r| r.topic == t).expect("rfi");
-        assert_eq!(rfi("plumbing: maker").status, cadaddy_walk3d::RfiStatus::Answered);
-        assert!(rfi("plumbing: maker").answer.as_deref().is_some_and(|a| a.contains("No exceptions taken")));
         assert_eq!(rfi("plumbing: submittal sent back").status, cadaddy_walk3d::RfiStatus::Open);
         assert_eq!(v["with_product"], 4, "{v}");
         assert_eq!(v["no_product_data"], 2, "{v}");

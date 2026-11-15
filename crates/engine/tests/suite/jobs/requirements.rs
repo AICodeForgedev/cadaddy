@@ -20,6 +20,11 @@ fn print() -> Source {
 /// An element as the build makes them: a box (feet; the drawing is in inches), the build's tag
 /// and its properties, each from `src` unless given as `(value, source)`.
 fn el(d: &mut Drawing, part: &str, level: &str, layer: &str, at: [f64; 3], ps: &[(&str, Value, Source)]) -> Handle {
+    el_with(d, part, level, layer, at, ps, &[])
+}
+
+/// [`el`], with more of the build's record (`prop:CIRCUIT=…`).
+fn el_with(d: &mut Drawing, part: &str, level: &str, layer: &str, at: [f64; 3], ps: &[(&str, Value, Source)], record: &[&str]) -> Handle {
     let v = |x: f64, y: f64, z: f64| Vec3 { x: x * 12.0, y: y * 12.0, z: z * 12.0 };
     let (lo, hi) = (at, [at[0] + 1.0, at[1] + 1.0, at[2] + 0.5]);
     let vertices = vec![
@@ -38,12 +43,13 @@ fn el(d: &mut Drawing, part: &str, level: &str, layer: &str, at: [f64; 3], ps: &
     d.handseed = h.0 + 1;
     let mut e = Entity::new(h, EntityKind::Mesh(Mesh { vertices, faces, ..Default::default() }));
     e.common.layer = layer.into();
-    let x = vec![
+    let mut x = vec![
         RawTag { code: 1001, value: "CADADDY_WALLGEN".into() },
         RawTag { code: 1000, value: part.into() },
         RawTag { code: 1000, value: level.into() },
         RawTag { code: 1000, value: "0".into() },
     ];
+    x.extend(record.iter().map(|r| RawTag { code: 1000, value: (*r).into() }));
     let mut store = Props::default();
     for (k, val, src) in ps {
         store.set(k, Prop::new(val.clone(), src.clone()));
@@ -229,8 +235,10 @@ fn a_planted_set_raises_one_rfi_per_open_requirement_and_space() {
     let conn = check(&r, "E-CONN-CIRCUIT");
     assert_eq!((conn["ran"].as_bool(), conn["objects"].as_u64()), (Some(false), Some(0)));
     assert!(conn["status"].as_str().unwrap().starts_with("did not run"), "{conn}");
-    // Nor did the breakers' requirements: no panel schedule built.
-    assert_eq!(r["requirements"]["did_not_run"], 4, "{}", r["requirements"]);
+    // Nor did the breakers' requirements or the schedules' arithmetic (no panel schedule built),
+    // nor the fire alarm outputs' (no sequence read, no damper circuit: Q6647).
+    assert_eq!(r["requirements"]["did_not_run"], 8, "{}", r["requirements"]);
+    assert_eq!(check(&r, "FA-OUTPUT-DEVICE")["ran"], false);
     assert_eq!(check(&r, "E-CIRCUIT-SCHEDULED")["status"], "did not run: no circuit on the plans in the model");
 
     // The RFIs, written like a contractor's: where, what each document shows, the question, the
@@ -315,4 +323,116 @@ fn with_no_model_built_rfi_read_says_so_instead_of_an_empty_list() {
     assert_eq!(r["built"], false);
     assert!(r["message"].as_str().unwrap().contains("no model built"), "{r}");
     assert_eq!(r["total"], 0);
+}
+
+/// Q6651: the requirement checks read the model as it stands. A switch's load is the luminaires
+/// carrying its leg (or naming it as their control), a scheduled circuit's load any element
+/// carrying it (a site pole and a sign the build never linked to a breaker), and a luminaire on
+/// the emergency system's circuit is unswitched by design (NEC 700.21). A review item the model
+/// now answers is closed; one it doesn't answer stays open.
+#[test]
+fn the_requirements_read_the_model_as_it_stands() {
+    let mut d = Drawing::new_imperial();
+    let lum = |d: &mut Drawing, room: &str, x: f64, more: &[(&'static str, Value, Source)]| {
+        let mut ps = vec![p("room", room), p("circuit", "LP1-1"), p("type_mark", "A"), sched("schedule_row", "A DOWNLIGHT"), p("sheet", "E-101")];
+        ps.extend(more.iter().cloned());
+        el(d, "light", "L1", "E-LITE", [x, 5.0, 9.0], &ps)
+    };
+    // Room 301: two lights whose control is switch S on leg a, and switch S on leg a, which
+    // carries no `controls` of its own.
+    lum(&mut d, "301", 4.0, &[p("control", "switch S leg a")]);
+    lum(&mut d, "301", 10.0, &[p("control", "switch S leg a")]);
+    let leg_switch = device(&mut d, "L1", "switch", "301", 1.0, 9.0, &[p("switch_leg", "a"), p("type_mark", "S")]);
+    // Room 302: a dimmer with no letter; its light names it.
+    let dimmer = device(&mut d, "L1", "dimmer", "302", 21.0, 9.0, &[]);
+    lum(&mut d, "302", 24.0, &[p("controlled_by", &dimmer.hex())]);
+    // Room 305, a stamped copy of a typical room: its switch S has no letter, and its light's
+    // control names the typical room's switch S (another handle).
+    device(&mut d, "L1", "switch", "305", 81.0, 9.0, &[p("type_mark", "S")]);
+    lum(&mut d, "305", 84.0, &[p("control", "switch leg a: S 9FFFF0")]);
+    // Room 303: a switch on a leg no luminaire carries: still open.
+    let idle = device(&mut d, "L1", "switch", "303", 41.0, 9.0, &[p("switch_leg", "b")]);
+    // A stair light on the emergency system's circuit, no control drawn; a room's light with none.
+    let stair = el(
+        &mut d,
+        "light",
+        "L1",
+        "E-LITE",
+        [60.0, 5.0, 9.0],
+        &[p("room", "ST1"), p("circuit", "LP1-9"), p("type_mark", "A"), sched("schedule_row", "A DOWNLIGHT")],
+    );
+    let dark = lum(&mut d, "304", 120.0, &[]);
+    // The site: a pole on LP1-40 (its label names its panel; no panel property), a sign whose
+    // build record carries LP1-42; nothing carries LP1-44.
+    device(&mut d, "SITE", "site_pole", "", 200.0, 0.0, &[p("circuit", "LP1-40")]);
+    el_with(&mut d, "equipment", "SITE", "E-SITE", [220.0, 0.0, 0.0], &[p("type_mark", "SIGN-1")], &["prop:CIRCUIT=LP1-42", "prop:PANEL=LP1"]);
+    let mut sp = BuildingSpec {
+        levels: vec![serde_json::from_value(json!({"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0})).unwrap()],
+        ..BuildingSpec::default()
+    };
+    sp.mep.panel_schedules.push(
+        serde_json::from_value(json!({"panel": "LP1", "source": "E-601", "circuits": [
+            {"number": "1", "description": "LIGHTING"},
+            {"number": "9", "description": "EM LTG STAIR"},
+            {"number": "40", "description": "POLE LIGHTS"},
+            {"number": "42", "description": "MONUMENT SIGN"},
+            {"number": "44", "description": "SITE RECEPTACLE"}
+        ]}))
+        .unwrap(),
+    );
+    // The build's lighting review items, raised before the model was complete.
+    let item = |id: &str, topic: &str, h: Handle| {
+        serde_json::from_value::<cadaddy_engine::walk3d::Rfi>(
+            json!({"id": id, "kind": "conflict", "level": "L1", "about": "x", "issue": "x", "topic": topic, "elements": [h.hex()]}),
+        )
+        .unwrap()
+    };
+    sp.rfis = vec![
+        item("L-STAIR", "lighting: fixture with no control", stair),
+        item("L-DARK", "lighting: fixture with no control", dark),
+        item("L-LEGA", "lighting: switch leg with no fixture", leg_switch),
+        item("L-LEGB", "lighting: switch leg with no fixture", idle),
+    ];
+    d.building_spec = Some(sp.to_json()).into();
+    // The breakers step's report: three rows nothing it linked is on.
+    let row = |c: &str| json!({"kind": "row_no_plan", "panel": "LP1", "circuit": c, "description": "x", "sheet": "E-601"});
+    let report = json!({"breakers": 5, "mismatches": [row("LP1-40"), row("LP1-42"), row("LP1-44")], "mismatches_total": 3});
+    d.embedded.insert("breakers/report.json".into(), std::sync::Arc::new(serde_json::to_vec(&report).unwrap()));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Building", None);
+
+    let r = s.execute("rfi.read", &json!({})).unwrap();
+    let sw = check(&r, "E-SW-LOAD");
+    assert_eq!(
+        (sw["objects"].as_u64(), sw["met_by_documents"].as_u64(), sw["findings"].as_u64()),
+        (Some(4), Some(3), Some(1)),
+        "only the leg-b switch: {sw}"
+    );
+    let lc = check(&r, "E-LUM-CONTROL");
+    assert_eq!((lc["objects"].as_u64(), lc["open_objects"].as_u64()), (Some(6), Some(1)), "only room 304's light: {lc}");
+    let bl = check(&r, "E-BREAKER-LOAD");
+    assert_eq!((bl["objects"].as_u64(), bl["missing"].as_u64(), bl["findings"].as_u64()), (Some(5), Some(1), Some(1)), "only LP1-44: {bl}");
+    assert_eq!(r["closed_by_model"], 2, "{r}");
+    let status = |r: &Value, id: &str| r["items"].as_array().unwrap().iter().find(|i| i["id"] == id).map(|i| i["status"].clone()).unwrap_or_default();
+    assert_eq!((status(&r, "L-STAIR"), status(&r, "L-LEGA")), (json!("closed"), json!("closed")), "{}", r["items"]);
+    assert_eq!((status(&r, "L-DARK"), status(&r, "L-LEGB")), (json!("open"), json!("open")));
+
+    // Apply: the answered items close with the answer's basis; the others stay open; no mark on
+    // the objects the model completes.
+    s.execute("rfi.read", &json!({"apply": true})).unwrap();
+    let closed = s.execute("rfi.list", &json!({"status": "closed"})).unwrap();
+    let ids: Vec<&str> = closed["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    assert!(ids.contains(&"L-STAIR") && ids.contains(&"L-LEGA"), "{ids:?}");
+    assert!(closed["items"][0]["answer"].as_str().unwrap().starts_with("Answered by the model"), "{}", closed["items"][0]);
+    assert!(closed["items"][0]["answered_by"].as_str().unwrap().starts_with("the model as it stands"), "{}", closed["items"][0]);
+    let open = s.execute("rfi.list", &json!({"status": "open"})).unwrap();
+    let open_ids: Vec<&str> = open["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
+    assert!(open_ids.contains(&"L-DARK") && open_ids.contains(&"L-LEGB"), "{open_ids:?}");
+    assert!(prop(&mut s, leg_switch, "open:E-SW-LOAD").is_null());
+    assert!(prop(&mut s, stair, "open:E-LUM-CONTROL").is_null());
+    assert!(prop(&mut s, idle, "open:E-SW-LOAD")["value"].is_string());
+    let items = s.execute("rfi.list", &json!({"kind": "requirement"})).unwrap();
+    let text = items["csv"].as_str().unwrap_or_default();
+    assert!(!text.contains("LP1-40") && !text.contains("LP1-42") && text.contains("LP1-44"), "{text}");
 }
