@@ -138,7 +138,7 @@ impl Default for GpuCaps {
 }
 
 /// Names of adapters that are software or virtual.
-fn soft_name(name: &str) -> bool {
+pub(crate) fn soft_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     ["llvmpipe", "lavapipe", "softpipe", "swiftshader", "microsoft basic render", "warp", "virgl", "vmware svga", "virtualbox", "parallels display"]
         .iter()

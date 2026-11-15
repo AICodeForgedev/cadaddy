@@ -2738,11 +2738,22 @@ struct DimensionScale {
     named: Option<String>,
 }
 
+/// The one standard of `list` within `tolerance` (relative) of the measured scale `k` (Q6468):
+/// none when two different ratios are that close, since the measurement can't tell them apart
+/// (the same ratio listed twice is one standard; the first name stands).
+fn nearest_standard(k: f64, list: Vec<(f64, String)>, tolerance: f64) -> Option<(f64, String)> {
+    let mut close = list.into_iter().filter(|(s, _)| (s / k - 1.0).abs() <= tolerance);
+    let first = close.next()?;
+    close.all(|(s, _)| same_factor(s, first.0)).then_some(first)
+}
+
 /// The scale a sheet's dimension strings give, for a sheet whose scale note can't be read: each
 /// dimension string's length ([`dimension_length`]) over the length of the line it is written
 /// along (a stroke segment parallel to it, its middle beside the text, within two text heights).
 /// At least [`DIMENSION_MIN_AGREE`] (and a third) of them must agree within
-/// [`DIMENSION_AGREE`]; their scale is the drawing's standard one that close, else their median.
+/// [`DIMENSION_AGREE`]; their scale is the feet standard that close ([`nearest_standard`] of
+/// [`standard_scales`] without the metric ratios: the strings are feet and inches), else their
+/// median.
 fn scale_from_dimensions(texts: &[NoteText], strokes: &[Stroke]) -> Option<DimensionScale> {
     // the segments, filed by grid cell
     let mut segs: Vec<((f64, f64), (f64, f64))> = Vec::new();
@@ -2850,10 +2861,8 @@ fn scale_from_dimensions(texts: &[NoteText], strokes: &[Stroke]) -> Option<Dimen
         return None;
     }
     let median = *ks.get(i + agree / 2)?;
-    let named = standard_scales(false)
-        .into_iter()
-        .filter(|(k, _)| (k / median - 1.0).abs() <= DIMENSION_AGREE)
-        .min_by(|a, b| (a.0 / median - 1.0).abs().total_cmp(&(b.0 / median - 1.0).abs()));
+    // the strings are feet and inches: only the feet scales are candidates, never a metric ratio
+    let named = nearest_standard(median, standard_scales(true), DIMENSION_AGREE);
     Some(match named {
         Some((k, name)) => DimensionScale { scale: k, agree, measured: n, named: Some(name) },
         None => DimensionScale { scale: median, agree, measured: n, named: None },
@@ -9668,6 +9677,69 @@ mod tests {
         // a scale given still stands
         let r = read_with(note, &PdfOptions { scale: Some(48.0), ..without });
         assert_eq!(r.scale, 48.0);
+    }
+
+    /// Q6468: dimension strings in feet and inches measure an imperial scale: the measured scale
+    /// snaps only to the feet scales (never a metric ratio), and not at all when two of them are
+    /// as close.
+    #[test]
+    fn a_scale_measured_from_feet_strings_snaps_only_to_feet_scales() {
+        // four strings all about 98.1x (a 1/8" sheet measured 2 percent long): 96, not 1:100
+        let content = [
+            dimension((100.0, 100.0), 176.1, "20'-0\"", false),
+            dimension((100.0, 200.0), 110.1, "12'-6\"", false),
+            dimension((400.0, 100.0), 70.5, "8'-0\"", true),
+            dimension((400.0, 400.0), 88.1, "10'-0\"", false),
+        ]
+        .concat();
+        let r = read_page(&content);
+        assert_eq!(r.scale, 96.0, "{}", r.scale_source);
+        assert!(r.scale_source.contains("(1/8\" = 1'-0\")"), "{}", r.scale_source);
+        assert!(!r.scale_source.contains("1:"), "no metric name: {}", r.scale_source);
+        // about 49x (a 1/4" sheet measured long): 48, not 1:50
+        let k = 49.0;
+        let len = |inches: f64| inches / k * 72.0;
+        let content = [
+            dimension((100.0, 100.0), len(240.0), "20'-0\"", false),
+            dimension((100.0, 300.0), len(150.0), "12'-6\"", false),
+            dimension((450.0, 100.0), len(96.0), "8'-0\"", true),
+            dimension((450.0, 450.0), len(120.0), "10'-0\"", false),
+        ]
+        .concat();
+        let r = read_page(&content);
+        assert_eq!(r.scale, 48.0, "{}", r.scale_source);
+        assert!(r.scale_source.contains("(1/4\" = 1'-0\")"), "{}", r.scale_source);
+        // exactly 16x: the feet name (3/4" = 1'-0"), not the metric 1:16 listed before it
+        let k = 16.0;
+        let len = |inches: f64| inches / k * 72.0;
+        let content = [
+            dimension((100.0, 100.0), len(60.0), "5'-0\"", false),
+            dimension((100.0, 300.0), len(48.0), "4'-0\"", false),
+            dimension((450.0, 100.0), len(36.0), "3'-0\"", true),
+        ]
+        .concat();
+        let r = read_page(&content);
+        assert_eq!(r.scale, 16.0, "{}", r.scale_source);
+        assert!(r.scale_source.contains("(3/4\" = 1'-0\")"), "{}", r.scale_source);
+    }
+
+    /// Q6468: a measured scale with two standards within the tolerance is left as measured.
+    #[test]
+    fn a_measured_scale_between_two_close_standards_is_not_snapped() {
+        let list = vec![(96.0, "A".to_string()), (100.0, "B".to_string()), (240.0, "C".to_string())];
+        assert_eq!(nearest_standard(98.1, list.clone(), DIMENSION_AGREE), None, "96 and 100 both within 3 percent");
+        assert_eq!(nearest_standard(95.0, list.clone(), DIMENSION_AGREE), Some((96.0, "A".to_string())), "only 96 is that close");
+        assert_eq!(nearest_standard(238.0, list.clone(), DIMENSION_AGREE), Some((240.0, "C".to_string())));
+        assert_eq!(nearest_standard(150.0, list, DIMENSION_AGREE), None, "none close");
+        // the same ratio listed twice is one standard, not two
+        let twice = vec![(12.0, "A".to_string()), (12.0, "B".to_string())];
+        assert_eq!(nearest_standard(12.1, twice, DIMENSION_AGREE), Some((12.0, "A".to_string())));
+        // the feet family has no two standards that close anywhere in its range
+        let feet = standard_scales(true);
+        for k in (1..=7000).map(f64::from) {
+            let close = feet.iter().filter(|(s, _)| (s / k - 1.0).abs() <= DIMENSION_AGREE).count();
+            assert!(close <= 1, "{k}: {close} feet standards within the tolerance");
+        }
     }
 
     #[test]

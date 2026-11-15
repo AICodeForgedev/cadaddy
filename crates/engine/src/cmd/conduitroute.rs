@@ -7247,6 +7247,8 @@ pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool, ask: Ask) -> R
         fi += 1;
         keep
     });
+    // Each run's name as the spec stores it (before its level's move): its pieces carry it.
+    let names: Vec<String> = shifted.mep.runs.iter().map(super::mep::run_base).collect();
     for r in &mut shifted.mep.runs {
         let o = off_of(&r.level);
         r.points.iter_mut().for_each(|p| *p = [p[0] + o.x, p[1] + o.y]);
@@ -7262,7 +7264,7 @@ pub(crate) fn reroute_feeders(s: &mut Session, all_feeders: bool, ask: Ask) -> R
     // The routing's report first: the takeoff sizes each box by the conductors entering it.
     store_report(d, &routed.report);
     let before: BTreeSet<Handle> = d.model.handles().into_iter().collect();
-    let atoms = super::mepatoms::build::build(d, &shifted);
+    let atoms = super::mepatoms::build::build_named(d, &shifted, &names);
     let made: Vec<Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
     for h in made {
         let level = d.model.get(h).and_then(|e| super::bspec::made_level(e)).unwrap_or_default();

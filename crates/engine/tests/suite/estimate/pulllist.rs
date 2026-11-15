@@ -446,3 +446,112 @@ fn a_feeder_held_only_as_routed_runs_is_pulled_from_them_and_said_to_be_in_no_ta
     assert!((f(&c["feeders_not_cut"]["raceway_ft"]) - f(&p["raceway_ft"])).abs() < 0.05, "{c}");
     assert_eq!(c["takeoff_check"]["conduit_takeoff"]["matches"], json!(true), "{c}");
 }
+
+/// Q6666: two levels drawn side by side on one sheet (the second's plan 500 ft along x) and
+/// stacked by the build, a distribution panel on the upper one feeding two panels on the lower
+/// one and one beside it; the feeders laid after the build by conduit.reroute, which cuts them
+/// into pieces where the stacked model has them.
+fn upper_floor_source() -> Session {
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Two Floors", None);
+    let panel = |tag: &str, level: &str, at: [f64; 2]| {
+        json!({"tag": tag, "kind": "panel", "level": level, "min": [at[0] - 10.0, at[1] - 3.0], "max": [at[0] + 10.0, at[1] + 3.0],
+            "height_ft": 4, "bottom_ft": 2, "properties": {"VOLTS": "208Y/120"}})
+    };
+    let feeder = |tag: &str, to: &str| {
+        json!({"tag": tag, "from": "DP", "to": to, "sets": 1, "phases": 3, "size": "#3", "material": "cu", "neutrals": 1, "grounds": 1,
+            "ground_size": "#8", "conduits": 1, "conduit_in": 1, "entry": "top", "source": "made-up feeder schedule"})
+    };
+    let spec = json!({
+        "version": 1, "units_per_foot": 12, "stack": true,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [0, 0, 2400, 1200], "base": [0, 0]},
+            {"name": "L2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "region": [6000, 0, 8400, 1200], "base": [6000, 0]}
+        ],
+        "mep": {
+            "systems": [{"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [1, 0], "bottom_ft": 10, "show": true}],
+            "equipment": [panel("DP", "L2", [6600.0, 600.0]), panel("LP1", "L1", [300.0, 300.0]), panel("LP2", "L1", [1800.0, 900.0]), panel("LP3", "L2", [7800.0, 300.0])],
+            "feeders": [feeder("F1", "LP1"), feeder("F2", "LP2"), feeder("F3", "LP3")]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("conduit.reroute", &json!({"feeders": "all"})).expect("route the feeders");
+    s
+}
+
+#[test]
+fn every_run_a_feeder_pull_lists_is_carried_by_its_pieces_on_every_level() {
+    let mut s = upper_floor_source();
+    let r = s.execute("pull.schedule", &json!({"max": 1000})).expect("schedule");
+    let feeders: Vec<&Value> = r["pulls"].as_array().into_iter().flatten().filter(|p| p["kind"] == json!("feeder")).collect();
+    assert_eq!(feeders.len(), 3, "a pull per feeder: {r}");
+    for p in &feeders {
+        assert_eq!(p["in_takeoff"], json!(true), "cut into pieces: {p}");
+        assert!(p["runs"].as_array().is_some_and(|a| !a.is_empty()), "{p}");
+    }
+    let listed: std::collections::BTreeSet<String> = feeder_runs_traced(&mut s, &r)
+        .into_iter()
+        .map(|(run, n)| {
+            assert!(n > 0, "the pieces carry the run {run} the pull lists: {r}");
+            run
+        })
+        .collect();
+    // And the other way: every feeder raceway piece on either level is in its feeder's pull
+    // (the entry stubs at the gear are pulled with it, by their own names).
+    let found = s.execute("bim.props.find", &json!({"kind": "conduit", "where": {"feeder": "exists"}, "select": true, "limit": 5000})).expect("find");
+    assert!(found["count"].as_u64().unwrap_or(0) > 0, "{found}");
+    let got = s.execute("bim.props.get", &json!({})).expect("get");
+    let mut levels = std::collections::BTreeSet::new();
+    for e in got["elements"].as_array().into_iter().flatten() {
+        let run = e["props"]["run"]["value"].as_str().unwrap_or_default();
+        assert!(listed.contains(run), "piece {} of run {run} is in no feeder pull: {listed:?}", e["handle"]);
+        levels.insert(e["props"]["level"]["value"].as_str().unwrap_or_default().to_string());
+    }
+    assert_eq!(levels.len(), 2, "pieces on both levels: {levels:?}");
+}
+
+/// Each feeder pull's listed runs: every name once over all pulls, and the conduit pieces that
+/// carry it.
+fn feeder_runs_traced(s: &mut Session, r: &Value) -> Vec<(String, usize)> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for p in r["pulls"].as_array().into_iter().flatten().filter(|p| p["kind"] == json!("feeder")) {
+        for run in p["runs"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            assert!(seen.insert(run.to_string()), "one name, one run: {run} listed twice in {r}");
+            let found = s.execute("bim.props.find", &json!({"kind": "conduit", "where": {"run": run}, "limit": 1000})).expect("find");
+            out.push((run.to_string(), found["handles"].as_array().map_or(0, Vec::len)));
+        }
+    }
+    out
+}
+
+#[test]
+fn two_feeders_out_of_one_spot_are_each_pulled_along_their_own_pieces() {
+    let mut s = building(None, true, None);
+    // F3 leaves MDP where F1 does (one entry point) and runs on to LP3.
+    let got = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = got["spec"].clone();
+    let mep = spec["mep"].as_object_mut().expect("mep");
+    mep["equipment"]
+        .as_array_mut()
+        .expect("equipment")
+        .push(json!({"tag": "LP3", "kind": "panel", "level": "L1", "min": [-24, 406], "max": [-4, 426], "height_ft": 4, "bottom_ft": 2}));
+    mep["feeders"].as_array_mut().expect("feeders").push(json!({"tag": "F3", "from": "MDP", "to": "LP3", "sets": 1, "phases": 3, "size": "#3", "material": "cu", "neutrals": 1, "grounds": 1, "ground_size": "#8", "conduits": 1, "conduit_in": 1.5, "entry": "top"}));
+    mep["runs"].as_array_mut().expect("runs").push(json!({"system": "E-FEEDER", "level": "L1", "source_sheet": "feeder F3 MDP\u{2192}LP3", "points": [[-175, 120], [-175, 300], [-14, 300], [-14, 416]], "size_in": [1.5, 0], "bottoms_ft": [10, 10, 10]}));
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({"route": false})).expect("build");
+    let r = s.execute("pull.schedule", &json!({"max": 1000})).expect("schedule");
+    for f in ["F1 to LP1", "F3 to LP3"] {
+        let p = pull(&r, f);
+        assert_eq!(p["in_takeoff"], json!(true), "{f} pulled along its pieces: {r}");
+    }
+    let f3 = pull(&r, "F3 to LP3");
+    assert_eq!((f3["from"].as_str(), f3["to"].as_str()), (Some("MDP"), Some("LP3")), "{f3}");
+    let traced = feeder_runs_traced(&mut s, &r);
+    assert!(traced.len() >= 2 && traced.iter().all(|(_, n)| *n > 0), "{traced:?}");
+    // Each piece says which feeder it is part of.
+    let f3_pieces =
+        s.execute("bim.props.find", &json!({"kind": "conduit", "where": {"feeder": "feeder F3 MDP\u{2192}LP3"}, "limit": 1000})).expect("find");
+    assert!(f3_pieces["count"].as_u64().unwrap_or(0) > 0, "{f3_pieces}");
+}

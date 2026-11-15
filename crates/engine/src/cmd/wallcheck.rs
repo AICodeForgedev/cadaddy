@@ -12,7 +12,11 @@
 //!    [`overbuilt_levels`]) is a high finding and an always-asked question before the takeoff;
 //! 3. a level's wall board over its walls' area times their faces ([`board_over`]) is a suspect
 //!    line of the takeoff;
-//! 4. a storey whose rooms cover far less than its floor ([`under_roomed_levels`]: rooms built to
+//! 4. while the plan is read, a group of wall pieces standing free inside the building (no end
+//!    meeting another wall, the outside or a door) no longer than
+//!    [`Rules::free_standing_max_ft`] is the equipment, shelving or casework drawn there (Q6637,
+//!    `wallgen/freestanding.rs`);
+//! 5. a storey whose rooms cover far less than its floor ([`under_roomed_levels`]: rooms built to
 //!    their casework, or rooms left out) is a finding (Q6487).
 //!
 //! The numbers are rule data: `wallcheck.json`.
@@ -38,8 +42,11 @@ pub struct Rules {
     /// side is casework or equipment (a counter, a cabinet run, an appliance): what pairs up
     /// inside it is no wall.
     pub casework_depth_max_in: f64,
-    /// The smallest side of a room (feet): a floor cut all into such rooms holds the most walls a
-    /// storey can.
+    /// The side of the rooms a storey's floor is cut into at its densest (feet): a floor cut all
+    /// into such rooms holds the most walls a storey can. 8' (a quarter of a foot of inside walls
+    /// to a square foot) is over any building's: guest rooms, offices and closets mixed run about
+    /// 0.1-0.2; a storey over it is reading equipment or casework as walls (Q6637: a kitchen's
+    /// at 0.37 passed the 5' rule's 0.4).
     pub min_room_side_ft: f64,
     /// A storey's walls over what it can hold by more than this share are reported (0: any).
     pub max_over_ratio: f64,
@@ -53,18 +60,46 @@ pub struct Rules {
     /// A storey whose built rooms cover less than this share of its floor is reported (a
     /// building's rooms are most of its floor; walls, shafts and chases the rest).
     pub min_room_share: f64,
+    /// A group of wall pieces standing free inside the building (no end meeting another wall,
+    /// the outside or a door) at most this long on its longest side (feet) is equipment, shelving
+    /// or casework (Q6637); longer, a free-standing wall.
+    #[serde(default = "free_standing_max_ft")]
+    pub free_standing_max_ft: f64,
+    /// It stands at least this far (feet) inside the building's outside walls: by them it is a
+    /// piece of the outside.
+    #[serde(default = "free_standing_shell_clear_ft")]
+    pub free_standing_shell_clear_ft: f64,
+    /// Free pieces walling in a space at least this across both ways (feet) are a room's walls
+    /// (a shaft, a closet, a walk-in), whatever stands against them.
+    #[serde(default = "free_standing_room_min_ft")]
+    pub free_standing_room_min_ft: f64,
+}
+
+fn free_standing_room_min_ft() -> f64 {
+    3.0
+}
+
+fn free_standing_max_ft() -> f64 {
+    16.0
+}
+
+fn free_standing_shell_clear_ft() -> f64 {
+    2.0
 }
 
 impl Default for Rules {
     fn default() -> Self {
         Rules {
             casework_depth_max_in: 48.0,
-            min_room_side_ft: 5.0,
+            min_room_side_ft: 8.0,
             max_over_ratio: 0.0,
             wall_faces: 2.0,
             board_over_ratio: 1.25,
             min_level_walls_ft: 40.0,
             min_room_share: 0.5,
+            free_standing_max_ft: free_standing_max_ft(),
+            free_standing_shell_clear_ft: free_standing_shell_clear_ft(),
+            free_standing_room_min_ft: free_standing_room_min_ft(),
         }
     }
 }
@@ -109,7 +144,7 @@ const EMPTY: PlanBox = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NE
 pub fn overbuilt_levels(walls: &[(String, f64, PlanBox)], floors: &[(String, PlanBox)], upf: f64) -> Vec<Overbuilt> {
     let upf = if finite_pos(upf) { upf } else { 12.0 };
     let r = rules();
-    let side = if finite_pos(r.min_room_side_ft) { r.min_room_side_ft } else { 5.0 };
+    let side = if finite_pos(r.min_room_side_ft) { r.min_room_side_ft } else { 8.0 };
     let mut by: BTreeMap<String, (f64, PlanBox)> = BTreeMap::new();
     for (level, len, b) in walls {
         if level.is_empty() || !finite_pos(*len) || !b.iter().all(|v| v.is_finite()) {
@@ -241,8 +276,8 @@ mod tests {
 
     #[test]
     fn a_small_building_with_several_times_its_walls_is_overbuilt() {
-        // 46' × 19': 130' round the outside, 874 sq ft; at most 130 + 2 × 874 / 5 ≈ 480' of walls
-        // (a floor all in 5' rooms) — 580' is not a building's.
+        // 46' × 19': 130' round the outside, 874 sq ft; at most 130 + 2 × 874 / 8 ≈ 349' of walls
+        // (a floor all in 8' rooms) — 580' is not a building's.
         let walls = storey("Level 1", 46.0, 19.0, 450.0);
         let over = overbuilt_levels(&walls, &[], 12.0);
         assert_eq!(over.len(), 1, "{over:?}");
@@ -251,6 +286,19 @@ mod tests {
         assert!((o.walls_ft - 580.0).abs() < 1.0 && o.can_hold_ft < o.walls_ft, "{o:?}");
         // The same storey with a few rooms' walls is a building.
         assert!(overbuilt_levels(&storey("Level 1", 46.0, 19.0, 60.0), &[], 12.0).is_empty());
+    }
+
+    /// Q6637: a storey reading its kitchen's equipment as walls (about 0.37 ft of wall to the
+    /// square foot, over twice a building's) is reported; its real walls are not.
+    #[test]
+    fn a_storey_with_twice_a_buildings_walls_to_its_floor_is_overbuilt() {
+        // 70' × 40' (2,800 sq ft, 220' round): at most 220 + 2 × 2,800 / 8 = 920'.
+        let floors = vec![("Level 1".to_string(), [0.0, 0.0, 70.0 * 12.0, 40.0 * 12.0])];
+        let over = overbuilt_levels(&storey("Level 1", 70.0, 40.0, 820.0), &floors, 12.0);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert!((over[0].walls_ft - 1_040.0).abs() < 1.0 && (over[0].can_hold_ft - 920.0).abs() < 1.0, "{over:?}");
+        // Its shell and about 300' of rooms inside: a building.
+        assert!(overbuilt_levels(&storey("Level 1", 70.0, 40.0, 300.0), &floors, 12.0).is_empty());
     }
 
     #[test]

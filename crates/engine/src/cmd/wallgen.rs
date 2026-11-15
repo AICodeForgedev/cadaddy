@@ -20,6 +20,7 @@ use super::*;
 use crate::{Result, Session};
 
 mod doortags;
+mod freestanding;
 mod heads;
 mod outline;
 
@@ -3022,6 +3023,13 @@ fn plan_level_with(
     if joined > 0 {
         notes.push(format!("{}: {joined} block-long pieces of wall faces joined.", level.name));
     }
+    // A grid drawn over the floor (the reflected ceiling's on a plan printed with it, a tile
+    // pattern): its lines are no wall faces (Q6659).
+    let grid = super::perceive::geometry::drop_grid_lines(&mut segs, &lim, k);
+    if grid > 0 {
+        notes
+            .push(format!("{}: {grid} lines of a grid drawn over the floor (a ceiling grid, a floor pattern) not taken for wall faces.", level.name));
+    }
     // The rounded outlines left out stay in sight until the symbols are read: a tub's or a basin's
     // rounded inner outline is the symbol's, and its pairs with the symbol's outline show the
     // outline is one (left out, the outline's edge paired with the wall face beside it as a wall).
@@ -3198,6 +3206,8 @@ fn plan_level_with(
             notes.push(format!("{}: {} line pairs outside the building left out (grids, dimensions, border).", level.name, before - pl.walls.len()));
         }
     }
+    // The walls read from face pairs come first; single-line walls and jambs after.
+    let pair_walls = pl.walls.len();
     // The source of each wall: the line it was found on (the nearest wall-layer object).
     // (Each object's centre worked out once: per wall and comparison it was most of a big plan's build.)
     let centres: Vec<(Vec2, Handle)> = wall_ents.iter().map(|e| (cadaddy_doc::entity_bounds(d, e, 0).center(), e.handle)).collect();
@@ -3256,6 +3266,29 @@ fn plan_level_with(
     if jamb_count > 0 {
         notes.push(format!("{}: {jamb_count} short wall pieces between an opening and a crossing wall (jambs) built.", level.name));
     }
+    // Openings: each cuts the wall it lies in (found here: their doors hold the walls they hang in).
+    let mut ops = openings(d, &ents, &all_segs, k);
+    // Pieces standing free inside the building, no end meeting another wall, the outside or a
+    // door, small: the equipment, shelving or casework drawn there, no walls (Q6637).
+    let doors: Vec<Vec2> =
+        ops.iter().flat_map(|o| std::iter::once(o.at).chain(o.swing.iter().flat_map(|s| s.1))).chain(jambs.iter().copied()).collect();
+    let wc = super::wallcheck::rules();
+    let sizes = freestanding::Sizes {
+        max_side: wc.free_standing_max_ft * upf,
+        shell_clear: wc.free_standing_shell_clear_ft * upf,
+        room_min: wc.free_standing_room_min_ft * upf,
+        max_opening: oz.max_ft * upf,
+        corner_post: CORNER_POST_IN * k,
+        k,
+    };
+    let (free, free_len) = freestanding::drop_free_standing(&mut pl.walls, pair_walls, &doors, &sizes);
+    if free > 0 {
+        notes.push(format!(
+            "{}: {free} wall pieces ({:.0} ft) standing free inside the building (no end meeting another wall, the outside or a door) not taken for walls: equipment, shelving or casework drawn there.",
+            level.name,
+            free_len / upf
+        ));
+    }
     // Walls the plans tag: their type, and the height its rule gives there. First the walls
     // the spec's wall edits move, delete or add (Q6613).
     if let Some(sp) = &g.spec {
@@ -3309,8 +3342,6 @@ fn plan_level_with(
     if corners > 0 {
         notes.push(format!("{}: {corners} corners where two walls stopped short (a corner post between them) closed.", level.name));
     }
-    // Openings: each cuts the wall it lies in.
-    let mut ops = openings(d, &ents, &all_segs, k);
 
     // A family's size and heights for the blocks it covers (sheet units above the floor).
     let mut fitted: HashMap<Handle, (Option<f64>, Option<f64>)> = HashMap::new();
@@ -7307,6 +7338,179 @@ mod tests {
         assert!(walls[1].a.dist(Vec2::new(-3.0, 0.0)) < 1e-6, "{:?}", walls[1].a);
         assert!(walls[2].b.dist(Vec2::new(300.0, 40.0)) < 1e-9 && walls[3].a.dist(Vec2::new(340.0, 0.0)) < 1e-9);
         assert!(walls[4].b.dist(Vec2::new(700.0, 0.0)) < 1e-9 && walls[5].a.dist(Vec2::new(706.0, 0.0)) < 1e-9);
+    }
+
+    /// Q6637: a 40' × 30' building (6" walls; units inches), a partition across it with a door,
+    /// and a kitchen's equipment drawn on the plan in its east half: shelving units as closed
+    /// outlines 18" and 12" deep, an L of two units meeting at a corner, a row of three, a 6"
+    /// box drawn line by line, a prep table's outline 2' deep with its shelf's line inside. The
+    /// walls planned there, and the notes.
+    fn planned_kitchen() -> (Vec<PlanWall>, Vec<String>) {
+        let mut d = Drawing::new_imperial();
+        let mut add = |kind: EntityKind| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        };
+        let line = |a: (f64, f64), b: (f64, f64)| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) });
+        let outline = |pts: &[(f64, f64)]| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: pts
+                    .iter()
+                    .map(|&(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| outline(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]);
+        // The shell: its outside and inside faces.
+        add(rect(0.0, 0.0, 480.0, 360.0));
+        add(rect(6.0, 6.0, 474.0, 354.0));
+        // The partition at x = 240, 4½" thick, broken for a 3' door hung at its lower piece's end.
+        for x in [237.75, 242.25] {
+            add(line((x, 6.0), (x, 150.0)));
+            add(line((x, 186.0), (x, 354.0)));
+        }
+        add(EntityKind::Arc(cadaddy_doc::Arc { center: Vec3::new(240.0, 150.0, 0.0), radius: 36.0, start: 0.0, end: std::f64::consts::FRAC_PI_2 }));
+        // The kitchen: shelving 18" x 4', an L of 12" units, a row of three 2' units.
+        add(rect(300.0, 90.0, 348.0, 108.0));
+        add(rect(300.0, 200.0, 360.0, 212.0));
+        add(rect(348.0, 150.0, 360.0, 200.0));
+        for x in [300.0, 330.0, 360.0] {
+            add(rect(x, 270.0, x + 24.0, 282.0));
+        }
+        // A 6" x 30" box drawn line by line.
+        for (a, b) in [((420.0, 60.0), (420.0, 90.0)), ((426.0, 60.0), (426.0, 90.0)), ((420.0, 60.0), (426.0, 60.0)), ((420.0, 90.0), (426.0, 90.0))]
+        {
+            add(line(a, b));
+        }
+        // A prep table 2' x 6' with its undershelf's line 10" in.
+        add(rect(380.0, 140.0, 452.0, 164.0));
+        add(line((380.0, 150.0), (452.0, 150.0)));
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let mut notes = Vec::new();
+        let walls = plan_level(&d, &g, &level, 12.0, &mut notes).walls;
+        (walls, notes)
+    }
+
+    #[test]
+    fn a_kitchens_shelving_and_equipment_standing_free_are_no_walls() {
+        let (walls, notes) = planned_kitchen();
+        let listed = || walls.iter().map(|w| format!("{:?}-{:?} {:.1}", w.a, w.b, w.thickness)).collect::<Vec<_>>().join("; ");
+        let mid = |w: &PlanWall| w.a.mid(w.b);
+        // Nothing in the kitchen but the shell: the equipment is no wall.
+        let in_kitchen = walls.iter().filter(|w| {
+            let m = mid(w);
+            m.x > 260.0 && m.x < 465.0 && m.y > 20.0 && m.y < 340.0
+        });
+        assert_eq!(in_kitchen.count(), 0, "{}", listed());
+        // The shell's four walls and the partition's two pieces, its door's hinge holding them.
+        assert_eq!(walls.iter().filter(|w| (w.thickness - 6.0).abs() < 0.1 && w.a.dist(w.b) > 300.0).count(), 4, "{}", listed());
+        assert_eq!(walls.iter().filter(|w| (w.thickness - 4.5).abs() < 0.1 && (mid(w).x - 240.0).abs() < 1.0).count(), 2, "{}", listed());
+        assert_eq!(walls.len(), 6, "{}", listed());
+        assert!(notes.iter().any(|n| n.contains("standing free inside the building")), "{notes:?}");
+    }
+
+    /// Q6659: a 40' × 25' building (6" walls; units inches) printed with its reflected ceiling:
+    /// a 6" partition between two rooms, a 2' ceiling grid in each room ending on the walls'
+    /// faces, a 2' × 2' light fixture and a diffuser (its outline and three slot lines) set in the
+    /// grid, a column grid line running through, out past the building. `grid`: the grid drawn
+    /// in both directions (else none). The walls planned there, and the notes.
+    fn planned_with_ceiling_grid(grid: bool) -> (Vec<PlanWall>, Vec<String>) {
+        let mut d = Drawing::new_imperial();
+        let mut add = |kind: EntityKind| {
+            let h = Handle(d.handseed);
+            d.handseed = h.0 + 1;
+            let mut e = Entity::new(h, kind);
+            e.common.layer = "A-WALL".into();
+            d.model.push(e);
+        };
+        let line = |a: (f64, f64), b: (f64, f64)| EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) });
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            EntityKind::LwPolyline(cadaddy_doc::LwPolyline {
+                vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                    .iter()
+                    .map(|&(x, y)| cadaddy_geom::PolyVertex { p: Vec2::new(x, y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                    .collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        // The shell's faces and the partition's at x = 237 and 243.
+        add(rect(0.0, 0.0, 480.0, 300.0));
+        add(rect(6.0, 6.0, 474.0, 294.0));
+        add(line((237.0, 6.0), (237.0, 294.0)));
+        add(line((243.0, 6.0), (243.0, 294.0)));
+        if grid {
+            // Each room's grid: 2' apart, 14"-16" borders, the lines stopping on the walls' faces.
+            for (x0, x1, first) in [(6.0, 237.0, 20.0), (243.0, 474.0, 259.0)] {
+                let mut x = first;
+                while x < x1 - 12.0 {
+                    add(line((x, 6.0), (x, 294.0)));
+                    x += 24.0;
+                }
+                let mut y = 22.0;
+                while y < 282.0 {
+                    add(line((x0, y), (x1, y)));
+                    y += 24.0;
+                }
+            }
+        }
+        // The light fixture and the diffuser in room one's grid, and the diffuser's slots.
+        add(rect(44.0, 118.0, 68.0, 142.0));
+        add(rect(92.0, 118.0, 116.0, 142.0));
+        for y in [124.0, 130.0, 136.0] {
+            add(line((92.0, y), (116.0, y)));
+        }
+        // A column grid line through the building, out to its bubble.
+        add(line((140.0, -120.0), (140.0, 420.0)));
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let mut notes = Vec::new();
+        let walls = plan_level(&d, &g, &level, 12.0, &mut notes).walls;
+        (walls, notes)
+    }
+
+    #[test]
+    fn a_ceiling_grid_printed_on_the_plan_is_no_walls() {
+        let (walls, notes) = planned_with_ceiling_grid(true);
+        let listed = || walls.iter().map(|w| format!("{:?}-{:?} {:.1}", w.a, w.b, w.thickness)).collect::<Vec<_>>().join("; ");
+        // The shell's four walls and the partition, 6" each; nothing paired with a grid line
+        // (the fixtures' edges, the column grid line, the walls' faces 14"-16" from a border line).
+        assert!(walls.iter().all(|w| (w.thickness - 6.0).abs() < 0.1), "{}", listed());
+        assert_eq!(
+            walls.iter().filter(|w| w.a.dist(w.b) > 280.0 && (w.a.x - 240.0).abs() < 1.0 && (w.b.x - 240.0).abs() < 1.0).count(),
+            1,
+            "the partition: {}",
+            listed()
+        );
+        let length: f64 = walls.iter().map(|w| w.a.dist(w.b)).sum();
+        let (bare, bare_notes) = planned_with_ceiling_grid(false);
+        let bare_length: f64 = bare.iter().map(|w| w.a.dist(w.b)).sum();
+        // The same walls as the plan without its ceiling grid.
+        assert_eq!(walls.len(), bare.len(), "{} against {bare_notes:?}", listed());
+        assert!((length - bare_length).abs() < 12.0, "{length} against {bare_length}: {}", listed());
+        assert!(notes.iter().any(|n| n.contains("lines of a grid drawn over the floor")), "{notes:?}");
     }
 
     /// Q6583: a one-room-deep building (40' × 16', 6" walls; units inches) with what a plan
