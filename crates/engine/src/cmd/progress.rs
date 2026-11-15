@@ -799,7 +799,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{drivers?: [{level, driver: boxes|conduit_ft|terminations|devices|luminaires|panels|devices_tested, qty}], from_bom?: bool, rates?: {driver: hours per unit}} → {plan}"),
         CommandSpec::new("progress.mark", "Mark Installed Work", run_mark)
             .params("{phase: rough|makeup|trim|panel|test, level?: floor (empty: every floor), fraction?: 0–1 (default 1: complete), count?: with driver and level, driver?, elements?: [id] (driver and level from the model; each counts once), date?, by?, note?} → {marks, new_elements?}"),
-        CommandSpec::new("progress.hours", "Import Timecards", run_hours).params("{path: CSV (date, name/crew, hours, phase or cost code, driver?, level) | rows} → {added, skipped, total_hours}"),
+        CommandSpec::new("progress.hours", "Import Timecards", run_hours).params("{path?: CSV (date, name/crew, hours, phase or cost code, driver?, level), rows?: [{date, name, hours, phase, driver?, level}] (the same columns given here instead of a file)} → {added, skipped, total_hours}"),
         CommandSpec::new("progress.status", "Progress and Earned Value", run_status)
             .params("{date?, crew_rate?} → {phases: [{phase, budget_source: estimate|book_rate_assumption|mixed, budget_hours, earned_hours, actual_hours, percent_complete, cpi, projected_hours, earned_value, actual_cost, floors}], total, flags}")
             .noundo(),

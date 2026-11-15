@@ -224,12 +224,20 @@ fn on_disk(path: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
 }
 
 impl CdySaved {
-    fn new(path: &str, state: CdyState) -> Option<Self> {
+    /// What the file holds, as the saver that wrote it keeps it.
+    pub(crate) fn state(&self) -> &CdyState {
+        &self.state
+    }
+    /// The file's length when it was written or read.
+    pub(crate) fn file_len(&self) -> u64 {
+        self.len
+    }
+    pub(crate) fn new(path: &str, state: CdyState) -> Option<Self> {
         let (len, modified) = on_disk(path)?;
         Some(CdySaved { path: path.to_string(), len, modified, state })
     }
     /// Whether the file at `path` is still exactly what this describes.
-    fn holds(&self, path: &str) -> bool {
+    pub(crate) fn holds(&self, path: &str) -> bool {
         same_file(&self.path, path) && on_disk(path) == Some((self.len, self.modified))
     }
 }
@@ -1123,7 +1131,9 @@ pub(super) fn run_close(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("close", "no such drawing"));
     }
     s.cancel();
-    s.docs.remove(i);
+    let closed = s.docs.remove(i);
+    // A guided job's pictures go with its drawing, unless the job can still ask (Q6433).
+    super::jobtemp::after_close(&closed, &s.docs);
     if i < s.active {
         // An earlier drawing went away: the active one shifted down by one.
         s.active -= 1;
@@ -1162,7 +1172,9 @@ fn release_closed(s: &mut Session) {
 
 fn run_closeall(s: &mut Session, _p: &Value) -> Result<Value> {
     s.cancel();
-    s.docs.clear();
+    for closed in std::mem::take(&mut s.docs) {
+        super::jobtemp::after_close(&closed, &[]);
+    }
     s.active = 0;
     release_closed(s);
     ok()

@@ -30,7 +30,7 @@
         {"key": "size", "type": "text", "unit": "in", "required": true},
         {"key": "material", "type": "text", "required": true},
         {"key": "slope", "type": "text", "required": false, "note": "drainage lines"},
-        {"key": "elevation", "type": "number", "unit": "ft", "required": true, "aliases": ["invert", "bottom_height"]},
+        {"key": "elevation", "type": "number", "signed": true, "unit": "ft", "required": true, "aliases": ["invert", "bottom_height"]},
         {"key": "insulation", "type": "text", "required": false},
         {"key": "connections", "type": "text", "required": false},
         {"key": "level", "type": "text", "required": true}
@@ -63,7 +63,7 @@
         {"key": "k_factor", "type": "number", "required": false},
         {"key": "temperature", "type": "text", "required": false},
         {"key": "finish", "type": "text", "required": false},
-        {"key": "elevation", "type": "number", "unit": "ft", "required": false},
+        {"key": "elevation", "type": "number", "signed": true, "unit": "ft", "required": false},
         {"key": "room", "type": "text", "required": true},
         {"key": "level", "type": "text", "required": true},
         {"key": "location", "type": "text", "required": true}

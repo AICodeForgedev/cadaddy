@@ -494,6 +494,11 @@ pub struct Assembly {
     /// How far past the ceiling an [`HeightRule::AboveCeiling`] wall goes, inches.
     #[serde(default = "six", skip_serializing_if = "is_six")]
     pub above_ceiling_in: f64,
+    /// The ceiling a [`HeightRule::Ceiling`] or [`HeightRule::AboveCeiling`] wall stops at is a
+    /// fire rated ceiling assembly (the head key says `TO UNDERSIDE OF FIRE RATED CEILING`): the
+    /// ceiling carries the rating on, so a rated wall stopping there is as designed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub to_rated_ceiling: bool,
     /// `1 HR`, `2 HR`; none = not rated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_rating: Option<String>,
@@ -1426,6 +1431,12 @@ pub struct Mep {
     /// the job kept them).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub wire_length_read: String,
+    /// The outputs the fire alarm's sequence of operations (its matrix, or a written sequence)
+    /// calls for (a shunt trip, a damper release, a fan shutdown, a door release, an elevator
+    /// recall), as read when the job read its pages: each needs a device or relay and its power
+    /// on the drawings, which the requirements check against the model.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fa_outputs: Vec<FaOutput>,
     /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
     /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1809,6 +1820,7 @@ impl Mep {
             && self.load_summaries.is_empty()
             && self.wire_length_tables.is_empty()
             && self.wire_length_read.is_empty()
+            && self.fa_outputs.is_empty()
             && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
@@ -1822,6 +1834,23 @@ impl Mep {
             && self.required_services.is_empty()
             && self.elevation_bands.is_empty()
     }
+}
+
+/// One output the fire alarm's sequence of operations calls for: its class in the rules data
+/// (`shunt_trip`, `damper_release`, `fan_control`, `door_release`, `elevator_recall`), the output
+/// as printed, the sheet, and how many of the matrix's inputs mark it (0: a written sequence).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FaOutput {
+    pub class: String,
+    pub text: String,
+    pub sheet: String,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub inputs: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A utility or service entrance: conduits from the property line or the utility's structure
@@ -2113,9 +2142,13 @@ pub struct PanelCircuit {
     pub wire: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_va: Option<f64>,
-    /// What the drawings print where a submittal corrected `load_va`.
+    /// What the drawings print where a submittal or a cross-check corrected `load_va`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_load_va: Option<f64>,
+    /// The values a cross-check corrected for the field (`load_va`: a feeder row that isn't the
+    /// fed panel's total), each beside the design value with the reason and the rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
@@ -2178,6 +2211,19 @@ pub struct EquipmentElectrical {
     /// light): built as objects where the drawings have none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_circuits: Vec<ExtraCircuit>,
+    /// What its submittal's notes ask of the wiring and the connections around it: copper
+    /// conductors only, the least conductor size (`4` for `4 AWG Wire Min.`), a disconnect that
+    /// comes with the unit (on or in it), a service receptacle and a data connection of its own.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub copper_only: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub min_wire: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unit_disconnect: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_receptacle: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_data: bool,
     /// Built instead of the drawings' where its submittal differs (`drawing_ocpd` and the feeder
     /// stay beside it): its protection, conductors and conduit, why, and the rule.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -2284,6 +2330,11 @@ pub struct LoadSummaryLine {
     /// The line's texts after its label, as printed (`3,000 x 125% = 3,750`).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// The values a cross-check corrected for the field (`count`: a per-unit item counted for
+    /// more or fewer units than the plans give it to), each beside the printed value with the
+    /// reason and the rule (the printed values stay as read).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
@@ -2587,6 +2638,55 @@ pub struct MepRun {
     /// points carry its own point. Empty: carried by the base points.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub storey_points: BTreeMap<String, [f64; 2]>,
+}
+
+impl MepRun {
+    /// Whether its path, heights and size have the shape [`BuildingSpec::check`] asks of a run:
+    /// 2 points or more with one bottom height per segment (or 1 point and 1 bottom under its
+    /// `top_ft` for a vertical riser), every number finite, a size over 0.
+    pub fn shape_ok(&self) -> bool {
+        let vertical = self.top_ft.is_some();
+        let min_pts = if vertical { 1 } else { 2 };
+        let btm_ok = if vertical { self.bottoms_ft.len() == 1 && self.points.len() == 1 } else { self.bottoms_ft.len() + 1 == self.points.len() };
+        self.points.len() >= min_pts
+            && btm_ok
+            && self.points.iter().flatten().chain(self.bottoms_ft.iter()).chain(self.size_in.iter()).all(|v| v.is_finite())
+            && self.size_in[0] > 0.0
+            && self.top_ft.is_none_or(|t| t.is_finite() && t > self.bottoms_ft.first().copied().unwrap_or(0.0))
+    }
+
+    /// Mends the heights where they can be mended without guessing: one per point becomes one
+    /// per segment (each segment keeps its first point's height), extra ones go from the end,
+    /// missing ones repeat the last. A riser keeps its first point and first height. A segment
+    /// of no length is left as it is: it is a vertical leg between the heights around it. What
+    /// it changed, in words (empty: nothing).
+    pub fn mend_shape(&mut self) -> Vec<String> {
+        let mut did = Vec::new();
+        if self.top_ft.is_some() {
+            if self.points.len() > 1 {
+                self.points.truncate(1);
+                did.push("a riser's extra plan points dropped".to_string());
+            }
+            if self.bottoms_ft.len() > 1 {
+                self.bottoms_ft.truncate(1);
+                did.push("a riser's extra heights dropped".to_string());
+            }
+            return did;
+        }
+        let segs = self.points.len().saturating_sub(1);
+        if segs == 0 || self.bottoms_ft.len() == segs {
+            return did;
+        }
+        if self.bottoms_ft.len() == self.points.len() {
+            self.bottoms_ft.pop();
+            did.push("one height per point made one per segment".to_string());
+        } else if let Some(last) = self.bottoms_ft.last().copied() {
+            let had = self.bottoms_ft.len();
+            self.bottoms_ft.resize(segs, last);
+            did.push(format!("{had} height(s) for {segs} segment(s) made one per segment"));
+        }
+        did
+    }
 }
 
 /// One value of a run the build corrected for the field: the property (`route`), the design
@@ -3773,16 +3873,7 @@ impl BuildingSpec {
             if self.level(&r.level).is_none() {
                 out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", r.level)));
             }
-            let vertical = r.top_ft.is_some();
-            let min_pts = if vertical { 1 } else { 2 };
-            let btm_ok = if vertical { r.bottoms_ft.len() == 1 && r.points.len() == 1 } else { r.bottoms_ft.len() + 1 == r.points.len() };
-            if r.points.len() < min_pts
-                || !btm_ok
-                || !r.points.iter().flatten().chain(r.bottoms_ft.iter()).chain(r.size_in.iter()).all(|v| fin(*v))
-                || r.size_in[0].is_nan()
-                || r.size_in[0] <= 0.0
-                || r.top_ft.is_some_and(|t| !fin(t) || t <= r.bottoms_ft.first().copied().unwrap_or(0.0))
-            {
+            if !r.shape_ok() {
                 out.push(Issue::error(
                     at,
                     "a run needs 2 points or more (or 1 point with top_ft for a vertical riser), a size, and one bottom height per segment",

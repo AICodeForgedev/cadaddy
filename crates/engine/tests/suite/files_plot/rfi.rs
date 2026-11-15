@@ -54,7 +54,9 @@ fn building() -> Session {
             {"name": "X1", "thickness_in": 7.25, "from": "pairs", "assembly": {"tag": "X1", "height": "full", "external": true, "head": head,
                 "layers": [board("5/8\" Type X gypsum board")]}},
             {"name": "P1", "thickness_in": 5.0, "from": "pairs", "assembly": {"tag": "P1", "height": "above_ceiling", "fire_rating": "1 HR",
-                "layers": [board("5/8\" Type X gypsum board"), board("5/8\" Type X gypsum board")]}}
+                "layers": [board("5/8\" Type X gypsum board"), board("5/8\" Type X gypsum board")]}},
+            {"name": "P2", "thickness_in": 5.0, "from": "pairs", "assembly": {"tag": "P2", "height": "deck", "head": head,
+                "layers": [board("5/8\" Type X gypsum board")]}}
         ],
         "walls": [
             {"level": "1", "a": [0, 3.625], "b": [480, 3.625], "wall_type": "X1"},
@@ -129,6 +131,67 @@ fn list_has_the_readers_items_and_the_specs_own_gaps() {
     assert!(one["items"][0]["issue"].as_str().unwrap().contains("1 HR"), "{one}");
     assert!(s.execute("rfi.list", &json!({"kind": "nonsense"})).is_err());
     assert!(s.execute("rfi.list", &json!({"severity": "urgent"})).is_err());
+}
+
+/// The built wall standing on a plan point (inches).
+fn wall_at(s: &Session, x: f64, y: f64) -> cadaddy_engine::doc::Handle {
+    let d = s.doc().unwrap();
+    let at = cadaddy_engine::geom::Vec2::new(x, y);
+    d.model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::elemprops::element_kind(e).as_deref() == Some("wall"))
+        .map(|e| (cadaddy_engine::doc::entity_bounds(d, e, 0).center().dist(at), e.handle))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap()
+        .1
+}
+
+fn open_kind(r: &Value, kind: &str) -> usize {
+    r["items"].as_array().unwrap().iter().filter(|i| i["kind"] == kind && i["status"] == "open").count()
+}
+
+#[test]
+fn a_type_set_on_the_built_wall_closes_its_gaps_and_the_headline_counts_only_questions() {
+    // Q6652: the partition's type was guessed (no tag); a person types the built wall.
+    let mut s = building();
+    let before = s.execute("rfi.list", &json!({})).unwrap();
+    assert_eq!(open_kind(&before, "untagged_wall"), 1, "{}", before["csv"]);
+    assert_eq!(open_kind(&before, "double_ceiling_short_wall"), 1, "{}", before["csv"]);
+    // The questions for the design team (the readers' tag and sleeve, the rated wall stopping
+    // above the ceiling) apart from the gaps the build filled (the guessed wall and ceiling
+    // types, the head of wall, the two-layer ceiling over the wall).
+    assert_eq!(before["open"]["questions"], 3, "{}", before["open"]);
+    let gaps = before["open"]["spec_gaps"].as_u64().unwrap();
+    assert!(gaps >= 4, "{}", before["open"]);
+    assert!(before["headline"].as_str().unwrap().starts_with("3 things to ask before you build: 3 high (and "), "{}", before["headline"]);
+
+    let w = wall_at(&s, 240.0, 144.0);
+    s.execute("bim.props.set", &json!({"handle": w.hex(), "key": "type", "value": "P2"})).unwrap();
+    let after = s.execute("rfi.list", &json!({})).unwrap();
+    assert_eq!(open_kind(&after, "untagged_wall"), 0, "{}", after["csv"]);
+    let closed: Vec<&Value> = after["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "untagged_wall").collect();
+    assert_eq!(closed.len(), 1, "listed closed, not dropped: {}", after["csv"]);
+    assert_eq!(closed[0]["status"], "closed");
+    assert_eq!(closed[0]["answer"], "Type P2.");
+    let by = closed[0]["answered_by"].as_str().unwrap();
+    assert!(by.contains(&w.hex()) && by.contains("a person"), "{by}");
+    // P2 goes to the deck: the two-layer ceiling over it is answered too; P2's rating question
+    // was never P1's wall's to answer (the type is still in the legend), so it stays.
+    assert_eq!(open_kind(&after, "double_ceiling_short_wall"), 0, "{}", after["csv"]);
+    assert_eq!(open_kind(&after, "rated_to_ceiling"), 1);
+    assert_eq!(after["open"]["questions"], 3);
+    assert_eq!(after["open"]["spec_gaps"].as_u64().unwrap(), gaps - 2, "{}", after["open"]);
+    assert_eq!(after["open"]["closed_by_answers"], 2);
+    // The ids stay put, and rfi.set finds a closed item by its id.
+    let id = closed[0]["id"].as_str().unwrap();
+    let before_id = before["items"].as_array().unwrap().iter().find(|i| i["kind"] == "untagged_wall").unwrap()["id"].clone();
+    assert_eq!(before_id, id);
+    s.execute("rfi.set", &json!({"id": id, "answer": "Confirmed in the field."})).unwrap();
+    // A type the legend doesn't have is not a correction the list can take.
+    let mut s2 = building();
+    let w2 = wall_at(&s2, 240.0, 144.0);
+    s2.execute("bim.props.set", &json!({"handle": w2.hex(), "key": "type", "value": "NOPE"})).unwrap();
+    assert_eq!(open_kind(&s2.execute("rfi.list", &json!({})).unwrap(), "untagged_wall"), 1);
 }
 
 #[test]

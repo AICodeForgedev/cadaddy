@@ -4642,31 +4642,40 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             let rad = r_of(size);
             let z_end = mid.clamp(g.lo.z + rad, (g.hi.z - rad).max(g.lo.z + rad));
             let bot = |z: f64| (z - rad - floor) / upf;
+            // Across at the connection's height: one bottom per segment (the spec's shape, Q6662).
             let mut pts = vec![[m.at.x, m.at.y]];
-            let mut bots = vec![bot(mid)];
             let corner = Vec2::new(end.x, m.at.y);
             if corner.dist(m.at) > upf / 96.0 && corner.dist(end) > upf / 96.0 {
                 pts.push([corner.x, corner.y]);
-                bots.push(bot(mid));
             }
             pts.push([end.x, end.y]);
-            bots.push(bot(mid));
-            if (z_end - mid).abs() > upf / 96.0 {
-                pts.push([end.x, end.y]);
-                bots.push(bot(z_end));
-            }
-            leg_n += 1;
-            let mut r = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), pts, size, 0.0);
-            r.bottoms_ft = bots;
-            r.id = format!("{cid}#{leg_n}");
-            r.size_source = format!("minimum: {min_src}");
-            r.height_source = ROUTED.into();
-            r.basis = format!(
+            let basis = format!(
                 "the whip from its connection to {}'s terminal box: {}",
                 g.tag,
                 super::provenance::rule(super::equipdisc::RULE).basis_for("")
             );
-            let ft = run_ft(&r, upf);
+            leg_n += 1;
+            let mut r = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), pts, size, bot(mid));
+            r.id = format!("{cid}#{leg_n}");
+            r.size_source = format!("minimum: {min_src}");
+            r.height_source = ROUTED.into();
+            r.basis = basis.clone();
+            let mut ft = run_ft(&r, upf);
+            // Up or down into the housing at its end: a riser of its own (a run's drop is at a
+            // corner between two of its segments, and the whip ends there).
+            let drop = (z_end - mid).abs() > upf / 96.0 && runs.len() + 1 < MAX_RUNS;
+            let riser = drop.then(|| {
+                let (lo, hi) = (bot(mid.min(z_end)), bot(mid.max(z_end)));
+                let mut v = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), vec![[end.x, end.y]], size, lo);
+                v.top_ft = Some(hi);
+                v.size_source = r.size_source.clone();
+                v.height_source = ROUTED.into();
+                v.basis = basis;
+                v
+            });
+            if let Some(v) = &riser {
+                ft += run_ft(v, upf);
+            }
             whip_n += 1;
             whip_ft += ft;
             let l = lens.entry(ci).or_default();
@@ -4682,6 +4691,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 }));
             }
             runs.push(r);
+            if let Some(mut v) = riser {
+                leg_n += 1;
+                v.id = format!("{cid}#{leg_n}");
+                runs.push(v);
+            }
         }
         let mut t = tag.clone();
         if let Some((chain_ft, br_ft, reach_ft, by)) = &branched {
@@ -6183,6 +6197,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     out.runs.extend(lv_out.runs);
     out.runs.extend(fa_out.runs);
+    // Every run the routing writes has the shape the spec's own check asks (Q6662): a leg of no
+    // length or a height per point is mended, one that can't be is dropped, each with a note.
+    out.report["runs_checked"] = check_runs(&mut out.runs, upf);
     out.tags = tags;
     out.tags.extend(lv_out.tags);
     out.tags.extend(fa_out.tags);
@@ -6198,6 +6215,43 @@ pub(crate) fn mep_piece(e: &Entity) -> bool {
 /// The sheet a circuit was read on (its tag's), for the run's source.
 fn tag_sheet(t: &ElementTag) -> String {
     field_of(t, "sheet").unwrap_or_default().to_string()
+}
+
+/// Checks the routed `runs` against the spec's shape for a run ([`MepRun::shape_ok`]): a run
+/// whose heights aren't one per segment is mended ([`MepRun::mend_shape`]); one still off, or
+/// with neither plan length nor rise (within 1/8" at `upf` sheet units a foot), is dropped. A
+/// segment of no length between other heights stays: it is the run's vertical leg. The report:
+/// how many were checked, mended and dropped, and each mended or dropped run with why.
+pub(crate) fn check_runs(runs: &mut Vec<MepRun>, upf: f64) -> Value {
+    let tol = upf / 96.0;
+    let checked = runs.len();
+    let mut items: Vec<Value> = Vec::new();
+    let (mut mended, mut dropped) = (0usize, 0usize);
+    runs.retain_mut(|r| {
+        let did = r.mend_shape();
+        let no_plan = r.points.windows(2).all(|w| if let [a, b] = w { (b[0] - a[0]).hypot(b[1] - a[1]) <= tol } else { true });
+        let (lo, hi) = r.bottoms_ft.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), b| (lo.min(*b), hi.max(*b)));
+        let rise = hi - lo;
+        let empty = r.top_ft.is_none() && no_plan && (rise.is_nan() || rise <= 1.0 / 96.0);
+        let keep = r.shape_ok() && !empty;
+        if !keep {
+            dropped += 1;
+        } else if !did.is_empty() {
+            mended += 1;
+        }
+        if (!keep || !did.is_empty()) && items.len() < MAX_ITEMS {
+            let what = if keep {
+                format!("mended: {}", did.join("; "))
+            } else if empty {
+                "dropped: a run of no length".to_string()
+            } else {
+                "dropped: its points and heights don't make a run (2 points or more with one bottom height per segment, or a riser's 1 point under its top)".to_string()
+            };
+            items.push(json!({"id": r.id, "system": r.system, "level": r.level, "what": what}));
+        }
+        keep
+    });
+    json!({"checked": checked, "mended": mended, "dropped": dropped, "items": items})
 }
 
 /// A run's length, feet (risers by their height).
@@ -7296,7 +7350,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand)} → {routed, removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, rerouted_list: [{feeder, why}], dropped_list}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, equipment_connections: {loads, connected, drawn_disconnects, built, built_by_kind, removed, connection_boxes, took_circuit, built_list} (Q6624: each piece of equipment that carries its circuit, its connection), circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{feeders?: \"moved\"|\"all\" (default moved: the feeders whose gear moved, went to another floor or was placed since their route was made are routed again; all: every feeder with placed gear, routed on demand)} → {routed, removed, atoms, seconds, feeders: {rerouted, kept, dropped, off_gear_before, off_gear_after, unrouted_before, unrouted_after, off_feed_before, off_feed_after (Q6664: routes whose chains differ from the panels' recorded feeds), disagree, rerouted_list: [{feeder, why}], dropped_list, disagree_list (routes kept as given that the feed data disagrees with; feeders not laid beside them)}, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, box_clearance: {movedOffOverlap, movedOffBackToBack, devicesMoved, puttyPads, ratedWallRemedy: separate|putty pads, ratedWallRemedySource, devicesPutBack, ...}, equipment_connections: {loads, connected, drawn_disconnects, built, built_by_kind, removed, connection_boxes, took_circuit, built_list} (Q6624: each piece of equipment that carries its circuit, its connection), circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build; each feeder routed again from its source to its gear where it moved), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")

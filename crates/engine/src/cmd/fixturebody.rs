@@ -51,6 +51,8 @@ pub(crate) struct Family {
     pub words: Vec<String>,
     pub size_in: [f64; 3],
     pub basis: String,
+    /// Its schedules print bare sizes in nominal feet (a troffer's `2X4`).
+    pub bare_feet: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -121,11 +123,14 @@ pub(crate) fn family_of(class: Class, text: &str) -> Option<&'static Family> {
     list.iter().find(|f| f.words.iter().any(|w| says(&have, w)))
 }
 
-/// A size printed in `text` (`2X4`, `2'X4'`, `24"X48"`, `60 X 32`): its two sides, inches, and
-/// the words as printed. Bare numbers of 8 or less are feet (a luminaire's nominal `2X4`), larger
-/// ones inches; a side outside the rules' limits (a lamp count and wattage `2X32W` is refused by
-/// the letter after it) is no size.
-pub(crate) fn printed_size(text: &str) -> Option<([f64; 2], String)> {
+/// A size printed in `text` (`2X4`, `2'X4'`, `24"X48"`, `60 X 32`): its two sides, inches, the
+/// words as printed and how its numbers were read (feet or inches, and why). Marks decide; a bare
+/// number over 8 is inches (no fixture is 9 ft across). Bare numbers of 8 or less could be either
+/// (a troffer's nominal `2X4`, a downlight's `6X6`): feet for a family the rules print in nominal
+/// feet (`bare_feet`: troffers, strips), else the reading nearer `usual`'s usual size, else (no
+/// kind to judge by) inches. A side outside the rules' limits (a lamp count and wattage `2X32W` is
+/// refused by the letter after it) is no size.
+pub(crate) fn printed_size(text: &str, usual: Option<&Family>) -> Option<([f64; 2], String, String)> {
     let chars: Vec<char> = text.chars().take(2_000).collect();
     let [lo, hi] = rules().size_limits_in;
     let is_mark = |c: char| c == '\'' || c == '"';
@@ -173,18 +178,46 @@ pub(crate) fn printed_size(text: &str) -> Option<([f64; 2], String)> {
         }
         let num = |a: usize, b: usize| chars.get(a..b).map(|s| s.iter().collect::<String>()).and_then(|s| s.parse::<f64>().ok());
         let (Some(a), Some(b)) = (num(start_a, end_a), num(start_b, end_b)) else { continue };
-        let feet = match (left_mark, right_mark) {
-            (Some('\''), _) | (_, Some('\'')) => true,
-            (Some('"'), _) | (_, Some('"')) => false,
-            _ => a <= 8.0 && b <= 8.0,
+        let fits = |v: &[f64; 2]| v.iter().all(|x| x.is_finite() && *x >= lo && *x <= hi);
+        let (inches, feet) = ([a, b], [a * 12.0, b * 12.0]);
+        let read = match (left_mark, right_mark) {
+            (Some('\''), _) | (_, Some('\'')) => Some((feet, "feet, as marked".to_string())),
+            (Some('"'), _) | (_, Some('"')) => Some((inches, "inches, as marked".to_string())),
+            _ if a > 8.0 || b > 8.0 => Some((inches, "inches: a bare number over 8".to_string())),
+            _ => bare_reading(inches, feet, usual, fits),
         };
-        let (a, b) = if feet { (a * 12.0, b * 12.0) } else { (a, b) };
-        if [a, b].iter().all(|v| v.is_finite() && *v >= lo && *v <= hi) {
+        if let Some((v, how)) = read.filter(|(v, _)| fits(v)) {
             let said: String = chars.get(start_a..k).map(|s| s.iter().collect()).unwrap_or_default();
-            return Some(([a, b], said.trim().to_string()));
+            return Some((v, said.trim().to_string(), how));
         }
     }
     None
+}
+
+/// How bare numbers of 8 or less read (`6X6`: 6 in or 6 ft?): the reading and why.
+fn bare_reading(inches: [f64; 2], feet: [f64; 2], usual: Option<&Family>, fits: impl Fn(&[f64; 2]) -> bool) -> Option<([f64; 2], String)> {
+    if let Some(f) = usual.filter(|f| f.bare_feet)
+        && fits(&feet)
+    {
+        return Some((feet, format!("feet: a {}'s sizes print in nominal feet", f.name)));
+    }
+    // How far a reading is from the family's usual plan size: shorter side to shorter side,
+    // longer to longer, by ratio.
+    let plan = usual.map(|f| [f.size_in[0], f.size_in[1]]).filter(|v| v.iter().all(|x| x.is_finite() && *x > 0.0));
+    let off = |v: &[f64; 2], u: &[f64; 2]| {
+        let (s, l) = (v[0].min(v[1]), v[0].max(v[1]));
+        let (us, ul) = (u[0].min(u[1]), u[0].max(u[1]));
+        (s / us).ln().abs() + (l / ul).ln().abs()
+    };
+    match (usual, plan) {
+        (Some(f), Some(u)) if fits(&inches) && fits(&feet) => Some(if off(&feet, &u) < off(&inches, &u) {
+            (feet, format!("feet: nearer a {}'s usual size than inches", f.name))
+        } else {
+            (inches, format!("inches: nearer a {}'s usual size than feet", f.name))
+        }),
+        _ if fits(&inches) => Some((inches, "inches: bare numbers and no kind to read them by".to_string())),
+        _ => Some((feet, "feet: too small to be inches".to_string())),
+    }
 }
 
 /// The body a fixture is built as: its size (inches: width along its wall, depth out from it,
@@ -244,7 +277,7 @@ pub(crate) fn body(ask: &Ask) -> Option<Body> {
             ),
         });
     }
-    if let Some(([a, b], said)) = printed_size(ask.schedule) {
+    if let Some(([a, b], said, how)) = printed_size(ask.schedule, kind) {
         // A wall fixture's longer side runs along its wall, unless its kind's usual body is
         // deeper than wide (a tub is long along its wall; a water closet deep).
         let deep = kind.is_some_and(|f| f.size_in[1] > f.size_in[0]);
@@ -254,7 +287,7 @@ pub(crate) fn body(ask: &Ask) -> Option<Body> {
             size_in: [w, d, height],
             provenance: "derived",
             basis: format!(
-                "the size its schedule prints, {said}{}",
+                "the size its schedule prints, {said} ({how}){}",
                 kind.map(|f| format!("; its height a {}'s ({})", f.name, f.basis)).unwrap_or_default()
             ),
         });
@@ -290,7 +323,7 @@ mod tests {
 
     #[test]
     fn printed_sizes_are_read_and_lamps_and_models_are_not() {
-        let s = |t: &str| printed_size(t).map(|(v, _)| v);
+        let s = |t: &str| printed_size(t, family_of(Class::Light, t)).map(|(v, _, _)| v);
         assert_eq!(s("2X4 LED TROFFER"), Some([24.0, 48.0]));
         assert_eq!(s("2'X2' FLAT PANEL"), Some([24.0, 24.0]));
         assert_eq!(s("24\" x 48\" panel"), Some([24.0, 48.0]));
@@ -337,12 +370,44 @@ mod tests {
     #[test]
     fn hostile_text_never_panics() {
         for t in ["", "X", "XXXX", "9999999999999999999X9", "1.2.3X4", "'X'", "\"x\"", "××××", "2 X 4 X 6", &"9X".repeat(5000)] {
-            let _ = printed_size(t);
+            let _ = printed_size(t, None);
+            let _ = printed_size(t, family_of(Class::Light, "TROFFER"));
+            let _ = printed_size(t, family_of(Class::Light, "DOWNLIGHT"));
             let _ = family_of(Class::Light, t);
             let _ = drawn_size(t);
         }
         assert_eq!(drawn_size("21, 30"), Some([21.0, 30.0]));
         assert_eq!(drawn_size("NaN, 3"), None);
         assert_eq!(drawn_size("1e300, 3"), None);
+    }
+
+    #[test]
+    fn bare_small_numbers_read_by_the_fixture_family() {
+        let size = |class, words: &str, schedule: &str, on_wall| {
+            body(&Ask { class, words, schedule, drawn_in: None, on_wall }).map(|b| (b.size_in, b.provenance))
+        };
+        let light = |schedule: &str| size(Class::Light, "luminaire", schedule, false);
+        // Inch-size luminaires printed without marks are inches, not feet.
+        assert_eq!(light("6X6 SQUARE RECESSED DOWNLIGHT"), Some(([6.0, 6.0, 6.0], "derived")));
+        assert_eq!(light("4 X 4 RECESSED DOWNLIGHT"), Some(([4.0, 4.0, 6.0], "derived")));
+        assert_eq!(light("8x8 WAFER"), Some(([8.0, 8.0, 6.0], "derived")));
+        assert_eq!(light("6X6 LED"), Some(([6.0, 6.0, 6.0], "derived")));
+        // Families the rules read in nominal feet.
+        assert_eq!(light("2X4 LED TROFFER"), Some(([24.0, 48.0, 5.0], "derived")));
+        assert_eq!(light("2X2 FLAT PANEL"), Some(([24.0, 24.0, 5.0], "derived")));
+        assert_eq!(light("1X4 STRIP"), Some(([12.0, 48.0, 4.0], "derived")));
+        assert_eq!(light("1 x 8 WRAP"), Some(([12.0, 96.0, 4.0], "derived")));
+        // No shape word: the reading nearer the luminaire's usual size.
+        assert_eq!(light("2X4 LED"), Some(([24.0, 48.0, 6.0], "derived")));
+        // Marks still decide.
+        assert_eq!(light("6'X6' DOWNLIGHT"), Some(([72.0, 72.0, 6.0], "derived")));
+        assert_eq!(light("4\"X4\" TROFFER"), Some(([4.0, 4.0, 5.0], "derived")));
+        // Plumbing: the reading nearer its kind's usual size; no kind, inches.
+        assert_eq!(size(Class::Plumbing, "", "FLOOR DRAIN 6X6", false), Some(([6.0, 6.0, 1.0], "derived")));
+        assert_eq!(size(Class::Plumbing, "", "SHOWER 3X3", true), Some(([36.0, 36.0, 4.0], "derived")));
+        assert_eq!(size(Class::Plumbing, "", "WASHER BOX 4X6", true), Some(([6.0, 4.0, 6.0], "derived")));
+        // How the numbers were read is in its basis.
+        let b = body(&Ask { class: Class::Light, words: "luminaire", schedule: "6X6 DOWNLIGHT", drawn_in: None, on_wall: false }).unwrap();
+        assert!(b.basis.contains("inches"), "{}", b.basis);
     }
 }

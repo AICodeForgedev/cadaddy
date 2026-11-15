@@ -19,6 +19,7 @@ mod dwg_hatch_assoc_keep;
 mod dwg_header_vars;
 mod dwg_interop;
 mod dwg_keeps_custom_records;
+mod dwg_keeps_read_as;
 mod dwg_layout_owner;
 mod dwg_native_common_data;
 mod dwg_native_entities;

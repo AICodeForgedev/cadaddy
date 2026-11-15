@@ -3,11 +3,11 @@
 //! never today's lossy output. Only confirmed failures receive an explicit ignore reason.
 
 use cadaddy_color::{Color, Rgb};
-use cadaddy_doc::{Common, EntityKind, Transparency};
+use cadaddy_doc::{Common, Drawing, EntityKind, HAlign, Transparency, VAlign};
 use cadaddy_io::Version;
 
-use super::super::cases;
-use super::{check, check_version};
+use super::super::{cases, compare};
+use super::{check, check_version, check_version_using};
 
 #[test]
 fn empty_model_and_defaults() {
@@ -109,9 +109,42 @@ fn text_alignment_with_points() {
     check(cases::coplanar_text_alignment());
 }
 #[test]
-#[ignore = "Confirmed change: missing justified TEXT align_pt becomes (0,0,elevation), moving text"]
 fn text_alignment_without_points() {
-    check(cases::text_alignment(false));
+    // A DWG always stores an alignment point: TEXT read without one gets the point it is drawn
+    // by, so it is drawn in the same place (it went to, or was stretched to, (0,0,elevation)).
+    // Justified text: its insertion point, its first point then worked out from it. Aligned and fit
+    // text: its baseline's end along its rotation. Every other field is kept.
+    let placed = |expected: &Drawing, actual: &Drawing| {
+        let mut want = expected.clone();
+        let handles: Vec<_> = want.model.iter().map(|e| e.handle).collect();
+        for h in handles {
+            let Some(EntityKind::Text(back)) = actual.entity(h).map(|e| e.kind.clone()) else { continue };
+            want.model.modify(h, |e| {
+                let EntityKind::Text(t) = &mut e.kind else { return };
+                match (t.align_pt, t.halign, t.valign) {
+                    (Some(_), ..) | (None, HAlign::Left, VAlign::Baseline) => {}
+                    (None, HAlign::Aligned | HAlign::Fit, _) => {
+                        let end = back.align_pt.expect("the baseline's end");
+                        let along = end - t.insert;
+                        assert!(along.len() > 0.0 && (along.y.atan2(along.x) - t.rotation).abs() < 1e-9, "{along:?} along {}", t.rotation);
+                        t.align_pt = Some(end);
+                    }
+                    (None, ..) => {
+                        t.align_pt = Some(t.insert);
+                        t.insert = back.insert;
+                    }
+                }
+            });
+        }
+        want
+    };
+    for case in cases::text_alignment(false) {
+        for version in Version::ALL {
+            check_version_using(&case.name, &case.drawing, &case.drawing, version, |expected, actual, context| {
+                compare::model(&placed(expected, actual), actual, context);
+            });
+        }
+    }
 }
 #[test]
 #[ignore = "Confirmed loss on the shared DXF path: ByBlock plot style becomes ByLayer"]

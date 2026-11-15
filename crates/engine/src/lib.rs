@@ -351,6 +351,9 @@ pub struct DocState {
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The guided job's checkpoint as this drawing last wrote (or read) it, and what it holds: the
+    /// next checkpoint appends only the parts that changed (Q6576).
+    pub job_checkpoint: Option<cmd::file::CdySaved>,
     /// The DWG copy (DWGCOPY) this drawing last wrote: a file at that path is the drawing's own
     /// to replace; any other `.dwg` there is kept as `.dwg.bak` first.
     pub dwg_copy_written: Option<String>,
@@ -466,6 +469,7 @@ impl DocState {
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
+            job_checkpoint: None,
             dwg_copy_written: None,
             disk_id: None,
             wallgen: None,
@@ -1055,18 +1059,11 @@ pub fn documented_params(doc: &str) -> Vec<&str> {
 /// included, but not its result: what [`CommandSpec::reach`] looks for file and network words in
 /// (`colorMap?: path` reaches files although `path` there isn't a parameter's name).
 pub fn param_words(doc: &str) -> Vec<&str> {
-    words_in(doc, false)
+    words_in(doc)
 }
 
-/// The names the doc reader took before battle test 7 (a value word after a colon, a plain
-/// choice's values and a capitalised word left out): what the job, BIM and MEP lane's commands
-/// still take.
-fn lane_words(doc: &str) -> Vec<&str> {
-    words_in(doc, true)
-}
-
-/// [`param_words`]; `names` leaves out what the earlier reader didn't take as names.
-fn words_in(doc: &str, names: bool) -> Vec<&str> {
+/// [`param_words`].
+fn words_in(doc: &str) -> Vec<&str> {
     let b = doc.as_bytes();
     let mut out = Vec::new();
     let mut nest = 0usize;
@@ -1081,12 +1078,9 @@ fn words_in(doc: &str, names: bool) -> Vec<&str> {
             let prev = doc[..start].trim_end().chars().last();
             let next = doc[i..].trim_start().chars().next();
             let word = &doc[start..i];
-            let named = !matches!(next, Some('?' | ':'));
-            let left_out = names && named && (prev == Some(':') && VALUE_WORDS.contains(&word) || plain_choice(doc, start, prev));
             if matches!(prev, Some('{' | ',' | '|' | '(' | ':' | ';' | '/' | '+'))
                 && matches!(next, Some(':' | '?' | ',' | '}' | ')' | '(' | '|' | '+' | '/' | '→'))
                 && !word.starts_with(|c: char| c.is_ascii_uppercase())
-                && !left_out
             {
                 out.push(word);
             }
@@ -1200,18 +1194,7 @@ fn documented_names(doc: &str) -> Vec<(&str, usize)> {
                 // a note in brackets after it). Docs of several forms go on after it. A result
                 // told in words (`→ list: [{…}]; load: {name, …}`) runs to the next form.
                 _ if groups.is_empty() && doc.get(i..).is_some_and(|r| r.starts_with('→')) => {
-                    let at = i + '→'.len_utf8();
-                    let group = skip_group(doc, at, b'{', b'}', true);
-                    if group == at {
-                        i = next_form(doc, at);
-                        continue;
-                    }
-                    i = skip_group(doc, group, b'(', b')', false);
-                    // `…: the readable text of TEXT, MTEXT` is prose about the result, up to the
-                    // next form (`|`) or the end.
-                    if doc.get(i..).is_some_and(|r| r.starts_with(':')) {
-                        i = doc.get(i..).and_then(|r| r.find('|')).map_or(doc.len(), |at| i + at);
-                    }
+                    i = after_result(doc, i);
                     continue;
                 }
                 _ => {}
@@ -1222,12 +1205,35 @@ fn documented_names(doc: &str) -> Vec<(&str, usize)> {
     out
 }
 
-/// The values the doc's choices offer (`option: save|restore|set`, `mode?: on|off`).
+/// Where the doc goes on after the command's result whose `→` is at `at`: past the group after
+/// the arrow and a note in brackets after it, or a result told in words (`→ list: [{…}]; load:
+/// {name, …}`) up to the next form. `…: the readable text of TEXT, MTEXT` after the group is prose
+/// about the result, up to the next form (`|`) or the end.
+fn after_result(doc: &str, at: usize) -> usize {
+    let at = at + '→'.len_utf8();
+    let group = skip_group(doc, at, b'{', b'}', true);
+    if group == at {
+        return next_form(doc, at);
+    }
+    let i = skip_group(doc, group, b'(', b')', false);
+    if doc.get(i..).is_some_and(|r| r.starts_with(':')) {
+        return doc.get(i..).and_then(|r| r.find('|')).map_or(doc.len(), |found| i + found);
+    }
+    i
+}
+
+/// The values the doc's choices offer (`option: save|restore|set`, `mode?: on|off`), not the
+/// result's (`job.answer`'s `→ {answered: id | [ids]}` left its own `id` out; battle test 8).
 fn choice_words(doc: &str) -> Vec<&str> {
     let b = doc.as_bytes();
     let mut out = Vec::new();
+    let mut depth = 0usize;
     let mut i = 0;
     while i < b.len() {
+        if depth == 0 && doc.get(i..).is_some_and(|r| r.starts_with('→')) {
+            i = after_result(doc, i);
+            continue;
+        }
         if b[i].is_ascii_alphabetic() || b[i] == b'_' {
             let start = i;
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
@@ -1240,6 +1246,11 @@ fn choice_words(doc: &str) -> Vec<&str> {
                 out.push(&doc[start..i]);
             }
         } else {
+            match b[i] {
+                b'{' | b'[' | b'(' => depth += 1,
+                b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
             i += 1;
         }
     }
@@ -1315,15 +1326,6 @@ fn without_notes(t: &str) -> String {
     out
 }
 
-/// Words that follow a `:` in a parameter list as a value's type or unit, never as a name.
-const VALUE_WORDS: [&str; 16] =
-    ["bool", "boolean", "number", "string", "int", "integer", "degrees", "deg", "inches", "feet", "hex", "base64", "true", "false", "null", "typed"];
-
-/// [`choice_value`] as the reader took it before battle test 7: only a list of plain words.
-fn plain_choice(doc: &str, at: usize, prev: Option<char>) -> bool {
-    choice_segment(doc, at, prev).is_some_and(|list| list.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '|' | ' ' | '-')))
-}
-
 /// The text after the colon of the choice the word at `at` (after a `|`) is one value of.
 fn choice_segment(doc: &str, at: usize, prev: Option<char>) -> Option<&str> {
     if prev != Some('|') {
@@ -1395,25 +1397,6 @@ fn open_params(doc: &str) -> bool {
     false
 }
 
-/// [`open_params`] as it was before battle test 7: an ellipsis or placeholder anywhere in the
-/// top-level list, a value's place too (the job, BIM and MEP lane's commands keep it).
-fn open_params_loose(doc: &str) -> bool {
-    let doc = doc.split('→').next().unwrap_or(doc);
-    let mut depth = 0usize;
-    for (i, c) in doc.char_indices() {
-        let rest = doc.get(i..).unwrap_or_default();
-        match c {
-            '{' | '[' => depth += 1,
-            '}' | ']' => depth = depth.saturating_sub(1),
-            '…' if depth == 1 => return true,
-            '.' if depth == 1 && rest.starts_with("...") => return true,
-            '<' if depth == 1 && closes(rest) => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
 /// Whether the `<` that starts `rest` is closed by a `>` before its parameter list ends.
 fn closes(rest: &str) -> bool {
     let mut depth = 0usize;
@@ -1442,78 +1425,7 @@ pub fn params_doc(spec: &CommandSpec) -> &'static str {
 /// Whether `spec` takes parameters beyond the ones its documentation names (its doc leaves them
 /// open), so that an agent's unknown ones aren't refused.
 pub fn takes_open_params(spec: &CommandSpec) -> bool {
-    if in_job_lane(spec.id) { open_params_loose(params_doc(spec)) } else { open_params(params_doc(spec)) }
-}
-
-/// Command families of the job, BIM and MEP lane (the print-set pipeline and the building model):
-/// the agent guard keeps its earlier, looser checks for them ([`own_params`], the wrong-typed
-/// checks in [`refuse_wrong_typed_params`]); their callers are checked in that lane.
-const JOB_LANE: &[&str] = &[
-    "bim.",
-    "bspec.",
-    "mep.",
-    "model.",
-    "job.",
-    "rooms",
-    "walls.",
-    "wallgen",
-    "code.",
-    "estimate.",
-    "takeoff",
-    "schedule.",
-    "project.",
-    "rules.",
-    "validate",
-    "automation.",
-    "tags.",
-    "site.",
-    "finishes.",
-    "framing.",
-    "casework.",
-    "envelope.",
-    "plan.",
-    "prints.",
-    "arch.",
-    "levels.",
-    "stairs.",
-    "unittypes.",
-    "fieldview.",
-    "asbuilt.",
-    "override.",
-    "review.",
-    "rfi.",
-    "callouts.",
-    "cover.",
-    "calibrate.",
-    "fourd.",
-    "p2m.",
-    "lv.",
-    "parts.",
-    "furnish",
-    "drywall.",
-    "coordination.",
-    "ifc.",
-    "import.check",
-    "sheet.facts",
-    "labels.",
-    "roof.",
-    "grounding.",
-    "wholejob.",
-    "progress.",
-    "printset.",
-    "printrev.",
-    "co.",
-    "concrete.",
-    "ugsheets.",
-    "procure.",
-    "cobie.",
-    "bcf.",
-    "sheetset.from_model",
-];
-
-/// Whether command `id` belongs to the job, BIM and MEP lane ([`JOB_LANE`]).
-pub fn in_job_lane(id: &str) -> bool {
-    JOB_LANE.iter().any(|p| id.starts_with(p))
+    open_params(params_doc(spec))
 }
 
 /// A command's own parameters among the names its doc mentions: the ones at the top of a form
@@ -1541,27 +1453,17 @@ fn takes_nothing(doc: &str) -> bool {
 pub fn unknown_params(spec: &CommandSpec, params: &Value) -> Vec<String> {
     let Some(given) = params.as_object() else { return Vec::new() };
     let doc = params_doc(spec);
-    let lane = in_job_lane(spec.id);
-    let delegated = if lane { None } else { delegated_params(doc) };
+    let delegated = delegated_params(doc);
     if takes_open_params(spec) && delegated.is_none() {
         return Vec::new();
     }
     if let Some(known) = delegated {
         return given.keys().filter(|k| !known.contains(&k.as_str()) && !ALWAYS_PARAMS.contains(&k.as_str())).cloned().collect();
     }
-    let names = documented_names(doc);
-    let known: Vec<&str> = if in_job_lane(spec.id) {
-        // Every word its doc puts where a name or a value goes, as the reader before battle test
-        // 7 took them (that lane's callers aren't checked here); none: anything goes.
-        let mut all: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
-        all.extend(lane_words(doc));
-        if all.is_empty() {
-            return Vec::new();
-        }
-        all
-    } else {
-        own_params(&names)
-    };
+    // Only what the doc lists before the `→`, at the top of a form: not a word where a value
+    // goes, a field of a value or a key of the result (battle test 8 B7-019: the job, BIM and MEP
+    // commands took those, and anything at all when their doc was `{} → {…}`).
+    let known = own_params(&documented_names(doc));
     if known.is_empty() && !takes_nothing(doc) {
         return Vec::new();
     }
@@ -1573,7 +1475,7 @@ pub fn unknown_params(spec: &CommandSpec, params: &Value) -> Vec<String> {
 pub fn offered_params(spec: &CommandSpec) -> Vec<&'static str> {
     let doc = params_doc(spec);
     match delegated_params(doc) {
-        Some(names) if !in_job_lane(spec.id) => names,
+        Some(names) => names,
         _ => own_params(&documented_names(doc)),
     }
 }
@@ -1624,8 +1526,11 @@ pub fn param_kind(doc: &str, key: &str) -> Option<ParamKind> {
 /// is a plain one.
 fn annotation_kind(ann: &str) -> Option<ParamKind> {
     let first = ann.split(|c: char| c.is_whitespace() || matches!(c, ',' | '}' | '|' | '(' | ')' | '/')).next().unwrap_or("");
-    // A choice that includes a structure (`bool | {…}`, `number | [x,y]`) takes both.
-    let tail = ann.split([',', '}']).next().unwrap_or(ann);
+    // A choice that includes a structure (`bool | {…}`, `number | [x,y]`) takes both, a note in
+    // brackets before it too (`number (people per crew, every trade) | {kind: people}` read as a
+    // number at its comma; battle test 8).
+    let plain = without_notes(ann);
+    let tail = plain.split([',', '}']).next().unwrap_or(&plain);
     if tail.contains(['{', '[']) || tail.contains('|') && !matches!(first, "true" | "false") {
         return None;
     }
@@ -1738,9 +1643,25 @@ fn note_value(note: &str) -> Option<&str> {
 /// (`where? ("text" | {attribute: n})`).
 fn note_takes_object(note: &str) -> bool {
     match note_value(note) {
-        Some(v) => without_notes(v).contains('{'),
+        Some(v) => {
+            let v = without_notes(v);
+            v.contains('{') || names_object(&v)
+        }
         None => note.contains('{'),
     }
+}
+
+/// Whether a value doc names an object as one of its types in words (`spec?: object (merged
+/// into …)`, `answer: "Correct" | text | object`; battle test 8: those were refused an object).
+/// Not where `object` is one option among words (ZOOM's `mode: extents|all|…|object`): every
+/// other choice must be a type too (text, a number, a flag, a quoted value, a list).
+fn names_object(value: &str) -> bool {
+    let first = |alt: &str| alt.split_whitespace().next().map(|w| w.trim_end_matches([',', ';', '.']).to_ascii_lowercase()).unwrap_or_default();
+    let alts: Vec<String> = value.split('|').map(first).collect();
+    alts.iter().any(|w| w == "object")
+        && alts.iter().all(|w| {
+            w.is_empty() || w.starts_with('[') || matches!(w.as_str(), "object" | "text" | "string" | "number" | "bool" | "boolean" | "null")
+        })
 }
 
 /// Whether a note says the value is a list only (`elements?: [{offset, color?}]`).
@@ -1923,11 +1844,71 @@ fn map_value_doc<'a>(notes: &[&'a str]) -> Option<&'a str> {
     found
 }
 
-/// An entry `name` of map parameter `k` whose value isn't what the map's doc `entry` says (a list
-/// or an object where it shows a single value, text where it shows a number…).
-fn wrong_map_entry(k: &str, name: &str, v: &Value, entry: &str) -> Option<String> {
+/// What a map parameter's notes say one named key takes, from the note in brackets right after
+/// the key's name (`{key: value} (any of: systems_palette ([{key, rgb}]), fire_main_min_in
+/// (number), …)`): `[…]` a list, `{…}` an object, `number`, `count` or a number (a default)
+/// a number. `None` when the notes don't
+/// name the key, or its note is words (`kind (category devices, …)`): the map's entry doc
+/// stands.
+fn named_entry_kind(notes: &[&str], name: &str) -> Option<EntryKind> {
+    if name.is_empty() {
+        return None;
+    }
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    for note in notes {
+        let mut at = 0;
+        while let Some(found) = note.get(at..).and_then(|r| r.find(name)) {
+            let start = at + found;
+            let end = start + name.len();
+            at = end;
+            let before = note.get(..start).and_then(|b| b.chars().next_back());
+            let after = note.get(end..).and_then(|r| r.chars().next());
+            if before.is_some_and(is_word) || after.is_some_and(is_word) {
+                continue;
+            }
+            let close = skip_group(note, end, b'(', b')', false);
+            if close <= end {
+                continue;
+            }
+            let inner = note.get(end..close).unwrap_or("").trim().trim_start_matches('(').trim_end_matches(')').trim();
+            let kind = match inner.chars().next() {
+                Some('[') => Some(EntryKind::List),
+                Some('{') => Some(EntryKind::Object),
+                _ if annotation_kind(inner) == Some(ParamKind::Number) => Some(EntryKind::Number),
+                _ if inner.split_whitespace().next().is_some_and(|w| w.parse::<f64>().is_ok_and(f64::is_finite)) => Some(EntryKind::Number),
+                _ => None,
+            };
+            if kind.is_some() {
+                return kind;
+            }
+        }
+    }
+    None
+}
+
+/// The shape a named key of a map takes ([`named_entry_kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryKind {
+    List,
+    Object,
+    Number,
+}
+
+/// An entry `name` of map parameter `k` whose value isn't what the key's own note says
+/// ([`named_entry_kind`]) or, when it has none, what the map's doc `entry` says (a list or an
+/// object where it shows a single value, text where it shows a number…).
+fn wrong_map_entry(k: &str, name: &str, v: &Value, entry: &str, notes: &[&str]) -> Option<String> {
     if v.is_null() {
         return None;
+    }
+    if let Some(kind) = named_entry_kind(notes, name) {
+        let want = match kind {
+            EntryKind::List if !v.is_array() => "a list",
+            EntryKind::Object if !v.is_object() => "an object",
+            EntryKind::Number if !v.is_number() => "a number",
+            _ => return None,
+        };
+        return Some(format!("`{k}` entry `{name}` must be {want}"));
     }
     let plain = without_notes(entry);
     let want = match annotation_kind(entry) {
@@ -1959,8 +1940,7 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
             continue;
         }
         let kind = param_kind(doc, k);
-        let lane = !in_job_lane(spec.id);
-        let notes = if lane { param_notes(doc, k) } else { Vec::new() };
+        let notes = param_notes(doc, k);
         // A number spelt as text that isn't finite ('nan', '-inf') was silently dropped (battle
         // test 6 B7-019): refused for every parameter that takes a number.
         let numeric = kind.is_some() || is_numeric_name(k) || notes.iter().any(|n| note_is_numeric(n));
@@ -1973,8 +1953,9 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
             return Err(EngineError::BadParams { cmd: spec.id.into(), msg: format!("`{k}` must be 0 or more (got {v})") });
         }
         // An object or a list where the doc shows a single value was read as "not given" (battle
-        // test 7 B7-019: 603 of 3,896 object values ran in 225 commands).
-        if lane && kind.is_none() && !notes.is_empty() {
+        // test 7 B7-019: 603 of 3,896 object values ran in 225 commands; battle test 8: 342 more
+        // in the job, BIM and MEP commands, which skipped this check).
+        if kind.is_none() && !notes.is_empty() {
             if let Some(o) = v.as_object() {
                 let list_only = notes.iter().all(|n| note_is_list(n));
                 if list_only || !notes.iter().any(|n| note_takes_object(n)) {
@@ -1989,7 +1970,7 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
                 }
                 // A map (`set?: {alias: command}`): any key, each value as the doc says.
                 if let Some(entry) = map_value_doc(&notes) {
-                    if let Some(msg) = o.iter().find_map(|(name, v)| wrong_map_entry(k, name, v, entry)) {
+                    if let Some(msg) = o.iter().find_map(|(name, v)| wrong_map_entry(k, name, v, entry, &notes)) {
                         return Err(EngineError::BadParams { cmd: spec.id.into(), msg });
                     }
                 } else if let Some(fields) = value_fields(&notes)

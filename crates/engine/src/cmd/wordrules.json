@@ -3618,7 +3618,33 @@
     "TYPE",
     "MARK",
     "SYMBOL",
-    "FIXTURE"
+    "FIXTURE",
+    "ID"
+   ]
+  },
+  "schedules.key_heading_words": {
+   "source": "format vocabulary of schedules: the words a schedule's key column heading is made of (PLAN MARK, FIXTURE TAG, MARK NO., TYPE ID), so a heading stacked on two lines in one cell (PLAN over MARK) is one heading and its second line no row of marks (fix-schedule-plan-mark-header-unread)",
+   "words": [
+    "PLAN",
+    "FIXTURE",
+    "LUMINAIRE",
+    "TAG",
+    "MARK",
+    "TYPE",
+    "SYMBOL",
+    "ID",
+    "NO",
+    "NUMBER",
+    "KEY"
+   ]
+  },
+  "schedules.key_tag_words": {
+   "source": "format vocabulary of plumbing and equipment schedules: a key heading (schedules.key_heading_words) holding one of these heads the column of tags (PLAN MARK, FIXTURE TAG, MARK NO., ID); one with TYPE alone heads a fixture type column (fix-schedule-plan-mark-header-unread)",
+   "words": [
+    "TAG",
+    "MARK",
+    "SYMBOL",
+    "ID"
    ]
   },
   "schedules.not_mark_heading_words": {
@@ -4321,6 +4347,17 @@
     "FINISH PLAN",
     "SLAB PENETRATION PLAN",
     "SLAB PLAN"
+   ]
+  },
+  "sheets.other_level_view_title_words": {
+   "source": "A plan view title that names another level or the ground around the building, not the storey its sheet is filed on: its marks are not that storey's, though its outline lies on the floor plan's (a roof plan beside the floor plan draws the same shell). A floor plan's sheet's other views of its own storey (a reflected ceiling plan, a power or lighting plan) are fitted onto the floor plan; these never are. (drafting convention: general, no job's title)",
+   "words": [
+    "ROOF",
+    "FOUNDATION",
+    "FOOTING",
+    "SITE PLAN",
+    "KEY PLAN",
+    "VICINITY"
    ]
   },
   "sheets.reference_words": {

@@ -88,6 +88,11 @@ fn object(e: &cadaddy_engine::doc::Entity) -> Value {
     fn derived_first_point(t: &mut Value) {
         let (h, v) = (t["halign"].as_str().unwrap_or("left"), t["valign"].as_str().unwrap_or("baseline"));
         let by_first = (h == "left" && v == "baseline") || h == "aligned" || h == "fit";
+        // Without an alignment point it is drawn at its first point, which a writer writes as
+        // its alignment point (DXF group 11).
+        if !by_first && t["alignPt"].is_null() && !t["insert"].is_null() {
+            t["alignPt"] = t["insert"].clone();
+        }
         if !by_first && !t["alignPt"].is_null() {
             t.as_object_mut().unwrap().remove("insert");
         }

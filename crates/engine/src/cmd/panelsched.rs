@@ -1375,6 +1375,7 @@ fn circuits_of(side_rows: &[Vec<Cells>], sheet: &str) -> Vec<PanelCircuit> {
                 wire: c.wire.clone(),
                 load_va: (!loads.is_empty()).then(|| loads.iter().sum()),
                 design_load_va: None,
+                corrections: Vec::new(),
                 source: sheet.to_string(),
             });
         }
