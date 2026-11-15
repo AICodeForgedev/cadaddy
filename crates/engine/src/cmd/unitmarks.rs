@@ -1009,6 +1009,9 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
         let over = mark_over(t);
         let mut with: Vec<&TextItem> = over.iter().map(|(m, _)| *m).collect();
         with.extend(texts.iter().copied().filter(|k| keynote_number(k) && beside(k, t)));
+        // The lines printed under it (`WP`, `GFCI`) are its lettering too: the leader may leave
+        // any of them (Q6603).
+        with.extend(stacked_under(t, &texts, &marks.sheet_numbers));
         let (spot_at, spot) = super::labelspot::locate(t, &with, view.leaders, &[], 0.0);
         // A symbol the leader ends on, read with no circuit, is the one it names.
         if spot == super::labelspot::Spot::Leader
@@ -1026,9 +1029,18 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             continue;
         }
         // A leader onto a symbol the device reading read already (with its own circuit label
-        // beside it) names that device: no second one stacked on it.
+        // beside it) names that device: no second one stacked on it. A device read on another
+        // circuit is another symbol drawn by it (a range's receptacle under a microwave's, Q6603):
+        // one symbol carries one circuit, so the label still makes its own.
+        let same_circuit = |dv: &ReadDevice| {
+            let theirs = dv.circuit.trim();
+            theirs.is_empty() || theirs.eq_ignore_ascii_case(&circuit) || theirs.eq_ignore_ascii_case(c)
+        };
         if spot == super::labelspot::Spot::Leader
-            && view.read.iter().any(|dv| kind_of(dv) != "switch" && at_of(dv).dist(spot_at) <= super::labelspot::LEADER_SNAP_H * t.height)
+            && view
+                .read
+                .iter()
+                .any(|dv| kind_of(dv) != "switch" && same_circuit(dv) && at_of(dv).dist(spot_at) <= super::labelspot::LEADER_SNAP_H * t.height)
         {
             continue;
         }
@@ -1102,6 +1114,58 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             }
             out.push(dv);
         }
+    }
+    out
+}
+
+/// The lines of lettering stacked under a label, each a line's pitch under the one before it:
+/// this many of its heights down, at least and at most; starting this many heights from where the
+/// one above starts; this many lines at most.
+const STACK_PITCH_MIN_H: f64 = 0.8;
+const STACK_PITCH_MAX_H: f64 = 2.2;
+const STACK_ALIGN_H: f64 = 0.6;
+const STACK_LINES: usize = 2;
+/// A stacked line is this many characters at most (longer is a note).
+const STACK_CHARS: usize = 12;
+
+/// The short lines printed under a label as part of it (Q6603): a circuit label's designations
+/// (`GFCI`, `WP`, `TR`), each starting where the line above starts, a line's pitch under it, as
+/// tall as it. A leader may leave any line of the stack. A line that is itself a circuit label, a
+/// switch's designation or a keynote's number is another label, never this one's.
+fn stacked_under<'a>(label: &TextItem, texts: &[&'a TextItem], sheet_numbers: &BTreeSet<String>) -> Vec<&'a TextItem> {
+    let h = label.height;
+    if !h.is_finite() || h <= 0.0 || !label.rotation.is_finite() {
+        return Vec::new();
+    }
+    let along = Vec2::from_angle(label.rotation);
+    let up = Vec2::from_angle(label.rotation + std::f64::consts::FRAC_PI_2);
+    let mut out: Vec<&TextItem> = Vec::new();
+    let mut cur: &TextItem = label;
+    for _ in 0..STACK_LINES {
+        let next = texts
+            .iter()
+            .copied()
+            .filter(|o| !std::ptr::eq(*o, label) && !out.iter().any(|x| std::ptr::eq(*x, *o)))
+            .filter(|o| {
+                let v = o.value.trim();
+                let d = o.at - cur.at;
+                let drop = -d.dot(up);
+                (1..=STACK_CHARS).contains(&v.chars().count())
+                    && o.height.is_finite()
+                    && o.height >= 0.6 * h
+                    && o.height <= 1.6 * h
+                    && (o.rotation - label.rotation).abs() < 0.05
+                    && d.dot(along).abs() <= STACK_ALIGN_H * h
+                    && drop >= STACK_PITCH_MIN_H * h
+                    && drop <= STACK_PITCH_MAX_H * h
+                    && !keynote_number(o)
+                    && circuit_label(v, sheet_numbers).is_none()
+                    && switch_designations(v).is_empty()
+            })
+            .min_by(|a, b| a.at.dist(cur.at).total_cmp(&b.at.dist(cur.at)));
+        let Some(n) = next else { break };
+        out.push(n);
+        cur = n;
     }
     out
 }
@@ -1387,6 +1451,57 @@ mod tests {
         let devices: Vec<(String, String, [i64; 2])> =
             got.iter().map(|d| (d.kind.clone(), d.circuit.clone(), [d.at[0].round() as i64, d.at[1].round() as i64])).collect();
         assert_eq!(devices, [("luminaire".to_string(), "Q-2".to_string(), [100, 100])], "{got:?}");
+    }
+
+    #[test]
+    fn a_leader_from_the_line_under_a_label_names_its_symbol_beside_another_circuits_device() {
+        // Q6603: a range receptacle's circuit `X-8` with `TR` printed under it, beside a
+        // keynote's marker `7`, set outside the kitchen. Its leader leaves the end of `TR` (a
+        // level shoulder, then a slant down to the receptacle drawn on the cooktop wall at
+        // (60, 82)). The microwave's receptacle, read with its own circuit `X-4`, is drawn just
+        // above it at (63, 88); a receptacle `X-2` is read further along the wall.
+        let texts = [text("X-8", [0.0, 100.0]), text("TR", [0.0, 92.4]), text("7", [-10.0, 100.0])];
+        let leaders = super::super::labelspot::Leaders::new(
+            vec![(Vec2::new(9.0, 94.4), Vec2::new(18.0, 94.4)), (Vec2::new(18.0, 94.4), Vec2::new(60.0, 82.0))],
+            16.0,
+        );
+        let microwave = read("REC", [63.0, 88.0], "X-4", "");
+        let along = read("REC", [33.0, 86.0], "X-2", "");
+        let view = View {
+            sheet: "E-9",
+            level: "1",
+            rect: [-50.0, 0.0, 250.0, 200.0],
+            texts: texts.iter().collect(),
+            read: vec![&microwave, &along],
+            leaders: Some(&leaders),
+            strokes: None,
+        };
+        let got = read_view(&view, &[], &Marks::default());
+        let devices: Vec<(String, [i64; 2])> = got.iter().map(|d| (d.circuit.clone(), [d.at[0].round() as i64, d.at[1].round() as i64])).collect();
+        assert_eq!(devices, [("X-8".to_string(), [60, 82])], "{got:?}");
+        assert!(got.iter().all(|d| d.spot.starts_with("at the end of the leader from its label X-8")), "{got:?}");
+        // The microwave's own circuit at the tip: that one is the device it names, none added.
+        let same = read("REC", [63.0, 88.0], "X-8", "");
+        let again = View { read: vec![&same, &along], ..view };
+        assert!(read_view(&again, &[], &Marks::default()).is_empty());
+    }
+
+    #[test]
+    fn the_lines_stacked_under_a_label_are_its_own_and_another_label_is_not() {
+        let label = text("X-8", [0.0, 100.0]);
+        let (hor, gfci, other, note, far) = (
+            text("TR", [0.2, 93.6]),
+            text("GFCI", [0.0, 87.0]),
+            text("X-9", [0.0, 80.5]),
+            text("SEE KEYNOTE 7 FOR DETAILS", [0.0, 93.6]),
+            text("WP", [12.0, 93.6]),
+        );
+        let all = [&label, &hor, &gfci, &other, &note, &far];
+        let got: Vec<&str> = stacked_under(&label, &all, &BTreeSet::new()).iter().map(|t| t.value.as_str()).collect();
+        assert_eq!(got, ["TR", "GFCI"]);
+        // A circuit label under it is another label; nothing stacked under a lone label.
+        let got: Vec<&str> = stacked_under(&gfci, &all, &BTreeSet::new()).iter().map(|t| t.value.as_str()).collect();
+        assert!(got.is_empty(), "{got:?}");
     }
 
     #[test]

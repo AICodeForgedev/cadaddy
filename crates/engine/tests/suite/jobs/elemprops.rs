@@ -399,9 +399,13 @@ fn hostile_calls_never_panic_and_refuse_clearly() {
     }
     assert!(s.execute("bim.props.find", &json!({"where": "x"})).is_err());
     assert!(s.execute("bim.props.find", &json!({"limit": -1})).is_ok());
-    // A long text value is capped, not refused.
+    // A text value longer than a store keeps is refused, not cut silently (Q6384); one that fits is kept whole.
     let long = "x".repeat(50_000);
-    s.execute("bim.props.set", &json!({"handle": w.hex(), "key": "note", "value": long})).unwrap();
+    let e = s.execute("bim.props.set", &json!({"handle": w.hex(), "key": "note", "value": long})).unwrap_err().to_string();
+    assert!(e.contains(&props::MAX_TEXT.to_string()), "{e}");
+    assert!(stored(&s, w).get("note").is_none());
+    let fits = "x".repeat(props::MAX_TEXT);
+    s.execute("bim.props.set", &json!({"handle": w.hex(), "key": "note", "value": fits})).unwrap();
     assert_eq!(stored(&s, w).get("note").unwrap().text().len(), props::MAX_TEXT);
     // An empty drawing: a summary that says what to do.
     let mut e = Session::empty();

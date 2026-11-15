@@ -25,8 +25,8 @@
         {"key": "host_wall", "type": "ref", "required": true, "aliases": ["host"]},
         {"key": "host_face", "type": "text", "required": true},
         {"key": "offset_from", "type": "text", "required": false, "note": "the wall the along-wall offset is measured from"},
-        {"key": "offset_along", "type": "number", "unit": "in", "required": false, "aliases": ["offset"]},
-        {"key": "offset_depth", "type": "number", "unit": "in", "required": false},
+        {"key": "offset_along", "type": "number", "signed": true, "unit": "in", "required": false, "aliases": ["offset"]},
+        {"key": "offset_depth", "type": "number", "signed": true, "unit": "in", "required": false},
         {"key": "room", "type": "text", "required": true},
         {"key": "level", "type": "text", "required": true},
         {"key": "panel", "type": "text", "required": true, "aliases": ["fed_from"]},
@@ -133,7 +133,7 @@
         {"key": "length", "type": "number", "unit": "ft", "required": true},
         {"key": "system", "type": "text", "required": true},
         {"key": "circuit", "type": "text", "required": true},
-        {"key": "elevation", "type": "number", "unit": "ft", "required": true, "aliases": ["bottom_height"]},
+        {"key": "elevation", "type": "number", "signed": true, "unit": "ft", "required": true, "aliases": ["bottom_height"]},
         {"key": "connections", "type": "text", "required": false, "aliases": ["from", "to"]},
         {"key": "level", "type": "text", "required": true}
       ]

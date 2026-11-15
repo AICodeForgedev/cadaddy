@@ -42,15 +42,23 @@ const ROOF_PLAN: [f64; 4] = [3900.0, -100.0, 6600.0, 900.0];
 /// the building's silhouette (`outline`, relative to the left end of the ground line) and the
 /// region it stands in.
 fn elevation(s: &mut Session, y0: f64, title: &str, length: f64, outline: &[[f64; 2]], marks: &[(f64, &str)]) -> [f64; 4] {
+    let lines: Vec<(f64, &str)> =
+        [(0.0, "LEVEL 1 EL. 100'-0\""), (144.0, "T.O. ROOF EL. 112'-0\"")].into_iter().chain(marks.iter().copied()).collect();
+    elevation_lines(s, y0, title, length, outline, &lines)
+}
+
+/// One elevation with the level lines given (heights over its ground line, labels).
+fn elevation_lines(s: &mut Session, y0: f64, title: &str, length: f64, outline: &[[f64; 2]], lines: &[(f64, &str)]) -> [f64; 4] {
     layer(s, "A-ELEV");
     text(s, [length / 2.0, y0 - 60.0], title);
-    for (dy, label) in [(0.0, "LEVEL 1 EL. 100'-0\""), (144.0, "T.O. ROOF EL. 112'-0\"")].iter().chain(marks) {
+    for (dy, label) in lines {
         line(s, [-60.0, y0 + dy], [length + 60.0, y0 + dy]);
         text(s, [length + 80.0, y0 + dy + 6.0], label);
     }
     let pts: Vec<[f64; 2]> = outline.iter().map(|p| [p[0], y0 + p[1]]).collect();
     poly(s, &pts);
-    [-200.0, y0 - 100.0, length + 400.0, y0 + 400.0]
+    let up = lines.iter().map(|l| l.0 + 100.0).fold(400.0, f64::max);
+    [-200.0, y0 - 100.0, length + 400.0, y0 + up]
 }
 
 const LOW: (f64, &str) = (204.0, "T.O. PARAPET EL. 117'-0\"");
@@ -193,4 +201,92 @@ fn reading_the_elevations_again_or_in_another_order_builds_the_same() {
     assert_eq!(sp["exterior"]["parapets"].as_array().unwrap().len(), 6, "a facade read twice replaces its own tops: {}", sp["exterior"]["parapets"]);
     s.execute("model.build", &json!({})).unwrap();
     assert_eq!(built_tops(&s), a);
+}
+
+/// A two-storey 100' x 40' main block with a 20' one-storey wing on its west end (fix-parapet-
+/// stretch-two-origins): the south elevation shows both, the roof level over Level 2 holds the
+/// main block's roof only. Its parapet steps up over the main roof's east 30'. The stretch is
+/// measured from the main roof's end (the roof level's own extent, what the build measures
+/// along), not the wing's.
+const WING_ROOF_PLAN: [f64; 4] = [3900.0, -100.0, 5300.0, 600.0];
+
+fn winged() -> (Session, [f64; 4]) {
+    const MAIN: f64 = 1200.0;
+    const WING: f64 = 240.0;
+    const DEEP: f64 = 480.0;
+    const AT: [f64; 2] = [4000.0, 0.0];
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [-WING, 0.0], [MAIN, DEEP]);
+    rect(&mut s, [-WING + 6.0, 6.0], [MAIN - 6.0, DEEP - 6.0]);
+    rect(&mut s, [0.0, 1200.0], [MAIN, 1200.0 + DEEP]);
+    rect(&mut s, [6.0, 1206.0], [MAIN - 6.0, 1200.0 + DEEP - 6.0]);
+    layer(&mut s, "A-ROOF");
+    rect(&mut s, AT, [AT[0] + MAIN, AT[1] + DEEP]);
+    rect(&mut s, [AT[0] + 8.0, AT[1] + 8.0], [AT[0] + MAIN - 8.0, AT[1] + DEEP - 8.0]);
+    // As seen from the south: the wing's 14' top on the left, then the main block, its parapet
+    // 7' over the roof stepping up to 9'-6" for the last 30'.
+    let (w, l) = (WING, WING + MAIN);
+    let (mid, high) = (288.0 + 84.0, 288.0 + 114.0);
+    let outline = [[0.0, 0.0], [l, 0.0], [l, high], [l - 360.0, high], [l - 360.0, mid], [w, mid], [w, 168.0], [0.0, 168.0]];
+    let lines = [
+        (0.0, "LEVEL 1 EL. 100'-0\""),
+        (144.0, "LEVEL 2 EL. 112'-0\""),
+        (288.0, "T.O. ROOF EL. 124'-0\""),
+        (mid, "T.O. PARAPET EL. 131'-0\""),
+        (high, "T.O. PARAPET EL. 133'-6\""),
+    ];
+    let region = elevation_lines(&mut s, -3000.0, "SOUTH ELEVATION", l, &outline, &lines);
+    s.execute(
+        "bspec.set",
+        &json!({"replace": true, "spec": {
+            "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-400, -100, 1400, 600], "base": [0, 0]},
+                {"name": "Level 2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "region": [-400, 1100, 1400, 1800], "base": [0, 1200]},
+                {"name": "Roof", "elevation_ft": 24, "height_ft": 4, "ceiling_ft": 4, "region": WING_ROOF_PLAN}
+            ],
+            "layers": [{"layer": "A-WALL", "role": "wall"}],
+            "exterior": {"framing": [{"level": "Roof", "member": "truss", "spacing_in": 24, "depth_in": 24, "bearing_ft": 22}]}
+        }}),
+    )
+    .unwrap();
+    (s, region)
+}
+
+#[test]
+fn a_stretch_is_measured_from_the_roof_levels_own_end_not_a_lower_wings() {
+    let (mut s, region) = winged();
+    let read = s.execute("elev.read", &json!({"region": region, "apply": true})).unwrap();
+    let tops: Vec<Value> = read["parapets"].as_array().unwrap().iter().map(|p| json!([p["height_ft"], p["start_ft"], p["end_ft"]])).collect();
+    assert_eq!(tops, vec![json!([7.0, 0.0, 70.0]), json!([9.5, 70.0, 100.0])], "{read}");
+    s.execute("roof.read", &json!({"region": WING_ROOF_PLAN, "apply": true})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    let pieces = r["parapetTops"].as_array().unwrap_or_else(|| panic!("no parapetTops: {r}"));
+    let lf = |h: f64| -> f64 {
+        pieces.iter().filter(|p| p["facade"] == "south" && p["height_ft"].as_f64() == Some(h)).map(|p| p["lf"].as_f64().unwrap()).sum()
+    };
+    assert!((lf(9.5) - 30.0).abs() < 0.5 && (lf(7.0) - 70.0).abs() < 0.5, "{pieces:?}");
+    assert!(pieces.iter().filter(|p| p["facade"] == "south").all(|p| p["status"] == "read"), "{pieces:?}");
+    let south = |h: f64| -> Vec<(f64, f64)> {
+        pieces
+            .iter()
+            .filter(|p| p["facade"] == "south" && p["height_ft"].as_f64() == Some(h))
+            .map(|p| (p["from_ft"].as_f64().unwrap(), p["to_ft"].as_f64().unwrap()))
+            .collect()
+    };
+    assert_eq!((south(7.0), south(9.5)), (vec![(0.0, 70.0)], vec![(70.0, 100.0)]), "{pieces:?}");
+    // The high piece stands over the main roof's east 30' (70' to 100' from its west end) on the
+    // south face (the other faces take their neighbour's top, no elevation marks them).
+    let roof = made(&s, "roof");
+    let x0 = roof.iter().flat_map(|m| m.vertices.iter().map(|v| v.x)).fold(f64::INFINITY, f64::min);
+    let y0 = roof.iter().flat_map(|m| m.vertices.iter().map(|v| v.y)).fold(f64::INFINITY, f64::min);
+    // Along the south face between its corners (the end walls' 8" boxes left out).
+    let span = |at: f64| -> (f64, f64) {
+        let m = made(&s, "parapet").into_iter().find(|m| (top(m) - at).abs() < 0.5).unwrap_or_else(|| panic!("no parapet at {at}: {r}"));
+        let along = m.vertices.iter().filter(|v| v.y < y0 + 9.0).map(|v| v.x - x0).filter(|x| *x > 9.0 && *x < 1191.0);
+        along.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)))
+    };
+    let (high, low) = (span(288.0 + 114.0), span(288.0 + 84.0));
+    assert!((high.0 - 840.0).abs() < 1.0 && (low.1 - 840.0).abs() < 1.0, "high {high:?} low {low:?}");
 }

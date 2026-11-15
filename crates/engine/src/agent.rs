@@ -142,6 +142,61 @@ fn diff(before: &HashMap<Handle, Arc<Entity>>, s: &Session) -> (Vec<String>, Vec
     (hex(added), hex(removed), hex(changed))
 }
 
+/// The drawing's data besides its objects that changed between `a` and `b` (Q6384: a dry run
+/// of an edit that writes none, as a price, a BCF topic, a form, a saved view, says so): the
+/// building spec by its top-level keys (`building_spec.estimate`), embedded files by name.
+fn data_changes(a: &cadaddy_doc::Drawing, b: &cadaddy_doc::Drawing) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut part = |name: &str, same: bool| {
+        if !same {
+            out.push(name.to_string());
+        }
+    };
+    part("layers", a.layers == b.layers);
+    part("linetypes", a.linetypes == b.linetypes);
+    part("text_styles", a.text_styles == b.text_styles);
+    part("dim_styles", a.dim_styles == b.dim_styles);
+    part("mleader_styles", a.mleader_styles == b.mleader_styles);
+    part("table_styles", a.table_styles == b.table_styles);
+    part("mline_styles", a.mline_styles == b.mline_styles);
+    part("blocks", a.blocks == b.blocks);
+    part("layouts", a.layouts == b.layouts);
+    part("views", a.views == b.views);
+    part("vports", a.vports == b.vports);
+    part("ucss", a.ucss == b.ucss);
+    part("layer_states", a.layer_states == b.layer_states);
+    part("layer_filters", a.layer_filters == b.layer_filters);
+    part("groups", a.groups == b.groups);
+    part("materials", a.materials == b.materials);
+    part("scales", a.scales == b.scales);
+    part("bim_types", a.bim_types == b.bim_types);
+    part("project_rules", a.project_rules == b.project_rules);
+    part("tours", a.tours == b.tours);
+    part("bcf", a.bcf == b.bcf);
+    part("schedule4d", a.schedule4d == b.schedule4d);
+    part("parts", a.parts == b.parts);
+    part("overrides", a.overrides == b.overrides);
+    part("agent", a.agent == b.agent);
+    part("import_check", a.import_check == b.import_check);
+    part("properties", a.properties == b.properties);
+    part("sheet_store", a.sheet_store == b.sheet_store);
+    part("hidden_objects", a.hidden_objects == b.hidden_objects);
+    if a.building_spec != b.building_spec {
+        let parse = |t: &Option<String>| t.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
+        match (parse(&a.building_spec), parse(&b.building_spec)) {
+            (Some(Value::Object(x)), Some(Value::Object(y))) => {
+                let keys: std::collections::BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+                out.extend(keys.into_iter().filter(|k| x.get(*k) != y.get(*k)).map(|k| format!("building_spec.{k}")));
+            }
+            _ => out.push("building_spec".into()),
+        }
+    }
+    let names: std::collections::BTreeSet<&String> = a.embedded.keys().chain(b.embedded.keys()).collect();
+    out.extend(names.into_iter().filter(|n| a.embedded.get(*n) != b.embedded.get(*n)).map(|n| format!("embedded:{n}")));
+    out.truncate(MAX_LISTED);
+    out
+}
+
 fn listed(v: &[String]) -> Vec<String> {
     v.iter().take(MAX_LISTED).cloned().collect()
 }
@@ -365,6 +420,10 @@ impl Session {
         DRY.with(|d| d.set(false));
         let same_drawing = self.state().is_ok_and(|s| s.title == title);
         let (added, removed, changed) = if same_drawing { diff(&before, self) } else { (Vec::new(), Vec::new(), Vec::new()) };
+        let data = match (docs.get(active), self.state()) {
+            (Some(was), Ok(now)) if same_drawing && !Arc::ptr_eq(&was.doc, &now.doc) => data_changes(&was.doc, &now.doc),
+            _ => Vec::new(),
+        };
         let opened_or_closed = self.docs.len() != docs.len() || !same_drawing;
         self.docs = docs;
         self.active = active;
@@ -378,6 +437,7 @@ impl Session {
             "wouldChange": {
                 "added": listed(&added), "removed": listed(&removed), "changed": listed(&changed),
                 "counts": [added.len(), removed.len(), changed.len()],
+                "data": data,
                 "drawings": opened_or_closed,
             },
         }))
@@ -390,7 +450,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{label?: what the request is (shown in the journal and as its undo step)} → {request}: what follows, until agent.end, is one undo step and one journal entry")
             .noundo(),
         CommandSpec::new("agent.end", "End Agent Request", run_end).params("{} → the journal entry: {id, label, drawing, commands, added, removed, changed, counts}").noundo(),
-        CommandSpec::new("agent.dryrun", "Agent Dry Run", run_dry).params("{on: bool} → {dryRun}: on, commands report what they would change (`wouldChange`) and change nothing; no file is written").noundo(),
+        CommandSpec::new("agent.dryrun", "Agent Dry Run", run_dry).params("{on: bool} → {dryRun}: on, commands report what they would change (`wouldChange`: added, removed, changed objects, their counts, and `data`: the drawing's other data it would change, as building_spec.estimate, bcf, embedded:<file>) and change nothing; no file is written").noundo(),
         CommandSpec::new("agent.confirm", "Agent Confirmations", run_confirm)
             .params("{on?: bool} → {confirm}: on (the default), an agent saving over a file or closing with changes waits for the user")
             .noundo(),

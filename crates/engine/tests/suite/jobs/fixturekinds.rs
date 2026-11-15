@@ -193,3 +193,43 @@ fn each_fixture_has_a_body_sized_from_the_documents_or_its_kind_and_says_which()
     assert!(plan[1] <= 4.5, "{plan:?}");
     assert!(props(&mut s, &devices[0].0)["body_provenance"].is_null());
 }
+
+/// Q6457: a schedule size printed with bare numbers of 8 or less is read by the fixture's family:
+/// a 6X6 downlight is 6 in square (not 6 ft), a 2X4 troffer still 2 ft by 4 ft, a 6X6 floor drain
+/// 6 in square. Each body's basis says how the numbers were read.
+#[test]
+fn bare_small_schedule_sizes_are_read_by_the_fixture_family() {
+    let mut s = Session::empty();
+    s.open_drawing(room(), "Made-up Room", None);
+    let tags = vec![
+        tag(1, "luminaire", "LC", [10.0, 10.0], &[]),
+        tag(2, "luminaire", "LA", [20.0, 10.0], &[]),
+        tag(3, "plumbing_fixture", "PX-4", [30.0, 10.0], &[("fixture", "FLOOR DRAIN 6X6", "schedule")]),
+    ];
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": tags,
+        "mep": {"fixture_schedule": [
+            {"tag": "LC", "manufacturer": "Maker Four", "model": "SQ-6", "description": "6X6 SQUARE RECESSED DOWNLIGHT", "installation": "RECESSED", "source": "X-0"},
+            {"tag": "LA", "manufacturer": "Maker One", "model": "TRF-24", "description": "2X4 LED TROFFER, LAY-IN", "installation": "RECESSED", "source": "X-0"},
+        ]},
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let lights = found(&mut s, "light_fixture");
+    let plumbing = found(&mut s, "plumbing_fixture");
+    let of = |v: &[(String, String)], m: &str| v.iter().find(|(_, x)| x == m).map(|(h, _)| h.clone()).unwrap();
+    let lc = of(&lights, "LC");
+    let (plan, _) = body(&s, &lc);
+    assert!(near(plan[0], 6.0) && near(plan[1], 6.0), "a 6X6 downlight is 6 in square: {plan:?}");
+    let p = props(&mut s, &lc);
+    assert_eq!(p["body_provenance"]["value"], "derived", "{p}");
+    assert!(p["body_basis"]["value"].as_str().unwrap().contains("inches"), "{p}");
+    let (plan, _) = body(&s, &of(&lights, "LA"));
+    assert!(near(plan[0], 24.0) && near(plan[1], 48.0), "a 2X4 troffer is 2 ft by 4 ft: {plan:?}");
+    let (plan, _) = body(&s, &of(&plumbing, "PX-4"));
+    assert!(near(plan[0], 6.0) && near(plan[1], 6.0), "a 6X6 floor drain is 6 in square: {plan:?}");
+}

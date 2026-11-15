@@ -58,7 +58,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new("wallgen", "3D Building from Plan", run)
         .menu(&["Draw", "Modeling", "3D Building from Plan"])
         .params(
-            "{rules?: walk rules (as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
+            "{rules?: object (walk rules, as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
         ),
         CommandSpec::new("model.update", "Update Model from Plans", run_update).long()
             .params("{} → {behind: bool (the plan had changed since the associative model was last built), rebuilt: bool}: build the model again now when edits to the plan have left it behind (it is built again anyway before the next command that reads it, and when editing stops for a moment)")
@@ -3593,11 +3593,10 @@ fn plan_level_with(
                     continue;
                 }
                 let (g0, g1) = (end, end + u * gap);
-                // Each gap once (found from both its pieces when both point at it).
-                let tol = a.thickness.max(b.thickness).max(k);
-                if gaps.iter().any(|(_, x0, x1, ..): &(usize, Vec2, Vec2, f64, bool, bool)| {
-                    (x0.dist(g0) <= tol && x1.dist(g1) <= tol) || (x0.dist(g1) <= tol && x1.dist(g0) <= tol)
-                }) {
+                // Each gap once (found from both its pieces when both point at it), on its own
+                // wall line: a wall lying face to face with this one has its own (Q6452).
+                let t = a.thickness.max(b.thickness);
+                if gaps.iter().any(|(_, x0, x1, xt, ..): &(usize, Vec2, Vec2, f64, bool, bool)| gap_found_again((*x0, *x1, *xt), (g0, g1), t, k)) {
                     continue;
                 }
                 let gap_mid = end + u * (gap * 0.5);
@@ -5167,6 +5166,25 @@ struct WindowTag {
 }
 
 /// Whether two gaps are one (the same ends, either way round).
+/// Whether the gap `g`, found between two pieces of a wall line up to `t` thick, is the gap `x`
+/// (`x.2` its wall's thickness) found again from its other piece (`k` units per inch): on the
+/// same wall line, both of `x`'s ends within half the thicker wall of `g`'s line (as far apart as
+/// two pieces of one line may stand), and its ends at `g`'s within a wall's thickness. A parallel
+/// wall a wall's thickness away (furring, a chase wall against another) is another line (Q6452).
+fn gap_found_again(x: (Vec2, Vec2, f64), g: (Vec2, Vec2), t: f64, k: f64) -> bool {
+    let (x0, x1, xt) = x;
+    let (g0, g1) = g;
+    let len = g0.dist(g1);
+    if !(len.is_finite() && len > 1e-9) {
+        return false;
+    }
+    let n = ((g1 - g0) * (1.0 / len)).perp();
+    let t = t.max(xt);
+    let (off, tol) = (t / 2.0 + 0.01 * k, t.max(k));
+    let same_line = n.dot(x0 - g0).abs() <= off && n.dot(x1 - g0).abs() <= off;
+    same_line && ((x0.dist(g0) <= tol && x1.dist(g1) <= tol) || (x0.dist(g1) <= tol && x1.dist(g0) <= tol))
+}
+
 fn same_gap(a: (Vec2, Vec2), b: (Vec2, Vec2), k: f64) -> bool {
     let tol = 0.01 * k;
     (a.0.dist(b.0) <= tol && a.1.dist(b.1) <= tol) || (a.0.dist(b.1) <= tol && a.1.dist(b.0) <= tol)
@@ -6487,6 +6505,89 @@ mod tests {
         assert!(!in_corridor_air(&cs, (k0 + k1) * 0.5, w.perp(), 6.0));
         // No corridors traced: nothing is in a corridor's air.
         assert!(!in_corridor_air(&[], (g0 + g1) * 0.5, u.perp(), 6.0));
+    }
+
+    /// Walls given by their face lines (inches: y of each face, both faces broken at the same
+    /// `gap` along x 0–300), in `order`: the level planned.
+    fn plan_face_walls(faces: &[(f64, f64)], gap: (f64, f64)) -> (PlanLevel, Vec<String>) {
+        let mut d = Drawing::new_imperial();
+        for &(y0, y1) in faces {
+            for y in [y0, y1] {
+                for (x0, x1) in [(0.0, gap.0), (gap.1, 300.0)] {
+                    let h = Handle(d.handseed);
+                    d.handseed = h.0 + 1;
+                    let mut e = Entity::new(h, EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(x0, y, 0.0), b: Vec3::new(x1, y, 0.0) }));
+                    e.common.layer = "A-WALL".into();
+                    d.model.push(e);
+                }
+            }
+        }
+        let rules: Rules = serde_json::from_value(json!({
+            "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 9.5, "ceiling_ft": 8, "base": [0, 0]}],
+            "layers": [{"layer": "A-WALL", "kind": "wall"}]
+        }))
+        .unwrap();
+        let level = rules.levels[0].clone();
+        let g = WallGen { rules, auto: false, slab_ft: 0.0, layers: None, spec: None };
+        let mut notes = Vec::new();
+        let pl = plan_level(&d, &g, &level, 12.0, &mut notes);
+        (pl, notes)
+    }
+
+    /// Q6452: two parallel walls lying face to face (a furring or chase wall against another),
+    /// each broken at the same station, are two gaps, one per wall line: each wall keeps its own
+    /// opening (here a cased opening's header), whichever wall comes first. Before, the "each gap
+    /// once" test took the second wall's gap for the first's (ends within a wall thickness) and
+    /// left it a bare full-height hole.
+    #[test]
+    fn two_walls_face_to_face_each_keep_their_opening() {
+        let gap = (100.0, 136.0);
+        // Face lines: two 6" walls sharing a face line, and an 8" wall with a thinner one 1 1/2"
+        // off its face; each in both orders.
+        let cases: [&[(f64, f64)]; 4] =
+            [&[(-3.0, 3.0), (3.0, 9.0)], &[(3.0, 9.0), (-3.0, 3.0)], &[(0.0, 8.0), (9.5, 13.5)], &[(9.5, 13.5), (0.0, 8.0)]];
+        for faces in cases {
+            let (pl, notes) = plan_face_walls(faces, gap);
+            // The wall lines found (centreline y), each closer to the other than the thicker wall.
+            let mut lines: Vec<f64> = pl.walls.iter().map(|w| w.a.y).collect();
+            lines.sort_by(f64::total_cmp);
+            lines.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+            let t = pl.walls.iter().map(|w| w.thickness).fold(0.0, f64::max);
+            assert!(lines.len() == 2 && lines[1] - lines[0] <= t, "faces {faces:?}: two wall lines a wall apart: {:?} {notes:?}", wall_lines(&pl));
+            for y in lines {
+                let pieces: Vec<&PlanWall> = pl.walls.iter().filter(|w| (w.a.y - y).abs() < 0.5 && (w.b.y - y).abs() < 0.5).collect();
+                assert_eq!(pieces.len(), 2, "faces {faces:?}: the wall at y {y} in two pieces: {:?} {notes:?}", wall_lines(&pl));
+                let header = pieces.iter().flat_map(|w| w.extra.iter()).any(|(a, b, lo, _)| {
+                    let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
+                    (x0 - gap.0).abs() < 1.0 && (x1 - gap.1).abs() < 1.0 && (*lo - pl.door_head).abs() < 1e-6
+                });
+                assert!(header, "faces {faces:?}: the wall at y {y} keeps its opening's header: {:?} {notes:?}", wall_lines(&pl));
+            }
+        }
+    }
+
+    /// Q6452: a gap is the same gap found again only on its own wall line: from its other piece
+    /// (that piece's centreline up to half the thicker wall off, ends either way round) yes; from a
+    /// parallel wall a wall's thickness away, no.
+    #[test]
+    fn a_gap_found_again_is_on_its_own_wall_line() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let x = (v(100.0, 0.0), v(136.0, 0.0), 6.0);
+        assert!(gap_found_again(x, (v(100.0, 0.0), v(136.0, 0.0)), 6.0, 1.0));
+        assert!(gap_found_again(x, (v(136.0, 2.5), v(100.0, 2.5)), 6.0, 1.0), "the other piece, off-line by less than half the wall");
+        assert!(gap_found_again(x, (v(101.0, 3.0), v(135.0, 3.0)), 4.0, 1.0), "half the thicker wall (the found one's) off");
+        assert!(!gap_found_again(x, (v(100.0, 6.0), v(136.0, 6.0)), 6.0, 1.0), "a parallel wall sharing a face line");
+        assert!(!gap_found_again(x, (v(100.0, -4.5), v(136.0, -4.5)), 6.0, 1.0), "a parallel wall 1 1/2\" off the face");
+        assert!(!gap_found_again(x, (v(110.0, 0.0), v(146.0, 0.0)), 6.0, 1.0), "the same line, another station");
+        // A gap of no length, or not a number: never a match.
+        assert!(!gap_found_again(x, (v(100.0, 0.0), v(100.0, 0.0)), 6.0, 1.0));
+        assert!(!gap_found_again(x, (v(f64::NAN, 0.0), v(136.0, 0.0)), 6.0, 1.0));
+    }
+
+    /// A planned level's walls: (from, to, thickness, extras).
+    fn wall_lines(pl: &PlanLevel) -> Vec<((f64, f64), (f64, f64), f64, usize)> {
+        pl.walls.iter().map(|w| ((w.a.x, w.a.y), (w.b.x, w.b.y), w.thickness, w.extra.len())).collect()
     }
 
     /// A 20' × 10' room of 6" walls (feet; two face lines each on A-WALL), its south and north

@@ -3571,30 +3571,84 @@ fn path_leaf(p: &str) -> &str {
 /// a stop.
 fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
     let Some(path) = job.checkpoint.clone() else { return };
-    let Some(hooks) = super::file::io() else { return };
+    if super::file::io().is_none() {
+        return;
+    }
     let started = web_time::Instant::now();
     if save_job(s, job).is_err() {
         return;
     }
-    let Ok(d) = s.doc() else { return };
-    // A .cdy file without its preview (`ckpt`), else as the path says.
-    let written = (hooks.write)(d, "checkpoint.ckpt").or_else(|_| (hooks.write)(d, &path)).and_then(|bytes| {
-        let p = std::path::Path::new(&path);
-        if let Some(dir) = p.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        // Written aside, then moved over the last one: a crash mid-write keeps the last checkpoint.
-        let part = p.with_extension("cdy.part");
-        crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
-        crate::writefile::rename(&part, p).map_err(|e| e.to_string())
-    });
+    let written = store_checkpoint(s, &path);
     // How long it took, and the peak memory after it (a checkpoint per stage must not be the
     // job's peak: compare with the stage's line).
     let peak = super::memstat::process_mb().map_or_else(String::new, |(_, p)| format!(" (peak memory {p} MB)"));
-    progress_line(&format!("  checkpoint written in {:.1} s{peak}", started.elapsed().as_secs_f64()));
+    let how = match &written {
+        Ok(Stored::Appended(n)) => format!("appended ({:.1} MB)", *n as f64 / 1e6),
+        Ok(Stored::Whole(n)) => format!("written ({:.1} MB)", *n as f64 / 1e6),
+        Err(_) => "not written".to_string(),
+    };
+    progress_line(&format!("  checkpoint {how} in {:.1} s{peak}", started.elapsed().as_secs_f64()));
     if let Err(e) = written {
         s.echo(format!("guided: the job's checkpoint couldn't be written to {path}: {e}"));
     }
+}
+
+/// How a checkpoint was stored, and the bytes written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored {
+    /// The parts that changed, appended to the last checkpoint.
+    Appended(u64),
+    /// The whole file.
+    Whole(u64),
+}
+
+/// Store the job's drawing as its checkpoint at `path` (Q6576). When the file there is still the
+/// checkpoint this drawing last wrote (or was resumed from), only the parts that changed since are
+/// encoded and appended, with a new index: the model's unchanged chunks are neither encoded nor
+/// held twice. A checkpoint cut short while appending reads as the one before it (the last complete
+/// index). Otherwise, and when the superseded parts would be too much of the file, the whole file
+/// is written aside and moved over the last one, so a crash mid-write keeps the last checkpoint.
+/// The file has no preview: it is written again and again, and the preview renders all of model
+/// space.
+fn store_checkpoint(s: &mut Session, path: &str) -> std::result::Result<Stored, String> {
+    use cadaddy_io::cdy::{Output, SaveState};
+    let prev = s.state().ok().and_then(|st| st.job_checkpoint.clone()).filter(|c| c.holds(path));
+    let held = prev.as_ref().and_then(|c| c.state().downcast_ref::<SaveState>()).filter(|h| prev.as_ref().is_some_and(|c| c.file_len() == h.len));
+    let (stored, state) = {
+        let d = s.doc().map_err(|e| e.to_string())?;
+        let (out, state) = cadaddy_io::cdy::save(d, held, &|| None)?;
+        match out {
+            Output::Append { from, bytes, index_at } => match super::file::append_cdy(path, from, &bytes, index_at) {
+                Ok(()) => (Stored::Appended(bytes.len() as u64), state),
+                // The file was cut back to the last checkpoint: write it whole.
+                Err(_) => {
+                    drop(bytes);
+                    let (Output::Full(bytes), state) = cadaddy_io::cdy::save(d, None, &|| None)? else {
+                        return Err("the .cdy saver didn't write the whole file".into());
+                    };
+                    (Stored::Whole(replace_checkpoint(path, &bytes)?), state)
+                }
+            },
+            Output::Full(bytes) => (Stored::Whole(replace_checkpoint(path, &bytes)?), state),
+        }
+    };
+    if let Ok(st) = s.state_mut() {
+        st.job_checkpoint = super::file::CdySaved::new(path, std::sync::Arc::new(state));
+    }
+    Ok(stored)
+}
+
+/// Write a whole checkpoint aside, then move it over the last one: a crash mid-write keeps the
+/// last checkpoint. The bytes written.
+fn replace_checkpoint(path: &str, bytes: &[u8]) -> std::result::Result<u64, String> {
+    let p = std::path::Path::new(path);
+    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let part = p.with_extension("cdy.part");
+    crate::writefile::write(&part, bytes).map_err(|e| e.to_string())?;
+    crate::writefile::rename(&part, p).map_err(|e| e.to_string())?;
+    Ok(bytes.len() as u64)
 }
 
 /// Whether the file at `path` is a job's checkpoint (a drawing holding a job's state): one the
@@ -3622,10 +3676,14 @@ fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<GuidedJob> {
 }
 
 /// A checkpoint's drawing (its job state inside).
-fn checkpoint_drawing(path: &str) -> Result<cadaddy_doc::Drawing> {
+/// With what the file holds matched to the drawing read from it, when it can be: the job's next
+/// checkpoint then appends only what changed ([`store_checkpoint`]).
+fn checkpoint_drawing(path: &str) -> Result<(cadaddy_doc::Drawing, Option<cadaddy_io::cdy::SaveState>)> {
     let hooks = super::file::io().ok_or_else(|| bad("job.start", "no file reader to read the checkpoint with"))?;
     let bytes = std::fs::read(path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
-    (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))
+    let d = (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
+    let seed = cadaddy_io::cdy::is_cdy(&bytes).then(|| cadaddy_io::cdy::seed(&d, &bytes)).flatten();
+    Ok((d, seed))
 }
 
 /// The stages' names.
@@ -5765,6 +5823,138 @@ fn guest_room_name(name: &str) -> bool {
 /// The most words a room's name has (a longer label is a note).
 const MAX_ROOM_NAME_WORDS: usize = 4;
 
+/// A variant room's panel (`derived`: by the room, its basis) is derived from its type's plan,
+/// never drawn for it: its `STATUS` and `BASIS` say so (the provenance mark), its place the basis.
+fn mark_derived_panels(gear: &mut [cadaddy_walk3d::MepEquipment], derived: &BTreeMap<String, String>) {
+    for g in gear {
+        if let Some(basis) = g.properties.get("ROOM").and_then(|r| derived.get(r)).cloned() {
+            g.properties.insert("STATUS".into(), "derived".into());
+            g.properties.insert("BASIS".into(), basis.clone());
+            g.sources.insert("position".into(), basis);
+        }
+    }
+}
+
+/// Most units and panels listed by name in the unit-panel check (the rest counted).
+const MAX_UNIT_PANELS_LISTED: usize = 200;
+
+/// The unit-panel check (Q6351): every guest unit (a room the rooms stage read that
+/// [`guest_room_name`] names) has its own panel, one a typical-room plan letters (`gear`: the
+/// stamped rooms' panels, `panel_rooms`: each one's room and whether a typical plan stamped it).
+/// Per floor the units and their panels; each unit with none and each unit panel in no guest
+/// unit; and the key count the documents state against the units read (a unit whose tag no plan
+/// reading gave is counted there, not named).
+pub(crate) fn unit_panel_check(
+    job: &GuidedJob,
+    gear: &[cadaddy_walk3d::MepEquipment],
+    panel_rooms: &BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
+) -> Value {
+    let units: Vec<(String, String, String)> = job_rooms(job)
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _, _, _))| guest_room_name(name))
+        .map(|(i, (name, level, _, number))| (stamped_room(name, number, i), level_name(level), name.clone()))
+        .collect();
+    let unit_rooms: BTreeSet<&str> = units.iter().map(|(r, _, _)| r.as_str()).collect();
+    // The unit panels: those a typical-room plan put in a room (its own load center).
+    let mut panelled: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for g in gear.iter().filter(|g| g.kind.eq_ignore_ascii_case("panel")) {
+        let Some(room) = g.properties.get("ROOM") else { continue };
+        if panel_rooms.get(room).is_some_and(|(_, _, typical)| *typical) {
+            panelled.entry(room.clone()).or_default().push(g.tag.clone());
+        }
+    }
+    let mut by_level: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (room, level, _) in &units {
+        let e = by_level.entry(level.clone()).or_default();
+        e.0 += 1;
+        e.1 += usize::from(panelled.contains_key(room));
+    }
+    let missing: Vec<Value> = units
+        .iter()
+        .filter(|(room, _, _)| !panelled.contains_key(room))
+        .map(|(room, level, name)| json!({"room": room, "level": level, "name": name}))
+        .collect();
+    let stray: Vec<Value> =
+        panelled.iter().filter(|(room, _)| !unit_rooms.contains(room.as_str())).map(|(room, tags)| json!({"room": room, "panels": tags})).collect();
+    let keys = job
+        .stage(StageName::Rooms)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("keys"))
+        .and_then(|k| k.get("stated"))
+        .and_then(Value::as_u64);
+    json!({
+        "units": units.len(),
+        "units_with_panel": units.len() - missing.len(),
+        "stated_keys": keys,
+        "by_level": by_level.iter().map(|(l, (u, p))| (l.clone(), json!({"units": u, "with_panel": p}))).collect::<serde_json::Map<_, _>>(),
+        "units_without_panel": missing.iter().take(MAX_UNIT_PANELS_LISTED).collect::<Vec<_>>(),
+        "units_without_panel_count": missing.len(),
+        "panels_without_unit": stray.iter().take(MAX_UNIT_PANELS_LISTED).collect::<Vec<_>>(),
+        "panels_without_unit_count": stray.len(),
+        "rule": "every guest unit the documents show has its own unit panel (the typical unit's panel schedule) and that schedule's breakers",
+    })
+}
+
+/// The unit-panel check's findings: each guest unit with no panel, each unit panel in no guest
+/// unit, and fewer units read than the documents state (one finding each, the rooms listed).
+fn unit_panel_findings(job: &mut GuidedJob, check: &Value) {
+    let n = |k: &str| check.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let names = |k: &str| -> String {
+        check
+            .get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.get("room").and_then(Value::as_str))
+            .take(20)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if n("units_without_panel_count") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} guest unit(s) without a unit panel: {}", n("units_without_panel_count"), names("units_without_panel")),
+            "every guest unit gets its unit panel and the panel schedule's breakers; no typical-room plan stamped one into these rooms",
+            2,
+            vec!["Give the unit's type its typical-room plan, or name the type it is a variant of".into()],
+            None,
+            false,
+        );
+    }
+    if n("panels_without_unit_count") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} unit panel(s) in no guest unit: {}", n("panels_without_unit_count"), names("panels_without_unit")),
+            "a typical-room plan's panel was stamped into a room not read as a guest unit",
+            2,
+            vec!["Check the room's name, or leave the panel out".into()],
+            None,
+            false,
+        );
+    }
+    let units = n("units");
+    if let Some(stated) = check.get("stated_keys").and_then(Value::as_u64).filter(|k| *k > units) {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} guest unit(s) the documents count have no unit panel: {stated} keys stated, {units} units read", stated - units),
+            "a unit whose room tag the plan reading gave no room has no unit panel or breakers: its room is not in the model",
+            2,
+            vec!["Close the unit's outline on the plan or read its tag, and run the rooms stage again".into()],
+            None,
+            false,
+        );
+    }
+}
+
+/// Whether a room named `name` is a guest room varying the typical room type `words`: its type's
+/// words are all of the type's and more (`KING CORNER` of `KING`; not `STUDIO` of `KING`, nor an
+/// `OFFICE`).
+fn variant_of(name: &str, words: &BTreeSet<String>) -> bool {
+    let mine = type_words(name, None);
+    !words.is_empty() && mine.len() > words.len() && words.is_subset(&mine) && guest_room_name(name)
+}
+
 /// The keys gate: the count the documents state most often (`stated`: count, sheet, text) against
 /// the guest rooms among `rooms` (the rooms stage's: those [`guest_room_name`] names).
 /// None when no document states a count.
@@ -6251,7 +6441,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // Unlisted tags printed again and again: ask which device each is, with a crop.
         let mut unlisted: Vec<(&String, &UnlistedTag)> = census.unlisted.iter().collect();
         unlisted.sort_by(|a, b| b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(b.0)));
-        let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("device-tags");
+        let crop_dir = super::jobtemp::dir(&job.id).join("device-tags");
         let unknowns: Vec<Value> = unlisted
             .iter()
             .enumerate()
@@ -7137,6 +7327,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut placer: Option<SheetPlacer> = None;
     // How the placer put each sheet onto its level's plan (or why it couldn't), for the result.
     let mut placer_log: Option<PlacerLog> = None;
+    // Each sheet's views, read once for every placer the build makes (Q6442).
+    let sheet_views = SheetViews::default();
     // The building's shell first: each storey's outline from its exterior walls, before anything
     // is placed in it (rooms, MEP and devices go inside it).
     let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
@@ -7369,7 +7561,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         shells
                     })
                     .clone();
-                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference);
+                let (place, log) = arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference, &sheet_views);
                 placer_log = Some(log);
                 let sim = placer.insert(held_placer(place));
                 // Architecture is the rule: what can't be put onto the plans isn't drawn (a finding).
@@ -8162,6 +8354,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             all_devices.extend(stacks);
         }
     }
+    // Each guest unit's own panel against the units the rooms stage read (Q6351).
+    let mut unit_panels = Value::Null;
     if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         // (Or onto the plans the floors were taken from, with no architectural floor plans.)
@@ -8173,6 +8367,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The stamped rooms' panels (where a typical room's plan letters them), for their circuits.
         let mut room_panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
         let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
+        // The guest rooms whose panel is the typical plan's of the type they vary, by the room: the basis.
+        let mut derived_panels: BTreeMap<String, String> = BTreeMap::new();
         // The plans' breaker labels of the feeders to a typical panel, placed (Q6436).
         let mut feeder_marks: Vec<super::gearbuild::PlanLabel> = Vec::new();
         // Each stamped unit's footprint (its typical view's unit box in the room), by its room.
@@ -8188,8 +8384,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             shells
                         })
                         .clone();
-                    let (place, log) =
-                        arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job), &sheet_import_scales(job), reference.as_deref().unwrap_or("A"));
+                    let (place, log) = arch_placer(
+                        s.doc()?,
+                        &sp,
+                        &shell,
+                        enlarged_fits(job),
+                        &sheet_import_scales(job),
+                        reference.as_deref().unwrap_or("A"),
+                        &sheet_views,
+                    );
                     placer_log = Some(log);
                     placer = Some(held_placer(place));
                 }
@@ -8299,8 +8502,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_PLACEABLE, &why));
                 }
                 let stamp_clock = web_time::Instant::now();
-                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints, differs, duplicates } =
-                    stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                let StampedRooms {
+                    devices: mut stamped,
+                    report,
+                    authority,
+                    panels,
+                    rooms,
+                    sleeping: guest,
+                    footprints,
+                    differs,
+                    duplicates,
+                    derived_panels: derived,
+                } = stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
                 // One room's two copies of a tag at one spot are one device (its plan read it twice).
@@ -8401,6 +8614,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 room_panels = panels;
                 panel_rooms = rooms;
+                derived_panels = derived;
                 unit_footprints = footprints.iter().map(|(l, r, c, _)| (r.clone(), (l.clone(), c.clone()))).collect();
                 sleeping = guest;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
@@ -8669,6 +8883,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // their routes in the room, where the sheet's reading can't put them.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let (mut gear, room_panels) = super::printcond::room_panel_equipment(&room_panels, &panel_rooms, sp.units_per_foot);
+            mark_derived_panels(&mut gear, &derived_panels);
+            if !derived_panels.is_empty() {
+                progress_line(&format!(
+                    "  guest rooms of a type no typical plan is drawn for: {} took the unit panel of the type they vary",
+                    derived_panels.len()
+                ));
+            }
+            unit_panels = unit_panel_check(job, &gear, &panel_rooms);
             // Each copy of a typical panel takes the breaker label lettered in its room (Q6436).
             if !feeder_marks.is_empty() {
                 let rep = super::gearbuild::label_typical_copies(&mut gear, &feeder_marks, &panel_rooms, &unit_footprints, sp.units_per_foot);
@@ -8895,21 +9117,27 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // the electrical sheets; what none completes (type, circuit, control) is the finding, its
         // objects built inferred and unsure, completed by proposal.
         let t_arch = web_time::Instant::now();
-        architect_report =
-            match architect_objects_step(s, job, &mut devices, shells.as_deref().unwrap_or(&[]), reference.as_deref().unwrap_or("A"), &typical.views)
-            {
-                Ok(v) => {
-                    progress_line(&format!(
-                        "  the architect's objects completed by the electrical sheets: {}; open groups {}, built {} in {:.1} s",
-                        v["requirements"],
-                        v["open_groups"],
-                        v["built"],
-                        t_arch.elapsed().as_secs_f64()
-                    ));
-                    v
-                }
-                Err(e) => json!({"error": e.to_string()}),
-            };
+        architect_report = match architect_objects_step(
+            s,
+            job,
+            &mut devices,
+            shells.as_deref().unwrap_or(&[]),
+            reference.as_deref().unwrap_or("A"),
+            &typical.views,
+            &sheet_views,
+        ) {
+            Ok(v) => {
+                progress_line(&format!(
+                    "  the architect's objects completed by the electrical sheets: {}; open groups {}, built {} in {:.1} s",
+                    v["requirements"],
+                    v["open_groups"],
+                    v["built"],
+                    t_arch.elapsed().as_secs_f64()
+                ));
+                v
+            }
+            Err(e) => json!({"error": e.to_string()}),
+        };
         let placed_now = super::readers::place_devices(s, &devices, "guided job");
         // A unit whose receptacle its keynote puts in its sub-base sits on that sub-base.
         if placed_now.is_ok()
@@ -9352,6 +9580,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["fixture_schedule_error"] = json!(e.to_string()),
     }
     result["typical_plan_diffs"] = json!(plan_diffs.iter().take(MAX_PLAN_DIFFS).collect::<Vec<_>>());
+    if !unit_panels.is_null() {
+        unit_panel_findings(job, &unit_panels);
+        result["unit_panels"] = unit_panels;
+    }
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
             "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; drawn clear of the walls, hung from the ceiling: {}; outside their level's footprint: {}",
@@ -12306,6 +12538,11 @@ fn stamp_typical_rooms(
     let mut panels: BTreeMap<String, Vec<(String, [f64; 2])>> = BTreeMap::new();
     let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
     let mut sleeping: BTreeMap<usize, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
+    // The panels a guest room of a type no typical plan is drawn for would take from the typical
+    // plan of the type it varies (by the room: the type's word count, level, outline, the panels
+    // laid in, the view).
+    #[allow(clippy::type_complexity)]
+    let mut variants: BTreeMap<String, (usize, String, Vec<cadaddy_geom::Vec2>, Vec<(String, [f64; 2])>, String)> = BTreeMap::new();
     if unplaced.is_empty() {
         return StampedRooms {
             devices: out,
@@ -12317,6 +12554,7 @@ fn stamp_typical_rooms(
             footprints: Vec::new(),
             differs: Vec::new(),
             duplicates: BTreeMap::new(),
+            derived_panels: BTreeMap::new(),
         };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
@@ -12555,6 +12793,43 @@ fn stamp_typical_rooms(
                 *report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
         }
+        // A guest room of a type no typical plan is drawn for, its name a typical type's words
+        // and more (a wider or reversed unit of the type): the unit panel the type's plan letters,
+        // laid into it as that plan lays into its rooms (taken below only where no plan of its own
+        // gave it one).
+        for (title, view, words) in &views {
+            let lettering = panels_in(view);
+            if lettering.is_empty() {
+                continue;
+            }
+            for (ri, (name, level, outline, number)) in rooms.iter().enumerate().take(MAX_STAMPED) {
+                if !variant_of(name, words) {
+                    continue;
+                }
+                let room = stamped_room(name, number, ri);
+                if variants.get(&room).is_some_and(|v| v.0 >= words.len()) {
+                    continue;
+                }
+                let turn = turn_of(view, ri, outline);
+                let at: Vec<(String, [f64; 2])> =
+                    lettering.iter().filter_map(|(n, p)| Some((n.clone(), place_in_room(*p, *view, bbox(outline), turn)?))).collect();
+                if !at.is_empty() {
+                    variants.insert(room, (words.len(), level.clone(), outline.clone(), at, format!("{sheet} {title}")));
+                }
+            }
+        }
+    }
+    let mut derived_panels: BTreeMap<String, String> = BTreeMap::new();
+    for (room, (_, level, outline, at, view)) in variants {
+        if panels.contains_key(&room) {
+            continue;
+        }
+        derived_panels.insert(
+            room.clone(),
+            format!("derived: no typical-room plan is drawn for its type; the panel the typical plan of the type it varies letters ({view}), one in every guest room"),
+        );
+        panel_rooms.insert(room.clone(), (level, outline, true));
+        panels.insert(room, at);
     }
     // A device the floor's plans show in a room is the typical plan's copy of its tag and kind
     // nearest it there (a smoke detector a fire alarm plan marks S is no switch S): the copy is
@@ -12643,6 +12918,7 @@ fn stamp_typical_rooms(
         footprints,
         differs,
         duplicates,
+        derived_panels,
     }
 }
 
@@ -12869,7 +13145,7 @@ fn restore_typical_symbols(d: &cadaddy_doc::Drawing, job: &mut GuidedJob) -> usi
 }
 
 /// The set's sheet numbers, upper case: the sheet map's and the sheet list's.
-fn job_sheet_numbers(job: &GuidedJob) -> BTreeSet<String> {
+pub(crate) fn job_sheet_numbers(job: &GuidedJob) -> BTreeSet<String> {
     job.sheet_regions
         .iter()
         .map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase())
@@ -12975,6 +13251,8 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             continue;
         }
         let sheet = sh.number.split('/').next().unwrap_or(&sh.number).trim().to_string();
+        // The symbol inserts whose blocks were drawn from them (their strokes are theirs, Q6603).
+        let drawn = super::labelspot::drawn_copies(&sub);
         for (title, rect) in views.iter().map(|(t, r, _)| (t, r)).chain(room_plans) {
             let inside = |p: cadaddy_geom::Vec2| p.x >= rect[0] && p.x <= rect[2] && p.y >= rect[1] && p.y <= rect[3];
             let mine: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts.iter().filter(|t| inside(t.at)).collect();
@@ -12995,13 +13273,17 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
             // read elsewhere is that device here too.
             let mut pieces = Vec::new();
             let mut known: Vec<([f64; 4], super::unitmarks::Symbol)> = Vec::new();
-            // Its loose straight pieces, for the leaders its labels are set on (Q6337).
+            // Its loose objects, for the switch symbols drawn as linework (Q6602).
             let mut loose: Vec<&cadaddy_doc::EntityKind> = Vec::new();
+            // Its straight pieces, for the leaders its labels are set on (Q6337), the symbol
+            // blocks' own too (a leader the import took into a block, Q6603).
+            let mut leader_src: Vec<cadaddy_doc::EntityKind> = Vec::new();
             for e in sub.model.iter() {
                 let b = cadaddy_doc::entity_bounds(&sub, e, 0);
                 if b.is_empty() || b.max.x < rect[0] || b.min.x > rect[2] || b.max.y < rect[1] || b.min.y > rect[3] {
                     continue;
                 }
+                super::labelspot::leader_pieces(&sub, e, &drawn, &mut leader_src);
                 let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else {
                     super::unitmarks::pieces(&e.kind, &mut pieces);
                     if loose.len() < super::labelspot::MAX_LEADER_SEGS {
@@ -13049,7 +13331,7 @@ fn typical_view_marks(d: &cadaddy_doc::Drawing, job: &GuidedJob, pages: &[(Strin
                 .filter(|dv| sheet_key(&dv.sheet) == key && inside(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
                 .collect();
             let strokes = super::labelspot::Strokes::of(loose.iter().copied(), text_h);
-            let leaders = super::labelspot::Leaders::of(loose, 4.0 * text_h);
+            let leaders = super::labelspot::Leaders::of(leader_src.iter(), 4.0 * text_h).with_lettering(&mine);
             let view = super::unitmarks::View {
                 sheet: &sheet,
                 level: &level,
@@ -13156,6 +13438,7 @@ fn architect_objects_step(
     shells: &[(String, Vec<[cadaddy_geom::Vec2; 2]>)],
     reference: &str,
     typical_views: &BTreeMap<String, Vec<[f64; 4]>>,
+    sheet_views: &SheetViews,
 ) -> Result<Value> {
     use super::crossdisc as cd;
     let clock = web_time::Instant::now();
@@ -13264,7 +13547,7 @@ fn architect_objects_step(
             .collect();
         add_sheet_links(&mut sp_all, &extra);
         let d = s.doc()?;
-        let (place, _) = arch_placer(d, &sp_all, shells, enlarged_fits(job), &sheet_import_scales(job), reference);
+        let (place, _) = arch_placer(d, &sp_all, shells, enlarged_fits(job), &sheet_import_scales(job), reference, sheet_views);
         let spans: BTreeMap<String, (u64, u64)> = arch.iter().filter_map(|sh| Some((sheet_key(&sh.number), sh.span?))).collect();
         for (sheet, at, row) in &hits {
             let Some(r) = rows.get(*row) else { continue };
@@ -13352,7 +13635,7 @@ fn architect_objects_step(
     };
     // Each open group: its RFI (with a crop of the architect's sheet where it draws them, the
     // first few), its line, and its objects built, completed by the proposal.
-    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("architect-objects");
+    let crop_dir = super::jobtemp::dir(&job.id).join("architect-objects");
     let mut rfis: Vec<cadaddy_walk3d::Rfi> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut sketches = 0usize;
@@ -13762,7 +14045,7 @@ fn plan_symbols(
     let mut kinds: Vec<String> = table.entries.iter().filter(|e| e.kind != "not_device").map(|e| e.kind.clone()).collect();
     kinds.sort();
     kinds.dedup();
-    let crop_dir = std::env::temp_dir().join(format!("cadaddy-{}", job.id)).join("symbols");
+    let crop_dir = super::jobtemp::dir(&job.id).join("symbols");
     for (sig, copies) in repeats.into_iter().take(MAX_SYMBOL_QUESTIONS) {
         let Some((sheet, at, _, handles, strokes, units, span)) = copies.first() else { continue };
         let mut sheets: BTreeMap<&str, usize> = BTreeMap::new();
@@ -28767,6 +29050,9 @@ struct StampedRooms {
     /// The floor plans' devices (by their index in `placed`) where a typical plan's copy landed:
     /// the same devices, left out; each by the copy's mark (its handle) and room.
     duplicates: BTreeMap<usize, (String, String)>,
+    /// The guest rooms of a type no typical plan is drawn for whose panels are the typical plan's
+    /// of the type they vary ([`variant_of`]): by the room, the basis.
+    derived_panels: BTreeMap<String, String>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -29787,6 +30073,7 @@ fn arch_placer(
     enlarged: Vec<EnlargedFit>,
     plan_units: &[(String, f64)],
     reference: &str,
+    sheet_views: &SheetViews,
 ) -> (impl Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim> + use<>, PlacerLog) {
     let log: PlacerLog = Default::default();
     let arch_ref = reference.eq_ignore_ascii_case("A");
@@ -29875,7 +30162,13 @@ fn arch_placer(
     // And the views the job gave a level (a sheet's view of one floor), which the titles may miss.
     let view_rects: Vec<(String, [f64; 4])> =
         sp.sheets.iter().filter_map(|l| Some((level_key(l.level.as_deref()?), l.view.as_ref()?.rect))).collect();
-    let mut grid_views = sheet_plan_views(d, &others);
+    // Every sheet whose views the placer reads (the other sheets, each level's plan sheet), read
+    // in one walk of the model, and none read again that the build's placers read before (Q6442).
+    let mut wanted = others.clone();
+    wanted.extend(plans.iter().filter_map(|(_, r)| sheets.iter().find(|b| inside(&b.rect, mid(r))).map(|b| b.rect)));
+    drop(sheet_views.of(d, &wanted));
+    lap("sheets' views read");
+    let mut grid_views = sheet_plan_views(sheet_views, d, &others);
     grid_views.extend(view_rects.iter().map(|(_, r)| *r));
     let grid = super::grids::GridPlacer::new(d, upf, &plans, &others, &grid_views);
     lap("grid intersections read");
@@ -29892,7 +30185,7 @@ fn arch_placer(
             .iter()
             .filter_map(|(k, r)| {
                 let i = sheets.iter().position(|b| inside(&b.rect, mid(r)))?;
-                let (plan_v, other_v) = sheets.get(i).map(|b| own_views(d, &b.rect)).unwrap_or_default();
+                let (plan_v, other_v) = sheets.get(i).map(|b| own_views(sheet_views, d, &b.rect)).unwrap_or_default();
                 let pts = lines
                     .points(i, Some(r))
                     .into_iter()
@@ -30121,15 +30414,21 @@ fn arch_placer(
                 plan_upf.get(i).copied().flatten(),
                 upf,
             );
-            let fit = if other.is_some() { None } else { lines.fit(i, &tgt, ratio) };
+            // Why a sheet fits nowhere comes from the same fits (never weighed again to say it).
+            let (fit, why) = match other {
+                Some(_) => (None, String::new()),
+                None => match lines.fit_why(i, &tgt, ratio, &mut super::grids::FitStats::default()) {
+                    Ok(f) => (Some(f), String::new()),
+                    Err(why) => (None, why),
+                },
+            };
             let number = sheet_names.get(i).cloned().unwrap_or_default();
             progress_line(&format!(
                 "  placer: {number} on {level} by its linework at {ratio:.3} of its plan: {} ({:.1} s)",
                 fit.as_ref().map_or_else(
-                    || other.as_ref().map_or_else(
-                        || format!("no fit ({})", lines.best_tried(i, &tgt, ratio)),
-                        |o| format!("not fitted (its views name another part of the site: {o})")
-                    ),
+                    || other
+                        .as_ref()
+                        .map_or_else(|| format!("no fit ({why})"), |o| format!("not fitted (its views name another part of the site: {o})")),
                     |f| format!(
                         "scale {:.3}, offset [{:.0}, {:.0}], {:.0}% on the plan, {:.0} points over the next best{}",
                         f.sim.scale(),
@@ -30415,63 +30714,135 @@ fn arch_placer(
     (place, log)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Walks of the whole model to read sheets' views (Q6442: one per build, not one per level).
+    static SHEET_VIEW_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A sheet's views as read off the sheet alone: each view's title and region.
+type ViewsOfSheet = std::sync::Arc<Vec<(String, [f64; 4])>>;
+
+/// Each sheet's views ([`cadaddy_mepfix::sheet_facts::view_titles`], the sheet read on its own),
+/// kept for a build (Q6442): every level plan of a placer, and every placer the build makes over
+/// the same drawing, reads a sheet's views once, and the sheets not read yet are read in one walk
+/// of the model. A drawing changed since (its model or its blocks no longer the copy read) is
+/// read afresh.
+#[derive(Default)]
+pub(crate) struct SheetViews {
+    memo: std::sync::Mutex<SheetViewsMemo>,
+}
+
+#[derive(Default)]
+struct SheetViewsMemo {
+    /// The drawing the views were read off: its model and blocks (shared, so the copy costs a
+    /// pointer per chunk and tells a changed drawing by pointers).
+    read: Option<(cadaddy_doc::EntityStore, cadaddy_doc::shared::Shared<BTreeMap<String, std::sync::Arc<cadaddy_doc::Block>>>)>,
+    /// Each sheet's views by its rectangle (to the bit).
+    by_rect: std::collections::HashMap<[u64; 4], ViewsOfSheet>,
+}
+
+/// Sheets whose views a build keeps at most (a set has a few hundred).
+const MAX_SHEET_VIEWS_KEPT: usize = 4_096;
+
+impl SheetViews {
+    /// The views of each of the sheets `rects`, in their order; those not read yet are read in
+    /// one walk of the model.
+    fn of(&self, d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<ViewsOfSheet> {
+        let key = |r: &[f64; 4]| r.map(f64::to_bits);
+        let Ok(mut m) = self.memo.lock() else {
+            return read_sheet_views(d, rects).into_iter().map(std::sync::Arc::new).collect();
+        };
+        let same = m.read.as_ref().is_some_and(|(model, blocks)| d.model.unchanged_from(model) && d.blocks.same(blocks));
+        if !same || m.by_rect.len() > MAX_SHEET_VIEWS_KEPT {
+            m.by_rect.clear();
+            m.read = Some((d.model.clone(), d.blocks.clone()));
+        }
+        let mut missing: Vec<[f64; 4]> = Vec::new();
+        for r in rects {
+            if !m.by_rect.contains_key(&key(r)) && !missing.iter().any(|q| key(q) == key(r)) {
+                missing.push(*r);
+            }
+        }
+        if !missing.is_empty() {
+            for (r, v) in missing.iter().zip(read_sheet_views(d, &missing)) {
+                m.by_rect.insert(key(r), std::sync::Arc::new(v));
+            }
+        }
+        rects.iter().map(|r| m.by_rect.get(&key(r)).cloned().unwrap_or_default()).collect()
+    }
+}
+
+/// The views (title, region) on each of the sheets `rects`, each sheet read on its own: one walk
+/// of the model puts each object on every sheet its middle falls in (shared, not copied), then
+/// each sheet's objects are read as a drawing of their own.
+fn read_sheet_views(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<Vec<(String, [f64; 4])>> {
+    #[cfg(test)]
+    SHEET_VIEW_WALKS.with(|c| c.set(c.get() + 1));
+    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    let mut on: Vec<Vec<std::sync::Arc<cadaddy_doc::Entity>>> = vec![Vec::new(); rects.len()];
+    if !rects.is_empty() {
+        for e in d.model.iter() {
+            let b = cadaddy_doc::entity_bounds(d, e, 0);
+            if b.is_empty() {
+                continue;
+            }
+            let c = b.center();
+            for (r, mine) in rects.iter().zip(on.iter_mut()) {
+                if inside(r, c.x, c.y) {
+                    mine.push(e.clone());
+                }
+            }
+        }
+    }
+    // The drawing's tables and blocks once, its model left out: each sheet's objects go into a
+    // copy of it.
+    let mut bare = d.clone();
+    bare.model = cadaddy_doc::EntityStore::new();
+    on.into_iter()
+        .map(|mine| {
+            if mine.is_empty() {
+                return Vec::new();
+            }
+            let mut sub = bare.clone();
+            let mut store = cadaddy_doc::EntityStore::new();
+            for e in mine {
+                store.push_shared(e);
+            }
+            sub.model = store;
+            let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+            cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts).into_iter().filter_map(|v| Some((v.title, v.region?))).collect()
+        })
+        .collect()
+}
+
 /// The regions of sheet `rect`'s plan views and of its other views (elevations, sections,
 /// details, risers, diagrams, schedules: [`cadaddy_mepfix::sheet_reader::names_no_plan`]), the
-/// sheet read on its own.
-fn own_views(d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
-    let mine: Vec<cadaddy_doc::Entity> = d
-        .model
-        .iter()
-        .filter(|e| {
-            let b = cadaddy_doc::entity_bounds(d, e, 0);
-            let c = b.center();
-            !b.is_empty() && c.x >= rect[0] && c.x <= rect[2] && c.y >= rect[1] && c.y <= rect[3]
-        })
-        .map(|e| (**e).clone())
-        .collect();
-    if mine.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-    let mut sub = d.clone();
-    let mut store = cadaddy_doc::EntityStore::new();
-    store.push_many(mine);
-    sub.model = store;
-    let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+/// sheet read on its own ([`SheetViews`]).
+fn own_views(views: &SheetViews, d: &cadaddy_doc::Drawing, rect: &[f64; 4]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
     let (mut plans, mut others) = (Vec::new(), Vec::new());
-    for v in cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts) {
-        let Some(r) = v.region else { continue };
-        if cadaddy_mepfix::sheet_reader::names_no_plan(&v.title) { others.push(r) } else { plans.push(r) }
+    for v in views.of(d, std::slice::from_ref(rect)) {
+        for (title, r) in v.iter() {
+            if cadaddy_mepfix::sheet_reader::names_no_plan(title) { others.push(*r) } else { plans.push(*r) }
+        }
     }
     (plans, others)
 }
 
 /// The regions of the plan views (not elevations, sections, details, risers, diagrams,
-/// schedules) on each of the sheets `rects`, each sheet read on its own.
-fn sheet_plan_views(d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
-    let inside = |r: &[f64; 4], x: f64, y: f64| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
-    let mut on: Vec<Vec<cadaddy_doc::Entity>> = vec![Vec::new(); rects.len()];
-    for e in d.model.iter() {
-        let b = cadaddy_doc::entity_bounds(d, e, 0);
-        if b.is_empty() {
-            continue;
-        }
-        let c = b.center();
-        if let Some(i) = rects.iter().position(|r| inside(r, c.x, c.y)) {
-            on[i].push((**e).clone());
-        }
-    }
+/// schedules) on each of the sheets `rects`, each sheet read on its own ([`SheetViews`]); a sheet
+/// listed twice is read once.
+fn sheet_plan_views(views: &SheetViews, d: &cadaddy_doc::Drawing, rects: &[[f64; 4]]) -> Vec<[f64; 4]> {
     let not_plan = |t: &str| {
         let u = t.to_ascii_uppercase();
         !u.contains("PLAN") && ["ELEVATION", "SECTION", "DETAIL", "RISER", "DIAGRAM", "SCHEDULE", "ISOMETRIC"].iter().any(|w| u.contains(w))
     };
+    let mut seen: BTreeSet<[u64; 4]> = BTreeSet::new();
     let mut out = Vec::new();
-    for mine in on.into_iter().filter(|m| !m.is_empty()) {
-        let mut sub = d.clone();
-        let mut store = cadaddy_doc::EntityStore::new();
-        store.push_many(mine);
-        sub.model = store;
-        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        out.extend(cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts).into_iter().filter(|v| !not_plan(&v.title)).filter_map(|v| v.region));
+    for (v, r) in views.of(d, rects).iter().zip(rects) {
+        if seen.insert(r.map(f64::to_bits)) {
+            out.extend(v.iter().filter(|(t, _)| !not_plan(t)).map(|(_, r)| *r));
+        }
     }
     out
 }
@@ -32176,6 +32547,8 @@ fn question_value(job: &GuidedJob, q: &Question) -> Value {
     let ev = q.evidence.as_ref();
     let sheet = ev.and_then(|e| e.sheet.clone()).or_else(|| ev.and_then(|e| e.at).and_then(|at| job.level_at(at)).map(|r| r.number.clone()));
     let crop = ev.and_then(|e| e.crop_png_path.clone().or_else(|| e.leftovers.iter().find_map(|l| l.crop_path.clone())));
+    // A picture whose folder went (the job's drawing closed, a left-over swept) isn't offered.
+    let crop = super::jobtemp::still_there(crop);
     json!({
         "id": q.id,
         "stage": q.stage,
@@ -32853,6 +33226,10 @@ fn advance_pipeline(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     if job.is_done() && !job.checkpoint_given {
         super::sheetcheck::remove_packet(job);
     }
+    // And its pictures (Q6433): with nothing left open, no question shows them again.
+    if job.is_done() && job.next_question().is_none() {
+        super::jobtemp::remove(&job.id);
+    }
     r
 }
 
@@ -33251,6 +33628,8 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let mut job = GuidedJob::new(pdfs, goal);
+    // Left-over pictures of jobs cut off long ago go (Q6433).
+    super::jobtemp::sweep_stale(s, &job.id);
     // Interactive unless asked: the job stops at each checkpoint for an answer.
     job.auto = p.get("auto").and_then(Value::as_bool).unwrap_or(false);
     // The sheet-index checkpoint (Q6517): stops for its packet unless told to go on; its page
@@ -33372,7 +33751,10 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             job.audit("job_refreshed", "pipeline", None, Some(from), Some(json!({"checkpoint": path, "other_build": labels(&other), "why": why})));
             started_over = Some(json!({"from": from.label(), "other_build": labels(&other), "started_over": true, "why": why, "prints_note": note}));
         } else {
-            *s.doc_mut()? = checkpoint_drawing(&path)?;
+            let (d, seed) = checkpoint_drawing(&path)?;
+            *s.doc_mut()? = d;
+            let held = seed.and_then(|seed| super::file::CdySaved::new(&path, std::sync::Arc::new(seed)));
+            s.state_mut()?.job_checkpoint = held;
             // The print set's project lives in the session, not the drawing.
             s.execute("printset.open", &json!({"path": pdfs}))?;
             for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
@@ -38261,6 +38643,141 @@ mod tests {
         assert_eq!(rooms, BTreeMap::from([("201", 3), ("401", 3)]));
     }
 
+    /// A two-storey set of guest rooms (inches): two of a type a typical-room view is drawn for
+    /// (`KING`, 12' × 24') and two of a wider variant of it no view is drawn for (named `wide`,
+    /// 16' × 24'), and a corridor; the view (`title`) letters the unit's panel (`PNLBD 'U'`) and
+    /// draws three devices. The session, the job, the view's devices.
+    fn variant_rooms_set(title: &str, wide: &str) -> (crate::Session, GuidedJob, Vec<super::super::readers::ReadDevice>) {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let room_lines = |s: &mut crate::Session, o: [f64; 2], w: f64| {
+            let mut segs = vec![((0.0, 0.0), (w, 0.0)), ((w, 0.0), (w, 288.0)), ((w, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (w, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((w - 44.0, 210.0), (w, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        room_lines(&mut s, v, 144.0);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": title, "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 110.0, v[1] + 150.0], "text": "PNLBD 'U'", "height": 3.0})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        let rooms = [
+            ("KING", "501", "5", 10_000.0, 144.0),
+            ("KING", "601", "6", 10_400.0, 144.0),
+            (wide, "503", "5", 10_800.0, 192.0),
+            (wide, "603", "6", 11_200.0, 192.0),
+        ];
+        for (_, _, _, x, w) in rooms {
+            room_lines(&mut s, [x, 0.0], w);
+        }
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-907".into(),
+            level: "5".into(),
+            discipline: "E".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-907".into(), lo, hi }];
+        let mut list: Vec<Value> = rooms
+            .iter()
+            .map(|(name, n, level, x, w)| json!({"name": name, "number": n, "level": level, "outline": [[x, 0], [x + w, 0], [x + w, 288], [x, 288]]}))
+            .collect();
+        list.push(
+            json!({"name": "CORRIDOR", "number": "500", "level": "5", "outline": [[10_000, 300], [11_400, 300], [11_400, 360], [10_000, 360]]}),
+        );
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": list, "keys": {"stated": 5}}));
+        }
+        let device = |tag: &str, kind: &str, circuit: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: kind.into(),
+            circuit: circuit.into(),
+            at: [v[0] + at[0], v[1] + at[1]],
+            sheet: "E-907".into(),
+            level: "Level 5".into(),
+            ..Default::default()
+        };
+        let read = vec![
+            device("GFCI", "receptacle", "U-1", [20.0, 20.0]),
+            device("T", "thermostat", "", [120.0, 270.0]),
+            device("S", "switch", "", [130.0, 120.0]),
+        ];
+        (s, job, read)
+    }
+
+    /// Q6351: a guest room of a type no typical-room plan is drawn for (a wider unit of a typical
+    /// type, its name the type's words and more) had no unit panel: it takes the panel the type's
+    /// plan letters (derived, its basis said), laid into it as the plan lays into its own rooms,
+    /// and none of the plan's devices (the floor's plans show those). A room of a type of its own
+    /// (not a variant) takes nothing, and the unit-panel check lists it.
+    #[test]
+    fn a_guest_room_of_a_variant_type_takes_its_types_unit_panel() {
+        let (s, job, read) = variant_rooms_set("UNIT POWER PLAN - KING", "KING CORNER");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
+        let devices: BTreeSet<&str> = stamped.devices.iter().map(|d| d.room.as_str()).collect();
+        assert_eq!(devices, BTreeSet::from(["501", "601"]), "the view's devices only in its own type's rooms: {:?}", stamped.report);
+        let panelled: Vec<&str> = stamped.panels.iter().filter(|(_, at)| !at.is_empty()).map(|(r, _)| r.as_str()).collect();
+        assert_eq!(panelled, ["501", "503", "601", "603"], "{:?}", stamped.panels);
+        assert!(["503", "603"].iter().all(|r| stamped.rooms.get(*r).is_some_and(|(_, _, typical)| *typical)), "{:?}", stamped.rooms.keys());
+        assert_eq!(stamped.derived_panels.keys().map(String::as_str).collect::<Vec<_>>(), ["503", "603"]);
+        assert!(stamped.derived_panels.values().all(|b| b.starts_with("derived") && b.contains("E-907 UNIT POWER PLAN - KING")));
+        // Each in its own room.
+        for (room, at) in &stamped.panels {
+            let (_, outline, _) = stamped.rooms.get(room).unwrap();
+            let b = cadaddy_geom::Bounds2::from_points(outline.iter().copied());
+            assert!(
+                at.iter().all(|(_, p)| p[0] >= b.min.x - 1.0 && p[0] <= b.max.x + 1.0 && p[1] >= b.min.y - 1.0 && p[1] <= b.max.y + 1.0),
+                "{room}: {at:?}"
+            );
+        }
+        // The panels built from them: the variant rooms' derived, the rest as before.
+        let (mut gear, _) = super::super::printcond::room_panel_equipment(&stamped.panels, &stamped.rooms, 12.0);
+        mark_derived_panels(&mut gear, &stamped.derived_panels);
+        let status = |room: &str| {
+            gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some(room)).and_then(|g| g.properties.get("STATUS").cloned())
+        };
+        assert_eq!((status("501"), status("503").as_deref()), (None, Some("derived")));
+        assert_eq!(gear.iter().find(|g| g.properties.get("ROOM").map(String::as_str) == Some("603")).map(|g| g.tag.as_str()), Some("U-603"));
+        let check = unit_panel_check(&job, &gear, &stamped.rooms);
+        assert_eq!((check["units"].as_u64(), check["units_with_panel"].as_u64()), (Some(4), Some(4)), "{check:#}");
+        assert_eq!(check["by_level"]["Level 5"], json!({"units": 2, "with_panel": 2}), "{check:#}");
+        // A type of its own no plan is drawn for (not a variant of one): no panel, and listed.
+        let (s, mut job, read) = variant_rooms_set("UNIT POWER PLAN - KING", "STUDIO");
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced);
+        assert!(stamped.derived_panels.is_empty() && !stamped.panels.contains_key("503"), "{:?}", stamped.panels);
+        let (gear, _) = super::super::printcond::room_panel_equipment(&stamped.panels, &stamped.rooms, 12.0);
+        let check = unit_panel_check(&job, &gear, &stamped.rooms);
+        let missing: Vec<&str> = check["units_without_panel"].as_array().unwrap().iter().filter_map(|v| v["room"].as_str()).collect();
+        assert_eq!(missing, ["503", "603"], "{check:#}");
+        assert_eq!(check["stated_keys"].as_u64(), Some(5));
+        unit_panel_findings(&mut job, &check);
+        let said: Vec<&str> = job.findings.iter().map(|f| f.description.as_str()).collect();
+        assert!(said.iter().any(|d| d.starts_with("2 guest unit(s) without a unit panel: 503, 603")), "{said:?}");
+        assert!(said.iter().any(|d| d.contains("5 keys stated, 4 units read")), "{said:?}");
+    }
+
     /// fix-room-enlarged-view-copied-up: a typical view goes into every room of its type; where a
     /// room's own floor plan tags the view's device there, the room takes that plan's circuit (its
     /// floor's panel), the view's label kept in the basis; a view's label no schedule row or plan of
@@ -39300,6 +39817,206 @@ mod tests {
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
+    /// Q6433: a job (of its own made-up prints) whose plan prints a tag no legend lists four
+    /// times: the devices stage writes its "which device is this?" crop in the job's folder in
+    /// the temporary folder. The session, the job and the crop's path.
+    fn unlisted_tag_job(prints: &str) -> (crate::Session, GuidedJob, String) {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new(prints, JobGoal::Takeoff);
+        let _ = std::fs::remove_dir_all(super::super::jobtemp::dir(&job.id));
+        job.sheets = Some(
+            json!({"sheets": [{"number": "Q-1", "sheet_type": "plan"}, {"number": "Q-2", "sheet_type": "plan"}, {"number": "E1", "sheet_type": "schedule"}]}),
+        );
+        job.sheets_loaded = true;
+        let schedule: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let mut q1: Vec<(&str, f64, f64)> = vec![("A", 990.0, 772.0)];
+        q1.extend((0..5).map(|i| ("A", 100.0 + 40.0 * f64::from(i), 300.0)));
+        q1.extend((0..3).map(|i| ("B", 100.0 + 40.0 * f64::from(i), 200.0)));
+        q1.extend((0..4).map(|i| ("ZZ", 100.0 + 40.0 * f64::from(i), 100.0))); // unlisted, repeated
+        for (texts, syms, name) in [(schedule, q1, "Q-1"), (Vec::new(), vec![("A", 1000.0, 772.0), ("A", 1010.0, 760.0)], "Q-2")] {
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            add_sheet(&mut s, &texts, &syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: name.into(), lo, hi });
+        }
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let crop = r["devices"]["unknowns"][0]["crop_path"].as_str().unwrap_or_else(|| panic!("no crop: {r:#}")).to_string();
+        assert!(std::path::Path::new(&crop).is_file(), "{crop}");
+        assert!(std::path::Path::new(&crop).starts_with(super::super::jobtemp::dir(&job.id)), "{crop}");
+        (s, job, crop)
+    }
+
+    /// Q6433: a job that finishes with nothing open leaves no folder in the temporary folder.
+    #[test]
+    fn a_finished_job_leaves_no_temporary_folder() {
+        let (mut s, mut job, crop) = unlisted_tag_job("/nonexistent/q6433-finished");
+        let folder = super::super::jobtemp::dir(&job.id);
+        // While its question is open, the picture is there to show.
+        assert!(std::path::Path::new(&crop).is_file());
+        for st in &mut job.stages {
+            if st.status != StageStatus::Skipped {
+                st.status = StageStatus::Done;
+            }
+            for q in st.questions.iter_mut().chain(st.verify.iter_mut()).chain(st.completeness.iter_mut()) {
+                q.answer = Some(json!("skip"));
+            }
+        }
+        assert!(job.is_done() && job.next_question().is_none());
+        advance_pipeline(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!folder.exists(), "the finished job left {}", folder.display());
+    }
+
+    /// Q6433: closing the drawing of a job that can't ask again (no checkpoint, never saved)
+    /// takes its pictures with it; a drawing saved with the unfinished job keeps them for when
+    /// it opens again; a question whose picture went offers none.
+    #[test]
+    fn a_closed_drawing_takes_its_jobs_pictures() {
+        let (mut s, job, crop) = unlisted_tag_job("/nonexistent/q6433-closed");
+        let folder = super::super::jobtemp::dir(&job.id);
+        assert!(!job.is_done());
+        save_job(&mut s, &job).unwrap_or_else(|e| panic!("{e}"));
+        s.execute("close", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!folder.exists(), "the closed drawing's job left {}", folder.display());
+        let q = job.stages.iter().flat_map(|st| st.completeness.iter()).find(|q| q.question.contains("'ZZ'")).cloned();
+        let q = q.unwrap_or_else(|| panic!("no ZZ question"));
+        assert_eq!(q.evidence.as_ref().and_then(|e| e.crop_png_path.as_deref()), Some(crop.as_str()));
+        assert_eq!(question_value(&job, &q)["crop"], json!(null), "a picture that went isn't offered");
+
+        // Saved to a file with the job in it: the folder stays with the file.
+        let (mut s, job, crop) = unlisted_tag_job("/nonexistent/q6433-saved");
+        save_job(&mut s, &job).unwrap_or_else(|e| panic!("{e}"));
+        if let Ok(st) = s.state_mut() {
+            st.path = Some("/nonexistent/q6433-saved/Sample Floor Plan.cdy".into());
+            st.saved = st.doc.clone();
+        }
+        let q = job.stages.iter().flat_map(|st| st.completeness.iter()).find(|q| q.question.contains("'ZZ'")).cloned();
+        let q = q.unwrap_or_else(|| panic!("no ZZ question"));
+        assert_eq!(question_value(&job, &q)["crop"], json!(crop.clone()));
+        s.execute("close", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(std::path::Path::new(&crop).is_file(), "the saved job's picture went");
+        assert!(super::super::jobtemp::remove(&job.id));
+    }
+
+    /// A made-up set of `levels` floors, each level's plan on a sheet of its own (side by side):
+    /// a titled plan view with its scale line, an elevation beside it, and `filler` lines of
+    /// linework per sheet. Returns the session and its building spec.
+    fn many_level_set(levels: u32, filler: u32) -> (crate::Session, cadaddy_walk3d::BuildingSpec) {
+        let mut s = crate::Session::new();
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            let seg = |d: &mut cadaddy_doc::Drawing, a: [f64; 2], b: [f64; 2]| {
+                let (a, b) = (cadaddy_geom::Vec3::new(a[0], a[1], 0.0), cadaddy_geom::Vec3::new(b[0], b[1], 0.0));
+                d.add(&Space::Model, common(), EntityKind::Line(cadaddy_doc::Line { a, b })).ok();
+            };
+            for i in 0..levels {
+                let x0 = 2000.0 * f64::from(i);
+                for (a, b) in
+                    [([0.0, 0.0], [1000.0, 0.0]), ([1000.0, 0.0], [1000.0, 800.0]), ([1000.0, 800.0], [0.0, 800.0]), ([0.0, 800.0], [0.0, 0.0])]
+                {
+                    seg(d, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+                }
+                for (v, title) in [([x0 + 100.0, 120.0], format!("LEVEL {} FLOOR PLAN", i + 1)), ([x0 + 700.0, 120.0], "NORTH ELEVATION".to_string())]
+                {
+                    for k in 0..4 {
+                        let y = v[1] + 40.0 + 60.0 * f64::from(k);
+                        seg(d, [v[0], y], [v[0] + 200.0, y]);
+                        seg(d, [v[0] + 50.0 * f64::from(k), v[1] + 40.0], [v[0] + 50.0 * f64::from(k), v[1] + 220.0]);
+                    }
+                    d.add(&Space::Model, common(), EntityKind::Text(text(&title, v[0], v[1] - 19.0, 7.4))).ok();
+                    d.add(&Space::Model, common(), EntityKind::Text(text("SCALE: 1/4\" = 1'-0\"", v[0], v[1] - 28.0, 4.6))).ok();
+                }
+                for k in 0..filler {
+                    let (x, y) = (x0 + 20.0 + f64::from(k % 90) * 10.0, 400.0 + f64::from(k / 90 % 35) * 10.0);
+                    seg(d, [x, y], [x + 6.0, y + 3.0]);
+                }
+            }
+        }
+        let lv: Vec<Value> = (0..levels)
+            .map(|i| {
+                let x0 = 2000.0 * f64::from(i);
+                json!({"name": format!("Level {}", i + 1), "elevation_ft": 12.0 * f64::from(i), "height_ft": 12.0, "ceiling_ft": 9.0,
+                    "region": [x0 + 100.0, 100.0, x0 + 600.0, 700.0]})
+            })
+            .collect();
+        let sh: Vec<Value> = (0..levels)
+            .map(|i| {
+                let x0 = 2000.0 * f64::from(i);
+                json!({"number": format!("A-{}", 101 + i), "discipline": "A", "level": format!("Level {}", i + 1), "rect": [x0, 0.0, x0 + 1000.0, 800.0]})
+            })
+            .collect();
+        let sp = serde_json::from_value(json!({"units_per_foot": 12.0, "levels": lv, "sheets": sh})).unwrap_or_else(|e| panic!("{e}"));
+        (s, sp)
+    }
+
+    /// Q6442: building the level-plan placer reads each sheet's views once, in one walk of the
+    /// model for all the sheets, and a second placer of the same build (the architect's objects
+    /// after the MEP plans') reads none again: not once per level plan and again per placer.
+    #[test]
+    fn the_placer_reads_the_sheets_views_in_one_walk_shared_by_every_level_and_placer() {
+        let (s, sp) = many_level_set(20, 50);
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        SHEET_VIEW_WALKS.with(|c| c.set(0));
+        // The build's placers share one reading of the sheets' views.
+        let views = SheetViews::default();
+        let (first, _) = arch_placer(d, &sp, &[], Vec::new(), &[], "A", &views);
+        let (second, _) = arch_placer(d, &sp, &[], Vec::new(), &[], "A", &views);
+        let walks = SHEET_VIEW_WALKS.with(std::cell::Cell::get);
+        assert!(walks <= 1, "the model was walked {walks} times for sheets' views by two placers of 20 levels");
+        // The placers still place: a point on level 3's plan stays on it.
+        let p = [2.0 * 2000.0 + 300.0, 400.0];
+        assert_eq!(first(p, "Level 3").map(|m| m.apply(p)), second(p, "Level 3").map(|m| m.apply(p)));
+    }
+
+    /// Q6442: the sheets' views read together are each sheet's read on its own, and a drawing
+    /// changed since is read afresh, never answered from the views of the drawing before.
+    #[test]
+    fn sheets_views_read_together_match_each_sheet_alone_and_a_changed_drawing_is_reread() {
+        let (mut s, sp) = many_level_set(4, 20);
+        let rects: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect).collect();
+        let views = SheetViews::default();
+        {
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            let together = views.of(d, &rects);
+            for (r, v) in rects.iter().zip(&together) {
+                let alone = read_sheet_views(d, std::slice::from_ref(r));
+                assert_eq!(alone.first(), Some(&**v), "sheet at {r:?}");
+                // Each sheet: its floor plan and its elevation, told apart.
+                let (plans, others) = own_views(&views, d, r);
+                assert_eq!((plans.len(), others.len()), (1, 1), "sheet at {r:?}: {v:?}");
+            }
+            assert!(together.iter().all(|v| v.iter().any(|(t, _)| t.contains("FLOOR PLAN"))));
+        }
+        // A section added to the second sheet: read again, not the views from before.
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            let v = [2000.0 + 400.0, 470.0];
+            let v3 = |x: f64, y: f64| cadaddy_geom::Vec3::new(x, y, 0.0);
+            for k in 0..4 {
+                let (y, x) = (v[1] + 40.0 + 60.0 * f64::from(k), v[0] + 50.0 * f64::from(k));
+                d.add(&Space::Model, common(), EntityKind::Line(cadaddy_doc::Line { a: v3(v[0], y), b: v3(v[0] + 200.0, y) })).ok();
+                d.add(&Space::Model, common(), EntityKind::Line(cadaddy_doc::Line { a: v3(x, v[1] + 40.0), b: v3(x, v[1] + 220.0) })).ok();
+            }
+            d.add(&Space::Model, common(), EntityKind::Text(text("BUILDING SECTION", v[0], v[1] - 19.0, 7.4))).ok();
+            d.add(&Space::Model, common(), EntityKind::Text(text("SCALE: 1/4\" = 1'-0\"", v[0], v[1] - 28.0, 4.6))).ok();
+        }
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let second = rects.get(1).copied().unwrap_or_default();
+        let fresh = read_sheet_views(d, &[second]);
+        let kept = views.of(d, &[second]);
+        assert_eq!(fresh.first(), kept.first().map(|v| &**v));
+        assert!(kept.iter().flat_map(|v| v.iter()).any(|(t, _)| t.contains("SECTION")), "{kept:?}");
+    }
+
     /// Q6007: a made-up electrical plan (level 1, inches) with a fixture schedule, three A
     /// fixtures on circuit D-7 (a homerun arrow at the last one), two B fixtures on D-9 (no
     /// homerun), and panel D drawn as a box lettered D. The job reads the circuits, routes
@@ -39335,7 +40052,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, _) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p)).map(|q| [q[0].round(), q[1].round()]);
         // A duct's point where M-101 draws it lands where A-101 has that spot, by M-101's tags.
         assert_eq!(at([2560.0, 430.0]), Some([500.0, 400.0]));
@@ -39428,7 +40145,8 @@ mod tests {
     fn lights_on_the_architects_ceiling_plan_and_not_on_the_electrical_plan_are_flagged_and_built() {
         let (mut s, mut job, mut devices) = architect_objects_set(0);
         let before = devices.len();
-        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new(), &SheetViews::default())
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["legend_rows"], json!(["A-601: RECESSED DOWN LIGHT (light)"]), "{r:#}");
         assert_eq!((r["architect_found"].clone(), r["architect_placed"].clone()), (json!(6), json!(6)), "{r:#}");
         assert_eq!(r["open_groups"], json!(1), "{r:#}");
@@ -39496,7 +40214,7 @@ mod tests {
         assert_eq!(read["byKind"]["conflict"], json!(1), "{read:#}");
         // Run again (a rebuild): the same one item, not two.
         let mut again: Vec<super::super::readers::ReadDevice> = devices.iter().take(before).cloned().collect();
-        architect_objects_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        architect_objects_step(&mut s, &mut job, &mut again, &[], "A", &BTreeMap::new(), &SheetViews::default()).unwrap_or_else(|e| panic!("{e}"));
         let read = s.execute("rfi.list", &json!({})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(read["byKind"]["conflict"], json!(1), "{read:#}");
     }
@@ -39505,7 +40223,8 @@ mod tests {
     fn an_architects_ceiling_plan_the_electrical_plan_agrees_with_gives_no_finding() {
         let (mut s, mut job, mut devices) = architect_objects_set(2);
         let before = devices.len();
-        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let r = architect_objects_step(&mut s, &mut job, &mut devices, &[], "A", &BTreeMap::new(), &SheetViews::default())
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r["open_groups"], json!(0), "{r:#}");
         assert_eq!(r["requirements"]["lights"]["completed_by_electrical"], json!(6), "{r:#}");
         assert_eq!(r["objects"]["lights"], json!({"architect": 6, "engineer": 6}), "{r:#}");
@@ -39662,7 +40381,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         // A smoke detector in the fourth room drawn on the fire alarm sheet lands in that room on
         // the floor plan (to the linework's resolution: its lines are compared a foot or two apart).
         let p = [10500.0 + 700.0, 1300.0 + 540.0];
@@ -39678,7 +40397,7 @@ mod tests {
     #[test]
     fn a_sheet_of_another_building_in_the_same_title_block_is_not_stacked_on_the_plan() {
         let (s, sp) = frame_sheets();
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p));
         // The mechanical plan draws the floor plan's walls where the floor plan's sheet has them:
         // its frame holds.
@@ -39783,7 +40502,8 @@ mod tests {
     #[test]
     fn a_sheet_of_one_scale_note_fits_an_off_scale_plan_at_their_ratio() {
         let (s, sp) = off_scale_plan_sheets(1.0, 2.0);
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[("A-401".to_string(), 6.0)], "A");
+        let (place, log) =
+            arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[("A-401".to_string(), 6.0)], "A", &SheetViews::default());
         let at = |p: [f64; 2]| place(p, "Roof").map(|m| m.apply(p));
         let l = || log.lock().map(|l| l.clone()).unwrap_or_default();
         // The trade sheet's (500, 400) of the walls, drawn twice the plan's size.
@@ -39796,7 +40516,7 @@ mod tests {
 
         // Both at the job's scale: one to one, as before.
         let (s, sp) = off_scale_plan_sheets(1.0, 1.0);
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let p = [4500.0, 400.0];
         let m = place(p, "Roof").map(|m| m.apply(p)).unwrap_or_else(|| panic!("M-401 not placed: {:#?}", log.lock().map(|l| l.clone())));
         assert!((m[0] - 500.0).abs() < 15.0 && (m[1] - 400.0).abs() < 15.0, "{m:?}");
@@ -39860,7 +40580,7 @@ mod tests {
             ]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "M");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "M", &SheetViews::default());
         let q = place([2800.0, 450.0], "Level 2").map(|m| m.apply([2800.0, 450.0]));
         assert!(q.is_some_and(|q| (q[0] - 500.0).abs() < 1.0 && (q[1] - 400.0).abs() < 1.0), "{q:?} {:#?}", log.lock().map(|l| l.clone()));
         let l = log.lock().map(|l| l.clone()).unwrap_or_default();
@@ -47763,6 +48483,143 @@ mod tests {
 #[cfg(test)]
 #[path = "guided_symbols_tests.rs"]
 mod symbols_tests;
+
+#[cfg(test)]
+mod checkpoint_append_tests {
+    //! fix-job-checkpoint-full-rewrite (Q6576): a job's checkpoints after the first append only the
+    //! parts of the drawing that changed. Each used to encode the whole .cdy again; on a four-storey
+    //! print set the one after the 3D build added 1.06 GB on top of the build's 4.4 GB, the job's
+    //! peak, and cost 3-4 s a stage.
+    use super::*;
+    use cadaddy_doc::{Common, EntityKind, Line, Space};
+    use cadaddy_geom::Vec3;
+
+    fn hooks() {
+        crate::cmd::file::set_io(crate::cmd::file::IoHooks {
+            read: |b, n| cadaddy_io::read(b, n).map_err(|e| e.to_string()),
+            write: |d, n| cadaddy_io::write(d, n).map_err(|e| e.to_string()),
+            plot: None,
+            read_pdf: None,
+            read_dwf: None,
+            write_dwfx: None,
+        });
+    }
+
+    /// `n` made-up lines in model space, from `at` on.
+    fn lines(d: &mut cadaddy_doc::Drawing, at: usize, n: usize) {
+        for i in at..at + n {
+            let (x, y) = ((i % 997) as f64 * 3.7, (i / 997) as f64 * 2.9);
+            d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 1.5, y + 0.5, 0.0) })).unwrap();
+        }
+    }
+
+    fn scratch(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("cadaddy-q6576-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("job checkpoint.cdy").to_string_lossy().into_owned()
+    }
+
+    /// A session holding a 60,000-line drawing and a job checkpointing to `path`.
+    fn job_session(path: &str) -> (Session, GuidedJob) {
+        let mut s = crate::Session::new();
+        lines(s.doc_mut().unwrap(), 0, 60_000);
+        let mut job = GuidedJob::new("/made-up/prints", JobGoal::Takeoff);
+        job.checkpoint = Some(path.to_string());
+        (s, job)
+    }
+
+    fn len(path: &str) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    /// The job id of the checkpoint at `path`, read as the job reads it (without its drawing).
+    fn job_id(path: &str) -> Option<String> {
+        checkpoint_agent(path)?.get("guided_job")?.get("id")?.as_str().map(str::to_string)
+    }
+
+    #[test]
+    fn a_jobs_next_checkpoint_appends_only_what_changed() {
+        hooks();
+        let path = scratch("append");
+        let (mut s, mut job) = job_session(&path);
+        write_checkpoint(&mut s, &job);
+        let first = std::fs::read(&path).unwrap();
+        // A stage adds a few objects and moves the job on.
+        lines(s.doc_mut().unwrap(), 60_000, 25);
+        job.id = "second".into();
+        write_checkpoint(&mut s, &job);
+        let now = std::fs::read(&path).unwrap();
+        // The first checkpoint is kept byte for byte and the change is appended after it: a
+        // small part of the file, not the whole drawing encoded again.
+        assert!(
+            now.len() > first.len() && now.starts_with(&first),
+            "the second checkpoint was written whole ({} bytes, first {})",
+            now.len(),
+            first.len()
+        );
+        let appended = now.len() - first.len();
+        assert!(appended * 10 < first.len(), "{appended} bytes appended to a {}-byte checkpoint", first.len());
+        // It reads as the drawing and job it was written from.
+        let d = cadaddy_io::cdy::read_cdy(&now).unwrap();
+        assert_eq!(d.model.len(), 60_025);
+        assert_eq!(job_id(&path).as_deref(), Some("second"));
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_checkpoint_cut_short_while_appending_reads_as_the_one_before() {
+        hooks();
+        let path = scratch("cut");
+        let (mut s, mut job) = job_session(&path);
+        job.id = "first".into();
+        write_checkpoint(&mut s, &job);
+        let first = len(&path);
+        lines(s.doc_mut().unwrap(), 60_000, 2_000);
+        job.id = "second".into();
+        write_checkpoint(&mut s, &job);
+        let second = len(&path);
+        assert!(second > first);
+        // The machine stopped halfway through appending the second one.
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_len(first + (second - first) / 2).unwrap();
+        drop(f);
+        // A resume finds the first: its job (read without the drawing) and its drawing.
+        assert_eq!(job_id(&path).as_deref(), Some("first"));
+        assert!(is_job_checkpoint(&path));
+        let d = cadaddy_io::cdy::read_cdy(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(d.model.len(), 60_000);
+        // The job's next checkpoint isn't appended to the cut file: it is written whole.
+        job.id = "third".into();
+        write_checkpoint(&mut s, &job);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(cadaddy_io::cdy::verify(&bytes).unwrap()["ok"], serde_json::json!(true));
+        assert_eq!(cadaddy_io::cdy::read_cdy(&bytes).unwrap().model.len(), 62_000);
+        assert_eq!(job_id(&path).as_deref(), Some("third"));
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn a_job_resumed_from_its_checkpoint_appends_to_it() {
+        hooks();
+        let path = scratch("resume");
+        let (mut s, job) = job_session(&path);
+        write_checkpoint(&mut s, &job);
+        let first = std::fs::read(&path).unwrap();
+        // Another run reads the checkpoint (as `job.start` resuming does) and goes on.
+        let (d, seed) = checkpoint_drawing(&path).unwrap();
+        assert!(seed.is_some(), "a checkpoint this build wrote matches the drawing read from it");
+        let mut s = crate::Session::new();
+        *s.doc_mut().unwrap() = d;
+        s.state_mut().unwrap().job_checkpoint = seed.and_then(|seed| crate::cmd::file::CdySaved::new(&path, std::sync::Arc::new(seed)));
+        lines(s.doc_mut().unwrap(), 60_000, 25);
+        assert!(matches!(store_checkpoint(&mut s, &path), Ok(Stored::Appended(_))));
+        let now = std::fs::read(&path).unwrap();
+        assert!(now.starts_with(&first) && (now.len() - first.len()) * 10 < first.len());
+        assert_eq!(cadaddy_io::cdy::read_cdy(&now).unwrap().model.len(), 60_025);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
