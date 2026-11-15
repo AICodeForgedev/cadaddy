@@ -2020,24 +2020,36 @@ const FRAME_CACHE_MIN: u64 = 200_000;
 /// A kept frame nothing has shown for this long is freed (a closed or hidden drawing's).
 const FRAME_CACHE_IDLE: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Frames a kept layer was drawn again for, and frames shown from the kept picture.
-static FRAMES_DRAWN: AtomicU64 = AtomicU64::new(0);
-static FRAMES_KEPT: AtomicU64 = AtomicU64::new(0);
-
-/// `(drawn, kept)`: frames of large layers drawn into their kept picture, and frames shown from
-/// it unchanged (`ui.inspect`'s `perf.frameCache`).
-pub fn frame_cache_counts() -> (u64, u64) {
-    (FRAMES_DRAWN.load(Ordering::Relaxed), FRAMES_KEPT.load(Ordering::Relaxed))
+thread_local! {
+    /// `(drawn, kept)`: frames a kept layer was drawn again for, and frames shown from the kept
+    /// picture, counted by the thread that paints them. The app paints every canvas on the
+    /// interface's thread (like [`crate::dynres`]'s controller); windows painted on other threads
+    /// (tests side by side) count their own frames, not each other's.
+    static FRAMES: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+    /// The scale the drawing was last drawn at by this thread: 1 at rest ([`crate::dynres`]).
+    static SHOWN_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
 
-/// The scale the drawing was last drawn at (f32 bits): 1 at rest ([`crate::dynres`]).
-static SHOWN_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
+/// `(drawn, kept)`: frames of large layers drawn into their kept picture, and frames shown from
+/// it unchanged (`ui.inspect`'s `perf.frameCache`), on this thread.
+pub fn frame_cache_counts() -> (u64, u64) {
+    FRAMES.with(|f| f.get())
+}
+
+/// Count a frame of a kept layer: drawn into its picture, or shown from it unchanged.
+fn count_frame(drawn: bool) {
+    FRAMES.with(|f| {
+        let (d, k) = f.get();
+        f.set(if drawn { (d.saturating_add(1), k) } else { (d, k.saturating_add(1)) });
+    });
+}
+
 /// The GPU times the drawing's pass (timestamp queries).
 static PASS_TIMER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The scale the drawing was last drawn at each way: 1 is full resolution.
 pub fn shown_scale() -> f32 {
-    f32::from_bits(SHOWN_SCALE.load(Ordering::Relaxed))
+    SHOWN_SCALE.with(|s| s.get())
 }
 
 /// Whether the GPU times the drawing's pass, so the moving scale can follow it.
@@ -3069,7 +3081,7 @@ impl Resources {
         let tex = crate::dynres::scaled_size(size, scale);
         let scale = if tex == size { 1.0 } else { scale };
         if cb.reducible() {
-            SHOWN_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+            SHOWN_SCALE.with(|s| s.set(scale));
         }
         let mut cache = match res.cache.take() {
             Some(c) if c.size == tex && c.window == size => c,
@@ -3078,9 +3090,9 @@ impl Resources {
         cache.used = now;
         let shows = (cb.key, uniform, tex);
         if cache.shows.as_ref() == Some(&shows) {
-            FRAMES_KEPT.fetch_add(1, Ordering::Relaxed);
+            count_frame(false);
         } else {
-            FRAMES_DRAWN.fetch_add(1, Ordering::Relaxed);
+            count_frame(true);
             let stencil = cache.stencil.as_ref().zip(self.target.stencil).map(|(view, format)| wgpu::RenderPassDepthStencilAttachment {
                 view,
                 depth_ops: format.has_depth_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
@@ -4122,6 +4134,19 @@ mod tests {
     /// kept from the first frame on (`kept`) or drawn directly, looking at `center` at `scale`
     /// pixels a unit, read back.
     fn read_frame(rs: &egui_wgpu::RenderState, mesh: MeshData, kept: bool, center: Vec2, scale: f32, cull: Option<Bounds2>) -> Vec<u8> {
+        read_frame_moving(rs, mesh, kept, center, scale, cull, false)
+    }
+
+    /// [`read_frame`] of a view that is `moving` (drawn at the dynamic resolution's scale).
+    fn read_frame_moving(
+        rs: &egui_wgpu::RenderState,
+        mesh: MeshData,
+        kept: bool,
+        center: Vec2,
+        scale: f32,
+        cull: Option<Bounds2>,
+        moving: bool,
+    ) -> Vec<u8> {
         use egui_wgpu::CallbackTrait;
         let (device, queue) = (&rs.device, &rs.queue);
         let (w, h) = (64u32, 64u32);
@@ -4152,7 +4177,7 @@ mod tests {
             dash: 0.0,
             stencil: Stencil::Off,
             cull,
-            moving: false,
+            moving,
         };
         let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -4197,6 +4222,33 @@ mod tests {
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) }).unwrap();
         buffer.slice(..).get_mapped_range().unwrap().to_vec()
+    }
+
+    /// Q6543: the kept-frame counts and the shown scale are the painting thread's own. A window
+    /// on another thread drawing kept frames, one of them moving at half resolution, at the same
+    /// time as this thread leaves this thread's numbers as they were, so a test counting its own
+    /// frames never sees another's (it failed one whole lib run in two when the counts were the
+    /// process's).
+    #[test]
+    fn kept_frame_counts_are_the_painting_threads_own() {
+        let mesh = || build_mesh(&busy_list(5), Vec2::ZERO, Rgb(0, 0, 0), false);
+        let center = Vec2::new(32.0, 32.0);
+        let before = (frame_cache_counts(), shown_scale());
+        let other = std::thread::spawn(move || {
+            let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+            crate::dynres::with(|c| c.configure(true, 30, Some(0.5)));
+            let _ = read_frame(&rs, mesh(), true, center, 1.0, None);
+            let _ = read_frame_moving(&rs, mesh(), true, center, 1.0, None, true);
+            (frame_cache_counts(), shown_scale())
+        })
+        .join()
+        .unwrap();
+        assert_eq!(other, ((2, 0), 0.5), "the other thread counts its two kept frames and its moving scale");
+        assert_eq!((frame_cache_counts(), shown_scale()), before, "and this thread's numbers are unchanged");
+        // This thread's own kept frame is counted here.
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let _ = read_frame(&rs, mesh(), true, center, 1.0, None);
+        assert_eq!(frame_cache_counts(), (before.0.0 + 1, before.0.1));
     }
 
     /// Pixels that differ between two read backs.
