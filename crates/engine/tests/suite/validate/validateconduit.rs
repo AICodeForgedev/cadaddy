@@ -411,6 +411,72 @@ fn routes_that_cross_or_run_alongside_keep_their_clearance_one_over_the_other() 
     assert_eq!(verdicts(&fs, "E-CONDUIT-CONTINUITY").get("pass"), Some(&6), "{:?}", of(&fs, "E-CONDUIT-CONTINUITY"));
 }
 
+/// Moves a stick to run straight from `a` to `b` (inches): its stored ends and a body drawn as
+/// one segment.
+fn lay_stick(s: &mut Session, h: cadaddy_engine::doc::Handle, a: [f64; 3], b: [f64; 3]) {
+    use cadaddy_engine::doc::{EntityKind, Line};
+    use cadaddy_engine::geom::Vec3;
+    let d = s.doc_mut().expect("doc");
+    let _ = d.modify_entity(h, |e| {
+        let mut ps = props::read(&e.common.xdata);
+        ps.set("start", props::Prop::new(format!("{},{},{}", a[0], a[1], a[2]), props::Source::computed()));
+        ps.set("end", props::Prop::new(format!("{},{},{}", b[0], b[1], b[2]), props::Source::computed()));
+        e.common.xdata = props::write(&e.common.xdata, &ps).into();
+        e.kind = EntityKind::Line(Line { a: Vec3::new(a[0], a[1], a[2]), b: Vec3::new(b[0], b[1], b[2]) });
+    });
+}
+
+#[test]
+fn two_runs_crossing_at_one_height_fail_on_both_sticks() {
+    // Q6564: a crossing is one clash with two sides. Two runs that keep clear in the routed
+    // building get one stick each laid through the other's at the same height, away from any
+    // box: each stick fails, both name one clash id, and neither run is passed as clear.
+    let mut s = building(Some(20), |_| {});
+    let (_, fs) = screen(&mut s, &["G-CLASH"]);
+    let clear: Vec<String> =
+        of(&fs, "G-CLASH").into_iter().filter(|f| f["verdict"] == "pass").filter_map(|f| f["measured"]["run"].as_str().map(str::to_string)).collect();
+    let stick_of = |run: &str| {
+        pieces(&s, "conduit")
+            .into_iter()
+            .find(|(_, p)| p.get("run").map(|x| x.text()).as_deref() == Some(run) && p.get("vertical").map(|x| x.text()).as_deref() != Some("true"))
+            .map(|(h, _)| h)
+    };
+    let pair: Vec<(String, cadaddy_engine::doc::Handle)> = clear.iter().filter_map(|run| stick_of(run).map(|h| (run.clone(), h))).take(2).collect();
+    let [(run_a, a), (run_b, b)] = &pair[..] else { panic!("two clear runs with a stick: {clear:?}") };
+    // Mid-room, 9 ft up: one stick east-west, the other north-south, crossing at their middles.
+    let (x, y, z) = (80.0 * 12.0, 20.0 * 12.0, 108.0);
+    lay_stick(&mut s, *a, [x - 24.0, y, z], [x + 24.0, y, z]);
+    lay_stick(&mut s, *b, [x, y - 24.0, z], [x, y + 24.0, z]);
+    let (_, fs) = screen(&mut s, &["G-CLASH"]);
+    let crossing = |h: &cadaddy_engine::doc::Handle| -> Vec<&Value> {
+        of(&fs, "G-CLASH")
+            .into_iter()
+            .filter(|f| f["verdict"] == "fail" && f["handle"] == h.hex() && f["measured"]["b"]["category"] == "conduit")
+            .collect()
+    };
+    let (on_a, on_b) = (crossing(a), crossing(b));
+    assert_eq!((on_a.len(), on_b.len()), (1, 1), "both sticks fail: {:?}", of(&fs, "G-CLASH"));
+    assert_eq!(on_a[0]["measured"]["b"]["handle"], b.hex(), "{}", on_a[0]);
+    assert_eq!(on_b[0]["measured"]["b"]["handle"], a.hex(), "{}", on_b[0]);
+    assert_eq!(on_a[0]["measured"]["run"], run_a.as_str());
+    assert_eq!(on_b[0]["measured"]["run"], run_b.as_str());
+    let id = &on_a[0]["measured"]["clash_id"];
+    assert!(id.as_str().is_some_and(|i| !i.is_empty()) && *id == on_b[0]["measured"]["clash_id"], "one clash id: {} / {}", on_a[0], on_b[0]);
+    assert_ne!(on_a[0]["id"], on_b[0]["id"], "two findings");
+    // Each finding names its own stick among its pieces.
+    for (f, h) in [(on_a[0], a), (on_b[0], b)] {
+        assert!(f["handles"].as_array().is_some_and(|v| v.iter().any(|x| *x == h.hex())), "{f}");
+    }
+    // Neither run reads clear any more.
+    for run in [run_a, run_b] {
+        assert!(
+            !of(&fs, "G-CLASH").iter().any(|f| f["verdict"] == "pass" && f["measured"]["run"] == run.as_str()),
+            "{run} clashes, so it is not clear: {:?}",
+            of(&fs, "G-CLASH")
+        );
+    }
+}
+
 #[test]
 fn a_takeoff_off_by_a_fitting_fails() {
     let mut s = building(Some(20), |_| {});
