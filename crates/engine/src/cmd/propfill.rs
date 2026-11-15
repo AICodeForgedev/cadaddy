@@ -4692,7 +4692,9 @@ impl LuminaireRows {
     fn review_items(&self, sp: &mut BuildingSpec) -> usize {
         let mut added = 0usize;
         for (ty, (fcs, hs)) in &self.conflicts {
-            for c in super::lighting::field_conflicts(ty, fcs, hs) {
+            // An approved substitution is recorded on the element (its design value kept beside
+            // it), never asked (Q6653).
+            for c in super::lighting::field_conflicts(ty, fcs, hs).into_iter().filter(|c| !c.record) {
                 if sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
                     return added;
                 }

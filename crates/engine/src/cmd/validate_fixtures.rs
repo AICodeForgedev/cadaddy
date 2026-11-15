@@ -18,7 +18,9 @@
 //! - **on_plan** (each scheduled type, building scope): some plan or the model shows it.
 //! - **submittal** (each scheduled type): the approved lighting submittal's product for it is the
 //!   schedule's basis of design: the same maker (brands of one maker are one, `lightbrands.json`)
-//!   and the same series (one catalog number with other options is one product).
+//!   and the same series (one catalog number with other options is one product). Another
+//!   product in an approved submittal is a substitution: recorded as a pass, never a failure, so
+//!   no build RFI is expected for it; with its review stamp not read it is unsure (Q6653).
 //! - **submitted** (each submitted type, building scope): the schedule has a row for it.
 //! - **fields** (each scheduled type): the schedule's voltage and VA against the submittal's.
 //! - **quantity** (each scheduled type with a quantity, building scope): the model's count.
@@ -825,7 +827,10 @@ fn read_submittals(s: &mut crate::Session, job: &super::guided::GuidedJob, docs:
         };
         let mut marks = Vec::new();
         for p in r.get("proposals").and_then(Value::as_array).into_iter().flatten().take(2_000) {
-            let Some(mark) = p.get("mark").and_then(Value::as_str).and_then(tag_cell) else { continue };
+            // A cut sheet for a list of types (`A/B`) is each type's product (Q6653).
+            let listed: Vec<String> =
+                super::submittals::type_list(p.get("mark").and_then(Value::as_str).unwrap_or_default()).iter().filter_map(|m| tag_cell(m)).collect();
+            let Some(mark) = listed.first().cloned() else { continue };
             // A word the reader took for a type (`CONTROLS`, a heading) isn't one.
             if mark.len() >= 4 && mark.chars().all(|c| c.is_ascii_alphabetic()) {
                 *docs.unmeasured.entry("a submittal \"type\" that is a word, not a tag (not read as a type)".into()).or_default() += 1;
@@ -856,8 +861,7 @@ fn read_submittals(s: &mut crate::Session, job: &super::guided::GuidedJob, docs:
             let (status, _) = field(keys::REVIEW_STATUS);
             let (voltage, _) = field(keys::VOLTS);
             let (wattage, _) = field(keys::WATTAGE);
-            marks.push(mark.clone());
-            all.entry(mark).or_default().push(SubProduct {
+            let product = SubProduct {
                 maker,
                 catalog,
                 voltage,
@@ -870,7 +874,11 @@ fn read_submittals(s: &mut crate::Session, job: &super::guided::GuidedJob, docs:
                 revision,
                 status,
                 others: Vec::new(),
-            });
+            };
+            for m in listed {
+                marks.push(m.clone());
+                all.entry(m).or_default().push(product.clone());
+            }
         }
         // A product sent back (revise and resubmit, rejected) is no proposal of the reader's; its
         // record keeps the types it covered and the stamp.
@@ -1594,16 +1602,22 @@ fn submittal_outcome(ty: &str, r: &SchedRow, p: &SubProduct, no_subs: Option<&st
         diffs.push(format!("catalog {} is not the schedule's series {}", quote(&p.catalog), quote(&r.model)));
     }
     let subs = no_subs.map(|n| format!("; the schedule's notes say: {n}")).unwrap_or_default();
+    // A product the submittal (not sent back) gives in place of the basis of design is a
+    // substitution its review answered (Q6653): recorded, never a failure or an RFI.
+    // Its review stamp not read: a substitution if it was approved, so unsure, never a failure.
     if !diffs.is_empty() {
+        let approved = p.approved() == Some(true);
         return TypeOutcome {
             check: "submittal",
-            verdict: "fail",
+            verdict: if approved { "pass" } else { "unsure" },
             issue: format!(
-                "type {ty}: the submittal ({}) gives {} against the schedule ({}): {}{subs}",
+                "type {ty}: {}: the submittal ({}) gives {} in place of the schedule's ({}): {}{subs}; {}",
+                if approved { "an approved substitution" } else { "a substitution" },
                 p.cite,
                 p.words(),
                 r.source(),
-                diffs.join("; ")
+                diffs.join("; "),
+                if approved { "recorded, not a conflict" } else { "its review stamp was not read: recorded if approved, not a conflict" }
             ),
             expected,
             found: p.words(),
