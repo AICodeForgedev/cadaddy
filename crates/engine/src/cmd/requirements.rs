@@ -478,7 +478,11 @@ impl ModelFacts {
                     }
                 }
             }
-            // The circuits it carries: its properties, and the build's record of equipment.
+            // The circuits it carries: its properties, and the build's record of equipment. A
+            // breaker carries its own row's circuit: never its load.
+            if el.kind.eq_ignore_ascii_case("breaker") || super::breakers::is_breaker(el.e) {
+                continue;
+            }
             let mut carried: Vec<(String, u32, bool)> = Vec::new();
             if let Some(c) = el.get("circuit").filter(|p| !rules.empty(&p.text())) {
                 let panel = el.text("panel").unwrap_or_default();
