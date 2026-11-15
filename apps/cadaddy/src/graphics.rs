@@ -54,6 +54,14 @@ pub fn attempts(backend_override: Option<Backends>) -> Vec<Attempt> {
 /// Set `options` up for `attempt` (after [`configure`]).
 pub fn apply(options: &mut NativeOptions, attempt: Attempt) {
     let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup else { return };
+    if attempt != Attempt::Software {
+        // CADaddy's own adapter rule (adapterpick.rs): a discrete GPU before an integrated one
+        // unless `CADADDY_GPU` asks otherwise, every adapter found and the choice logged.
+        let preference = cadaddy_ui_egui::adapterpick::Preference::from_env();
+        create.power_preference = preference.power();
+        create.native_adapter_selector =
+            Some(std::sync::Arc::new(move |adapters, surface| cadaddy_ui_egui::adapterpick::pick(adapters, surface, &preference)));
+    }
     match attempt {
         Attempt::Default => {}
         Attempt::Gl => create.instance_descriptor.backends = Backends::GL,
@@ -371,5 +379,18 @@ mod tests {
         let WgpuSetup::CreateNew(create) = &options.wgpu_options.wgpu_setup else { panic!("a new setup") };
         assert!(create.native_adapter_selector.is_some());
         assert!(note(Attempt::Default).is_none() && note(Attempt::Software).is_some());
+    }
+
+    /// The window's own attempts choose the adapter by CADaddy's rule (a discrete GPU before an
+    /// integrated one), not by whatever the library defaults to.
+    #[test]
+    fn the_window_chooses_its_adapter_by_the_apps_rule() {
+        for attempt in [Attempt::Default, Attempt::Gl] {
+            let mut options = NativeOptions::default();
+            configure(&mut options, None, None);
+            apply(&mut options, attempt);
+            let WgpuSetup::CreateNew(create) = &options.wgpu_options.wgpu_setup else { panic!("a new setup") };
+            assert!(create.native_adapter_selector.is_some(), "{attempt:?}");
+        }
     }
 }

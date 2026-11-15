@@ -86,6 +86,7 @@ pub mod xrefs;
 pub mod actionbars;
 pub mod actionsdlg;
 pub mod activitypalette;
+pub mod adapterpick;
 pub mod agentdlg;
 pub mod agentpalette;
 pub mod authorpalette;
