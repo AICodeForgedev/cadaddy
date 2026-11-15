@@ -2142,9 +2142,13 @@ pub struct PanelCircuit {
     pub wire: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_va: Option<f64>,
-    /// What the drawings print where a submittal corrected `load_va`.
+    /// What the drawings print where a submittal or a cross-check corrected `load_va`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_load_va: Option<f64>,
+    /// The values a cross-check corrected for the field (`load_va`: a feeder row that isn't the
+    /// fed panel's total), each beside the design value with the reason and the rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
@@ -2326,6 +2330,11 @@ pub struct LoadSummaryLine {
     /// The line's texts after its label, as printed (`3,000 x 125% = 3,750`).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// The values a cross-check corrected for the field (`count`: a per-unit item counted for
+    /// more or fewer units than the plans give it to), each beside the printed value with the
+    /// reason and the rule (the printed values stay as read).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<RunCorrection>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
@@ -2629,6 +2638,55 @@ pub struct MepRun {
     /// points carry its own point. Empty: carried by the base points.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub storey_points: BTreeMap<String, [f64; 2]>,
+}
+
+impl MepRun {
+    /// Whether its path, heights and size have the shape [`BuildingSpec::check`] asks of a run:
+    /// 2 points or more with one bottom height per segment (or 1 point and 1 bottom under its
+    /// `top_ft` for a vertical riser), every number finite, a size over 0.
+    pub fn shape_ok(&self) -> bool {
+        let vertical = self.top_ft.is_some();
+        let min_pts = if vertical { 1 } else { 2 };
+        let btm_ok = if vertical { self.bottoms_ft.len() == 1 && self.points.len() == 1 } else { self.bottoms_ft.len() + 1 == self.points.len() };
+        self.points.len() >= min_pts
+            && btm_ok
+            && self.points.iter().flatten().chain(self.bottoms_ft.iter()).chain(self.size_in.iter()).all(|v| v.is_finite())
+            && self.size_in[0] > 0.0
+            && self.top_ft.is_none_or(|t| t.is_finite() && t > self.bottoms_ft.first().copied().unwrap_or(0.0))
+    }
+
+    /// Mends the heights where they can be mended without guessing: one per point becomes one
+    /// per segment (each segment keeps its first point's height), extra ones go from the end,
+    /// missing ones repeat the last. A riser keeps its first point and first height. A segment
+    /// of no length is left as it is: it is a vertical leg between the heights around it. What
+    /// it changed, in words (empty: nothing).
+    pub fn mend_shape(&mut self) -> Vec<String> {
+        let mut did = Vec::new();
+        if self.top_ft.is_some() {
+            if self.points.len() > 1 {
+                self.points.truncate(1);
+                did.push("a riser's extra plan points dropped".to_string());
+            }
+            if self.bottoms_ft.len() > 1 {
+                self.bottoms_ft.truncate(1);
+                did.push("a riser's extra heights dropped".to_string());
+            }
+            return did;
+        }
+        let segs = self.points.len().saturating_sub(1);
+        if segs == 0 || self.bottoms_ft.len() == segs {
+            return did;
+        }
+        if self.bottoms_ft.len() == self.points.len() {
+            self.bottoms_ft.pop();
+            did.push("one height per point made one per segment".to_string());
+        } else if let Some(last) = self.bottoms_ft.last().copied() {
+            let had = self.bottoms_ft.len();
+            self.bottoms_ft.resize(segs, last);
+            did.push(format!("{had} height(s) for {segs} segment(s) made one per segment"));
+        }
+        did
+    }
 }
 
 /// One value of a run the build corrected for the field: the property (`route`), the design
@@ -3815,16 +3873,7 @@ impl BuildingSpec {
             if self.level(&r.level).is_none() {
                 out.push(Issue::error(format!("{at}.level"), format!("there is no level named {}", r.level)));
             }
-            let vertical = r.top_ft.is_some();
-            let min_pts = if vertical { 1 } else { 2 };
-            let btm_ok = if vertical { r.bottoms_ft.len() == 1 && r.points.len() == 1 } else { r.bottoms_ft.len() + 1 == r.points.len() };
-            if r.points.len() < min_pts
-                || !btm_ok
-                || !r.points.iter().flatten().chain(r.bottoms_ft.iter()).chain(r.size_in.iter()).all(|v| fin(*v))
-                || r.size_in[0].is_nan()
-                || r.size_in[0] <= 0.0
-                || r.top_ft.is_some_and(|t| !fin(t) || t <= r.bottoms_ft.first().copied().unwrap_or(0.0))
-            {
+            if !r.shape_ok() {
                 out.push(Issue::error(
                     at,
                     "a run needs 2 points or more (or 1 point with top_ft for a vertical riser), a size, and one bottom height per segment",

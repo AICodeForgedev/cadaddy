@@ -1844,11 +1844,71 @@ fn map_value_doc<'a>(notes: &[&'a str]) -> Option<&'a str> {
     found
 }
 
-/// An entry `name` of map parameter `k` whose value isn't what the map's doc `entry` says (a list
-/// or an object where it shows a single value, text where it shows a number…).
-fn wrong_map_entry(k: &str, name: &str, v: &Value, entry: &str) -> Option<String> {
+/// What a map parameter's notes say one named key takes, from the note in brackets right after
+/// the key's name (`{key: value} (any of: systems_palette ([{key, rgb}]), fire_main_min_in
+/// (number), …)`): `[…]` a list, `{…}` an object, `number`, `count` or a number (a default)
+/// a number. `None` when the notes don't
+/// name the key, or its note is words (`kind (category devices, …)`): the map's entry doc
+/// stands.
+fn named_entry_kind(notes: &[&str], name: &str) -> Option<EntryKind> {
+    if name.is_empty() {
+        return None;
+    }
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    for note in notes {
+        let mut at = 0;
+        while let Some(found) = note.get(at..).and_then(|r| r.find(name)) {
+            let start = at + found;
+            let end = start + name.len();
+            at = end;
+            let before = note.get(..start).and_then(|b| b.chars().next_back());
+            let after = note.get(end..).and_then(|r| r.chars().next());
+            if before.is_some_and(is_word) || after.is_some_and(is_word) {
+                continue;
+            }
+            let close = skip_group(note, end, b'(', b')', false);
+            if close <= end {
+                continue;
+            }
+            let inner = note.get(end..close).unwrap_or("").trim().trim_start_matches('(').trim_end_matches(')').trim();
+            let kind = match inner.chars().next() {
+                Some('[') => Some(EntryKind::List),
+                Some('{') => Some(EntryKind::Object),
+                _ if annotation_kind(inner) == Some(ParamKind::Number) => Some(EntryKind::Number),
+                _ if inner.split_whitespace().next().is_some_and(|w| w.parse::<f64>().is_ok_and(f64::is_finite)) => Some(EntryKind::Number),
+                _ => None,
+            };
+            if kind.is_some() {
+                return kind;
+            }
+        }
+    }
+    None
+}
+
+/// The shape a named key of a map takes ([`named_entry_kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryKind {
+    List,
+    Object,
+    Number,
+}
+
+/// An entry `name` of map parameter `k` whose value isn't what the key's own note says
+/// ([`named_entry_kind`]) or, when it has none, what the map's doc `entry` says (a list or an
+/// object where it shows a single value, text where it shows a number…).
+fn wrong_map_entry(k: &str, name: &str, v: &Value, entry: &str, notes: &[&str]) -> Option<String> {
     if v.is_null() {
         return None;
+    }
+    if let Some(kind) = named_entry_kind(notes, name) {
+        let want = match kind {
+            EntryKind::List if !v.is_array() => "a list",
+            EntryKind::Object if !v.is_object() => "an object",
+            EntryKind::Number if !v.is_number() => "a number",
+            _ => return None,
+        };
+        return Some(format!("`{k}` entry `{name}` must be {want}"));
     }
     let plain = without_notes(entry);
     let want = match annotation_kind(entry) {
@@ -1910,7 +1970,7 @@ fn refuse_wrong_typed_params(spec: &CommandSpec, params: &Value) -> Result<()> {
                 }
                 // A map (`set?: {alias: command}`): any key, each value as the doc says.
                 if let Some(entry) = map_value_doc(&notes) {
-                    if let Some(msg) = o.iter().find_map(|(name, v)| wrong_map_entry(k, name, v, entry)) {
+                    if let Some(msg) = o.iter().find_map(|(name, v)| wrong_map_entry(k, name, v, entry, &notes)) {
                         return Err(EngineError::BadParams { cmd: spec.id.into(), msg });
                     }
                 } else if let Some(fields) = value_fields(&notes)

@@ -34,6 +34,17 @@
   "summary_titles": ["LOAD SUMMARY", "LOAD CALCULATION", "DEMAND CALCULATION", "SERVICE CALCULATION", "SERVICE LOAD", "LOAD CALC"],
   "feeder_summary_words": ["FEEDER", "FEEDERS"],
   "service_size_words": ["SERVICE SIZE", "SERVICE RATING", "SERVICE AMPS"],
+  "arithmetic": {
+    "about": "The panel and load-calculation tables' own arithmetic (Q6649, rfi.read and bim.loadcalc): a feeder row carries the load of the panel it feeds, a demand calculation's per-unit line counts as many units as its total over its VA and as the plans show the item on that feeder.",
+    "feeder_row_totals": ["connected_va", "demand_va"],
+    "feeder_row_cite": "NEC 215.2(A)(1), 220.40: a feeder's load is the loads it supplies; its row in the source panel's schedule carries the fed panel's own total (connected or demand, times the units it feeds), within the tolerance",
+    "per_unit_words": ["SUITE", "SUITES", "UNIT", "UNITS", "ROOM", "ROOMS", "APARTMENT", "APARTMENTS", "DWELLING", "DWELLINGS", "EACH", "EA"],
+    "item_stop_words": ["RECEPTACLE", "RECEPTACLES", "RCPT", "RCPTS", "RECEPT", "OUTLET", "OUTLETS", "CONNECTION", "CONNECTIONS", "CIRCUIT", "CIRCUITS", "LOAD", "LOADS", "FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "GROUND", "LOWER", "UPPER", "TOP", "FLOOR", "FLOORS", "LEVEL", "LEVELS", "ONLY", "PER", "VA", "KVA", "KW", "AND", "THE", "OF", "FOR", "WITH", "AT", "TO"],
+    "count_tolerance_pct": 0.25,
+    "count_cite": "NEC 220.84(C), 220.53: a multifamily or guest-suite demand calculation adds each unit's loads; an item only some units have is counted once for each unit on that feeder the plans give it to",
+    "line_cite": "a calculation line's count times its VA a unit is its total (the printed total within its rounding)",
+    "feeder_system": "E-FEEDER"
+  },
   "occupancies": [
     {
       "id": "hotel",
