@@ -2650,7 +2650,15 @@ pub(crate) fn build_named(d: &mut Drawing, sp: &BuildingSpec, names: &[String]) 
                 circuits: m.circuits.clone(),
                 panel: m.panel.clone(),
                 run: run_id.clone(),
-                feeder: if m.feeder.is_some() { key.circuit_tag.clone() } else { String::new() },
+                // The leg its first run is of (also one that matches no schedule row: a route
+                // laid against the feed data still says which leg it is).
+                feeder: c
+                    .runs
+                    .first()
+                    .and_then(|i| sp.mep.runs.get(*i))
+                    .filter(|r| super::super::ugplan::is_feeder_run(r) && r.source_sheet.starts_with("feeder "))
+                    .map(|r| r.source_sheet.clone())
+                    .unwrap_or_default(),
                 estimated: m.estimated,
                 source,
                 body: None,
