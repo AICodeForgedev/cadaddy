@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|window_not_in_wall|window_inside_building (a built window in no wall, or in a wall inside the building, not an outside wall)|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building|roof_off_walls (a roof standing over its walls on nothing, or off their outline), limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height), view?: systems|architectural|mep|floor|room (draw this BIM view without changing the drawing's)} → {path?|png, width, height, triangles, fidelity?, view?, drawn?, switches?, legend?: [{key, label, group, color, count}]}: the whole building (or a `view`) exactly as the 3D BIM view draws it (bim.view and bim.look)")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of its storey: what stands between its floor and the floor above, from every level, runs cut at the floor above), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height), view?: systems|architectural|mep|floor|room (draw this BIM view without changing the drawing's), section?: {min: [x,y,z], max: [x,y,z]} | bool (only the model inside this box, drawing units; default the coordination section box while it is on, false: none)} → {path?|png, width, height, triangles, fidelity?, storey?: {level, floor_ft, top_ft} (a level's or room's: the floor above it is cut at, null at the top), view?, drawn?, switches?, legend?: [{key, label, group, color, count}]}: the whole building (or a `view`) exactly as the 3D BIM view draws it (bim.view and bim.look)")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -1370,6 +1370,15 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|b| only.as_ref().is_none_or(|l| b.level.eq_ignore_ascii_case(l) && b.part != "ceiling" && b.part != "ground" && !over(b)))
         .map(|b| b.handle)
         .collect();
+    // A level's (or a room's level's) view is its storey (Q6660): its runs cut at the floor
+    // above, and the pieces of other levels' runs standing in it drawn (cut to it), whether the
+    // build cut its risers at each floor or kept them whole.
+    let storey = only.as_ref().and_then(|l| super::storey::Storey::of(d, l));
+    let carried_ok = |e: &Entity| {
+        storey.is_some()
+            && only.as_ref().is_some_and(|l| made_level(e).is_some_and(|m| !m.eq_ignore_ascii_case(l)))
+            && made_as(e).is_some_and(|part| part != "ceiling" && part != "ground")
+    };
     // The whole building: its storeys stacked, framed on what it stands as (walls, floors,
     // columns, roofs); a reader's stray object off the building (model.issues lists it as
     // outside_building) never shrinks the building to a speck in the corner of the view.
@@ -1398,8 +1407,9 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
         let all = whole;
-        let (mut md, what) = super::bimlook::display_summary(d, &look, whole, &|e, _| all || keep.contains(&e.handle))
-            .ok_or_else(|| bad("model.render", "nothing has been built yet (run model.build)"))?;
+        let (mut md, what) =
+            super::bimlook::display_summary_in(d, &look, whole, &|e, _| all || keep.contains(&e.handle) || carried_ok(e), storey.as_ref())
+                .ok_or_else(|| bad("model.render", "nothing has been built yet (run model.build)"))?;
         // The model as built: a view's object isolation (a clash shown alone) hides none of it.
         md.hidden_objects.clear();
         let view = super::bimviews::active_in(d, &look);
@@ -1419,7 +1429,7 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         // The whole building stacks its storeys; a level, a room, a plan box, a mark or a camera
         // are on the sheet's (and the built model's) own coordinates.
         let keep: std::collections::HashSet<Handle> = keep.iter().copied().collect();
-        let mut md = super::bimlook::compose(d, &look, ghost, whole, &|e, _| keep.contains(&e.handle));
+        let mut md = super::bimlook::compose_in(d, &look, ghost, whole, storey.as_ref(), &|e, _| keep.contains(&e.handle) || carried_ok(e));
         // The model as built: a view's object isolation (a clash shown alone) hides none of it.
         md.hidden_objects.clear();
         md
@@ -1427,10 +1437,26 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         let mut md = Drawing::new_imperial();
         md.layers = d.layers.clone();
         let offsets = if whole { super::bimlook::stack_offsets(d) } else { Vec::new() };
-        for h in &keep {
+        // The storey's other levels' objects after its own.
+        let from_others: Vec<Handle> = match &storey {
+            Some(st) => {
+                made.iter().filter(|b| d.model.get(b.handle).is_some_and(|e| carried_ok(e) && st.stands_in(e, &b.level))).map(|b| b.handle).collect()
+            }
+            None => Vec::new(),
+        };
+        for h in keep.iter().chain(from_others.iter()) {
             if let Some(e) = d.model.get(*h) {
-                let mut c = (**e).clone();
                 let level = made_level(e).unwrap_or_default();
+                let mut c = match &storey {
+                    Some(st) => {
+                        let from = (!only.as_ref().is_some_and(|l| l.eq_ignore_ascii_case(&level))).then_some(level.as_str());
+                        match st.place(e, from, true) {
+                            super::storey::Cut::Gone => continue,
+                            super::storey::Cut::Kept(c) => c.into_owned(),
+                        }
+                    }
+                    None => (**e).clone(),
+                };
                 if let Some(o) = super::bimlook::stack_move(offsets.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)).map(|o| o.1), e) {
                     c.kind.transform(&cadaddy_geom::Mat3::translate(o));
                 }
@@ -1542,6 +1568,16 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
             (Vec3::new(0.0, -1.0, 0.0), -y0.max(y1)),
         ]);
     }
+    if let Some((lo, hi)) = section_box(d, p)? {
+        keep_in.extend([
+            (Vec3::new(1.0, 0.0, 0.0), lo.x),
+            (Vec3::new(-1.0, 0.0, 0.0), -hi.x),
+            (Vec3::new(0.0, 1.0, 0.0), lo.y),
+            (Vec3::new(0.0, -1.0, 0.0), -hi.y),
+            (Vec3::new(0.0, 0.0, 1.0), lo.z),
+            (Vec3::new(0.0, 0.0, -1.0), -hi.z),
+        ]);
+    }
     let proj = Projection::new(dir);
     // Compute the view from the frame (if framing) or the model's bounds, not from the full
     // triangle list — this lets us pick LODs and cull before flattening the scene.
@@ -1646,6 +1682,10 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     if outliers > 0 {
         out["outliers"] = json!(outliers);
     }
+    // The storey drawn (Q6660): its floor and the floor above it is cut at (none: the top).
+    if let Some(st) = &storey {
+        out["storey"] = json!({"level": st.level, "floor_ft": st.lo / upf, "top_ft": st.hi.map(|h| h / upf)});
+    }
     // What view it drew: the elements, the switches, the palette (the Systems view's legend).
     if let Some((look, v, t)) = &drew {
         out["view"] = json!(v.name());
@@ -1659,6 +1699,33 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     }
     deliver(png, p, &mut out)?;
     Ok(out)
+}
+
+/// The section box a render keeps to (Q6660): `section: {min: [x, y, z], max: [x, y, z]}`
+/// (drawing units, as the render places the model), else the saved coordination section box
+/// (`coordination.sectionbox`) while it is on; `section: false` draws without one.
+fn section_box(d: &Drawing, p: &Value) -> Result<Option<(Vec3, Vec3)>> {
+    let corner = |v: &Value, key: &str| -> Option<Vec3> {
+        let a: Vec<f64> = v.get(key)?.as_array()?.iter().filter_map(Value::as_f64).collect();
+        match a[..] {
+            [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => Some(Vec3::new(x, y, z)),
+            _ => None,
+        }
+    };
+    let both = |v: &Value| {
+        corner(v, "min")
+            .zip(corner(v, "max"))
+            .map(|(a, b)| (Vec3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z)), Vec3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z))))
+    };
+    match p.get("section") {
+        Some(Value::Bool(false)) => Ok(None),
+        None | Some(Value::Null) | Some(Value::Bool(true)) => {
+            let saved = crate::specread::get(d, "coord_sectionbox");
+            Ok(if saved.get("on").and_then(Value::as_bool) == Some(true) { both(&saved) } else { None })
+        }
+        Some(v) if v.is_object() => both(v).map(Some).ok_or_else(|| bad("model.render", "`section` must be {min: [x, y, z], max: [x, y, z]}")),
+        Some(_) => Err(bad("model.render", "`section` must be {min: [x, y, z], max: [x, y, z]} or true/false")),
+    }
 }
 
 /// The part of a triangle in all the half-spaces (a convex polygon; clipped plane by plane).
