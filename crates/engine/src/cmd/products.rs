@@ -123,6 +123,7 @@ fn features_in(t: &str) -> Vec<String> {
         ("USB", "USB"),
         ("DUAL TECHNOLOGY", "dual technology"),
         ("PASSIVE INFRARED", "passive infrared"),
+        ("DIMMER", "dimmer"),
     ] {
         if u.contains(key) && !out.iter().any(|o: &String| o == name) {
             out.push(name.to_string());
@@ -163,6 +164,8 @@ pub(crate) fn kind_of_product(name: &str) -> Option<&'static str> {
         "receptacle"
     } else if has("SENSOR") || has("OCCUPANCY") {
         "occupancy_sensor"
+    } else if has("DIMMER") {
+        "dimmer"
     } else if has("SWITCH") && !has("ENCLOSED") && !has("DISCONNECT") && !has("TRANSFER") {
         "switch"
     } else if has("WALL PLATE") || has("COVER PLATE") {
@@ -847,9 +850,52 @@ fn spec_files_by(paths: &[String], only: &[String], divisions: &[&str]) -> Vec<S
     out
 }
 
+/// A switch's configuration and whether it dims, two fields apart (a 3-way dimmer is both): its
+/// ways from the number among its mark's designations, whatever their order (`S3`, `S3D`, `SM3`,
+/// `3W`, `S4`; `S2` two pole; `S1` single pole), else from its kind (`3way_switch`) and its mates
+/// on the plans as its switch loop counts them (one for a 3-way, two for a 4-way), else single
+/// pole; a dimmer by a `D` among its designations (`SD`, `S3D`, `SD3:a`), its kind or its name.
+/// Whether its mark gave its ways is the third.
+fn switch_config(mark: &str, kind: &str, name: &str, mates: usize) -> (&'static str, bool, bool) {
+    let head: String = mark.split(':').next().unwrap_or_default().chars().filter(char::is_ascii_alphanumeric).collect();
+    let head = head.to_ascii_uppercase();
+    // Its designations: the mark less the switch's own `S` (all ASCII: byte offsets are chars).
+    let rest = head.strip_prefix('S').unwrap_or(&head);
+    let at = rest.find(|c: char| c.is_ascii_digit()).unwrap_or(rest.len());
+    let ways: String = rest.get(at..).unwrap_or_default().chars().take_while(char::is_ascii_digit).collect();
+    let after = rest.get(at + ways.len()..).unwrap_or_default();
+    let after = if ways.is_empty() { after } else { after.strip_prefix("WAY").or_else(|| after.strip_prefix('W')).unwrap_or(after) };
+    let letters = format!("{}{after}", rest.get(..at).unwrap_or_default());
+    let config = match ways.as_str() {
+        "1" => "single pole",
+        "2" => "two pole",
+        "3" => "three way",
+        "4" => "four way",
+        _ => match super::conduitroute::gap::switch_ways(kind, mates) {
+            0 => "single pole",
+            1 => "three way",
+            _ => "four way",
+        },
+    };
+    let dimmer = letters.contains('D') || kind.to_ascii_lowercase().contains("dimmer") || name.to_ascii_uppercase().contains("DIMMER");
+    (config, dimmer, matches!(ways.as_str(), "1" | "2" | "3" | "4"))
+}
+
+/// What an element's product is ([`product_kind`]).
+struct ProductKind {
+    kind: String,
+    /// A switch's ways (`three way`), a receptacle's tamper resistance.
+    config: Option<String>,
+    /// A switch that dims (apart from its ways: a 3-way dimmer is both).
+    dimmer: bool,
+    /// The property its configuration was read from (a switch's mark, its mates on the plans).
+    config_from: Option<&'static str>,
+}
+
 /// An element's kind for its product: its own (a device's as read), refined by its mark (a GFCI
-/// receptacle, a three-way switch, an occupancy sensor switch), its name (a plumbing fixture's).
-fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String, Option<String>)> {
+/// receptacle, a three-way switch, an occupancy sensor switch), its name (a plumbing fixture's);
+/// its configuration (a switch's ways, a receptacle's tamper resistance) and whether it dims.
+fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<ProductKind> {
     let base = super::elemprops::element_kind(e)?;
     let kind = super::elemprops::reported_kind(e, base.clone());
     let text = |k: &str| store.get(k).filter(|p| p.has_value()).map(|p| p.text().to_ascii_uppercase()).unwrap_or_default();
@@ -862,7 +908,19 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
     // The code rules' decisions (bim.coderules): GFCI by circuit, tamper-resistant in guest rooms.
     let decided = text("receptacle_type");
     let tr = (text("tamper_resistant") == "YES").then(|| TAMPER_RESISTANT.to_string());
-    Some(match k {
+    if matches!(k, "switch" | "3way_switch" | "dimmer") {
+        if matches!(mark.split(':').next().map(str::trim), Some("OS" | "OS1" | "OS2" | "VS")) {
+            return Some(ProductKind { kind: "occupancy_sensor".into(), config: None, dimmer: false, config_from: None });
+        }
+        let mates = text("three_way_with").split(',').filter(|h| !h.trim().is_empty()).count();
+        let (config, dimmer, by_mark) = switch_config(&mark, k, &name, mates);
+        let config_from =
+            if by_mark { Some(if text("type_mark").is_empty() { "type" } else { "type_mark" }) } else { (mates > 0).then_some("three_way_with") };
+        // A dimmer's product is a dimmer (else its ways' switch: see `run`).
+        let kind = if dimmer { "dimmer" } else { "switch" };
+        return Some(ProductKind { kind: kind.into(), config: Some(config.to_string()), dimmer, config_from });
+    }
+    let (kind, config) = match k {
         // A piece of equipment's receptacle its keynote gives (`receptacle_for`: `30A/2P
         // RECEPTACLE FOR <unit>`): the note's product, not the convenience receptacles' section.
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if !text("receptacle_for").is_empty() => {
@@ -874,17 +932,6 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
             ("gfci_receptacle".into(), tr)
         }
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" => (k.to_string(), tr),
-        "switch" | "3way_switch" => {
-            let config = match mark.as_str() {
-                "S3" | "3W" => Some("three way"),
-                "S2" => Some("two pole"),
-                "S4" => Some("four way"),
-                "OS" | "OS1" | "OS2" | "VS" => return Some(("occupancy_sensor".into(), None)),
-                _ if k == "3way_switch" => Some("three way"),
-                _ => Some("single pole"),
-            };
-            ("switch".into(), config.map(str::to_string))
-        }
         "plumbing_fixture" | "fixture" => {
             // Its plumbing kind (the plumbing records' `product_kind`, else its schedule names'
             // words), before the general names (a pump's float switch is no switch).
@@ -904,7 +951,8 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
         },
         "light_fixture" | "luminaire" | "wall_luminaire" => ("luminaire".into(), None),
         _ => (k.to_string(), None),
-    })
+    };
+    Some(ProductKind { kind, config, dimmer: false, config_from: None })
 }
 
 /// The requirement for an element of `kind` (and `config`, a switch's): the one of its kind and
@@ -1067,8 +1115,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let mut store = props::read(&e.common.xdata);
         let before = store.clone();
-        let Some((kind, config)) = product_kind(e, &store) else { continue };
-        let req = requirement_for(&reqs, &kind, config.as_deref());
+        let Some(ProductKind { kind, config, dimmer, config_from }) = product_kind(e, &store) else { continue };
+        // A dimmer with no dimmer in the sections: the switch of its ways (its dimming kept apart).
+        let req = requirement_for(&reqs, &kind, config.as_deref())
+            .or_else(|| if dimmer { requirement_for(&reqs, "switch", config.as_deref()) } else { None });
         let maker = store.get("manufacturer").filter(|p| p.has_value()).map(|p| (p.text(), p.source.clone()));
         let catalog = store.get("catalog_number").filter(|p| p.has_value()).map(|p| p.text());
         let submittal = store.get("submittal").filter(|p| p.has_value()).map(|p| p.text());
@@ -1097,6 +1147,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if tr && !features.iter().any(|f| f == "TR") {
             features.push("TR".into());
         }
+        if dimmer && !features.iter().any(|f| f.eq_ignore_ascii_case("dimmer")) {
+            features.push("dimmer".into());
+        }
         // What its keynote asks of it besides (`USB`, `USB-C`): the product must have it too.
         let keyed: Vec<String> = store
             .get("keynote_features")
@@ -1114,16 +1167,25 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "maker": resolved_maker, "catalog": catalog,
             "color": req.and_then(|r| r.color.clone()), "configuration": config.clone().or_else(|| req.and_then(|r| r.config.clone())),
             "rating": req.and_then(|r| r.rating.clone()), "features": features,
+            "dimmer": matches!(kind.as_str(), "switch" | "dimmer").then_some(dimmer),
         });
         // The record's source: the section that speaks for its kind, else the submittal its maker
         // comes from.
         let src = req.map(spec_src).or_else(|| maker.as_ref().map(|m| m.1.clone())).unwrap_or_else(Source::computed);
+        // Its own configuration's source (a switch's ways: its mark, else its mates on the plans).
+        let own_src = config_from.and_then(|k| store.get(k)).map_or_else(Source::computed, |p| p.source.clone());
+        let mark_src =
+            ["type_mark", "type"].iter().find_map(|k| store.get(k).filter(|p| p.has_value())).map_or_else(Source::computed, |p| p.source.clone());
         let mut set = |key: &str, value: Value, source: Source| {
             let keep = store.get(key).is_some_and(|old| old.source.kind == SourceKind::User);
             if !keep && !value.is_null() {
                 store.set(key, Prop::new(value, source));
             }
         };
+        // Its dimming beside its ways, both kept (a 3-way dimmer is both).
+        if dimmer {
+            set("dimmer", json!("yes"), mark_src);
+        }
         // The record whole (as JSON text: a property holds a string, number or boolean).
         set("product", json!(json!({"required": required, "approved": approved, "resolved": resolved}).to_string()), src.clone());
         if let Some(r) = req {
@@ -1133,8 +1195,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(c) = &r.color {
                 set("color", json!(c), spec_src(r));
             }
-            if let Some(c) = config.clone().or_else(|| r.config.clone()) {
-                set("configuration", json!(c), spec_src(r));
+            match &config {
+                Some(c) => set("configuration", json!(c), own_src.clone()),
+                None => {
+                    if let Some(c) = &r.config {
+                        set("configuration", json!(c), spec_src(r));
+                    }
+                }
             }
             if let Some(v) = &r.rating {
                 set("rating", json!(v), spec_src(r));
@@ -1510,5 +1577,135 @@ PART 1 - GENERAL
         let files = spec_files(&[r.join("Specs").to_string_lossy().to_string()], &[]);
         assert_eq!(files.len(), 1, "{files:?}");
         assert!(files[0].ends_with("26 27 26 - Wiring Devices.txt"));
+    }
+
+    /// A switch device on Level 1 at `x` (inches): its kind, its mark as the plan reads it and
+    /// its mates on the plans (`three_way_with`).
+    fn switch_el(s: &mut Session, kind: &str, mark: &str, mates: &str, x: f64) -> Handle {
+        use cadaddy_doc::{Common, EntityKind, Space};
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(x, 0.0), cadaddy_geom::Vec2::new(x + 4.0, 0.0), 2.0, 44.0, 48.0);
+        let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 1", Handle(0));
+        let mut store = props::Props::default();
+        store.set("kind", Prop::new(kind, Source::print("E-101", None)));
+        if !mark.is_empty() {
+            store.set("type_mark", Prop::new(mark, Source::print("E-101", None)));
+        }
+        if !mates.is_empty() {
+            store.set("three_way_with", Prop::new(mates, Source::print("switch leg letters on the plans", None)));
+        }
+        let xdata = props::write(&tags, &store);
+        let d = s.doc_mut().expect("doc");
+        d.add(&Space::Model, Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).expect("add")
+    }
+
+    fn prop_of(s: &Session, h: Handle, key: &str) -> Option<Prop> {
+        s.doc().ok().and_then(|d| d.model.get(h)).and_then(|e| props::read(&e.common.xdata).get(key).cloned())
+    }
+
+    fn record_of(s: &Session, h: Handle) -> Value {
+        serde_json::from_str(&prop_of(s, h, "product").map(|p| p.text()).unwrap_or_default()).unwrap_or(Value::Null)
+    }
+
+    fn products_from(s: &mut Session, tag: &str, section: &str) -> Value {
+        let dir = std::env::temp_dir().join(format!("cadaddy-products-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("26 27 26 - Wiring Devices.txt");
+        std::fs::write(&f, section).unwrap();
+        let v = s.execute(CMD, &json!({"specs": [f.to_string_lossy()], "plumbing": false})).expect("bim.products");
+        let _ = std::fs::remove_dir_all(&dir);
+        v
+    }
+
+    /// Q6558: a switch's ways (its mark's 3 or 4, else its kind, else its mates on the plans)
+    /// set its configuration and product; its dimming is a field of its own beside them, so a
+    /// 3-way dimmer is a three-way product that dims, never a single-pole one.
+    #[test]
+    fn a_switchs_ways_and_its_dimming_are_both_kept() {
+        let mut s = Session::new();
+        let s3d = switch_el(&mut s, "switch", "S3D", "1A2", 0.0);
+        let unit = switch_el(&mut s, "switch", "S3D:a", "", 20.0);
+        let mated = switch_el(&mut s, "switch", "S", "1A3", 40.0);
+        let plain = switch_el(&mut s, "switch", "S", "", 60.0);
+        let sd = switch_el(&mut s, "switch", "SD", "", 80.0);
+        let s4 = switch_el(&mut s, "switch", "S4", "", 100.0);
+        let dim3 = switch_el(&mut s, "dimmer", "S3", "", 120.0);
+        let worded = switch_el(&mut s, "switch", "3-WAY DIMMER", "", 140.0);
+        products_from(&mut s, "ways", WIRING_DEVICES);
+        let config = |h: Handle| prop_of(&s, h, "configuration").map(|p| p.text()).unwrap_or_default();
+        let dims = |h: Handle| prop_of(&s, h, "dimmer").map(|p| p.text());
+        for (h, want, dimmer) in [
+            (s3d, "three way", true),
+            (unit, "three way", true),
+            (mated, "three way", false),
+            (plain, "single pole", false),
+            (sd, "single pole", true),
+            (s4, "four way", false),
+            (dim3, "three way", true),
+            (worded, "three way", true),
+        ] {
+            let rec = record_of(&s, h);
+            assert_eq!(config(h), want, "{}: {rec:#}", h.hex());
+            assert_eq!(rec["resolved"]["configuration"], want, "{rec:#}");
+            assert_eq!(dims(h).as_deref(), dimmer.then_some("yes"), "{}: {rec:#}", h.hex());
+            assert_eq!(rec["resolved"]["dimmer"], dimmer, "{rec:#}");
+            let featured = rec["resolved"]["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "dimmer"));
+            assert_eq!(featured, dimmer, "{rec:#}");
+        }
+        // The section's product of its ways: the three-way switch's makers, not the single pole's.
+        let rec = record_of(&s, s3d);
+        assert!(rec["required"]["product"].as_str().is_some_and(|p| p.ends_with("Three Way")), "{rec:#}");
+        assert_eq!(rec["required"]["makers"], json!(["Bryant", "Leviton Manufacturing Co., Inc"]), "{rec:#}");
+        // Each field says where it came from: the ways from the mark, else from the mates.
+        assert_eq!(prop_of(&s, s3d, "configuration").map(|p| p.source.kind), Some(SourceKind::Print));
+        assert_eq!(prop_of(&s, mated, "configuration").map(|p| p.source.doc).unwrap_or_default().as_deref(), Some("switch leg letters on the plans"));
+        assert_eq!(prop_of(&s, plain, "configuration").map(|p| p.source.kind), Some(SourceKind::Computed));
+    }
+
+    /// A section with a dimmer article: a dimmer (of any ways) takes it, a plain switch never.
+    #[test]
+    fn a_dimmer_takes_the_sections_dimmer_and_a_switch_its_toggle() {
+        let mut s = Session::new();
+        let s3d = switch_el(&mut s, "switch", "S3D", "", 0.0);
+        let s3 = switch_el(&mut s, "switch", "S3", "", 20.0);
+        let section = format!(
+            "{WIRING_DEVICES}\n--- page 9 of 9 ---\nSECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.9 WALL-BOX DIMMERS\n\
+             A. Dimmer Switches, 120 V, 20 A:\n1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n\
+             a. Maker Seven.\nb. Maker Nine.\nPART 3 - EXECUTION\n"
+        );
+        let v = products_from(&mut s, "dimarticle", &section);
+        assert!(v["kinds_specified"].as_array().is_some_and(|k| k.iter().any(|x| x == "dimmer")), "{v:#}");
+        let rec = record_of(&s, s3d);
+        assert!(rec["required"]["product"].as_str().is_some_and(|p| p.to_ascii_uppercase().contains("DIMMER")), "{rec:#}");
+        assert_eq!(rec["resolved"]["configuration"], "three way", "{rec:#}");
+        let rec = record_of(&s, s3);
+        assert!(rec["required"]["product"].as_str().is_some_and(|p| p.ends_with("Three Way")), "{rec:#}");
+        assert_eq!(rec["resolved"]["dimmer"], false, "{rec:#}");
+    }
+
+    #[test]
+    fn a_switchs_mark_gives_its_ways_and_dimming() {
+        for (mark, kind, mates, want) in [
+            ("S3D", "switch", 0, ("three way", true, true)),
+            ("S3-D", "switch", 0, ("three way", true, true)),
+            ("S3D:A", "switch", 0, ("three way", true, true)),
+            ("3W", "switch", 0, ("three way", false, true)),
+            ("S4M", "switch", 0, ("four way", false, true)),
+            ("SM3", "switch", 0, ("three way", false, true)),
+            ("SD3:A", "switch", 0, ("three way", true, true)),
+            ("DE", "switch", 0, ("single pole", true, false)),
+            ("S2", "switch", 2, ("two pole", false, true)),
+            ("S1", "switch", 1, ("single pole", false, true)),
+            ("SD:B", "switch", 0, ("single pole", true, false)),
+            ("SK", "switch", 1, ("three way", false, false)),
+            ("S", "switch", 2, ("four way", false, false)),
+            ("", "3way_switch", 0, ("three way", false, false)),
+            ("S", "switch", 0, ("single pole", false, false)),
+            ("SWP", "switch", 0, ("single pole", false, false)),
+        ] {
+            assert_eq!(switch_config(mark, kind, "", mates), want, "{mark} {kind} {mates}");
+        }
+        assert_eq!(switch_config("S", "switch", "DEVICE TYPE DIMMER", 0), ("single pole", true, false));
     }
 }
