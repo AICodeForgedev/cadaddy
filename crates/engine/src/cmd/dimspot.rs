@@ -9,8 +9,8 @@
 //! symbol a dimension chain measures the spot the chain's values put it at:
 //!
 //! - A chain's witness positions are laid out by its values from its first witness; a witness
-//!   whose extension line ends on a symbol (or runs through one) is that symbol's; one ending on
-//!   no symbol is a fixed end (a wall face, an opening edge, a casework edge).
+//!   whose extension line ends on a symbol is the device's drawn there; one ending on no symbol is
+//!   a fixed end (a wall face, an opening edge, a casework edge).
 //! - Each symbol in a chain is measured from the chain's nearest fixed end: its spot along the
 //!   dimension is that end's place plus the values between them. Across the dimension it stays.
 //! - A symbol two chains measure in two directions (along a wall and up from the floor of the
@@ -30,10 +30,8 @@ use super::dimreader::{DimString, Witness};
 /// Dimension strings and symbols looked at, at most.
 const MAX_STRINGS: usize = 20_000;
 const MAX_SPOTS: usize = 20_000;
-/// A symbol is at a witness when its middle is this near the witness line (text heights, along
-/// the dimension) and this near the witness's end (text heights).
-const ON_LINE_H: f64 = 0.6;
-const AT_END_H: f64 = 6.0;
+/// A device's spot is the symbol a witness ends on when this near its middle (text heights).
+const SPOT_AT_SYMBOL_H: f64 = 1.5;
 /// Two witnesses of one chain this close along it (text heights) are one.
 const SAME_WITNESS_H: f64 = 0.4;
 /// A spot moved less than this (inches) is already at its dimensioned spot.
@@ -78,25 +76,25 @@ fn ft_in(inches: f64) -> String {
             format!(" {a}/{b}")
         }
     };
-    if ft > 0 { format!("{ft}'-{whole}{frac}\"") } else { format!("{whole}{frac}\"") }
+    if ft > 0 {
+        format!("{ft}'-{whole}{frac}\"")
+    } else if whole == 0 && !frac.is_empty() {
+        format!("{}\"", frac.trim_start())
+    } else {
+        format!("{whole}{frac}\"")
+    }
 }
 
-/// The spot standing at witness `w` (of a dimension along `u`, text height `h`): the one its
-/// symbol is, else the nearest on its witness line near its end.
-fn spot_at(w: &Witness, u: Vec2, h: f64, spots: &[Vec2]) -> Option<usize> {
-    let near = |p: Vec2, r: f64| {
-        spots.iter().enumerate().filter(|(_, s)| s.is_finite() && s.dist(p) <= r).min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p))).map(|(i, _)| i)
-    };
-    if let Some(sym) = w.symbol
-        && let Some(i) = near(sym, 1.5 * h)
-    {
-        return Some(i);
-    }
+/// The spot standing at witness `w` (text height `h`): the one nearest the symbol its extension
+/// line ends on. A witness on no symbol measures no device (a value read off a note beside a line
+/// has none).
+fn spot_at(w: &Witness, h: f64, spots: &[Vec2]) -> Option<usize> {
+    let sym = w.symbol?;
     spots
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.is_finite() && (**s - w.on_line).dot(u).abs() <= ON_LINE_H * h && s.dist(w.point) <= AT_END_H * h)
-        .min_by(|a, b| a.1.dist(w.point).total_cmp(&b.1.dist(w.point)))
+        .filter(|(_, s)| s.is_finite() && s.dist(sym) <= SPOT_AT_SYMBOL_H * h)
+        .min_by(|a, b| a.1.dist(sym).total_cmp(&b.1.dist(sym)))
         .map(|(i, _)| i)
 }
 
@@ -146,13 +144,13 @@ pub(crate) fn dimensioned_spots(strings: &[DimString], spots: &[Vec2], units_per
                 Some(i) => i,
                 None => {
                     runs += 1;
-                    pos.push(Pos { along: ta, inches: 0.0, spot: spot_at(a, u, h, spots), symbol: a.symbol.is_some(), run: runs });
+                    pos.push(Pos { along: ta, inches: 0.0, spot: spot_at(a, h, spots), symbol: a.symbol.is_some(), run: runs });
                     pos.len() - 1
                 }
             };
             let Some((base, run)) = pos.get(ia).map(|p| (p.inches, p.run)) else { continue };
             if find(&pos, tb).is_none() {
-                pos.push(Pos { along: tb, inches: base + sign * s.inches, spot: spot_at(b, u, h, spots), symbol: b.symbol.is_some(), run });
+                pos.push(Pos { along: tb, inches: base + sign * s.inches, spot: spot_at(b, h, spots), symbol: b.symbol.is_some(), run });
             }
         }
         for p in pos.iter() {
@@ -229,6 +227,10 @@ mod tests {
         it.add_path(&[Vec2::new(0.0, y + 2.0), Vec2::new(0.0, 4.0)]);
         it.add_path(&[Vec2::new(30.0, y + 2.0), Vec2::new(30.0, 14.0)]);
         it.add_path(&[Vec2::new(60.0, y + 2.0), Vec2::new(60.0, 14.0)]);
+        // The devices' round symbols, where their extension lines end.
+        for x in [30.0, 60.0] {
+            it.dots.push((Vec2::new(x, 10.0), 4.0));
+        }
         it.add_text(first, Vec2::new(10.0, y + 1.0), None, HAlign::Left, 3.0, 0.0, 1.0);
         it.add_text(second, Vec2::new(40.0, y + 1.0), None, HAlign::Left, 3.0, 0.0, 1.0);
         it
@@ -264,9 +266,23 @@ mod tests {
     }
 
     #[test]
+    fn a_witness_ending_on_no_symbol_measures_no_device() {
+        // The same chain with no symbols drawn (a value read off a note beside a line): nothing
+        // is a device's, so nothing moves, though spots stand by the witness lines.
+        let mut it = view("3'-0\"", "2'-6\"");
+        it.dots.clear();
+        let strings = read(&it, Some(1.0)).strings;
+        assert_eq!(strings.len(), 2, "{strings:?}");
+        let f = dimensioned_spots(&strings, &[Vec2::new(30.0, 13.0), Vec2::new(60.0, 13.0)], 1.0, 24.0);
+        assert_eq!(f, Found::default(), "{f:?}");
+    }
+
+    #[test]
     fn lengths_are_written_as_a_drawing_writes_them() {
         assert_eq!(ft_in(40.5), "3'-4 1/2\"");
         assert_eq!(ft_in(6.0), "6\"");
+        assert_eq!(ft_in(0.375), "3/8\"");
+        assert_eq!(ft_in(1.375), "1 3/8\"");
         assert_eq!(ft_in(-30.0), "2'-6\"");
     }
 }

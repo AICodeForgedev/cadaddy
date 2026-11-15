@@ -15150,10 +15150,29 @@ fn typical_heights(
         // A dimensioned enlarged plan (Q6605): each symbol its dimension strings measure from a
         // wall face or an edge stands at the dimensioned spot, not where it is drawn.
         if sh.discipline.eq_ignore_ascii_case("A") {
+            let height_notes: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2, f64)> = texts
+                .iter()
+                .filter(|t| super::propfill::mount_height_in(&t.value).is_some() && t.height > 0.0 && t.at.is_finite())
+                .take(MAX_STAMPED)
+                .map(|t| {
+                    (t.at, t.at + cadaddy_geom::Vec2::from_angle(t.rotation) * (NOTE_CHAR_W * t.height * t.value.chars().count() as f64), t.height)
+                })
+                .collect();
+            let in_height_note = |p: cadaddy_geom::Vec2| {
+                height_notes.iter().any(|(a, b, th)| {
+                    let ab = *b - *a;
+                    let len2 = ab.x * ab.x + ab.y * ab.y;
+                    let u = if len2 > 0.0 { (((p - *a).x * ab.x + (p - *a).y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                    p.dist(*a + ab * u) <= *th
+                })
+            };
             let rects: Vec<[f64; 4]> = noted.iter().map(|v| v.view).collect();
             let items = super::dimreader::items_by_rect(&sub, &rects);
             for (v, it) in noted.iter_mut().zip(&items) {
-                let strings = super::dimreader::read(it, Some(1.0 / k_in)).strings;
+                // A value lettered in a mounting height note (`44\" AFF`, `COOKTOP 30\" AFF`) is
+                // the note's, never a dimension, whatever line it sits by.
+                let strings: Vec<super::dimreader::DimString> =
+                    super::dimreader::read(it, Some(1.0 / k_in)).strings.into_iter().filter(|st| !in_height_note(st.text_at)).collect();
                 if strings.is_empty() {
                     continue;
                 }
