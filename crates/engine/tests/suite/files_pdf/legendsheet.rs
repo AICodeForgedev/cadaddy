@@ -246,3 +246,136 @@ fn a_legend_sheet_titled_as_a_plan_builds_no_devices_and_a_wiring_note_no_exit_s
         st.to_string().chars().take(300).collect::<String>()
     );
 }
+
+/// Q6638: a mechanical/plumbing symbols legend sheet, 36" × 24", with no labelled title block:
+/// legend tables, a column of duct and pipe samples drawn as double lines (their faces read like
+/// walls), a `PLAN TAG KEY` table in the title column whose rows include `KEYED PLAN NOTE TAG`,
+/// and the sheet's title right over its number at the foot of the title column.
+fn symbols_legend_sheet() -> Vec<u8> {
+    let mut d = Drawing::default();
+    rect(&mut d, 0.5, 0.5, 35.5, 23.5);
+    let fittings: Vec<(&str, &str)> = vec![
+        ("CO", "CLEANOUT TO GRADE, FULL SIZE OF THE LINE"),
+        ("FD", "FLOOR DRAIN, SEE THE FIXTURE SCHEDULE"),
+        ("FS", "FLOOR SINK, SEE THE FIXTURE SCHEDULE"),
+        ("HB", "HOSE BIBB, FREEZE PROOF WHERE OUTSIDE"),
+        ("VTR", "VENT THROUGH ROOF, FULL SIZE OF THE STACK"),
+        ("BV", "BALL VALVE, FULL PORT, LINE SIZE"),
+        ("CV", "CHECK VALVE, SWING TYPE, LINE SIZE"),
+    ];
+    table(&mut d, 1.0, 21.5, "PLUMBING SYMBOLS", ["SYMBOL", "DESCRIPTION"], &fittings, true);
+    let hvac: Vec<(&str, &str)> = vec![
+        ("SD", "SUPPLY DIFFUSER, SEE THE AIR DEVICE SCHEDULE"),
+        ("RG", "RETURN GRILLE, SEE THE AIR DEVICE SCHEDULE"),
+        ("EG", "EXHAUST GRILLE, SEE THE AIR DEVICE SCHEDULE"),
+        ("VD", "VOLUME DAMPER, LOCKING QUADRANT"),
+        ("FSD", "FIRE SMOKE DAMPER, ACCESS DOOR AT EACH"),
+        ("TS", "THERMOSTAT, MOUNT AT 48 IN TO TOP"),
+    ];
+    table(&mut d, 1.0, 13.5, "HVAC SYMBOLS", ["SYMBOL", "DESCRIPTION"], &hvac, true);
+    let abbr: Vec<(&str, &str)> = vec![
+        ("AFF", "ABOVE FINISHED FLOOR"),
+        ("CW", "DOMESTIC COLD WATER"),
+        ("HW", "DOMESTIC HOT WATER"),
+        ("SAN", "SANITARY WASTE"),
+        ("UNO", "UNLESS NOTED OTHERWISE"),
+    ];
+    table(&mut d, 7.5, 21.5, "ABBREVIATIONS", ["ABBR", "MEANING"], &abbr, false);
+    // Duct and pipe samples: two faces a duct's width apart, each with its description.
+    text(&mut d, [14.0, 21.75], 0.18, "DUCTWORK AND PIPING LEGEND");
+    let samples = [
+        "SUPPLY AIR DUCTWORK, SIZE AS SHOWN ON THE PLANS",
+        "RETURN AIR DUCTWORK, SIZE AS SHOWN ON THE PLANS",
+        "EXHAUST AIR DUCTWORK, SIZE AS SHOWN ON THE PLANS",
+        "FLEXIBLE DUCT, SIX FEET LONG AT THE MOST",
+        "DOMESTIC COLD WATER PIPING ABOVE THE CEILING",
+        "DOMESTIC HOT WATER PIPING ABOVE THE CEILING",
+        "SANITARY WASTE PIPING BELOW THE FLOOR",
+        "VENT PIPING ABOVE THE CEILING",
+        "GAS PIPING, SIZE AS SHOWN ON THE PLANS",
+        "CONDENSATE DRAIN PIPING TO THE NEAREST DRAIN",
+        "REFRIGERANT PIPING, SIZE PER THE MAKER",
+        "STORM DRAIN PIPING BELOW THE FLOOR",
+    ];
+    for (i, desc) in samples.iter().enumerate() {
+        let y = 21.2 - 0.7 * i as f64;
+        line(&mut d, [14.0, y], [15.4, y]);
+        line(&mut d, [14.0, y - 0.12], [15.4, y - 0.12]);
+        text(&mut d, [15.7, y - 0.1], 0.1, desc);
+    }
+    // The title column: a plan notations table whose rows say PLAN, then the title block.
+    text(&mut d, [27.6, 8.8], 0.16, "PLAN TAG KEY:");
+    let rows =
+        ["INDICATES DIRECTION OF NORTH", "DETAIL REFERENCE - UPPER NUMBER", "INDICATES SHEET NUMBER", "KEYED PLAN NOTE TAG", "INDICATES CONNECTION"];
+    for (i, r) in rows.iter().enumerate() {
+        let y = 8.35 - 0.25 * i as f64;
+        text(&mut d, [28.4, y], 0.08, "1");
+        text(&mut d, [29.0, y], 0.08, r);
+    }
+    text(&mut d, [32.3, 2.7], 0.125, "MECHANICAL SYMBOLS LEGEND");
+    text(&mut d, [32.3, 1.4], 0.5, "M-001");
+    let o = cadaddy_io::pdf::PdfOptions {
+        paper_mm: Some((36.0 * 25.4, 24.0 * 25.4)),
+        landscape: Some(true),
+        fit: Some(true),
+        window: Some(Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(36.0, 24.0))),
+        margins: Some([0.0; 4]),
+        title: "Symbols".into(),
+        stamp: Some(false),
+        ..cadaddy_io::pdf::PdfOptions::default()
+    };
+    cadaddy_io::pdf::pdf(&d, &Space::Model, &o).expect("plot")
+}
+
+#[test]
+fn a_symbols_legend_titled_by_its_title_field_is_no_plan_and_the_job_never_asks_its_scale() {
+    let _g = serial();
+    pdf_reader();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("cadaddy_symbolslegend_{}_{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("folder");
+    let pages = vec![floor_plan(), (symbols_legend_sheet(), "M-001 Symbols".to_string(), String::new())];
+    std::fs::write(dir.join("Sample Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).expect("merge")).expect("write set");
+    // Classify titles it by its title field, never by the legend's KEYED PLAN NOTE TAG row, and
+    // reads it as legends.
+    let mut c = Session::new();
+    c.execute("printset.open", &json!({"path": dir.join("Sample Set.pdf").display().to_string()})).expect("printset.open");
+    let index = c.execute("printset.classify", &json!({})).expect("printset.classify");
+    let entry = |n: &str| index["sheets"].as_array().and_then(|a| a.iter().find(|sh| sh["number"] == n)).cloned().unwrap_or(Value::Null);
+    let legend = entry("M-001");
+    assert_eq!(legend["title"], json!("MECHANICAL SYMBOLS LEGEND"), "titled by its title block: {legend}");
+    assert_eq!(legend["type"], json!("schedule"), "typed as legends: {legend}");
+    assert_eq!(entry("A-101")["type"], json!("plan"), "the floor plan stays a plan");
+    // The unattended job runs to its end and never asks the legend sheet's scale.
+    let mut s = Session::new();
+    let mut st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
+    let mut asked: Vec<String> = Vec::new();
+    for _ in 0..60 {
+        if st["done"] == json!(true) {
+            break;
+        }
+        let q = if st["question"].is_object() { st["question"].clone() } else { st["next"].clone() };
+        let Some(id) = q["id"].as_str() else { break };
+        asked.push(q["question"].as_str().unwrap_or("").to_string());
+        let answer = q["default"].as_str().or_else(|| q["choices"][0].as_str()).unwrap_or("skip").to_string();
+        s.execute("job.answer", &json!({"id": id, "answer": answer})).expect("job.answer");
+        st = s.execute("job.status", &json!({})).expect("job.status");
+    }
+    assert_eq!(st["done"], json!(true), "the job runs to its end: {}", st.to_string().chars().take(600).collect::<String>());
+    assert!(!asked.iter().any(|q| q.contains("M-001")), "a question about the legend sheet: {asked:?}");
+    let job = job_state(&s);
+    let sheets = job["index"]["sheets"].as_array().cloned().unwrap_or_default();
+    let kept = sheets.iter().find(|sh| sh["number"] == "M-001").cloned().unwrap_or(Value::Null);
+    assert_eq!(kept["type"], json!("schedule"), "{kept}");
+    // Its samples are no devices.
+    let spec = s.execute("bspec.get", &json!({})).unwrap_or(Value::Null);
+    let tags = spec["spec"]["tags"].as_array().or_else(|| spec["tags"].as_array()).cloned().unwrap_or_default();
+    let from_legend: Vec<&Value> = tags
+        .iter()
+        .filter(|t| t["id"].as_str().is_some_and(|i| i.starts_with("device:")))
+        .filter(|t| t["fields"]["sheet"]["value"].as_str().or_else(|| t["fields"]["sheet"].as_str()).is_some_and(|sh| sh.starts_with("M-001")))
+        .collect();
+    assert!(from_legend.is_empty(), "devices read off the legend sheet: {from_legend:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

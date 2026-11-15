@@ -2708,6 +2708,54 @@ fn scale_questions(job: &mut GuidedJob, stage: StageName, regions: &mut [SheetRe
         );
         job.audit("plan_sheets_left_out_no_scale", "pipeline", None, Some(stage), Some(json!(left_out)));
     }
+    // Q6638: in an unattended job, a plan at paper size whose every level has its floor plan read
+    // at a scale on another sheet is not the plan its storey is built from: it is left out by
+    // default (`Not a plan`) and listed for review, so the job goes on instead of stopping. Asked
+    // (with that default) when someone answers.
+    let mut by_default: BTreeMap<String, String> = BTreeMap::new();
+    let mut defaults: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for i in 0..regions.len() {
+        let Some(r) = regions.get(i) else { continue };
+        if !at_paper(&r.number) || !matches!(r.kind.as_str(), "plan" | "enlarged_plan") || !r.not_built.is_empty() {
+            continue;
+        }
+        let Some(plans) = ps::storey_plans_elsewhere(r, regions, &at_paper) else { continue };
+        let number = base(&r.number);
+        if job.auto {
+            let t: String = title(&number).trim().chars().take(80).collect();
+            let what = if t.is_empty() { number.clone() } else { format!("{number} \"{t}\"") };
+            by_default.entry(number.to_ascii_uppercase()).or_insert_with(|| format!("{what}: its storey's floor plan is {}", plans.join(", ")));
+            if let Some(r) = regions.get_mut(i) {
+                r.not_built = format!(
+                    "{}: its storey's floor plan is {}, read at a scale; left out by default (unattended)",
+                    ps::NOT_STOREY_PLAN,
+                    plans.join(", ")
+                );
+            }
+        } else {
+            defaults.insert(number.to_ascii_uppercase(), plans);
+        }
+    }
+    if !by_default.is_empty() {
+        let list: Vec<String> = by_default.values().take(MAX_QUESTIONS_PER_STAGE).cloned().collect();
+        let more = by_default.len().saturating_sub(list.len());
+        progress_line(&format!("  sheets: {} plan sheet(s) with no scale left out by default, for review: {}", by_default.len(), list.join("; ")));
+        job.add_finding(
+            stage,
+            &format!(
+                "{} plan sheet(s) with no scale left out of the building by default, for review: not the plan their storey is built from ({}{})",
+                by_default.len(),
+                list.join("; "),
+                if more > 0 { format!("; and {more} more") } else { String::new() }
+            ),
+            "No scale reads on them and no plan of their floor gives one, and each of their levels is built from an architectural floor plan read at a scale, so an unattended job takes the default (Not a plan: leave it out) instead of stopping to ask; what they draw is missing until their scale is given",
+            3,
+            vec![ps::LEAVE_OUT.into(), "Give the sheet's scale (job.sheets.set) to build it".into()],
+            None,
+            false,
+        );
+        job.audit("plan_sheets_left_out_by_default", "pipeline", None, Some(stage), Some(json!(by_default)));
+    }
     let regions: &[SheetRegion] = regions;
     let built = |n: &str| {
         regions.iter().any(|r| {
@@ -2723,15 +2771,29 @@ fn scale_questions(job: &mut GuidedJob, stage: StageName, regions: &mut [SheetRe
         let number = base(sheet);
         let mut choices = printed.clone();
         choices.push(ps::LEAVE_OUT.into());
-        ps::ask_always(
-            job,
-            stage,
-            ps::no_scale_question(&number, &title(&number)),
-            "No scale note or lettering reads on it, its dimension strings don't agree on one, and no plan of its floor that prints its scale has its outline: built at the sheet's own size its level would be a few square feet. Give its scale as printed (1/8\" = 1'-0\", or drawing units a sheet inch), or say it is no plan".into(),
-            &number,
-            choices,
-            json!({"scale": "paper size", "printed_in_set": printed}),
-        );
+        let why = "No scale note or lettering reads on it, its dimension strings don't agree on one, and no plan of its floor that prints its scale has its outline: built at the sheet's own size its level would be a few square feet. Give its scale as printed (1/8\" = 1'-0\", or drawing units a sheet inch), or say it is no plan";
+        match defaults.get(&number.to_ascii_uppercase()) {
+            // Not the plan its storey is built from (Q6638): leaving it out is the default.
+            Some(plans) => ps::ask(
+                job,
+                stage,
+                ps::no_scale_question(&number, &title(&number)),
+                format!("{why}. Its storey is built from {}, read at a scale: leaving it out is the default", plans.join(", ")),
+                &number,
+                choices,
+                json!({"scale": "paper size", "printed_in_set": printed, "storey_plans": plans}),
+                Some(ps::LEAVE_OUT.into()),
+            ),
+            None => ps::ask_always(
+                job,
+                stage,
+                ps::no_scale_question(&number, &title(&number)),
+                why.into(),
+                &number,
+                choices,
+                json!({"scale": "paper size", "printed_in_set": printed}),
+            ),
+        }
         asked.insert(number.to_ascii_uppercase());
     }
     let min = ps::rules().min_level_footprint_sq_ft;
@@ -3931,6 +3993,9 @@ struct DeviceCensus {
     not_device: BTreeMap<&'static str, usize>,
     /// Tag-shaped marks no legend lists, by tag.
     unlisted: BTreeMap<String, UnlistedTag>,
+    /// Unlisted marks printed once or twice: stray lettering, unless a legend on a sheet the job
+    /// doesn't load lists them (Q6638: a legend sheet's device schedule).
+    stray: BTreeSet<String>,
     /// Every type the loaded legends and schedules list, and how many tables listed them.
     legend_types: std::collections::BTreeSet<String>,
     legend_tables: usize,
@@ -4168,13 +4233,43 @@ fn device_census(
             (sheet, Legend { types: rows.keys().cloned().collect(), regions: Vec::new(), rows })
         })
         .collect();
-    for (sheet, l) in unloaded.iter().chain(answered.iter()) {
+    for (_, l) in unloaded.iter().chain(answered.iter()) {
         c.legend_tables += 1;
         c.legend_types.extend(l.types.iter().cloned());
-        for (k, row) in &l.rows {
-            every_row.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
-        }
         every_legend.merge(l.clone());
+    }
+    // A row that names a device kind before one that names none (a misread table's `C CONDENSER
+    // WATER` on a details sheet against the legend sheet's `C CLOCK OUTLET (RECEPTACLE)`, Q6638).
+    for kinded in [true, false] {
+        for (sheet, l) in unloaded.iter().chain(answered.iter()) {
+            for (k, row) in l.rows.iter().filter(|(_, r)| row_kind(r, false).is_some() == kinded) {
+                every_row.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+            }
+        }
+    }
+    // The set's legend sheet (titled a legend: no plan the job loads, Q6638) speaks for its own
+    // trade's sheets too, as it would loaded: a mechanical plan's marks are the MEP legend's.
+    let classified: Vec<&Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten().collect();
+    let legend_words = cadaddy_mepfix::wordrules::words("sheets.legend_notes_heading_words");
+    let legend_sheet_trade = |sheet: &str| -> Option<String> {
+        let entry =
+            classified.iter().find(|c| c.get("number").and_then(Value::as_str).is_some_and(|n| n.trim().eq_ignore_ascii_case(sheet.trim())))?;
+        let title = entry.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
+        if !title.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| legend_words.contains(&w)) {
+            return None;
+        }
+        let d = entry.get("discipline").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        (!d.is_empty() && d != "G").then_some(d)
+    };
+    for kinded in [true, false] {
+        for (sheet, l) in unloaded {
+            let Some(trade) = legend_sheet_trade(sheet) else { continue };
+            let (tl, rows) = trade_legends.entry(trade).or_default();
+            for (k, row) in l.rows.iter().filter(|(_, r)| row_kind(r, false).is_some() == kinded) {
+                tl.types.insert(k.clone());
+                rows.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+            }
+        }
     }
     // A table whose heading names a trade speaks for that trade's sheets wherever it is printed
     // (a CASEWORK AND PLUMBING FIXTURE SCHEDULE on an architectural sheet types the plumbing
@@ -4996,6 +5091,7 @@ fn device_census(
         ));
     }
     let stray: usize = c.unlisted.values().filter(|u| u.count < MIN_REPEATED_TAG).map(|u| u.count).sum();
+    c.stray = c.unlisted.iter().filter(|(_, u)| u.count < MIN_REPEATED_TAG).map(|(t, _)| t.clone()).collect();
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
         *c.not_device.entry("unlisted, printed once or twice").or_default() += stray;
@@ -6744,19 +6840,26 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // when they list any. The marks are a symbol's tag, or lettering the electrical plans print
     // again and again by plain linework (`LA-1` over `P1-6` by a rectangle drawn loose, Q6639).
     let unread: Vec<&String> = census.unread_marks.iter().filter(|(_, n)| **n >= MIN_UNREAD_MARK_REPEATS).map(|(t, _)| t).collect();
-    if !census.unlisted.is_empty() || !unread.is_empty() {
-        let plan_tags: BTreeSet<String> =
-            census.by_type.keys().chain(census.unlisted.keys()).chain(unread.iter().copied()).map(|t| t.trim().to_ascii_uppercase()).collect();
+    if !census.unlisted.is_empty() || !unread.is_empty() || !census.stray.is_empty() {
+        let plan_tags: BTreeSet<String> = census
+            .by_type
+            .keys()
+            .chain(census.unlisted.keys())
+            .chain(census.stray.iter())
+            .chain(unread.iter().copied())
+            .map(|t| t.trim().to_ascii_uppercase())
+            .collect();
         let unloaded = schedule_legends_on(&unloaded_schedule_pages(job), &plan_tags);
         let listed: Vec<&String> = census
             .unlisted
             .keys()
+            .chain(census.stray.iter())
             .chain(unread.iter().copied())
             .filter(|t| unloaded.iter().any(|(_, l)| l.types.contains(t.trim().to_ascii_uppercase().as_str())))
             .collect();
         if !unloaded.is_empty() {
             progress_line(&format!(
-                "  luminaire schedules on sheets not loaded: {} on {:?}; the plans' unlisted marks they list: {:?}",
+                "  luminaire schedules and legends on sheets not loaded: {} on {:?}; the plans' unlisted marks they list: {:?}",
                 unloaded.len(),
                 unloaded.iter().map(|(n, _)| n.as_str()).collect::<BTreeSet<_>>(),
                 listed
@@ -21756,8 +21859,9 @@ fn unloaded_schedule_pages(job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing
 
 /// The luminaire schedules on sheets the job's drawing doesn't hold (`pages`, from
 /// [`unloaded_schedule_pages`]): each as a legend of its sheet, by number, its types checked
-/// against the tags the plans print (`plan_tags`). Their extents are another page's, so they
-/// carry none.
+/// against the tags the plans print (`plan_tags`); then each page's symbol legends and device
+/// schedules, the rows of the marks the plans print (a legend sheet is no plan the job loads,
+/// Q6638). Their extents are another page's, so they carry none.
 fn schedule_legends_on(
     pages: &[(String, cadaddy_doc::Drawing, bool)],
     plan_tags: &BTreeSet<String>,
@@ -21765,12 +21869,28 @@ fn schedule_legends_on(
     let mut out = Vec::new();
     for (number, d, electrical) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
+        let mut listed: BTreeSet<String> = BTreeSet::new();
         for tb in luminaire_schedules(&texts, || super::gridtable::segments(d), number, *electrical) {
             let mut l = schedule_legend(&tb, plan_tags);
             l.regions.clear();
             if !l.types.is_empty() {
+                listed.extend(l.types.iter().map(|t| t.trim().to_ascii_uppercase()));
                 out.push((number.clone(), l));
             }
+        }
+        // The set's legend sheet (its symbol legends and device schedules: `OS1` CEILING
+        // OCCUPANCY SENSOR) speaks for the plans though it is no plan the job loads (Q6638): the
+        // rows of the marks the plans print, the luminaire schedules' first.
+        let mut l = cadaddy_mepfix::device_types::read_legend(&texts);
+        l.regions.clear();
+        let keep = |t: &str| {
+            let u = t.trim().to_ascii_uppercase();
+            plan_tags.contains(&u) && !listed.contains(&u)
+        };
+        l.types.retain(|t| keep(t));
+        l.rows.retain(|k, _| keep(k));
+        if !l.types.is_empty() {
+            out.push((number.clone(), l));
         }
     }
     out
@@ -38338,6 +38458,37 @@ mod tests {
         assert_eq!(schedule_legends_from(Some(&schedule_legends_json(&legends))), legends);
     }
 
+    /// Q6638: the set's legend sheet, no plan the job loads, still speaks for the plans: its
+    /// device schedule's rows of the marks the plans print are read off its page; the rows of
+    /// marks no plan prints are not.
+    #[test]
+    fn a_legend_sheets_device_schedule_speaks_for_the_plans_it_is_not_one_of() {
+        let mut page = cadaddy_doc::Drawing::new_imperial();
+        let rows = [
+            ("DEVICE SCHEDULE", 100.0, 500.0, 8.0),
+            ("MARK", 100.0, 485.0, 5.0),
+            ("DESCRIPTION", 130.0, 485.0, 5.0),
+            ("OS1", 100.0, 472.0, 5.0),
+            ("CEILING OCCUPANCY SENSOR, DUAL TECHNOLOGY", 130.0, 472.0, 5.0),
+            ("VS1", 100.0, 460.0, 5.0),
+            ("WALL VACANCY SENSOR SWITCH", 130.0, 460.0, 5.0),
+            ("XQ", 100.0, 448.0, 5.0),
+            ("SAMPLE DEVICE NO PLAN PRINTS", 130.0, 448.0, 5.0),
+        ];
+        for (v, x, y, h) in rows {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, h))).ok();
+        }
+        let tags: BTreeSet<String> = ["OS1", "VS1", "ZZ"].iter().map(|t| t.to_string()).collect();
+        let legends = schedule_legends_on(&[("X-005".to_string(), page, false)], &tags);
+        let types: Vec<&String> = legends.iter().flat_map(|(_, l)| l.types.iter()).collect();
+        assert_eq!(types, ["OS1", "VS1"], "{legends:#?}");
+        let (sheet, l) = legends.first().expect("the legend sheet's rows");
+        assert_eq!(sheet, "X-005");
+        assert!(l.regions.is_empty(), "another page's extents");
+        assert!(l.rows.get("OS1").is_some_and(|r| r.description.contains("OCCUPANCY SENSOR")), "{l:?}");
+        assert!(!l.rows.contains_key("XQ"), "a row no plan prints: {l:?}");
+    }
+
     /// Q6165: what a mark resolves to. A row's description (`legend_kind`), else its table (a
     /// light fixture schedule's type is a luminaire, not on a plumbing sheet; an equipment
     /// schedule's an equipment connection); a mechanical equipment tag is its equipment's
@@ -48303,6 +48454,72 @@ mod tests {
             "{d}"
         );
         assert!(!said[0].blocking, "a finding, never a stop");
+    }
+
+    /// Q6638: a plan with no scale whose storey is built from another sheet's floor plan, read at
+    /// a scale (a trade's plan, a legend sheet filed as a plan), never stops an unattended job: it
+    /// is left out by default and listed for review. A floor plan that is its storey's only one
+    /// is still always asked; attended, the others are asked with leaving them out the default.
+    #[test]
+    fn a_plan_with_no_scale_beside_its_storeys_scaled_floor_plan_is_left_out_by_default_unattended() {
+        let regions = || {
+            vec![
+                region("A-101", "1", "A", "plan", 0.0),
+                region("M-105", "1", "M", "plan", 200.0),
+                region("A-107", "1", "A", "plan", 400.0),
+                region("A-102", "2", "A", "plan", 600.0),
+                region("E-102", "2", "E", "plan", 800.0),
+            ]
+        };
+        let sheets = [
+            json!({"number": "A-101", "title": "FIRST FLOOR PLAN", "type": "plan", "discipline": "A"}),
+            json!({"number": "M-105", "title": "SAMPLE NOTE REFERENCE", "type": "plan", "discipline": "M"}),
+            json!({"number": "A-107", "title": "FIRST FLOOR DIMENSION PLAN", "type": "plan", "discipline": "A"}),
+            json!({"number": "A-102", "title": "SECOND FLOOR PLAN", "type": "plan", "discipline": "A"}),
+            json!({"number": "E-102", "title": "SECOND FLOOR POWER PLAN", "type": "plan", "discipline": "E"}),
+        ];
+        let all: Vec<&Value> = sheets.iter().collect();
+        // A-101 is read at its scale; the others are at paper size.
+        let paper: Vec<String> = ["M-105", "A-107", "A-102", "E-102"].iter().map(|s| s.to_string()).collect();
+        let asked = |job: &GuidedJob| -> Vec<Question> {
+            job.stage(StageName::Rooms)
+                .map(|st| st.completeness.iter().filter(|q| q.question.starts_with(super::super::planscale::NO_SCALE_QUESTION)).cloned().collect())
+                .unwrap_or_default()
+        };
+        // Unattended.
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        job.auto = true;
+        let mut rs = regions();
+        scale_questions(&mut job, StageName::Rooms, &mut rs, &paper, &all, 1.0);
+        let qs = asked(&job);
+        let names: Vec<&str> = qs.iter().map(|q| q.question.as_str()).collect();
+        assert_eq!(qs.len(), 2, "level 2 has no floor plan read at a scale, so its plans are asked: {names:#?}");
+        assert!(qs.iter().all(|q| job.always_ask.contains(&q.id)), "always asked: {names:#?}");
+        assert!(names.iter().any(|q| q.contains("A-102")) && names.iter().any(|q| q.contains("E-102")), "{names:#?}");
+        for n in ["M-105", "A-107"] {
+            let r = rs.iter().find(|r| r.number == n).expect("region");
+            assert!(r.not_built.starts_with(super::super::planscale::NOT_STOREY_PLAN) && r.not_built.contains("A-101"), "{n} left out: {r:?}");
+        }
+        assert!(rs.iter().any(|r| r.number == "A-101" && r.not_built.is_empty()), "the floor plan is built");
+        let said: Vec<&JobFinding> =
+            job.findings.iter().filter(|f| f.description.contains("left out of the building by default, for review")).collect();
+        assert_eq!(said.len(), 1, "{:#?}", job.findings);
+        let d = &said[0].description;
+        assert!(d.starts_with("2 plan sheet(s)") && d.contains("M-105 \"SAMPLE NOTE REFERENCE\": its storey's floor plan is A-101"), "{d}");
+        assert!(d.contains("A-107"), "{d}");
+        assert!(!said[0].blocking, "a finding, never a stop");
+        // Attended: asked, leaving them out the default; the storeys' own floor plans always.
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Bim);
+        let mut rs = regions();
+        scale_questions(&mut job, StageName::Rooms, &mut rs, &paper, &all, 1.0);
+        let qs = asked(&job);
+        assert_eq!(qs.len(), 4, "{qs:#?}");
+        for q in &qs {
+            let trade = q.question.contains("M-105") || q.question.contains("A-107");
+            assert_eq!(job.always_ask.contains(&q.id), !trade, "{}", q.question);
+            assert_eq!(q.default.as_deref(), trade.then_some(super::super::planscale::LEAVE_OUT), "{}", q.question);
+        }
+        assert!(rs.iter().all(|r| r.not_built.is_empty()), "nothing left out before the answers");
     }
 
     /// A stage run again asks its questions again: the same ones keep their id and answer; an
