@@ -72,25 +72,65 @@ impl Default for RasterOptions {
 
 /// Render to a pixmap. Returns `None` for zero or absurd sizes.
 pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixmap> {
-    if view.width == 0 || view.height == 0 || view.width > 16384 || view.height > 16384 {
-        return None;
+    let mut canvas = Canvas::new(view, o)?;
+    canvas.draw(list);
+    Some(canvas.finish())
+}
+
+/// Opaque polylines of one colour and width in a row, stroked as one path when the run ends.
+type Run = Option<(Paint<'static>, f32, PathBuilder)>;
+
+/// A raster drawn display list by display list: drawing a list's parts one after another, in
+/// order, makes the pixels drawing the whole list makes ([`render`]), so a large drawing's
+/// preview needn't hold its whole list ([`crate::build_each`]; Q6635).
+pub struct Canvas {
+    pm: Pixmap,
+    view: View,
+    o: RasterOptions,
+    /// The run of polylines still to stroke: it carries on into the next list drawn.
+    run: Run,
+}
+
+impl Canvas {
+    /// A blank raster of `view`'s size; `None` for zero or absurd sizes.
+    pub fn new(view: &View, o: &RasterOptions) -> Option<Self> {
+        if view.width == 0 || view.height == 0 || view.width > 16384 || view.height > 16384 {
+            return None;
+        }
+        let mut pm = Pixmap::new(view.width, view.height)?;
+        pm.fill(tiny_skia::Color::from_rgba8(o.background.0, o.background.1, o.background.2, 255));
+        Some(Canvas { pm, view: *view, o: *o, run: None })
     }
-    let mut pm = Pixmap::new(view.width, view.height)?;
-    pm.fill(tiny_skia::Color::from_rgba8(o.background.0, o.background.1, o.background.2, 255));
+
+    /// The raster, everything drawn.
+    pub fn finish(mut self) -> Pixmap {
+        flush(&mut self.pm, &mut self.run);
+        self.pm
+    }
+
+    /// Draw `list` over what is drawn.
+    pub fn draw(&mut self, list: &DisplayList) {
+        let (view, o) = (&self.view, &self.o);
+        let (pm, run) = (&mut self.pm, &mut self.run);
+        draw_list(pm, run, list, view, o);
+    }
+}
+
+fn flush(pm: &mut Pixmap, run: &mut Run) {
+    if let Some((paint, w, pb)) = run.take()
+        && let Some(path) = pb.finish()
+    {
+        let stroke = Stroke { width: w, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Default::default() };
+        pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+}
+
+fn draw_list(pm: &mut Pixmap, run: &mut Run, list: &DisplayList, view: &View, o: &RasterOptions) {
     let vis = view.world_bounds();
-    // each image's pixels as a premultiplied pixmap, made once per render
+    // each image's pixels as a premultiplied pixmap, made once per list
     let mut pixmaps: std::collections::HashMap<*const crate::images::Raster, Option<Pixmap>> = std::collections::HashMap::new();
     // Opaque polylines of one colour and width in a row are stroked as one path: one stroke per
     // object made a large drawing's thumbnail cost a microsecond per object.
-    let mut run: Option<(Paint, f32, PathBuilder)> = None;
-    let flush = |pm: &mut Pixmap, run: &mut Option<(Paint<'static>, f32, PathBuilder)>| {
-        if let Some((paint, w, pb)) = run.take()
-            && let Some(path) = pb.finish()
-        {
-            let stroke = Stroke { width: w, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Default::default() };
-            pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-        }
-    };
     for p in &list.prims {
         let c = p.display_rgb(o.background);
         let mut paint = Paint::default();
@@ -99,7 +139,7 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
         paint.anti_alias = o.antialias;
         let pts = list.points(p);
         if p.kind != Kind::Polyline {
-            flush(&mut pm, &mut run);
+            flush(pm, run);
         }
         match p.kind {
             Kind::Polyline => {
@@ -110,7 +150,7 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
                 let w = if o.px_per_mm > 0.0 && p.lw > 0.0 { (p.lw * o.px_per_mm).max(o.hairline) } else { o.hairline };
                 let joins = p.alpha() == 255 && run.as_ref().is_some_and(|(rp, rw, _)| *rw == w && same_paint(rp, &paint));
                 if !joins {
-                    flush(&mut pm, &mut run);
+                    flush(pm, run);
                 }
                 let (_, _, pb) = run.get_or_insert_with(|| (paint, w, PathBuilder::new()));
                 // Points closer than a quarter pixel to the last one drawn add nothing.
@@ -125,7 +165,7 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
                     last = Some((x, y));
                 }
                 if p.alpha() != 255 {
-                    flush(&mut pm, &mut run);
+                    flush(pm, run);
                 }
             }
             Kind::Tris | Kind::InkMask | Kind::Mask => {
@@ -200,8 +240,6 @@ pub fn render(list: &DisplayList, view: &View, o: &RasterOptions) -> Option<Pixm
             }
         }
     }
-    flush(&mut pm, &mut run);
-    Some(pm)
 }
 
 /// Whether two solid paints draw alike.

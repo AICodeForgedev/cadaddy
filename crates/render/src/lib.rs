@@ -806,7 +806,8 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         let parallel = false;
         #[cfg(not(target_arch = "wasm32"))]
         if parallel {
-            build_parallel(&mut b, d, store);
+            let ents: Vec<&std::sync::Arc<Entity>> = store.iter().collect();
+            build_parallel(&mut b, d, &ents);
         }
         let mut viewports = 0usize;
         for e in store.iter().filter(|_| !parallel) {
@@ -823,25 +824,79 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
             top_entity(&mut b, d, e);
         }
     }
-    // Drywall layer boundary lines: thin grey lines overlaid on wall entities.
-    if !opts.layer_lines.is_empty() {
-        let grey = Rgb(160, 160, 160);
-        for &([x0, y0, _z0], [x1, y1, _z1]) in &opts.layer_lines {
-            let start = b.list.verts.len() as u32;
-            let a = Vec2::new(x0, y0);
-            let c = Vec2::new(x1, y1);
-            b.list.bounds.add(a);
-            b.list.bounds.add(c);
-            b.list.verts.push(a);
-            b.list.verts.push(c);
-            b.list.prims.push(DPrim { handle: Handle(0), color: grey, aci7: false, lw: 0.0, transparency: 0, kind: Kind::Polyline, start, len: 2 });
-        }
-    }
+    layer_lines(&mut b.list, opts);
     // A layout is drawn in paper units, so its pens become geometry now.
     if let Some(sheet) = b.list.sheet {
         pen::apply(&mut b.list, sheet.unit_mm);
     }
     b.list
+}
+
+/// Drywall layer boundary lines: thin grey lines overlaid on wall entities.
+fn layer_lines(list: &mut DisplayList, opts: &Options) {
+    let grey = Rgb(160, 160, 160);
+    for &([x0, y0, _z0], [x1, y1, _z1]) in &opts.layer_lines {
+        let start = list.verts.len() as u32;
+        let a = Vec2::new(x0, y0);
+        let c = Vec2::new(x1, y1);
+        list.bounds.add(a);
+        list.bounds.add(c);
+        list.verts.push(a);
+        list.verts.push(c);
+        list.prims.push(DPrim { handle: Handle(0), color: grey, aci7: false, lw: 0.0, transparency: 0, kind: Kind::Polyline, start, len: 2 });
+    }
+}
+
+/// Top-level objects per part [`build_each`] builds.
+pub const BUILD_EACH_OBJECTS: usize = 8_192;
+
+/// [`build`] for a raster drawn as it is built (a file's preview): model space's display list in
+/// parts of `batch` top-level objects, in drawing order, each handed to `each` and dropped, so only
+/// one part is held at once. The whole list of a print set's 1.3 million objects held over a
+/// gigabyte for a 256 × 192 preview (Q6635). The parts drawn one after another on a
+/// [`raster::Canvas`] draw what the whole list draws, and their bounds together are its bounds;
+/// one block-expansion budget runs over all of them. A layout or a plot style table needs the
+/// whole list (its viewports, pens and styles): it comes as one part.
+pub fn build_each(d: &Drawing, space: &Space, opts: &Options, batch: usize, mut each: impl FnMut(&DisplayList)) {
+    let Some(store) = d.space(space).filter(|_| !matches!(space, Space::Paper(_))) else {
+        each(&build(d, space, opts));
+        return;
+    };
+    if style_table(d, space, opts, false).is_some() || store.len() <= batch {
+        each(&build(d, space, opts));
+        return;
+    }
+    let opts = &with_point_view(d, space, opts);
+    let budget = std::sync::atomic::AtomicUsize::new(0);
+    let ents: Vec<&std::sync::Arc<Entity>> = store.iter().collect();
+    for part in ents.chunks(batch.max(1)) {
+        let mut b = Builder {
+            list: DisplayList::default(),
+            opts,
+            plotting: false,
+            styles: None,
+            named: None,
+            shared_budget: Some(&budget),
+            transparency: 0,
+            paper: false,
+            prof: profile::Local::new(opts),
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if part.len() >= 2 * PARALLEL_CHUNK {
+            build_parallel(&mut b, d, part);
+            each(&b.list);
+            continue;
+        }
+        for e in part {
+            top_entity(&mut b, d, e);
+        }
+        each(&b.list);
+    }
+    if !opts.layer_lines.is_empty() {
+        let mut list = DisplayList::default();
+        layer_lines(&mut list, opts);
+        each(&list);
+    }
 }
 
 /// Top-level entities per task when a display list is built on all cores.
@@ -854,10 +909,11 @@ const PARALLEL_CHUNK: usize = 256;
 /// stopped blocking the UI) and after every edit; one core made both slow on real drawings. Plots, layouts and plot styles keep the one-thread
 /// path (they run once, and their pens and per-primitive layers are built along the way).
 #[cfg(not(target_arch = "wasm32"))]
-fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadaddy_doc::EntityStore) {
+fn build_parallel(b: &mut Builder, d: &Drawing, ents: &[&std::sync::Arc<Entity>]) {
     use rayon::prelude::*;
-    let ents: Vec<&std::sync::Arc<Entity>> = store.iter().collect();
-    let budget = std::sync::atomic::AtomicUsize::new(0);
+    // The list's own expansion budget, or the one it shares with the lists built before it.
+    let own = std::sync::atomic::AtomicUsize::new(0);
+    let budget = b.shared_budget.unwrap_or(&own);
     let (opts, plotting) = (b.opts, b.plotting);
     let parts: Vec<DisplayList> = ents
         .par_chunks(PARALLEL_CHUNK)
@@ -868,7 +924,7 @@ fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadaddy_doc::EntityStore
                 plotting,
                 styles: None,
                 named: None,
-                shared_budget: Some(&budget),
+                shared_budget: Some(budget),
                 transparency: 0,
                 paper: false,
                 prof: profile::Local::new(opts),
