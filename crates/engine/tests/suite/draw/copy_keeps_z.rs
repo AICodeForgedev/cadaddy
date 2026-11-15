@@ -10,7 +10,7 @@ use cadaddy_engine::geom::{Spline, Vec2, Vec3};
 use serde_json::{Value, json};
 
 /// A storey's rise in the tests (inches): any made-up floor-to-floor height.
-const RISE: f64 = 109.75;
+const RISE: f64 = 126.5;
 /// The device's height above its floor (inches).
 const Z0: f64 = 16.0;
 
