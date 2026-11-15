@@ -522,6 +522,13 @@ pub struct GuidedJob {
     /// bim_build stage puts them in the model after it drafts the building spec.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub devices: Vec<super::readers::ReadDevice>,
+    /// How the last BIM build put [`Self::devices`] onto the levels' plans (Q6645): each sheet's
+    /// registration (the transform its placer used, or why none held) and the devices that went
+    /// through it. Validate's overlay maps every symbol through it. `None`: the build placed
+    /// nothing by registration (the devices stand where their sheets draw them), or a job from
+    /// before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_placement: Option<DevicePlacement>,
     /// What the mechanical and plumbing plans read (mep_read), each run on its sheet's level:
     /// the BIM build puts it into the spec it drafts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -593,6 +600,103 @@ pub struct GuidedJob {
     /// documents, and the reports name the issue they were built from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documents: Option<super::docsource::JobDocuments>,
+}
+
+/// How the BIM build put the job's devices onto the levels' plans (Q6645).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DevicePlacement {
+    /// How many devices the job had when the build placed them: a reading after it (more or
+    /// fewer devices) leaves the placement stale, and nothing is mapped through it.
+    pub devices: usize,
+    pub sheets: Vec<PlacedSheet>,
+}
+
+/// One sheet's registration onto one level's plan, as the BIM build placed its devices by it
+/// (Q6645): a sheet whose views are placed apart (each by its grids) has one per transform.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlacedSheet {
+    pub sheet: String,
+    pub level: String,
+    /// `p ↦ R·p + t`, `R = [[a, −b], [b, a]]` as `[a, b, tx, ty]`: sheet to the level's plan
+    /// (drawing units). `None`: no registration placed these devices ([`Self::why`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<[f64; 4]>,
+    /// Its scale and turn (degrees), for the reader.
+    #[serde(default)]
+    pub scale: f64,
+    #[serde(default)]
+    pub turn_deg: f64,
+    /// Why there is no transform (a typical room's plan stamps its devices into the rooms of
+    /// its type; no registration holds for the sheet's view).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
+    /// The job's devices placed by it (indexes into [`GuidedJob::devices`]).
+    pub devices: Vec<u32>,
+}
+
+impl PlacedSheet {
+    /// Where a point of the sheet goes on the level's plan (`None`: not registered).
+    pub fn apply(&self, p: [f64; 2]) -> Option<[f64; 2]> {
+        let [a, b, tx, ty] = self.transform?;
+        let q = [a * p[0] - b * p[1] + tx, b * p[0] + a * p[1] + ty];
+        (q[0].is_finite() && q[1].is_finite()).then_some(q)
+    }
+}
+
+/// Most registrations kept with a job (a set of a few hundred sheets, each view apart).
+const MAX_REGISTRATIONS: usize = 5_000;
+
+/// Why a device a typical room's plan shows has no one place on a floor.
+const STAMPED_WHY: &str = "a typical room's plan: its devices are stamped into every room of its type";
+/// Why a device no registration places has no place on a floor.
+pub(crate) const UNREGISTERED_WHY: &str = "no registration puts this sheet's view onto its level's plan";
+
+/// The registrations the build placed `devices` by (Q6645): for each device, `None` when a typical
+/// room's view takes it, else the transform its sheet's registration gives (`None`: none holds).
+fn device_placement(devices: &[super::readers::ReadDevice], how: impl Fn(&super::readers::ReadDevice) -> Placed) -> DevicePlacement {
+    let mut sheets: Vec<PlacedSheet> = Vec::new();
+    let mut at: BTreeMap<(String, String, Option<[u64; 4]>, &'static str), usize> = BTreeMap::new();
+    for (i, dv) in devices.iter().enumerate() {
+        let Ok(i) = u32::try_from(i) else { break };
+        let (sim, why) = match how(dv) {
+            Placed::Stamped => (None, STAMPED_WHY),
+            Placed::By(m) => (Some(m), ""),
+            Placed::Nowhere => (None, UNREGISTERED_WHY),
+        };
+        let t = sim.map(|m| [m.a, m.b, m.tx, m.ty]);
+        let key = (sheet_key(&dv.sheet), dv.level.to_ascii_uppercase(), t.map(|t| t.map(f64::to_bits)), why);
+        let k = match at.get(&key) {
+            Some(k) => *k,
+            None if sheets.len() < MAX_REGISTRATIONS => {
+                at.insert(key, sheets.len());
+                sheets.push(PlacedSheet {
+                    sheet: dv.sheet.clone(),
+                    level: dv.level.clone(),
+                    transform: t,
+                    scale: sim.map_or(0.0, |m| m.scale()),
+                    turn_deg: sim.map_or(0.0, |m| m.rotation_deg()),
+                    why: why.to_string(),
+                    devices: Vec::new(),
+                });
+                sheets.len() - 1
+            }
+            None => continue,
+        };
+        if let Some(r) = sheets.get_mut(k) {
+            r.devices.push(i);
+        }
+    }
+    DevicePlacement { devices: devices.len(), sheets }
+}
+
+/// How the build placed one device (Q6645).
+enum Placed {
+    /// A typical room's view: stamped into the rooms of its type.
+    Stamped,
+    /// By its sheet's registration.
+    By(cadaddy_mepfix::tagid::Sim),
+    /// No registration holds.
+    Nowhere,
 }
 
 /// A level as an answer gave it: the elevation and name the user typed, or "Correct".
@@ -1205,6 +1309,7 @@ impl GuidedJob {
             sheet_scales: Vec::new(),
             unread_sheets: Vec::new(),
             devices: Vec::new(),
+            device_placement: None,
             mep: None,
             circuits: Vec::new(),
             auto: false,
@@ -6469,6 +6574,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Every confirmed device goes in the model on its sheet's level (MUST 1): now when there is
     // a building model, and again by the bim_build stage after it drafts the spec.
     job.devices = census.placed.clone();
+    // Read again: the last build's placement of the devices no longer holds (Q6645).
+    job.device_placement = None;
     let has_model = s.doc().is_ok_and(|d| d.building_spec.as_deref().is_some_and(|t| !t.trim().is_empty()));
     results["model"] = if job.devices.is_empty() {
         json!({"inserted": 0})
@@ -8467,6 +8574,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     // Each guest unit's own panel against the units the rooms stage read (Q6351).
     let mut unit_panels = Value::Null;
+    // How the devices go onto the plans (set below when a registration places them).
+    job.device_placement = None;
     if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         // (Or onto the plans the floors were taken from, with no architectural floor plans.)
@@ -8520,6 +8629,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         .is_some_and(|rs| rs.iter().any(|r| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3]))
                 };
                 let placeable = |dv: &super::readers::ReadDevice| if typical.holds(dv) || in_view(dv) { None } else { sim_sheet(dv.at, &dv.level) };
+                // Each sheet's registration as the devices go through it: what Validate's overlay
+                // maps the sheets' symbols through (Q6645).
+                job.device_placement = Some(device_placement(all_devices.get(..job.devices.len()).unwrap_or(&all_devices), |dv| {
+                    if typical.holds(dv) || in_view(dv) { Placed::Stamped } else { sim_sheet(dv.at, &dv.level).map_or(Placed::Nowhere, Placed::By) }
+                }));
                 let out: Vec<_> = all_devices
                     .iter()
                     .filter_map(|dv| {
@@ -10780,7 +10894,7 @@ fn fa_shop_step(s: &Session, job: &mut GuidedJob, devices: &mut Vec<super::reade
 }
 
 /// What a read device is: its sheet's or legend's kind, else its mark's.
-fn device_kind_of(dv: &super::readers::ReadDevice) -> &str {
+pub(crate) fn device_kind_of(dv: &super::readers::ReadDevice) -> &str {
     if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { &dv.kind }
 }
 
@@ -10956,7 +11070,7 @@ const DEFAULT_STOREY_FT: f64 = 10.0;
 /// A plan's level as the building's levels name it: `Level 3`, `Roof`, `B1`.
 /// Uses the canonical level mapping so every alias resolves to one name:
 /// R/RF/ROOF/T.O. → Roof, B/B1 → Basement, PH → Penthouse, M/MEZZ → Mezzanine, etc.
-fn level_name(code: &str) -> String {
+pub(crate) fn level_name(code: &str) -> String {
     // Try canonical_level first; fall back to common short codes that the canonical
     // function doesn't handle as bare single-word inputs.
     let canonical = cadaddy_walk3d::levels::canonical_level(code).map(|(c, _)| c).or_else(|| {
