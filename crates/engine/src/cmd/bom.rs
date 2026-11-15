@@ -1253,7 +1253,7 @@ fn atom_lines(
             // The strut, rods, anchors and clamps of raceways run together (Q6353).
             "strut" | "rod" => ("raceway supports", "ft"),
             "strut_strap" | "support_anchor" | "strut_nut" | "riser_clamp" => ("raceway supports", "each"),
-            "box" | "ring" => ("boxes", "each"),
+            "box" | "ring" | "access_panel" => ("boxes", "each"),
             "cable" | "wire" => ("wire", "ft"),
             _ => continue,
         };

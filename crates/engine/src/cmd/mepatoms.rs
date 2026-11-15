@@ -33,6 +33,7 @@ use crate::{Result, Session};
 
 pub(crate) mod boxclear;
 pub(crate) mod build;
+pub(crate) mod jboxaccess;
 pub(crate) mod splices;
 pub(crate) mod supports;
 
@@ -1473,6 +1474,8 @@ pub(crate) const PIECES: &[&str] = &[
     "bushing",
     "box",
     "ring",
+    // The access panel under a junction box over a hard ceiling (Q6562).
+    "access_panel",
     "cable",
     "wire",
     "strut",

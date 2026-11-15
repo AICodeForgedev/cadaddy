@@ -423,6 +423,15 @@
       "skip_from": ["equipment", "site_work", "ceiling", "floor", "hoistway"]
     },
     {
+      "id": "E-JBOX-ACCESS",
+      "trade": "electrical",
+      "fills": "how a junction box the build infers where runs meet is kept accessible when it sits over a gypsum (hard-lid) ceiling or soffit (panel_item, panel_size, panel_in: the flush access panel set in the ceiling under it, an element of its own listed with the box); a box over a grid ceiling is reached through its tiles, one over an open ceiling is seen",
+      "basis": "NEC 314.29: every box stays accessible without removing any part of the building or its finish; trade practice: a junction box over a gypsum ceiling gets a flush access panel in the ceiling under it, set by the ceiling trade and furnished with the box, the box itself where the runs meet; alternative: the splice moved into a device box or to a spot over an accessible ceiling, which re-routes the runs and may be what the field coordinates instead",
+      "panel_item": "Access panel, 12\" x 12\", flush, for gypsum ceiling",
+      "panel_size": "12\" x 12\"",
+      "panel_in": 12.0
+    },
+    {
       "id": "E-SENSOR-POWER-PACK",
       "trade": "electrical",
       "fills": "the power pack each low-voltage occupancy or vacancy sensor zone needs, which the plans rarely draw: one per zone (a room, or each switched or dimmed leg in it when its sensors carry leg letters), a dimming pack when the zone's sensor dims 0-10V, mounted on a box beside the controlled luminaire nearest its sensors, the zone's sensors wired to it with low-voltage cable; a wall-box sensor that switches line voltage itself takes none; a pack the documents draw in a room is that room's (numbers and words: low_voltage_words and line_voltage_words, what a sensor's legend, type or product says of its voltage, read first; remote_words and wallbox_words, what they say of where it mounts; then what the specification's lighting control section says (a separate power pack, recorded on each sensor as control_power; spec_context_lines, how many lines after one naming a sensor still speak of sensors); remote_mountings, the mountings (the built element's) of a sensor that is never in a wall box; wallbox_max_height_in, the highest a wall-box sensor (a switch's replacement, at switch height) is mounted: one on a wall higher is a high-wall sensor; dimming_words, a sensor that dims; pack_words, a drawn pack; switching_item, dimming_item, box_item and box_size, cable_item and cable_size, what is bought; cable_slack_ft, the drops and makeup each sensor's cable adds to the plan run; default_cable_ft, one sensor's cable when no location is known; zone_reach_ft, how far from its sensors a luminaire the sensor does not name may be and still take the pack)",

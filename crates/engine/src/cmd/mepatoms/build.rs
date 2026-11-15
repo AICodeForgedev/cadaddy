@@ -2818,6 +2818,65 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
     }
+    // -- Junction boxes over a hard ceiling (Q6562, NEC 314.29): an access panel under each. --
+    let (mut access_panels, mut access_unknown) = (0usize, 0usize);
+    let junction_boxes: Vec<usize> =
+        atoms.iter().enumerate().filter(|(_, (a, _))| a.kind == "box" && a.extra.iter().any(|x| x.0 == "junction")).map(|(i, _)| i).collect();
+    if !junction_boxes.is_empty() {
+        let jx = super::jboxaccess::Rule::load();
+        let built = super::super::propfill::built_ceilings_with_grids_on_plans(d);
+        for bi in junction_boxes {
+            if atoms.len() >= MAX_ATOMS {
+                break;
+            }
+            let Some((at, ctx)) = atoms.get(bi).map(|(a, c)| (a.a, c.clone())) else { continue };
+            let under = super::jboxaccess::under(sp, &built, &ctx.level, Vec2::new(at.x, at.y), upf);
+            if under == super::jboxaccess::Under::Unknown {
+                access_unknown += 1;
+            }
+            let Some(hard) = super::jboxaccess::over_hard(&under, at.z) else { continue };
+            let why = format!(
+                "the junction box where the runs meet is above {}, where nothing reaches it (NEC 314.29 keeps every box accessible): {} in the ceiling under it",
+                hard.what, jx.panel_item
+            );
+            if let Some(b) = atoms.get_mut(bi) {
+                b.0.extra.push(("design:access", format!("none: above {}", hard.what), "computed: the box as placed".into()));
+                b.0.extra.push(("access", format!("{} in the ceiling under it", jx.panel_item), jx.basis.clone()));
+                b.0.extra.push(("correction:access", format!("{}: {why}", super::jboxaccess::RULE), jx.basis.clone()));
+            }
+            // The panel is flush with the ceiling's underside: an element of its own (the takeoff
+            // counts it), connected to the box it serves.
+            let side = jx.panel_in / 12.0 * upf;
+            let thick = 0.75 / 12.0 * upf;
+            let mut pctx = ctx.clone();
+            pctx.body = Some((Vec3::new(at.x, at.y, hard.z + thick / 2.0), Vec2::new(1.0, 0.0), side, side, thick));
+            pctx.src = rule_source(&jx.basis);
+            pctx.made = Made::Inferred;
+            pctx.basis = jx.basis.clone();
+            let mut panel = Atom::fitting(
+                "access_panel",
+                jx.panel_item.clone(),
+                "access panel",
+                &jx.panel_size,
+                Vec3::new(at.x, at.y, hard.z),
+                Vec3::new(0.0, 0.0, 0.01 * upf),
+                jx.panel_in,
+                &jx.basis,
+            );
+            panel.connects = vec![bi];
+            panel.extra.push(("access_to", "the junction box over it".into(), "computed".into()));
+            panel.extra.push(("ceiling", hard.what.clone(), "computed: the ceiling under the box".into()));
+            // The box's own `connects` stay its runs' ends (its splices are read from them).
+            atoms.push((panel, pctx));
+            access_panels += 1;
+        }
+    }
+    if access_panels > 0 && notes.len() < 200 {
+        notes.push(format!(
+            "{access_panels} junction box(es) above a gypsum ceiling: an access panel in the ceiling under each ({})",
+            super::jboxaccess::RULE
+        ));
+    }
     for (base, ends, deg, cite) in bend_notes {
         for e in ends.iter().flatten() {
             if let Some(a) = atoms.get_mut(base + e) {
@@ -3251,6 +3310,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomsByKind": by_kind,
         "atomChains": chains_n,
         "junctionBoxes": junctions,
+        // Junction boxes over a gypsum ceiling and the access panels under them (Q6562); boxes
+        // over no ceiling the documents type are left as they are and counted.
+        "junctionAccess": {"accessPanels": access_panels, "ceilingNotKnown": access_unknown, "rule": super::jboxaccess::RULE},
         "deviceBoxes": boxes.len(),
         "boxesMade": box_reasons.values().sum::<usize>(),
         "boxesByReason": box_reasons,
@@ -4905,5 +4967,73 @@ mod tests {
         assert!((conduit_ft - 40.0).abs() < 0.5, "{conduit_ft} ft {r}");
         assert_eq!(r["racewayLaidOnce"]["ft"], json!(20.0), "{r}");
         assert_eq!(r["junctionBoxes"], json!(1), "{r}");
+    }
+
+    /// Q6562: a junction box the build infers over a gypsum ceiling gets an access panel in the
+    /// ceiling under it (NEC 314.29), listed with the box and counted; one over a grid or no
+    /// typed ceiling, or over a ceiling higher than the box, gets none.
+    #[test]
+    fn a_junction_box_over_a_gypsum_ceiling_gets_an_access_panel_under_it() {
+        let routed = |id: &str, end: f64| json!({"system": "E-BRANCH", "level": "Level 1", "id": id, "points": [[0, 0], [240, 0], [240, end]], "size_in": [0.5, 0], "bottoms_ft": [8.0, 8.0], "height_source": "routed"});
+        let build_with = |rcp: serde_json::Value| {
+            let sp = json!({
+                "version": 1, "units_per_foot": 12,
+                "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
+                "ceiling_types": [{"name": "HL-1", "kind": "gypsum"}, {"name": "AT-1", "kind": "grid"}],
+                "rcp": rcp,
+                "mep": {
+                    "systems": [{"name": "E-BRANCH", "layer": "E-BRANCH", "kind": "conduit", "size_in": [0.5, 0], "bottom_ft": 8, "show": true}],
+                    "runs": [routed("circuit:Level 1:room-1:Q-1#1", 120.0), routed("circuit:Level 1:room-1:Q-1#2", -120.0)]
+                },
+                "tags": [{"id": "circuit:Level 1:room-1:Q-1", "kind": "circuit", "level": "Level 1", "at_ft": [0, 0], "fields": {"circuit": {"value": "Q-1", "source": "plan"}, "panel": {"value": "Q", "source": "plan"}}}]
+            });
+            let sp = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_string()).expect("spec");
+            let mut d = Drawing::default();
+            let r = build(&mut d, &sp);
+            (d, r)
+        };
+        let area = |ty: &str, h: f64| json!({"ceilings": [{"level": "Level 1", "room": "A", "outline": [[-60, -180], [540, -180], [540, 180], [-60, 180]], "height_ft": h, "ceiling_type": ty}]});
+        let of_kind = |d: &Drawing, k: &str| -> Vec<Props> {
+            d.model
+                .iter()
+                .map(|e| props::read(&e.common.xdata))
+                .filter(|ps| ps.get(super::super::ATOM_KEY).map(Prop::text).as_deref() == Some(k))
+                .collect()
+        };
+        let text = |ps: &Props, k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
+        // Over a gypsum ceiling at 7'-6": one panel, at the ceiling, under the box.
+        let (d, r) = build_with(area("HL-1", 7.5));
+        assert_eq!(r["junctionBoxes"], json!(1), "{r}");
+        assert_eq!(r["junctionAccess"]["accessPanels"], json!(1), "{r}");
+        let panels = of_kind(&d, "access_panel");
+        assert_eq!(panels.len(), 1, "{r}");
+        let p = panels.first().expect("panel");
+        assert!(text(p, "item").to_ascii_lowercase().contains("access panel"), "{}", text(p, "item"));
+        assert!(text(p, "ceiling").contains("room A") && text(p, "ceiling").contains("7'-6\""), "{}", text(p, "ceiling"));
+        assert!(text(p, "elevation").parse::<f64>().is_ok_and(|z| (z - 7.5).abs() < 0.1), "flush with the ceiling: {}", text(p, "elevation"));
+        // Counted: the takeoff and the BOM list it.
+        let ix = super::super::Index::of(&d);
+        assert_eq!(
+            ix.rows.iter().filter(|(k, _)| k.kind == "access_panel").map(|(_, t)| t.count).sum::<u64>(),
+            1,
+            "{:?}",
+            ix.rows.keys().map(|k| &k.kind).collect::<Vec<_>>()
+        );
+        // The box keeps the design value beside the correction.
+        let jb: Vec<Props> = of_kind(&d, "box").into_iter().filter(|ps| ps.get("junction").is_some()).collect();
+        let b = jb.first().expect("junction box");
+        assert!(text(b, "design:access").starts_with("none"), "{}", text(b, "design:access"));
+        assert!(text(b, "access").to_ascii_lowercase().contains("access panel"), "{}", text(b, "access"));
+        assert!(text(b, "correction:access").starts_with(super::super::jboxaccess::RULE) && text(b, "correction:access").contains("314.29"));
+        // Over a grid ceiling: reached through its tiles, no panel.
+        let (d, r) = build_with(area("AT-1", 7.5));
+        assert_eq!((r["junctionAccess"]["accessPanels"].clone(), of_kind(&d, "access_panel").len()), (json!(0), 0), "{r}");
+        // A gypsum ceiling over the box (the box in the room under it): no panel.
+        let (d, r) = build_with(area("HL-1", 9.5));
+        assert_eq!(of_kind(&d, "access_panel").len(), 0, "{r}");
+        // No ceiling read: not known, left as it is and counted.
+        let (d, r) = build_with(json!({}));
+        assert_eq!(of_kind(&d, "access_panel").len(), 0, "{r}");
+        assert_eq!(r["junctionAccess"]["ceilingNotKnown"], json!(1), "{r}");
     }
 }
