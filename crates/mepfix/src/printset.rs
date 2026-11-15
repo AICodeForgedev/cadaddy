@@ -1898,13 +1898,22 @@ const SERIES_MIN_PAGES: usize = 5;
 /// two letters whose first is a discipline (rule data `sheets.discipline_prefix`). A mark that
 /// repeats page to page is one number, not a series; and where a series sits still has to agree
 /// page to page before it gives the set a number spot ([`number_spots`]).
+///
+/// Every number is looked at, so the result never depends on page order: the stream is already
+/// bounded by its pages ([`MAX_SHEETS`]) and each page's candidates. What is kept is bounded by
+/// value, not by position: one or two capital letters make at most 702 series, and each keeps no
+/// more than the [`SERIES_MIN_PAGES`] different numbers that make it one.
 fn set_series(numbers: impl Iterator<Item = String>) -> std::collections::BTreeSet<String> {
     let mut by_letters: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
-    for n in numbers.take(MAX_SHEETS * 64) {
+    for n in numbers {
         let n = n.trim().to_ascii_uppercase();
         let letters = sheet_facts::discipline_of(&n);
-        if (1..=2).contains(&letters.len()) {
-            by_letters.entry(letters).or_default().insert(n);
+        if !(1..=2).contains(&letters.len()) {
+            continue;
+        }
+        let seen = by_letters.entry(letters).or_default();
+        if seen.len() < SERIES_MIN_PAGES {
+            seen.insert(n);
         }
     }
     let known = crate::wordrules::pairs("sheets.discipline_prefix");
@@ -3597,6 +3606,22 @@ mod classify_tests {
         assert!(s(&["XQ1", "XQ2", "XQ3", "XQ4", "XQ5"]).is_empty());
         assert!(s(&["RTU1", "RTU2", "RTU3", "RTU4", "RTU5"]).is_empty());
         assert!(s(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_series_does_not_depend_on_page_order() {
+        // a big set: one number repeated on page after page, then another discipline's five
+        // numbers; the second series is found whichever comes first
+        let repeated = || std::iter::repeat_n("GX101".to_string(), 130_000);
+        let late = || (1..=5).map(|i| format!("AJ20{i}"));
+        let first = set_series(repeated().chain(late())).into_iter().collect::<Vec<_>>();
+        let last = set_series(late().chain(repeated())).into_iter().collect::<Vec<_>>();
+        assert_eq!(first, ["AJ"]);
+        assert_eq!(last, ["AJ"]);
+        // many different numbers of one series ahead of another still leave room for the other
+        let many = || (0..200_000).map(|i| format!("GX{i}"));
+        assert_eq!(set_series(many().chain(late())).into_iter().collect::<Vec<_>>(), ["AJ", "GX"]);
+        assert_eq!(set_series(late().chain(many())).into_iter().collect::<Vec<_>>(), ["AJ", "GX"]);
     }
 
     #[test]
