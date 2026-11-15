@@ -4,7 +4,8 @@
 
 use cadaddy_doc::{Common, Entity, EntityKind, Handle, LwPolyline, MAX_BLOCK_DEPTH, Space};
 use cadaddy_geom::{
-    Arc, Ellipse, Line, Mat3, PolyVertex, Polyline, Segment, Spline, TAU, Vec2, ccw_sweep, intersect_ext, line_circle, line_line_infinite, norm_angle,
+    Arc, Ellipse, Line, Mat3, PolyVertex, Polyline, Segment, Spline, TAU, Vec2, Vec3, ccw_sweep, intersect_ext, line_circle, line_line_infinite,
+    norm_angle,
 };
 use serde_json::{Value, json};
 
@@ -59,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(SelOp::new(SelKind::Reverse)))),
         CommandSpec::new("ncopy", "Copy Nested Objects", run_ncopy)
             .menu(&["Modify", "Copy Nested Objects"])
-            .params("{handle (block reference), pick?: [x,y] (nearest nested object; default all), delta? | from,to}")
+            .params("{handle (block reference), pick?: [x,y] (nearest nested object; default all), delta? ([dx,dy] or [dx,dy,dz]) | from,to (points with an optional z)}")
             .interactive(|_| Ok(Box::new(NcopyM::default()))),
         CommandSpec::new("chspace", "Change Space", run_chspace)
             .menu(&["Modify", "Change Space"])
@@ -1858,13 +1859,15 @@ fn run_ncopy(s: &mut Session, p: &Value) -> Result<Value> {
     if items.is_empty() {
         return Err(other("The block reference has no nested objects."));
     }
-    let delta = match (point_param(p, "delta"), point_param(p, "from"), point_param(p, "to")) {
-        (Some(d), _, _) => d,
-        (None, Some(a), Some(b)) => b - a,
-        _ => Vec2::ZERO,
-    };
-    let hs = place_copies(s, &items, delta)?;
-    Ok(json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
+    // A height copies up or down, as COPY does (Q6656).
+    let delta = if p.get("delta").is_some() || (p.get("from").is_some() && p.get("to").is_some()) { delta3_param("ncopy", p)? } else { Vec3::ZERO };
+    let hs = place_copies(s, &items, delta.xy())?;
+    let kept = super::modify::lift(s, &hs, delta.z)?;
+    let mut out = json!({ "handles": hs.iter().map(|h| h.hex()).collect::<Vec<_>>() });
+    if let Some(note) = super::modify::flat_note(kept) {
+        out["message"] = json!(note);
+    }
+    Ok(out)
 }
 
 #[derive(Default)]
