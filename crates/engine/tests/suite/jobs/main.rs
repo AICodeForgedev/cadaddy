@@ -137,6 +137,7 @@ mod wall_list_edits;
 mod wallgen;
 mod walllayout;
 mod walltypedata;
+mod whip_shape;
 mod wholejob;
 mod window_frame_gap;
 mod windows_typed;
