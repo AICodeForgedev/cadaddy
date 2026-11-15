@@ -16,6 +16,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("crash_report.rs", "", "the panic hook's report, written when the app dies"),
     ("cmd/file.rs", "OpenOptions::new().write(true)", "appends to the file being saved; writefile::check on the line before refuses a dry run"),
     ("lisp/builtins.rs", "OpenOptions::new()", "(open ... \"w\"); writefile::check just above refuses a dry run"),
+    (
+        "cmd/validate_trend.rs",
+        "OpenOptions::new().write(true).create_new(true)",
+        "the trend index's exclusively created temporary file (unsynced cache); writefile::check on it and the index just above refuses a dry run",
+    ),
 ];
 
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -956,7 +956,7 @@ fn write_index_native(path: &str, bytes: &[u8]) {
     }
     let wrote = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| f.write_all(bytes));
     if wrote.is_err() || crate::writefile::rename(&tmp, path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = crate::writefile::remove(&tmp);
     }
 }
 
