@@ -3125,8 +3125,8 @@ fn damaged_text_height(height: f64, sheet_pts: (f64, f64)) -> bool {
     !height.is_finite() || height > sheet_pts.0.max(sheet_pts.1).max(72.0)
 }
 
-/// The boxes of a page's visible real text items, a quarter letter round, for finding what lies
-/// on them.
+/// The boxes of a page's visible real text items (or its hidden ones, [`TextCover::hidden`]), a
+/// quarter letter round, for finding what lies on them.
 struct TextCover {
     boxes: Vec<[f64; 4]>,
     grid: HashMap<(i64, i64), Vec<usize>>,
@@ -3136,9 +3136,18 @@ impl TextCover {
     const CELL: f64 = 36.0;
 
     fn new(texts: &[TextOut]) -> TextCover {
+        Self::of(texts, false)
+    }
+
+    /// The boxes of the hidden texts: the searchable copies of lettering drawn as strokes.
+    fn hidden(texts: &[TextOut]) -> TextCover {
+        Self::of(texts, true)
+    }
+
+    fn of(texts: &[TextOut], hidden: bool) -> TextCover {
         let mut boxes: Vec<[f64; 4]> = Vec::new();
         let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-        for t in texts.iter().filter(|t| !t.value.trim().is_empty() && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)) {
+        for t in texts.iter().filter(|t| !t.value.trim().is_empty() && (t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER)) == hidden) {
             let h = t.height.max(0.5);
             let (dx, dy) = (t.end.0 - t.at.0, t.end.1 - t.at.1);
             let len = dx.hypot(dy);
@@ -5594,6 +5603,9 @@ struct SymbolInstance {
     ocr_idx: Option<usize>,
     /// The device-type tag from nearby hidden text (e.g. "A", "G", "OS").
     device_type: Option<String>,
+    /// Strokes its cluster took that the symbol step left loose where printed (not the
+    /// symbol's: a leader, a copy's own lettering).
+    released: Vec<usize>,
 }
 
 /// A short mark that may name the device beside it: real PDF text, or lettering the OCR read
@@ -5688,6 +5700,52 @@ fn stands_alone(i: usize, height: f64, boxes: &[[f64; 4]]) -> bool {
     boxes.iter().enumerate().all(|(k, o)| k == i || !(o[0] <= b[2] + gap && o[2] >= b[0] - gap && o[1] <= b[3] + gap && o[3] >= b[1] - gap))
 }
 
+/// The readings of lettering that spell a tag a symbol took from the page's text, read from
+/// strokes the symbol's cluster held and the symbol step left loose: the symbol's TAG attribute
+/// prints that tag. A copy's own lettering is not shared by its type's other copies, so it
+/// leaves the symbol's block (Q6636) and is read like any lettering; written as a text of its
+/// own as well, the tag would stand twice, once loose (a door's tag in a corridor read as a
+/// room's number).
+fn tag_lettering_readings(groups: &[Vec<SymbolInstance>], texts: &[TextOut], readings: &[RecoveredText]) -> Vec<usize> {
+    let tags: Vec<(&str, &[usize])> = groups
+        .iter()
+        .flatten()
+        .filter(|inst| !inst.released.is_empty())
+        .filter_map(|inst| Some((texts.get(inst.nearby_text_idx?)?.value.trim(), inst.released.as_slice())))
+        .filter(|(v, _)| !v.is_empty())
+        .collect();
+    readings
+        .iter()
+        .enumerate()
+        .filter(|(_, rt)| {
+            let v = rt.value.trim();
+            !rt.stroke_indices.is_empty()
+                && tags.iter().any(|(tag, released)| tag.eq_ignore_ascii_case(v) && rt.stroke_indices.iter().all(|si| released.contains(si)))
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The strokes a symbol's cluster held and the symbol step left loose that lie on a hidden text:
+/// a copy's own lettering (its circuit, its number: drawn differently at each copy, so in no
+/// block), which that hidden text stands for. They go where the import puts all lettering a
+/// hidden text confirms (its source layer, off), not loose on the plan as linework, where the
+/// rooms and walls readers would take them for lines of the building (Q6636).
+fn released_lettering(groups: &[Vec<SymbolInstance>], strokes: &[Stroke], texts: &[TextOut]) -> Vec<usize> {
+    let cover = TextCover::hidden(texts);
+    if cover.boxes.is_empty() {
+        return Vec::new();
+    }
+    groups
+        .iter()
+        .flatten()
+        .flat_map(|inst| inst.released.iter().copied())
+        .filter(|&si| {
+            strokes.get(si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_some_and(|b| cover.covers(b[0], b[1]) && cover.covers(b[2], b[3]))
+        })
+        .collect()
+}
+
 /// Smallest and largest symbol on a sheet, in points.
 fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
     let short = (sheet.0 * 72.0).min(sheet.1 * 72.0);
@@ -5699,14 +5757,17 @@ fn symbol_size_range(sheet: (f64, f64)) -> (f64, f64) {
 /// copies share, so no copy's own strokes are erased and none are invented at another copy.
 /// Each instance is first rid of the drawing round it its cluster took
 /// ([`release_foreign_strokes`]).
-fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke], fills: &[Fill]) -> Vec<Vec<SymbolInstance>> {
+fn group_symbols(instances: Vec<SymbolInstance>, strokes: &[Stroke], fills: &[Fill], doors: &HashSet<usize>) -> Vec<Vec<SymbolInstance>> {
     let mut groups: BTreeMap<String, Vec<SymbolInstance>> = BTreeMap::new();
     for inst in instances {
         let key = inst.device_type.clone().unwrap_or_else(|| "UNKNOWN".to_string());
         groups.entry(key).or_default().push(inst);
     }
     let mut out = Vec::new();
+    let lines = LineRuns::new(strokes);
     for mut group in groups.into_values().filter(|g| g.len() >= 2) {
+        release_doors(&mut group, doors);
+        release_line_dashes(&mut group, strokes, &lines);
         release_foreign_strokes(&mut group, strokes);
         out.extend(split_by_shared_drawing(group, strokes, fills));
     }
@@ -5756,8 +5817,109 @@ fn release_foreign_strokes(group: &mut [SymbolInstance], strokes: &[Stroke]) {
         if size <= 0.0 {
             continue;
         }
-        inst.stroke_indices
-            .retain(|&si| strokes.get(si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size));
+        let (kept, gone): (Vec<usize>, Vec<usize>) = inst.stroke_indices.iter().partition(|&&si| {
+            strokes.get(si).and_then(|s| bbox(std::slice::from_ref(&s.pts))).is_none_or(|b| extent(b) <= FOREIGN_STROKE_OVER * size)
+        });
+        inst.stroke_indices = kept;
+        inst.released.extend(gone);
+    }
+}
+
+/// The page's straight strokes by the line they lie on (direction and offset, to
+/// [`KEY_TOL_PT`]), each line's strokes as their spans along it: finds the strokes a line
+/// drawn in pieces runs through end to end ([`LineRuns::continues_both_ways`]).
+struct LineRuns {
+    /// (direction bucket, offset bucket) → (start, end) along the line, sorted by start.
+    by_line: HashMap<(i64, i64), Vec<(f64, f64)>>,
+}
+
+impl LineRuns {
+    fn new(strokes: &[Stroke]) -> Self {
+        let mut by_line: HashMap<(i64, i64), Vec<(f64, f64)>> = HashMap::new();
+        for s in strokes {
+            if let Some((key, span)) = Self::line_of(s) {
+                by_line.entry(key).or_default().push(span);
+            }
+        }
+        for spans in by_line.values_mut() {
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        LineRuns { by_line }
+    }
+
+    /// A straight open stroke's line (its direction, half a degree, and its offset from the
+    /// page's origin square to it) and its span along that line.
+    fn line_of(s: &Stroke) -> Option<((i64, i64), (f64, f64))> {
+        let (&[a, b], false) = (s.pts.as_slice(), s.closed) else { return None };
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        if dx.hypot(dy) <= KEY_TOL_PT {
+            return None;
+        }
+        // direction in [0°, 180°): a line read either way round is the same line
+        let deg = dy.atan2(dx).to_degrees().rem_euclid(180.0);
+        let dir = (deg * 2.0).round() as i64 % 360;
+        let (sin, cos) = (f64::from(dir as i32) / 2.0).to_radians().sin_cos();
+        let off = ((-sin * a.0 + cos * a.1) / KEY_TOL_PT).round() as i64;
+        let (p, q) = (cos * a.0 + sin * a.1, cos * b.0 + sin * b.1);
+        p.is_finite().then_some(((dir, off), (p.min(q), p.max(q))))
+    }
+
+    /// Whether `s` is one piece of a line drawn in pieces (a dash of a grid, centre or hidden
+    /// line, a run of a wall face): another stroke on its line starts within its own length
+    /// past its one end, and another ends within its own length before its other end.
+    fn continues_both_ways(&self, s: &Stroke) -> bool {
+        let Some(((dir, off), (lo, hi))) = Self::line_of(s) else { return false };
+        let reach = hi - lo;
+        let mut after = false;
+        let mut before = false;
+        for o in off - 1..=off + 1 {
+            let Some(spans) = self.by_line.get(&(dir, o)) else { continue };
+            // spans starting from just inside its end to its own length past it
+            let from = spans.partition_point(|sp| sp.0 < hi - KEY_TOL_PT);
+            after |= spans.get(from).is_some_and(|sp| sp.0 <= hi + reach);
+            // spans ending from its own length before its start to just inside it, starting
+            // before it (one search, capped: a line's spans don't overlap much)
+            let to = spans.partition_point(|sp| sp.0 < lo);
+            before |=
+                spans.get(to.saturating_sub(MAX_LINE_LOOKBACK)..to).into_iter().flatten().any(|sp| sp.1 >= lo - reach && sp.1 <= lo + KEY_TOL_PT);
+            if after && before {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// A symbol's cluster can take the swing and leaf of the door beside its tag (a receptacle's
+/// circuit printed by a door): two copies by doors swung alike draw them alike, and a block of
+/// them hides the door from the readers (no door built, the room open through its doorway). A
+/// door's swing and leaf, as the reader finds them ([`door_swings_apart`]), are the door's and
+/// stay loose where printed (Q6636).
+fn release_doors(group: &mut [SymbolInstance], doors: &HashSet<usize>) {
+    if doors.is_empty() {
+        return;
+    }
+    for inst in group.iter_mut() {
+        let (gone, kept): (Vec<usize>, Vec<usize>) = inst.stroke_indices.iter().partition(|si| doors.contains(si));
+        inst.stroke_indices = kept;
+        inst.released.extend(gone);
+    }
+}
+
+/// A symbol's cluster can take the dashes of a line passing by it (the grid line a receptacle
+/// on a column line sits on, a wall's centre line): every copy on such a line draws a dash
+/// alike, and a block of them would carry the line's pieces into the model as the symbol's
+/// drawing (a grid line's dashes, in a block, close a corridor into two rooms). A straight
+/// stroke at least as long as the tag's letters that its line continues past both ends is
+/// that line's, never the symbol's, and stays loose where printed (Q6636).
+fn release_line_dashes(group: &mut [SymbolInstance], strokes: &[Stroke], lines: &LineRuns) {
+    for inst in group.iter_mut() {
+        let letters = inst.nearby_text_at.map_or(0.0, |t| t.1);
+        let (gone, kept): (Vec<usize>, Vec<usize>) = inst.stroke_indices.iter().partition(|&&si| {
+            strokes.get(si).is_some_and(|s| LineRuns::line_of(s).is_some_and(|(_, (lo, hi))| hi - lo >= letters) && lines.continues_both_ways(s))
+        });
+        inst.stroke_indices = kept;
+        inst.released.extend(gone);
     }
 }
 
@@ -6003,7 +6165,9 @@ fn keep_pieces(mut inst: SymbolInstance, pieces: &[Piece], keep: &[usize], centr
         return inst;
     }
     let kept: Vec<&Piece> = keep.iter().filter_map(|&k| pieces.get(k)).collect();
-    inst.stroke_indices = kept.iter().filter(|p| !p.fill).map(|p| p.idx).collect();
+    let stroke_indices: Vec<usize> = kept.iter().filter(|p| !p.fill).map(|p| p.idx).collect();
+    inst.released.extend(inst.stroke_indices.iter().filter(|si| !stroke_indices.contains(si)));
+    inst.stroke_indices = stroke_indices;
     inst.fill_indices = kept.iter().filter(|p| p.fill).map(|p| p.idx).collect();
     inst.center = centre;
     inst
@@ -6027,6 +6191,8 @@ const PIECE_TOL_PT: f64 = 1.0;
 const MAX_ALIKE_PIECES: usize = 16;
 /// … and most votes per copy.
 const MAX_PIECE_VOTES: usize = 4096;
+/// Most strokes before a line's piece that are looked at for one ending at its start.
+const MAX_LINE_LOOKBACK: usize = 64;
 /// Most blocks one device type is split into by how its copies are drawn; copies past them are
 /// blocks of their own.
 const MAX_SYMBOL_VARIANTS: usize = 64;
@@ -6207,6 +6373,7 @@ fn find_symbol_instances(
         }
 
         instances.push(SymbolInstance {
+            released: Vec::new(),
             center,
             stroke_indices: cluster,
             fill_indices: cluster_fills,
@@ -6616,7 +6783,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             .filter(|(i, t)| is_device_tag(&t.value) && !is_annotation_word(&t.value) && Some(*i) != sheet_no && t.height <= tall)
             .map(|(i, t)| TagAnchor { value: &t.value, at: t.at, height: t.height, text_idx: Some(i), ocr_idx: None })
             .collect();
-        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes, &fills);
+        // the door swings and leaves on the page: a door's, never a symbol's
+        let doors = door_swings_apart(&strokes);
+        let found = group_symbols(find_symbol_instances(&strokes, &fills, &anchors, sheet, &shx_stroke_indices, false), &strokes, &fills, &doors);
         let mut instances: Vec<SymbolInstance> = found.into_iter().flatten().collect();
         let mut taken: HashSet<usize> = shx_stroke_indices.clone();
         for inst in &instances {
@@ -6815,7 +6984,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             notes.push(format!("DO NOT SCALE note found in recovered SHX text — overriding scale {old_scale}x → 1.0"));
         }
 
-        let symbol_groups = group_symbols(instances, &strokes, &fills);
+        let symbol_groups = group_symbols(instances, &strokes, &fills, &doors);
         let mut symbol_stroke_indices: HashSet<usize> = HashSet::new();
         let mut symbol_fill_indices: HashSet<usize> = HashSet::new();
         let mut symbol_text_indices: HashSet<usize> = HashSet::new();
@@ -6829,6 +6998,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 symbol_ocr_indices.extend(inst.ocr_idx);
             }
         }
+        // the lettering of a tag a symbol took from the page's text is that TAG too
+        symbol_ocr_indices.extend(tag_lettering_readings(&symbol_groups, &texts, &recovered_texts));
+        shx_stroke_indices.extend(released_lettering(&symbol_groups, &strokes, &texts).into_iter().filter(|si| !symbol_stroke_indices.contains(si)));
         if total_symbols > 0 {
             stats.insert("symbol instances detected".into(), total_symbols);
             stats.insert("symbol types".into(), symbol_groups.len());
@@ -9460,5 +9632,97 @@ mod tests {
         for pair in ["8\" 16'-8\"", "10\" 1'-9\"", "3\" 6'-2\"", "1/8\" 1'-1\"", "1\" 25'"] {
             assert_eq!(standard_pair_scale(pair), None, "{pair}");
         }
+    }
+
+    #[test]
+    fn a_copys_own_lettering_left_by_its_symbol_is_filed_as_lettering_and_its_tag_read_once() {
+        // Q6636: a copy's own lettering (drawn differently at each copy) is in no block. A copy
+        // tagged R10 (its hidden text) whose cluster held the strokes spelling R10 and a stacked
+        // second circuit (another hidden text) released them: a reading of those strokes is the
+        // TAG the insert prints (not written again, loose: a door's tag read as a room number),
+        // and every released stroke lying on a hidden text goes with the lettering. A reading of
+        // the same string from strokes the symbol never held, and a released stroke on no text
+        // (a leader), stay as they are.
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let hidden = |value: &str, at: (f64, f64)| TextOut {
+            at,
+            end: (at.0 + 18.0, at.1),
+            height: 6.0,
+            rotation: 0.0,
+            width_factor: 1.0,
+            value: value.into(),
+            pen,
+            layer: Some(HIDDEN_TEXT_LAYER.into()),
+            style: None,
+            order: 0,
+        };
+        let texts = vec![hidden("R10", (100.0, 100.0)), hidden("R-74", (100.0, 92.0)), hidden("R10", (300.0, 100.0))];
+        let strokes = vec![
+            st(vec![(101.0, 100.5), (101.0, 105.0)]), // 0: the R of R10, on its tag
+            st(vec![(108.0, 100.5), (111.0, 105.0)]), // 1: its 1
+            st(vec![(104.0, 92.5), (107.0, 97.0)]),   // 2: the stacked circuit's lettering
+            st(vec![(90.0, 90.0), (60.0, 60.0)]),     // 3: a leader, on no text
+            st(vec![(301.0, 100.5), (301.0, 105.0)]), // 4: lettering of another R10, no symbol's
+        ];
+        let inst = SymbolInstance {
+            center: (95.0, 100.0),
+            stroke_indices: Vec::new(),
+            fill_indices: Vec::new(),
+            nearby_text: Some("R10".into()),
+            nearby_text_idx: Some(0),
+            nearby_text_at: Some(((100.0, 100.0), 6.0)),
+            ocr_idx: None,
+            device_type: Some("R".into()),
+            released: vec![0, 1, 2, 3],
+        };
+        let groups = vec![vec![inst]];
+        let reading = |v: &str, at: (f64, f64), of: &[usize]| RecoveredText {
+            at,
+            height: 6.0,
+            value: v.into(),
+            stroke_indices: of.iter().copied().collect(),
+            pen,
+            layer: None,
+            unconfirmed: false,
+            confidence: None,
+            review: false,
+            strokes_stay: false,
+            rotation: 0.0,
+            in_cell: false,
+        };
+        let readings = vec![
+            reading("R10", (100.0, 100.0), &[0, 1]),
+            reading("R10", (300.0, 100.0), &[4]),
+            reading("R-74", (100.0, 92.0), &[2]),
+            reading("R10", (100.0, 100.0), &[]),
+        ];
+        assert_eq!(tag_lettering_readings(&groups, &texts, &readings), vec![0], "only the tag read from the strokes its symbol left");
+        let mut filed = released_lettering(&groups, &strokes, &texts);
+        filed.sort_unstable();
+        assert_eq!(filed, vec![0, 1, 2], "the released strokes on a hidden text are lettering; the leader is not");
+        // with no hidden text on the page, nothing is filed as lettering
+        let visible: Vec<TextOut> = texts.iter().map(|t| TextOut { layer: None, ..hidden(&t.value, t.at) }).collect();
+        assert!(released_lettering(&groups, &strokes, &visible).is_empty());
+    }
+
+    #[test]
+    fn a_line_drawn_in_pieces_runs_through_its_dashes_end_to_end() {
+        // Q6636: the dashes of a grid or centre line (and a wall face drawn in runs) continue
+        // past both ends along their own line; a symbol's bar, a dash at a line's end, or a
+        // stroke beside a dashed line (off it by a point) does not.
+        let pen = Pen { rgb: [0, 0, 0], lw: 0, transp: 0 };
+        let st = |pts: Vec<(f64, f64)>| Stroke { pts, closed: false, pen, layer: None, curve_loop: false, curved_loop: false, order: 0 };
+        let mut strokes: Vec<Stroke> = (0..6).map(|k| f64::from(k) * 20.0).map(|y| st(vec![(50.0, 200.0 + y), (50.0, 214.0 + y)])).collect();
+        // the same line read the other way round, slanted at 30°
+        let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        strokes.extend(
+            (0..3).map(|k| f64::from(k) * 16.0).map(|t| st(vec![(300.0 + (t + 12.0) * c, 100.0 + (t + 12.0) * s), (300.0 + t * c, 100.0 + t * s)])),
+        );
+        strokes.push(st(vec![(51.0, 242.0), (51.0, 252.0)])); // beside the line, a point off it
+        strokes.push(st(vec![(120.0, 300.0), (132.0, 300.0)])); // a bar on its own
+        let lines = LineRuns::new(&strokes);
+        let runs: Vec<bool> = strokes.iter().map(|s| lines.continues_both_ways(s)).collect();
+        assert_eq!(runs, [false, true, true, true, true, false, false, true, false, false, false]);
     }
 }

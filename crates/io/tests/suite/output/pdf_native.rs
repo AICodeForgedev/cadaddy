@@ -956,6 +956,103 @@ fn copies_of_one_tag_drawn_two_ways_are_two_blocks() {
     assert_eq!(per_block.values().copied().collect::<Vec<_>>(), vec![3, 3], "two blocks of three: {per_block:?}");
 }
 
+/// The line pieces each symbol block draws (a polyline's sides one by one), by block name.
+fn block_pieces(d: &Drawing) -> std::collections::BTreeMap<String, usize> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in d.model.iter() {
+        if let EntityKind::Insert(i) = &e.kind
+            && i.block.starts_with("PDF-SYM-")
+            && let Some(b) = d.blocks.get(&i.block)
+        {
+            let n = b
+                .entities
+                .iter()
+                .map(|e| match &e.kind {
+                    EntityKind::Line(_) => 1,
+                    EntityKind::LwPolyline(p) => p.vertices.len().saturating_sub(1) + usize::from(p.closed),
+                    _ => 0,
+                })
+                .sum();
+            out.insert(i.block.clone(), n);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_dashed_line_through_every_copy_of_a_symbol_is_the_lines_not_the_symbols() {
+    // Six tagged crossed diamonds of one type, each on a dashed grid line that runs up the
+    // sheet through it (dashes 17 points long, 3 apart): every copy's cluster takes the dashes
+    // through it, drawn alike at every copy. Before this rework the block held the dash, so a block
+    // carried the grid line's pieces into the model as the symbol's drawing (on a plan they
+    // closed a corridor into two rooms). A straight stroke its line continues past both ends is
+    // that line's: the block is the diamond, the dashes stay loose, and the sheet draws the same
+    // strokes as without the symbol step.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        let s = 6;
+        for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R3) Tj ET ", cx + 10, cy).as_bytes());
+    }
+    // the grid lines, one through each column of copies, dash by dash
+    for cx in [150, 250, 350] {
+        for k in 0..14 {
+            let y = 222 + 20 * k;
+            content.extend_from_slice(format!("{cx} {y} m {cx} {} l S ", y + 17).as_bytes());
+        }
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let blocks = block_pieces(d);
+    assert_eq!(blocks.values().copied().collect::<Vec<_>>(), vec![6], "one block, the diamond and its cross only: {blocks:?}");
+    let loose_dashes =
+        d.model.iter().filter(|e| matches!(&e.kind, EntityKind::Line(l) if (l.a.x - l.b.x).abs() < 1e-6 && (l.a.y - l.b.y).abs() > 1e-6)).count();
+    assert_eq!(loose_dashes, 3 * 14, "every dash of the grid lines is loose");
+}
+
+#[test]
+fn a_door_swing_beside_every_copy_of_a_symbol_stays_the_doors() {
+    // Six tagged crossed diamonds of one type, each beside a door hung the same way: its leaf
+    // up from the hinge and its swing a quarter circle, both inside the copy's cluster and drawn
+    // alike at every copy. Before this rework the block held the swing and leaf, so the doors
+    // were in no reader's sight (no door built, the room open through its doorway). A door's
+    // swing and leaf are the door's: the block is the diamond, each swing and leaf stays loose,
+    // and the sheet draws the same strokes as without the symbol step.
+    let mut content = b"q 0 0 0 RG 0.5 w ".to_vec();
+    let k = 0.5523 * 14.0;
+    for (cx, cy) in [(150, 300), (250, 300), (350, 300), (150, 400), (250, 400), (350, 400)] {
+        let s = 6;
+        for (a, b) in [((0, -s), (s, 0)), ((s, 0), (0, s)), ((0, s), (-s, 0)), ((-s, 0), (0, -s)), ((-3, -3), (3, 3)), ((-3, 3), (3, -3))] {
+            content.extend_from_slice(format!("{} {} m {} {} l S ", cx + a.0, cy + a.1, cx + b.0, cy + b.1).as_bytes());
+        }
+        content.extend_from_slice(format!("BT /F1 6 Tf {} {} Td (R4) Tj ET ", cx + 10, cy).as_bytes());
+        // hinge at (cx - 12, cy - 8): the wall's face to it, the leaf up, the swing to the jamb
+        let (hx, hy) = (f64::from(cx) - 12.0, f64::from(cy) - 8.0);
+        content.extend_from_slice(format!("{} {hy} m {hx} {hy} l S ", hx - 40.0).as_bytes());
+        content.extend_from_slice(format!("{hx} {hy} m {hx} {} l S ", hy + 14.0).as_bytes());
+        content
+            .extend_from_slice(format!("{hx} {} m {} {} {} {} {} {hy} c S ", hy + 14.0, hx + k, hy + 14.0, hx + 14.0, hy + k, hx + 14.0).as_bytes());
+    }
+    content.extend_from_slice(b"Q");
+    let pdf = pdf_with(&content);
+    let with = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read failed");
+    let without = pdf_read::read(&pdf, &PdfOptions { recover_text: false, ..PdfOptions::default() }).expect("PDF read failed");
+    let d = &with.drawing;
+    assert_eq!(symbol_tags(d).len(), 6, "every tag is a symbol with its TAG");
+    assert_eq!(drawn_pieces(d).0, drawn_pieces(&without.drawing).0, "the same strokes, none erased or invented");
+    let blocks = block_pieces(d);
+    assert_eq!(blocks.values().copied().collect::<Vec<_>>(), vec![6], "one block, the diamond and its cross only: {blocks:?}");
+    let swings = d.model.iter().filter(|e| matches!(&e.kind, EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() >= 4)).count();
+    assert_eq!(swings, 6, "every door's swing is loose where printed");
+}
+
 #[test]
 fn dimension_words_never_anchor_a_symbol() {
     // Six windows across a wall, each drawn as a frame rectangle and a pane line, and under each a
