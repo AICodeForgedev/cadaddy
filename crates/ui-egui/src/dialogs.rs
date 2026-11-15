@@ -550,6 +550,15 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                 _ => {
                     ui.heading(crate::tl!("CADaddy"));
                     ui.label(crate::tf!("Version {version}", version = crate::diag::version_with_build()));
+                    if let Some(choice) = crate::adapterpick::last() {
+                        if let Some(chosen) = choice.chosen() {
+                            ui.label(RichText::new(crate::tf!("Graphics: {adapter}", adapter = chosen.name.as_str())).color(t.text_dim));
+                        }
+                        let others: Vec<&str> = choice.others().iter().map(|c| c.name.as_str()).collect();
+                        if !others.is_empty() {
+                            ui.label(RichText::new(crate::tf!("Also available: {adapters}", adapters = others.join(", "))).small().color(t.text_dim));
+                        }
+                    }
                     ui.label(crate::tl!("Computer-aided design and drafting for Windows, Mac and Linux, written in Rust."));
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("Includes open-source components: see NOTICE.")).color(t.text_dim));

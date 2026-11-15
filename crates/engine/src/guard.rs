@@ -137,6 +137,11 @@ pub(crate) mod tests {
         static PANIC_AFTER_COMMAND: Cell<bool> = const { Cell::new(false) };
     }
 
+    /// Make the passes after the next commands panic (`true`) or not.
+    pub(crate) fn arm_panic_after_command(on: bool) {
+        PANIC_AFTER_COMMAND.set(on);
+    }
+
     /// Called at the start of the passes after a command, which nothing can make panic on demand.
     pub(crate) fn panic_if_armed() {
         assert!(!PANIC_AFTER_COMMAND.get(), "a pass after the command panicked");

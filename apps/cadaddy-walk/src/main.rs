@@ -97,8 +97,14 @@ fn run(a: &Args) -> Result<(), String> {
         w.pitch = pitch.to_radians();
     }
     let instance = wgpu::Instance::default();
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).map_err(|e| format!("no GPU adapter: {e}"))?;
+    // CADaddy's adapter rule (a discrete GPU before an integrated one, `CADADDY_GPU` to choose),
+    // not the first adapter listed: on a laptop that is the integrated GPU.
+    let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+    let adapter = cadaddy_ui_egui::adapterpick::pick(&adapters, None, &cadaddy_ui_egui::adapterpick::Preference::from_env())
+        .map_err(|e| format!("no GPU adapter: {e}"))?;
+    for line in cadaddy_ui_egui::adapterpick::last().map(|c| c.log_lines()).unwrap_or_default() {
+        eprintln!("{line}");
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).map_err(|e| format!("GPU device: {e}"))?;
     let mut g = gpu::Gpu::new(&device, cadaddy_ui_egui::gpucaps::MSAA_WANTED);
     g.upload(&device, &b.scene);
