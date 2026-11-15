@@ -765,7 +765,7 @@ impl Scope {
             if let Some(piece) = mpart.strip_prefix("atom:") {
                 return match piece {
                     "wire" => What::Wire,
-                    "box" | "ring" => What::Box,
+                    "box" | "ring" | "access_panel" => What::Box,
                     p if part_in(p, &r.raceway_atoms) => self.raceway(e, size),
                     _ => What::Fitting,
                 };

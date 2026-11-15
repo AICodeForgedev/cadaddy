@@ -1972,7 +1972,7 @@ struct Release {
 fn category_of(kind: &str) -> &'static str {
     match kind {
         "conduit" => "conduit",
-        "box" | "ring" => "boxes",
+        "box" | "ring" | "access_panel" => "boxes",
         "cable" | "wire" => "wire",
         "device" => "devices",
         "plate" => "plates",

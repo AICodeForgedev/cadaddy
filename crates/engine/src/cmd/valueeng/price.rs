@@ -357,7 +357,7 @@ pub(crate) fn category_of(kind: &str) -> &'static str {
     match kind {
         "conduit" => "conduit",
         "coupling" | "connector" | "elbow" | "offset" | "strap" | "locknut" | "bushing" | "bend" => "conduit fittings",
-        "box" | "ring" => "boxes",
+        "box" | "ring" | "access_panel" => "boxes",
         "cable" | "wire" => "wire",
         _ => "",
     }

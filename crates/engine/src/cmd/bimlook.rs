@@ -462,7 +462,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         if let Some(piece) = mpart.strip_prefix("atom:") {
             let category = match piece {
                 "conduit" => noun.to_string(),
-                "box" | "ring" => "Boxes".into(),
+                "box" | "ring" | "access_panel" => "Boxes".into(),
                 "breaker" => "Breakers".into(),
                 "strap" | "strut" | "strut_strap" | "rod" | "support_anchor" | "strut_nut" | "riser_clamp" => format!("{noun} Supports"),
                 "cable" => "Cable".into(),

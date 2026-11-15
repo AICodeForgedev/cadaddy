@@ -486,12 +486,36 @@ pub(crate) struct BuiltCeiling {
     z: f64,
     tris: Vec<[Vec2; 3]>,
     area: f64,
+    /// Its ceiling type as built (`type:`, a grid's `ceiling_type:`), when one is known.
+    ty: Option<String>,
+    /// A suspended ceiling's grid (made as `grid`), not the ceiling it hangs in.
+    grid: bool,
 }
 
 impl BuiltCeiling {
     /// The level it was built on (none: not known).
     pub(crate) fn level(&self) -> Option<&str> {
         self.level.as_deref()
+    }
+
+    /// Whether it covers plan point `p`.
+    pub(crate) fn covers_at(&self, p: Vec2) -> bool {
+        self.covers(p)
+    }
+
+    /// Its underside (drawing units) and plan area.
+    pub(crate) fn z_and_area(&self) -> (f64, f64) {
+        (self.z, self.area)
+    }
+
+    /// Its ceiling type as built, when known.
+    pub(crate) fn ceiling_type(&self) -> Option<&str> {
+        self.ty.as_deref()
+    }
+
+    /// Whether it is a suspended ceiling's grid.
+    pub(crate) fn is_grid(&self) -> bool {
+        self.grid
     }
 
     fn covers(&self, p: Vec2) -> bool {
@@ -531,12 +555,27 @@ pub(crate) fn built_ceilings_on_plans(d: &Drawing) -> Vec<BuiltCeiling> {
     built_ceilings_at(d, true)
 }
 
+/// [`built_ceilings_on_plans`] with the ceiling grids kept (each [`BuiltCeiling::is_grid`]): what
+/// covers a plan point and of what kind (Q6562: a box over a grid is reached through its tiles).
+pub(crate) fn built_ceilings_with_grids_on_plans(d: &Drawing) -> Vec<BuiltCeiling> {
+    built_ceilings_where(d, true, true)
+}
+
 fn built_ceilings_at(d: &Drawing, on_plans: bool) -> Vec<BuiltCeiling> {
+    built_ceilings_where(d, on_plans, !on_plans)
+}
+
+fn built_ceilings_where(d: &Drawing, on_plans: bool, grids: bool) -> Vec<BuiltCeiling> {
     d.model
         .iter()
         .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
-        .filter(|e| !on_plans || super::wallgen::made_as(e).as_deref() != Some("grid"))
+        .filter(|e| grids || super::wallgen::made_as(e).as_deref() != Some("grid"))
         .filter_map(|e| {
+            let grid = super::wallgen::made_as(e).as_deref() == Some("grid");
+            let ty = super::bimlook::made_tag(e, "type")
+                .or_else(|| super::bimlook::made_tag(e, "ceiling_type"))
+                .filter(|t| !t.is_empty())
+                .map(str::to_string);
             let (bounds, z, _) = extent(d, e)?;
             if bounds.is_empty() || !z.is_finite() {
                 return None;
@@ -553,6 +592,8 @@ fn built_ceilings_at(d: &Drawing, on_plans: bool) -> Vec<BuiltCeiling> {
                     z,
                     tris: vec![[a, b, c], [a, c, dd]],
                     area: bounds.width() * bounds.height(),
+                    ty,
+                    grid,
                 });
             };
             let at = |i: &u32| m.vertices.get(usize::try_from(*i).ok()?).map(|v| Vec2::new(v.x, v.y) - back);
@@ -568,7 +609,7 @@ fn built_ceilings_at(d: &Drawing, on_plans: bool) -> Vec<BuiltCeiling> {
                 }
             }
             let area = tris.iter().map(|[a, b, c]| ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.0).sum::<f64>();
-            (area > 0.0).then(|| BuiltCeiling { level: super::bspec::made_level(e), bounds, z, tris, area })
+            (area > 0.0).then(|| BuiltCeiling { level: super::bspec::made_level(e), bounds, z, tris, area, ty, grid })
         })
         .take(MAX_ELEMENTS)
         .collect()
@@ -5595,7 +5636,15 @@ mod tests {
         let ceiling = |pts: Vec<Vec2>, z_ft: f64| {
             let tris: Vec<[Vec2; 3]> = super::super::bspec::ear_clip(&pts).iter().map(|t| [pts[t[0]], pts[t[1]], pts[t[2]]]).collect();
             let area = cadaddy_geom::shoelace(&pts).abs();
-            BuiltCeiling { level: Some("L1".into()), bounds: Bounds2::from_points(pts.iter().copied()), z: z_ft * 12.0, tris, area }
+            BuiltCeiling {
+                level: Some("L1".into()),
+                bounds: Bounds2::from_points(pts.iter().copied()),
+                z: z_ft * 12.0,
+                tris,
+                area,
+                ty: None,
+                grid: false,
+            }
         };
         let bath = ceiling(vec![ft(0.0, 0.0), ft(8.0, 0.0), ft(8.0, 4.0), ft(4.0, 4.0), ft(4.0, 8.0), ft(0.0, 8.0)], 8.0);
         let bedroom = ceiling(vec![ft(0.0, 0.0), ft(20.0, 0.0), ft(20.0, 12.0), ft(0.0, 12.0)], 9.0);
