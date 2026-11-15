@@ -211,6 +211,36 @@
       "step": "rough_in",
       "severity": "high",
       "propose": "none"
+    },
+    {
+      "id": "FA-OUTPUT-DEVICE",
+      "object": "fire alarm output",
+      "trade": "fire alarm",
+      "kinds": ["equipment"],
+      "needs": ["fa_device"],
+      "from_build": "fa_outputs",
+      "build_kinds": ["device"],
+      "what": "a device or relay that performs it, with its power",
+      "basis": "NFPA 72 21.1 to 21.8: every emergency control function the fire alarm's sequence of operations calls for (an elevator recall or shunt trip, a damper release, a fan shutdown, a door release) is performed by a fire alarm control relay or device at the controlled equipment, with its power; the output class's own code section is in each item",
+      "ask": "Which device or relay performs it, and where is its power?",
+      "step": "rough_in",
+      "severity": "medium",
+      "propose": "none"
+    },
+    {
+      "id": "FA-ACTUATOR-LOAD",
+      "object": "damper actuator circuit",
+      "trade": "electrical",
+      "kinds": ["equipment"],
+      "needs": ["load_va"],
+      "from_build": "fa_outputs",
+      "build_kinds": ["actuator_load"],
+      "what": "the load of the damper actuators it feeds",
+      "basis": "NEC 220.14(A) and 408.4(A): a branch circuit's schedule row carries the loads on it; a circuit feeding N damper actuators carries their N loads",
+      "ask": "What load do the dampers' actuators put on the circuit?",
+      "step": "rough_in",
+      "severity": "low",
+      "propose": "none"
     }
   ]
 }

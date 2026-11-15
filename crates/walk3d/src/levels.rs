@@ -348,11 +348,12 @@ pub fn parse_elevation(s: &str) -> Option<(f64, usize, usize)> {
         };
         let after = skip_ws(e);
         if b.get(after) == Some(&b'\'') {
-            // Feet, then maybe inches: 14'-0", 14' 6", 14'-6 1/2".
+            // Feet, then maybe inches: 14'-0", 14' 6", 14'-6 1/2", 14' - 6 1/2".
             let mut j = after + 1;
             let mut end = j;
             let mut inch = 0.0;
-            let k = skip_ws(if b.get(j) == Some(&b'-') { j + 1 } else { j });
+            let dash = skip_ws(j);
+            let k = skip_ws(if b.get(dash) == Some(&b'-') { dash + 1 } else { j });
             if b.get(k).is_some_and(u8::is_ascii_digit) {
                 j = digits(k);
                 if let Some(v) = num(k, j) {
@@ -376,6 +377,9 @@ pub fn parse_elevation(s: &str) -> Option<(f64, usize, usize)> {
                         end = m2 + 1;
                     } else if b.get(m2) != Some(&b'\'') {
                         end = m;
+                    } else {
+                        // Another feet value (`10' - 12'`): no inches.
+                        inch = 0.0;
                     }
                 }
             }
@@ -1509,6 +1513,12 @@ mod tests {
         assert_eq!(parse_elevation("EL 114.50").map(|e| e.0), Some(114.5));
         assert_eq!(parse_elevation("12 FT").map(|e| e.0), Some(12.0));
         assert_eq!(parse_elevation("10'-14\""), None);
+        // A dash set off by spaces, as section marks print it, still takes the inches.
+        assert_eq!(parse_elevation("110' - 6 1/2\"").map(|e| e.0), Some(110.0 + 6.5 / 12.0));
+        assert_eq!(parse_elevation("119' - 7 3/4\"").map(|e| e.0), Some(119.0 + 7.75 / 12.0));
+        assert_eq!(parse_elevation("14' 6\"").map(|e| e.0), Some(14.5));
+        // Two feet values are no feet and inches.
+        assert_eq!(parse_elevation("10' - 12'").map(|e| e.0), Some(10.0));
         for s in ["'", "-'", "1'-", "1'-1/", "1'-1 1/0\"", "EL", "EL -", "+", "9999999999999999999999'", "1.2.3'", "€14'-0\"", "1'\u{2033}"] {
             let _ = parse_elevation(s);
             let _ = parse_level_note(s);

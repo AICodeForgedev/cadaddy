@@ -351,6 +351,9 @@ pub struct DocState {
     /// The .cdy file this drawing was last saved to or read from, and what it holds: the next
     /// save there appends only what changed ([`cmd::file::CdySaved`]).
     pub cdy_saved: Option<cmd::file::CdySaved>,
+    /// The guided job's checkpoint as this drawing last wrote (or read) it, and what it holds: the
+    /// next checkpoint appends only the parts that changed (Q6576).
+    pub job_checkpoint: Option<cmd::file::CdySaved>,
     /// The DWG copy (DWGCOPY) this drawing last wrote: a file at that path is the drawing's own
     /// to replace; any other `.dwg` there is kept as `.dwg.bak` first.
     pub dwg_copy_written: Option<String>,
@@ -466,6 +469,7 @@ impl DocState {
             exchange_notice: None,
             kept_job: None,
             cdy_saved: None,
+            job_checkpoint: None,
             dwg_copy_written: None,
             disk_id: None,
             wallgen: None,

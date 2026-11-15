@@ -86,13 +86,19 @@ pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
 
 /// The agent state of a .cdy file (a guided job's state, notes, review decisions), read without
 /// reading the drawing: `Ok(None)` when the file holds none, an error when it isn't a readable .cdy
-/// file (read the whole file then).
+/// file (read the whole file then). A save cut short while appending (a job's checkpoint the
+/// machine stopped writing) leaves the save before it, whose state this reads.
 pub fn agent(bytes: &[u8]) -> std::result::Result<Option<String>, String> {
     container::header(bytes)?;
-    if container::index(bytes).is_none() {
-        return Err("the file's index is damaged".into());
-    }
-    Ok(container::find(bytes, b"AGNT").and_then(|c| String::from_utf8(c.data).ok()))
+    let whole = if container::index(bytes).is_some() {
+        bytes
+    } else {
+        container::trailing_bytes(bytes)
+            .and_then(|t| bytes.get(..bytes.len().checked_sub(usize::try_from(t).ok()?)?))
+            .filter(|b| container::index(b).is_some())
+            .ok_or("the file's index is damaged")?
+    };
+    Ok(container::find(whole, b"AGNT").and_then(|c| String::from_utf8(c.data).ok()))
 }
 
 /// Most chunk and unreadable-span entries `verify` lists.

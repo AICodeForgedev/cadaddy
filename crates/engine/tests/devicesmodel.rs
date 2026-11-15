@@ -420,3 +420,53 @@ fn the_guided_jobs_devices_are_elements_its_takeoff_counts() {
     assert!(count(&k, "device") > 0, "{m:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Q6645: Validate's overlay looks for each sheet's symbols where the job placed that sheet's
+/// devices (through the sheet's registration onto its level's plan), not at the sheet's own
+/// position beside the floor plan: no "missing" symbol lies far off the building's walls, and a
+/// true model is not all failures.
+#[test]
+fn the_overlay_checks_each_symbol_where_the_job_placed_its_sheet() {
+    let _g = serial();
+    hooks();
+    let dir = job_folder("overlay", &["A-101", "E-201"]);
+    let mut s = Session::new();
+    let st =
+        s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
+    assert_eq!(st["done"], json!(true), "{st}");
+    let devices = count(&summary(&mut s), "device");
+    assert!(devices > 0, "the job built devices");
+    // The building's walls (drawing units).
+    let walls = s.execute("entities", &json!({"layer": "3D-Walls", "limit": 100000})).expect("walls");
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for e in walls["entities"].as_array().expect("walls") {
+        let (Some(lo), Some(hi)) = (e["extents"]["min"].as_array(), e["extents"]["max"].as_array()) else { continue };
+        let v = |a: &Vec<Value>, i: usize| a.get(i).and_then(Value::as_f64).unwrap_or(f64::NAN);
+        b = [b[0].min(v(lo, 0)), b[1].min(v(lo, 1)), b[2].max(v(hi, 0)), b[3].max(v(hi, 1))];
+    }
+    assert!(b.iter().all(|v| v.is_finite()) && b[2] > b[0], "the job built walls: {walls:#}");
+    let r = s.execute("bim.validate", &json!({"checks": ["overlay"], "limit": 500})).expect("validate");
+    let failures = r["failures"].as_array().expect("failures");
+    let missing: Vec<&Value> = failures.iter().filter(|f| f["rule"] == "missing_in_model").collect();
+    // 50' past the walls (inches).
+    let reach = 50.0 * 12.0;
+    let far: Vec<&&Value> = missing
+        .iter()
+        .filter(|f| {
+            let p = f["sheetAt"].as_array().map(|a| [a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64)]);
+            let Some([Some(x), Some(y)]) = p else { return true };
+            x < b[0] - reach || x > b[2] + reach || y < b[1] - reach || y > b[3] + reach
+        })
+        .collect();
+    assert!(
+        far.is_empty(),
+        "{} of {} missing symbols lie more than 50' off the walls {b:?}: {:#}",
+        far.len(),
+        missing.len(),
+        far.first().map_or(&Value::Null, |f| **f)
+    );
+    let checked = r["checked"]["overlay"].as_u64().unwrap_or(0);
+    assert!(checked > 0, "{r:#}");
+    assert!((missing.len() as u64) * 2 < checked, "most symbols find their devices: {} missing of {checked} checked", missing.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}

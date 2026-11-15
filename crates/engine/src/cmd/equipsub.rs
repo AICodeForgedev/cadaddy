@@ -5,6 +5,17 @@
 //! protection no larger than the maker's maximum, its conductors' ampacity at least 125% of its
 //! nameplate or full-load amps, its controller's short-circuit rating at least the available fault
 //! current at its source. A difference is an RFI with both values and the fix.
+//!
+//! Q6646: each load the panel schedules feed by tag (two letters are a tag too: `EF-9`) with a
+//! submittal: its file named for the tag, or for its kind (`EXHAUST FAN`, rule data) when a page
+//! of it names the tag (alone or in a list: `EF-5, 6, 7`). Beyond the above, its protection no
+//! smaller than its minimum circuit ampacity calls for (NEC 440.22, 430.52), its conductors of
+//! the material and least size its notes name (copper only, `4 AWG Wire Min.`; NEC 110.3(B)), a
+//! disconnect within sight of each placed unit (its own, unless its submittal says it brings one;
+//! NEC 440.14, 430.102(B)), and the service receptacle and data connection its notes ask for.
+//! Every difference is an RFI citing both documents, a corrected one too; what is corrected is
+//! built (the breaker, the conductors, the missing connection beside the unit) with the
+//! drawings' value kept beside it.
 
 use cadaddy_mepfix::sheet_facts::TextItem;
 use cadaddy_walk3d::EquipmentElectrical;
@@ -88,10 +99,30 @@ fn number_at(up: &str, keys: &[&str]) -> Option<f64> {
             {
                 return Some(if bare(u).starts_with('K') { v * 1000.0 } else { v });
             }
-            // Right after (a colon allowed): `SCCR: 10 kAmp`, `NAMEPLATE AMPS: 42`.
-            let after = i + kw.len();
+            // Right after (a colon allowed): `SCCR: 10 kAmp`, `NAMEPLATE AMPS: 42`; or after its
+            // unit: `MOPA  A.  20`, `MOP (A) 15`.
+            let mut after = i + kw.len();
+            // Its abbreviation in brackets first (`Max. Overcurrent Protection (MOP) 15`).
+            if words.get(after).is_some_and(|w| {
+                let inner = w.trim_start_matches('(').trim_end_matches(')');
+                w.starts_with('(') && w.ends_with(')') && inner.len() >= 2 && inner.chars().all(|c| c.is_ascii_alphabetic())
+            }) {
+                after += 1;
+            }
+            let mut thousand = false;
+            if words.get(after).is_some_and(|w| matches!(bare(w).trim_end_matches('.'), "A" | "AMPS" | "AMP")) {
+                after += 1;
+            } else if words.get(after).is_some_and(|w| kilo(w)) {
+                // `SCCR   kA   5K`: thousands.
+                thousand = true;
+                after += 1;
+            }
             if let Some(v) = words.get(after).and_then(|w| num(w)) {
-                return Some(if words.get(after + 1).is_some_and(|w| kilo(w)) { v * 1000.0 } else { v });
+                let k = thousand || bare(words.get(after).copied().unwrap_or("")).ends_with('K') || words.get(after + 1).is_some_and(|w| kilo(w));
+                return Some(if k { v * 1000.0 } else { v });
+            }
+            if thousand {
+                continue;
             }
             // Right before, no unit: `46 MCA`.
             if let Some(v) = back(1).and_then(num) {
@@ -111,7 +142,20 @@ pub(crate) fn text_electrical(text: &str) -> EquipmentElectrical {
         nameplate_a: number_at(&up, &["NAMEPLATE AMPS", "NAMEPLATE CURRENT", "RATED CURRENT"]),
         fla: number_at(&up, &["FULL LOAD AMPS", "FULL LOAD CURRENT"]),
         mca: number_at(&up, &["MINIMUM CIRCUIT AMPACITY", "MIN. CIRCUIT AMPACITY", "MCA"]),
-        max_ocpd_a: number_at(&up, &["MAXIMUM OVERCURRENT PROTECTION", "MAX FUSE SIZE", "MAX FUSE", "MOCP", "MOP", "MAX OCPD", "FUSE (AMP)"]),
+        max_ocpd_a: number_at(
+            &up,
+            &[
+                "MAXIMUM OVERCURRENT PROTECTION",
+                "MAX. OVERCURRENT PROTECTION",
+                "MAX FUSE SIZE",
+                "MAX FUSE",
+                "MOCP",
+                "MOPA",
+                "MOP",
+                "MAX OCPD",
+                "FUSE (AMP)",
+            ],
+        ),
         accel_a: number_at(&up, &["MAX ACCEL AMPS", "ACCELERATION AMPS", "ACCELERATING CURRENT"]),
         sccr_a: number_at(&up, &["RATING (SCCR)", "SCCR"]),
         ..EquipmentElectrical::default()
@@ -145,18 +189,48 @@ pub(crate) fn has_data(e: &EquipmentElectrical) -> bool {
     e.nameplate_a.is_some() || e.fla.is_some() || e.mca.is_some() || e.max_ocpd_a.is_some() || e.sccr_a.is_some()
 }
 
-/// A failed check: what, both values, the fix.
+/// A failed check: what, both values, the fix, and each document's word (the drawings' and the
+/// submittal's) for the RFI.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Conflict {
     pub check: &'static str,
     pub message: String,
     pub fix: String,
+    pub drawings: String,
+    pub submittal: String,
+}
+
+/// The checks a correction of the connection's protection or conductors settles ([`correct`]).
+pub(crate) const CORRECTED_CHECKS: &[&str] = &["protection", "protection_min", "conductors", "conductor_material", "conductor_min"];
+/// The checks of what is missing around a unit on its plans ([`lacking`]): built beside it.
+pub(crate) const LACK_CHECKS: &[&str] = &["disconnect", "receptacle", "data"];
+
+/// A conductor size as the ampacity table keys it (`#4` → `4`, `250 kcmil` → `250`).
+fn size_key(size: &str) -> &str {
+    size.trim().trim_start_matches('#').trim_end_matches(" kcmil").trim_end_matches(" KCMIL").trim()
+}
+
+/// The smallest standard protection (the rule's sizes) at or above `amps`.
+fn standard_at_least(amps: f64, rule: &super::coderules::CodeRule) -> Option<f64> {
+    rule.standard_ocpd_a.iter().copied().filter(|a| a.is_finite() && *a + 1e-9 >= amps).min_by(f64::total_cmp)
+}
+
+/// The protection a connection whose drawn breaker is under its minimum circuit ampacity takes:
+/// the smallest standard size at or above it, never above the most its submittal allows.
+fn least_protection(mca: f64, max: Option<f64>, rule: &super::coderules::CodeRule) -> Option<f64> {
+    let at = standard_at_least(mca, rule)?;
+    match max {
+        Some(m) if at > m + 1e-9 => None,
+        _ => Some(at),
+    }
 }
 
 /// The checks of one connection: `feeder` the drawings' conductors (size, material), `afc` the
 /// available fault current at its source panel (its schedule's AFC), the rule's data.
 pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: Option<f64>, rule: &super::coderules::CodeRule) -> Vec<Conflict> {
     let mut out = Vec::new();
+    let drawn = format!("{} at {}", e.drawing_ocpd, if e.source_panel.is_empty() { "its panel" } else { e.source_panel.as_str() });
+    let schedule = if e.source_panel.is_empty() { "the drawings".to_string() } else { format!("panel {} schedule", e.source_panel) };
     if let (Some((amps, _)), Some(max)) = (ocpd_of(&e.drawing_ocpd), e.max_ocpd_a)
         && amps > max + 1e-9
     {
@@ -168,11 +242,32 @@ pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: 
                 e.tag, e.drawing_ocpd, e.source_panel, e.source
             ),
             fix: format!("{max:.0} A{class} fuses in its disconnect (a fused switch), or a breaker of {max:.0} A at {}", e.source_panel),
+            drawings: format!("{schedule}: {drawn}"),
+            submittal: format!("{}: maximum overcurrent protection {max:.0} A{class}", e.source),
+        });
+    }
+    // Its protection no smaller than its minimum circuit ampacity calls for (NEC 440.22, 430.52).
+    if let (Some((amps, _)), Some(mca)) = (ocpd_of(&e.drawing_ocpd), e.mca)
+        && amps + 1e-9 < mca
+    {
+        let fix = match least_protection(mca, e.max_ocpd_a, rule) {
+            Some(a) => format!("a {a:.0} A breaker at {} (the smallest standard size at or above its {mca} A MCA)", e.source_panel),
+            None => format!("protection at or above its {mca} A MCA, within what its maker allows: ask the maker"),
+        };
+        out.push(Conflict {
+            check: "protection_min",
+            message: format!(
+                "{}: the drawings protect it with {} at {}, under its submittal's minimum circuit ampacity {mca} A ({}) [{}]",
+                e.tag, e.drawing_ocpd, e.source_panel, e.source, rule.min_ocpd_cite
+            ),
+            fix,
+            drawings: format!("{schedule}: {drawn}"),
+            submittal: format!("{}: minimum circuit ampacity {mca} A", e.source),
         });
     }
     let base = e.mca.or_else(|| e.fla.or(e.nameplate_a).map(|a| a * rule.conductor_factor.unwrap_or(1.25)));
     if let (Some(need), Some((size, material))) = (base, feeder) {
-        let have = rule.ampacity_75c.get(material).and_then(|t| t.get(size.trim_start_matches('#').trim_end_matches(" kcmil")));
+        let have = rule.ampacity_75c.get(material).and_then(|t| t.get(size_key(size)));
         if let Some(&have) = have
             && have + 1e-9 < need
         {
@@ -183,6 +278,52 @@ pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: 
                     e.tag, e.source
                 ),
                 fix: "Larger conductors (and conduit to suit)".into(),
+                drawings: format!("{schedule}: #{} {material}", size_key(size)),
+                submittal: format!("{}: {need:.0} A minimum circuit ampacity", e.source),
+            });
+        }
+    }
+    // The conductor material and least size its maker names (NEC 110.3(B)).
+    if let Some((size, material)) = feeder {
+        let mat = material.trim().to_ascii_lowercase();
+        if e.copper_only && mat.starts_with("al") {
+            out.push(Conflict {
+                check: "conductor_material",
+                message: format!(
+                    "{}: the drawings feed it with #{} aluminium; its submittal ({}) calls for copper wire only [{}]",
+                    e.tag,
+                    size_key(size),
+                    e.source,
+                    rule.conductor_cite
+                ),
+                fix: "Copper conductors of the ampacity it needs (and conduit to suit)".into(),
+                drawings: format!("{schedule}: #{} {material}", size_key(size)),
+                submittal: format!("{}: copper conductors only", e.source),
+            });
+        }
+        let have = rule.ampacity_75c.get(mat.as_str()).and_then(|t| t.get(size_key(size))).copied();
+        let least = rule
+            .ampacity_75c
+            .get(if e.copper_only || mat.is_empty() { "cu" } else { mat.as_str() })
+            .and_then(|t| t.get(size_key(&e.min_wire)))
+            .copied();
+        if !e.min_wire.is_empty()
+            && let (Some(have), Some(least)) = (have, least)
+            && have + 1e-9 < least
+        {
+            out.push(Conflict {
+                check: "conductor_min",
+                message: format!(
+                    "{}: the drawings feed it with #{} {material}; its submittal ({}) calls for #{} at least [{}]",
+                    e.tag,
+                    size_key(size),
+                    e.source,
+                    size_key(&e.min_wire),
+                    rule.conductor_cite
+                ),
+                fix: format!("#{} conductors at least (and conduit to suit)", size_key(&e.min_wire)),
+                drawings: format!("{schedule}: #{} {material}", size_key(size)),
+                submittal: format!("{}: #{} minimum", e.source, size_key(&e.min_wire)),
             });
         }
     }
@@ -199,9 +340,156 @@ pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: 
                 "A fault current study at {} (its feeder lowers it): at most {sccr:.0} A there, or a listed series-rated combination / current-limiting fuses, or a controller rated for it",
                 e.tag
             ),
+            drawings: format!("{schedule}: {afc:.0} A available fault current"),
+            submittal: format!("{}: short-circuit current rating {sccr:.0} A", e.source),
         });
     }
     out
+}
+
+/// A text as words for phrase matching: upper case, split at white space, each word's edge
+/// punctuation trimmed (`Min.` → `MIN`), a space each side.
+fn phrase_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| matches!(c, '.' | ',' | ':' | ';' | '(' | ')' | '*' | '\u{2022}' | '"' | '\'')).to_ascii_uppercase())
+        .filter(|w| !w.is_empty())
+        .take(400_000)
+        .collect()
+}
+
+/// Where `phrase` starts in `words` (each of its words in turn), every place.
+fn phrase_at(words: &[String], phrase: &str) -> Vec<usize> {
+    let p = phrase_words(phrase);
+    if p.is_empty() || p.len() > words.len() {
+        return Vec::new();
+    }
+    (0..=words.len() - p.len()).filter(|&i| p.iter().enumerate().all(|(j, w)| words.get(i + j) == Some(w))).collect()
+}
+
+/// A conductor size word (`4`, `#10`, `1/0`, `250`): as the ampacity table keys it.
+fn wire_size(w: &str) -> Option<String> {
+    let t = w.trim_start_matches('#');
+    let ok = !t.is_empty()
+        && (t.chars().all(|c| c.is_ascii_digit()) || t.split_once('/').is_some_and(|(a, b)| a.chars().all(|c| c.is_ascii_digit()) && b == "0"));
+    (ok && t.len() <= 4).then(|| t.to_string())
+}
+
+/// What a submittal's notes ask of its wiring and connections (the rule's words): copper only,
+/// the least conductor size near a "wire min" phrase (`4 AWG Wire Min.`, `Min. wire size #10`),
+/// a disconnect that comes with the unit, a service receptacle, a data connection. Taken over
+/// what `e` has already (a note said once is enough).
+pub(crate) fn text_notes(e: &mut EquipmentElectrical, text: &str, rule: &super::coderules::CodeRule) {
+    let words = phrase_words(text);
+    let any = |list: &[String]| list.iter().any(|p| !phrase_at(&words, p).is_empty());
+    e.copper_only |= any(&rule.copper_only_words);
+    e.unit_disconnect |= any(&rule.unit_disconnect_words) || any(&rule.unit_disconnect_more_words);
+    e.needs_receptacle |= any(&rule.receptacle_need_words);
+    e.needs_data |= any(&rule.data_need_words);
+    if e.min_wire.is_empty() {
+        'found: for p in &rule.min_wire_words {
+            let n = phrase_words(p).len();
+            for at in phrase_at(&words, p) {
+                // `<size> AWG` / `<size> KCMIL` just before it, else a size right after it.
+                let before = (at.saturating_sub(3)..at).rev().find_map(|i| {
+                    let unit = words.get(i + 1)?;
+                    (unit == "AWG" || unit == "KCMIL").then(|| wire_size(words.get(i)?)).flatten()
+                });
+                let after = || {
+                    (at + n..(at + n + 3).min(words.len())).find_map(|i| {
+                        let w = words.get(i)?;
+                        if w == "SIZE" || w == "AWG" { None } else { wire_size(w) }
+                    })
+                };
+                if let Some(size) = before.or_else(after) {
+                    e.min_wire = size;
+                    break 'found;
+                }
+            }
+        }
+    }
+}
+
+/// Where a tag is named on a submittal page, the tag lists expanded: `XF-14`, `Mark: XF-15, 16,
+/// 17`, `Unit Tags: XF-11, 12`, `AHU/CU-11,12,&15`, `CU-11 and 12`. Whether `tag` (`XF-16`) is one of
+/// them. A list is numbers joined by commas, `&` or `and`; a number after a space alone (a
+/// table's next cell: `EF-4   1   …`) is not.
+pub(crate) fn names_tag(page: &str, tag: &str) -> bool {
+    let want = tag.trim().to_ascii_uppercase();
+    let Some((prefix, _)) = want.split_once('-') else { return false };
+    if prefix.is_empty() {
+        return false;
+    }
+    let up = page.to_ascii_uppercase();
+    let b = up.as_bytes();
+    let head = format!("{prefix}-");
+    let digits = |mut i: usize| -> (usize, usize) {
+        let s = i;
+        while b.get(i).is_some_and(u8::is_ascii_digit) && i - s < 6 {
+            i += 1;
+        }
+        (s, i)
+    };
+    // A number's end: no letter or digit next, nor a decimal or a fraction (`1.5`, `1/4`).
+    let word_end = |i: usize| {
+        !(b.get(i).is_some_and(|c| c.is_ascii_alphanumeric())
+            || (b.get(i).is_some_and(|c| *c == b'.' || *c == b'/') && b.get(i + 1).is_some_and(u8::is_ascii_digit)))
+    };
+    let num = |s: usize, e: usize| up.get(s..e).map(|n| format!("{prefix}-{n}"));
+    for (at, _) in up.match_indices(&head).take(10_000) {
+        // Its own word: nothing of a longer tag before it (`/` before it is fine: `AHU/CU-14`).
+        if at > 0 && b.get(at - 1).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'-') {
+            continue;
+        }
+        let (s, mut i) = digits(at + head.len());
+        if s == i || !word_end(i) {
+            continue;
+        }
+        if num(s, i).as_deref() == Some(want.as_str()) {
+            return true;
+        }
+        // The numbers listed after it, joined by `,`, `&` or `and`.
+        for _ in 0..12 {
+            let mut j = i;
+            let mut joined = false;
+            loop {
+                match b.get(j) {
+                    Some(b' ' | b'\t') => j += 1,
+                    Some(b',' | b'&') => {
+                        joined = true;
+                        j += 1;
+                    }
+                    Some(b'A') if up.get(j..j + 4) == Some("AND ") => {
+                        joined = true;
+                        j += 3;
+                    }
+                    _ => break,
+                }
+            }
+            let (s2, e2) = digits(j);
+            if !joined || s2 == e2 || !word_end(e2) {
+                break;
+            }
+            if num(s2, e2).as_deref() == Some(want.as_str()) {
+                return true;
+            }
+            i = e2;
+        }
+    }
+    false
+}
+
+/// A submittal's pages (`--- page N of M ---` between them; a text with none is one page).
+pub(crate) fn pages(text: &str) -> Vec<&str> {
+    if !text.contains("--- page ") {
+        return vec![text];
+    }
+    text.split("--- page ").filter(|p| !p.trim().is_empty()).take(2_000).collect()
+}
+
+/// The pages of a submittal that name a tag, joined: its own section of a submittal of several
+/// units. Empty: no page names it.
+pub(crate) fn tag_pages(text: &str, tag: &str) -> String {
+    pages(text).into_iter().filter(|p| names_tag(p, tag)).collect::<Vec<_>>().join("\n--- page ")
 }
 
 /// Circuits a submittal may name, at most.
@@ -275,9 +563,212 @@ pub(crate) fn extra_circuit_tags(
     (built, no_room)
 }
 
+/// Units of one equipment looked at, at most.
+const MAX_UNITS: usize = 2_000;
+
+/// A placed unit of an equipment that lacks a connection its submittal or the code asks for
+/// within reach on its plan: `disconnect` (within sight, NEC 440.14 / 430.102(B); a cord-and-plug
+/// unit's receptacle is its disconnect), `receptacle` (a service receptacle), `data`. Its level
+/// and box (plan units).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Lack {
+    pub check: &'static str,
+    pub level: String,
+    pub lo: [f64; 2],
+    pub hi: [f64; 2],
+    /// A cord-and-plug unit: its disconnect is a receptacle.
+    pub cord: bool,
+}
+
+/// How far a point is from a box (0 inside it).
+fn gap_to(lo: [f64; 2], hi: [f64; 2], p: [f64; 2]) -> f64 {
+    let dx = (lo[0] - p[0]).max(p[0] - hi[0]).max(0.0);
+    let dy = (lo[1] - p[1]).max(p[1] - hi[1]).max(0.0);
+    dx.hypot(dy)
+}
+
+/// A device's words to tell what it is: its kind, type and device type.
+fn device_words(t: &cadaddy_walk3d::tags::ElementTag) -> String {
+    let f = |k: &str| t.fields.get(k).map(|v| v.value.as_str()).unwrap_or("");
+    format!("{} {} {}", t.kind.replace('_', " "), f("type"), f("device_type")).to_ascii_uppercase()
+}
+
+/// The placed units of `e` that lack, on their plans, a connection their submittal or the code
+/// asks for: a disconnect within sight (unless its submittal says it brings its own), a service
+/// receptacle and a data connection within reach where its submittal asks for them. A drawn
+/// connection is one unit's: the one its `equipment` field names, else the nearest piece of
+/// equipment (a stand or support under a unit is not one).
+pub(crate) fn lacking(
+    sp: &cadaddy_walk3d::BuildingSpec,
+    e: &EquipmentElectrical,
+    rule: &super::coderules::CodeRule,
+    disc: &super::equipdisc::Rule,
+) -> Vec<Lack> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let sight = rule.sight_reach_ft.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(50.0).min(500.0) * upf;
+    let aux = rule.aux_reach_ft.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(25.0).min(500.0) * upf;
+    let is_support = |q: &cadaddy_walk3d::MepEquipment| q.properties.contains_key("UNIT") || q.kind.to_ascii_lowercase().contains("stand");
+    let units: Vec<(usize, &cadaddy_walk3d::MepEquipment)> =
+        sp.mep.equipment.iter().enumerate().filter(|(_, q)| q.tag.eq_ignore_ascii_case(&e.tag) && !is_support(q)).take(MAX_UNITS).collect();
+    let mut out = Vec::new();
+    for (i, u) in units {
+        let words = format!("{} {} {} {}", u.kind.replace('_', " "), u.title, e.description, u.tag);
+        let cord = disc.connection_for(&words) == "receptacle";
+        let here: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.level.eq_ignore_ascii_case(&u.level)).collect();
+        let at = |t: &cadaddy_walk3d::tags::ElementTag| [t.at_ft[0] * upf, t.at_ft[1] * upf];
+        let lack = |check: &'static str| Lack { check, level: u.level.clone(), lo: u.min, hi: u.max, cord };
+        if !e.unit_disconnect {
+            // Each connection drawn on its level is its owner's: the equipment it names, else the
+            // nearest; this unit is met by one of its own within sight.
+            let met = here.iter().any(|t| {
+                let w = device_words(t);
+                let is_conn = disc.is_connection(&w) || (cord && w.contains("RECEPTACLE"));
+                if !is_conn || gap_to(u.min, u.max, at(t)) > sight {
+                    return false;
+                }
+                let named = t.fields.get("equipment").map(|f| f.value.trim().to_ascii_uppercase()).filter(|v| !v.is_empty());
+                let owner = sp
+                    .mep
+                    .equipment
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, q)| q.level.eq_ignore_ascii_case(&u.level) && !is_support(q))
+                    .filter(|(_, q)| named.as_deref().is_none_or(|n| q.tag.eq_ignore_ascii_case(n)))
+                    .min_by(|a, b| gap_to(a.1.min, a.1.max, at(t)).total_cmp(&gap_to(b.1.min, b.1.max, at(t))))
+                    .map(|(j, _)| j);
+                owner == Some(i)
+            });
+            if !met {
+                out.push(lack("disconnect"));
+            }
+        }
+        if e.needs_receptacle && !here.iter().any(|t| device_words(t).contains("RECEPTACLE") && gap_to(u.min, u.max, at(t)) <= aux) {
+            out.push(lack("receptacle"));
+        }
+        if e.needs_data
+            && !here.iter().any(|t| {
+                let w = device_words(t);
+                (w.contains("DATA") || w.contains("LOW VOLTAGE OUTLET") || w.contains("TELECOM")) && gap_to(u.min, u.max, at(t)) <= aux
+            })
+        {
+            out.push(lack("data"));
+        }
+    }
+    out
+}
+
+/// What each kind of lack is, in words, and the object built for it: (the finding's words, the
+/// tag kind, the device type).
+fn lack_object(l: &Lack, tag: &str) -> (&'static str, &'static str, String) {
+    match (l.check, l.cord) {
+        ("disconnect", true) => {
+            ("no receptacle (its disconnect: a cord-and-plug unit) within sight", "receptacle", format!("receptacle, {tag} cord connection"))
+        }
+        ("disconnect", false) => ("no disconnect within sight", "equipment_connection", format!("disconnect, {tag}")),
+        ("receptacle", _) => ("no service receptacle within reach", "receptacle", format!("service receptacle, {tag}")),
+        _ => ("no data connection within reach", "data_outlet", format!("data outlet, {tag}")),
+    }
+}
+
+/// The conflicts of a unit's lacks, one per kind (the units counted), each document's word.
+pub(crate) fn lack_conflicts(e: &EquipmentElectrical, lacks: &[Lack], rule: &super::coderules::CodeRule) -> Vec<Conflict> {
+    let mut out = Vec::new();
+    for check in ["disconnect", "receptacle", "data"] {
+        let mine: Vec<&Lack> = lacks.iter().filter(|l| l.check == check).collect();
+        let Some(first) = mine.first() else { continue };
+        let (what, _, _) = lack_object(first, &e.tag);
+        let mut levels: Vec<&str> = mine.iter().map(|l| l.level.as_str()).collect();
+        levels.dedup();
+        let (cite, asks) = match check {
+            "disconnect" => (rule.sight_cite.as_str(), "names no disconnect on or in the unit".to_string()),
+            "receptacle" => (rule.aux_cite.as_str(), "calls for a service receptacle".to_string()),
+            _ => (rule.aux_cite.as_str(), "calls for a data connection".to_string()),
+        };
+        out.push(Conflict {
+            check: match check {
+                "disconnect" => "disconnect",
+                "receptacle" => "receptacle",
+                _ => "data",
+            },
+            message: format!("{}: {what} on {} ({} placed); its submittal ({}) {asks} [{cite}]", e.tag, levels.join(", "), mine.len(), e.source),
+            fix: match check {
+                "disconnect" if first.cord => "A receptacle for its cord beside it".to_string(),
+                "disconnect" => "A disconnect within sight of it (a safety switch beside the unit), on its circuit".to_string(),
+                "receptacle" => "A 125 V service receptacle within 25 ft, on a circuit of its own".to_string(),
+                _ => "A data outlet and its pathway at the unit".to_string(),
+            },
+            drawings: format!("the plans of {}: {what}", levels.join(", ")),
+            submittal: format!("{}: {asks}", e.source),
+        });
+    }
+    out
+}
+
+/// The objects for the lacks: each beside its unit on its plan (a disconnect to one side, a
+/// receptacle to the other, a data outlet below), the design value ("not on the drawings"), the
+/// corrected value and the rule on it; `circuit` the unit's circuit (a disconnect's). Not built
+/// twice. What was built.
+pub(crate) fn build_lacking(
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    e: &EquipmentElectrical,
+    lacks: &[Lack],
+    circuit: Option<&str>,
+    rule: &super::coderules::CodeRule,
+) -> Vec<String> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut built = Vec::new();
+    for l in lacks.iter().take(MAX_UNITS) {
+        let (what, kind, item) = lack_object(l, &e.tag);
+        let mid = (l.lo[1] + l.hi[1]) / 2.0 / upf;
+        let base = match (l.check, l.cord) {
+            ("disconnect", false) => [l.hi[0] / upf + 1.0, mid],
+            ("data", _) => [(l.lo[0] + l.hi[0]) / 2.0 / upf, l.lo[1] / upf - 1.0],
+            _ => [l.lo[0] / upf - 1.0, mid],
+        };
+        // A spot no other tag stands on (a tag's id is its place).
+        let spot = (0..8).map(|k| [base[0], base[1] + 0.5 * k as f64]).find_map(|p| {
+            let id = format!("device:{}:{:.1},{:.1}", l.level, p[0], p[1]);
+            (!sp.tags.iter().any(|t| t.id == id)).then_some((id, p))
+        });
+        let Some((id, at_ft)) = spot else { continue };
+        if sp.tags.iter().any(|t| {
+            t.level.eq_ignore_ascii_case(&l.level)
+                && t.fields.get("device_type").is_some_and(|f| f.value == item)
+                && (t.at_ft[0] - at_ft[0]).hypot(t.at_ft[1] - at_ft[1]) < 4.0
+        }) {
+            continue;
+        }
+        let cite = match l.check {
+            "disconnect" => rule.sight_cite.as_str(),
+            _ => rule.aux_cite.as_str(),
+        };
+        let mut t = cadaddy_walk3d::tags::ElementTag { id, kind: kind.into(), level: l.level.clone(), at_ft, ..Default::default() };
+        if kind == "equipment_connection" {
+            t.set("type", "DISC", "rule");
+        }
+        t.set("device_type", item.clone(), "submittal");
+        t.set("equipment", e.tag.clone(), "submittal");
+        t.set("serves", e.tag.clone(), "submittal");
+        if let Some(c) = circuit.filter(|c| !c.is_empty() && l.check == "disconnect") {
+            t.set("circuit", c, "schedule");
+        }
+        t.set("sheet", e.source.clone(), "submittal");
+        t.set("symbol", "0", "rule");
+        t.set("design_value", "not on the drawings", "plan");
+        t.set("corrected_value", item.clone(), "rule");
+        t.set("correction_reason", format!("{}: {what} on {}; built beside it ({})", e.tag, l.level, e.source), "rule");
+        t.set("correction_rule", cite, "rule");
+        built.push(format!("{item} on {}", l.level));
+        sp.tags.push(t);
+    }
+    built
+}
+
 /// What is built instead of the drawings' where the submittal differs, from the same data the
-/// checks use: its protection (the most the submittal allows), its conductors (the smallest with
-/// the ampacity it needs) and their conduit by fill. Nothing to correct: empty. An equipment's
+/// checks use: its protection (the most the submittal allows; under its MCA, the smallest
+/// standard size at or above it), its conductors (the smallest with the ampacity it needs, in
+/// copper where its notes say copper only, at least the size they name) and their conduit by
+/// fill. Nothing to correct: empty. An equipment's
 /// short-circuit rating is no one thing to build: a study stays a question.
 pub(crate) fn correct(e: &mut EquipmentElectrical, feeder: Option<(&str, &str)>, rule: &super::coderules::CodeRule) {
     let mut why = Vec::new();
@@ -289,25 +780,52 @@ pub(crate) fn correct(e: &mut EquipmentElectrical, feeder: Option<(&str, &str)>,
         e.corrected_ocpd = format!("{max:.0}A/{poles}P{class}");
         why.push(format!("drawings {}, its submittal allows at most {max:.0} A", e.drawing_ocpd));
     }
-    let need = e.mca.or_else(|| e.fla.or(e.nameplate_a).map(|a| a * rule.conductor_factor.unwrap_or(1.25)));
-    if let (Some(need), Some((size, material))) = (need, feeder)
-        && let Some(table) = rule.ampacity_75c.get(material)
+    // A breaker under its minimum circuit ampacity: the smallest standard size at or above it.
+    if let (Some((amps, poles)), Some(mca)) = (ocpd_of(&e.drawing_ocpd), e.mca)
+        && amps + 1e-9 < mca
+        && let Some(at) = least_protection(mca, e.max_ocpd_a, rule)
     {
-        let have = table.get(size.trim_start_matches('#').trim_end_matches(" kcmil")).copied();
-        if have.is_some_and(|h| h + 1e-9 < need)
-            && let Some((bigger, a)) = table.iter().filter(|(_, a)| **a + 1e-9 >= need).min_by(|x, y| x.1.total_cmp(y.1))
+        e.corrected_ocpd = format!("{at:.0}A/{poles}P");
+        why.push(format!("drawings {}, under its submittal's {mca} A minimum circuit ampacity", e.drawing_ocpd));
+    }
+    let need = e.mca.or_else(|| e.fla.or(e.nameplate_a).map(|a| a * rule.conductor_factor.unwrap_or(1.25)));
+    if let Some((size, material)) = feeder {
+        let mat = material.trim().to_ascii_lowercase();
+        // Copper where its submittal says copper only; its own material else.
+        let target = if e.copper_only && mat.starts_with("al") { "cu".to_string() } else { mat.clone() };
+        let have = rule.ampacity_75c.get(mat.as_str()).and_then(|t| t.get(size_key(size))).copied();
+        let mut want = 0.0f64;
+        let mut parts = Vec::new();
+        if let (Some(need), Some(h)) = (need, have)
+            && h + 1e-9 < need
+        {
+            want = want.max(need);
+            parts.push(format!("feeder's #{} {material} is under the {need:.0} A it needs", size_key(size)));
+        }
+        if target != mat {
+            want = want.max(have.unwrap_or(0.0)).max(need.unwrap_or(0.0));
+            parts.push(format!("feeder's #{} {material}: its submittal calls for copper only", size_key(size)));
+        }
+        let least = rule.ampacity_75c.get(target.as_str()).and_then(|t| t.get(size_key(&e.min_wire))).copied();
+        if !e.min_wire.is_empty()
+            && let (Some(h), Some(l)) = (have, least)
+            && h + 1e-9 < l
+        {
+            want = want.max(l);
+            parts.push(format!("feeder's #{} {material} is under the #{} its submittal calls for", size_key(size), size_key(&e.min_wire)));
+        }
+        if want > 0.0
+            && let Some(table) = rule.ampacity_75c.get(target.as_str())
+            && let Some((bigger, a)) = table.iter().filter(|(_, a)| **a + 1e-9 >= want).min_by(|x, y| x.1.total_cmp(y.1))
         {
             let phases = e.phase.unwrap_or(3).clamp(1, 3);
             let hots = if phases == 1 { 2 } else { phases };
-            e.corrected_conductors = format!("{hots} #{bigger} {material}");
-            why.push(format!(
-                "feeder's #{} {material} is under the {need:.0} A it needs; #{bigger} carries {a:.0} A (75 C)",
-                size.trim_start_matches('#')
-            ));
+            e.corrected_conductors = format!("{hots} #{bigger} {target}");
+            why.push(format!("{}; #{bigger} {target} carries {a:.0} A (75 C)", parts.join("; ")));
             // Its conduit for those conductors and a ground (of the same size at most).
             let rl = super::conduitroute::rules();
-            let parts = [(hots, bigger.clone(), true), (1, bigger.clone(), false)];
-            if let Some((trade, _, _)) = super::conduitroute::fill_size(&parts, "EMT", 0.0, rl) {
+            let fill = [(hots, bigger.clone(), true), (1, bigger.clone(), false)];
+            if let Some((trade, _, _)) = super::conduitroute::fill_size(&fill, "EMT", 0.0, rl) {
                 e.corrected_conduit = format!("{}\" EMT", super::mepatoms::trade_size(trade));
             }
         }
@@ -407,6 +925,11 @@ pub(crate) fn from_answer(a: &serde_json::Value) -> EquipmentElectrical {
         hp: n("hp"),
         kw: n("kw"),
         sccr_a: n("sccr_a"),
+        copper_only: a.get("copper_only").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        min_wire: a.get("min_wire").and_then(serde_json::Value::as_str).and_then(wire_size).unwrap_or_default(),
+        unit_disconnect: a.get("unit_disconnect").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        needs_receptacle: a.get("needs_receptacle").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        needs_data: a.get("needs_data").and_then(serde_json::Value::as_bool).unwrap_or(false),
         extra_circuits: a
             .get("extra_circuits")
             .and_then(serde_json::Value::as_array)
@@ -431,7 +954,8 @@ pub(crate) fn from_answer(a: &serde_json::Value) -> EquipmentElectrical {
 /// description that is the load (`ELEVATOR` for `ELEV-1`: it starts with the tag's letters), not
 /// one that only mentions it (`LTG - ELEVATOR PIT`).
 pub(crate) fn schedule_row(sp: &cadaddy_walk3d::BuildingSpec, tag: &str) -> Option<(String, String)> {
-    let st = stem(tag)?;
+    // A tag of two letters (`EF-9`) has no stem to go by: its tag alone.
+    let st = stem(tag);
     let mut best: Option<(u8, String, String)> = None;
     for p in &sp.mep.panel_schedules {
         for c in &p.circuits {
@@ -441,9 +965,9 @@ pub(crate) fn schedule_row(sp: &cadaddy_walk3d::BuildingSpec, tag: &str) -> Opti
             // with it (`ELEVATOR SUMP PUMP` is a pump, ranked below).
             let rank = if words.iter().any(|w| w.eq_ignore_ascii_case(tag)) {
                 4
-            } else if words.len() == 1 && words.first().is_some_and(|w| w.starts_with(&st)) {
+            } else if st.as_deref().is_some_and(|st| words.len() == 1 && words.first().is_some_and(|w| w.starts_with(st))) {
                 3
-            } else if words.first().is_some_and(|w| w.starts_with(&st)) {
+            } else if st.as_deref().is_some_and(|st| words.first().is_some_and(|w| w.starts_with(st))) {
                 2
             } else {
                 0
@@ -590,11 +1114,184 @@ pub(crate) fn merge(into: &mut EquipmentElectrical, from: &EquipmentElectrical) 
     if into.extra_circuits.is_empty() {
         into.extra_circuits.clone_from(&from.extra_circuits);
     }
+    into.copper_only |= from.copper_only;
+    into.unit_disconnect |= from.unit_disconnect;
+    into.needs_receptacle |= from.needs_receptacle;
+    into.needs_data |= from.needs_data;
+    if into.min_wire.is_empty() {
+        into.min_wire.clone_from(&from.min_wire);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn equip_rule() -> super::super::coderules::CodeRule {
+        super::super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default()
+    }
+
+    /// Q6646: a maker's data sheet writes its unit between the key and the number (`MOPA  A.  20`,
+    /// `MOP (A) 15`), or calls the most protection MOPA: read as the others.
+    #[test]
+    fn a_data_sheets_mopa_and_unit_between_forms_are_read() {
+        let e = text_electrical("Voltage, Phase, Cycle V/Ph/Hz 208-230/1/60\nMCA   A.   19\nMOPA   A.   20\n");
+        assert_eq!((e.mca, e.max_ocpd_a), (Some(19.0), Some(20.0)), "{e:?}");
+        let f = text_electrical("MOP (A) 15\nMCA (A) 13.4\nMOP - Maximum Overcurrent Protection   MCA - Minimum Circuit Ampacity\n");
+        assert_eq!((f.mca, f.max_ocpd_a), (Some(13.4), Some(15.0)), "{f:?}");
+        let g = text_electrical("Min. Circuit Ampacity (MCA)   4\nMax. Overcurrent Protection (MOP)   15\nShort Circuit Current Rtg (SCCR)   5 kA\n");
+        assert_eq!((g.mca, g.max_ocpd_a, g.sccr_a), (Some(4.0), Some(15.0), Some(5000.0)), "{g:?}");
+        // The forms read before still read.
+        let k = text_electrical("MCA   A.   15\nMOPA   A.   15\nSCCR   kA   5K\n");
+        assert_eq!((k.mca, k.max_ocpd_a, k.sccr_a), (Some(15.0), Some(15.0), Some(5000.0)), "{k:?}");
+        let h = text_electrical("Unit Main Input   74.6 Amps MCA - 80 Amps MOP - 208 V");
+        assert_eq!((h.mca, h.max_ocpd_a), (Some(74.6), Some(80.0)), "{h:?}");
+    }
+
+    /// A submittal of several units names each on its own pages, alone or in a list joined by
+    /// commas, `&` or `and` (`XF-15, 16, 17`, `AHU/CU-11,12,&15`); a number a table puts in the next
+    /// cell, a decimal or a fraction after a tag is none of its list.
+    #[test]
+    fn a_tag_is_named_alone_or_in_a_list() {
+        assert!(names_tag("Mark: XF-14", "XF-14"));
+        assert!(names_tag("Mark: XF-15, 16, 17", "XF-16"));
+        assert!(names_tag("Unit Tags:   XF-11, 12, 13, 14, RX-1, 2", "XF-14"));
+        assert!(names_tag("AHU/CU-11,12,13,&15 Coordinate", "CU-15"));
+        assert!(names_tag("AHU/CU-14", "CU-14"));
+        assert!(names_tag("units cu-11 and 12", "CU-12"));
+        assert!(!names_tag("AHU/CU-11,12,13,&15", "CU-14"));
+        assert!(!names_tag("XF-14   1   ZZ-19   Nominal   1.5   16", "XF-1"), "a table's next cell");
+        assert!(!names_tag("XF-14, 1.5 HP", "XF-1"), "a decimal");
+        assert!(!names_tag("XF-14, 1/4 HP", "XF-1"), "a fraction");
+        assert!(!names_tag("RXF-14 and DXF-14", "XF-14"), "part of a longer tag");
+        assert!(!names_tag("XF-141", "XF-14"));
+        assert!(!names_tag("anything", "NOTAG"));
+        let text = "--- page 1 of 3 ---\nUnit Tags: XF-12, 9\n--- page 2 of 3 ---\nMark: XF-9\nMCA 4\n--- page 3 of 3 ---\nMark: XF-12\nMCA 9\n";
+        let mine = tag_pages(text, "XF-9");
+        assert!(mine.contains("MCA 4") && !mine.contains("MCA 9"), "{mine}");
+        assert!(tag_pages(text, "XF-7").is_empty());
+    }
+
+    /// The notes of a submittal (the rule's words): copper only, the least wire size, a disconnect
+    /// that comes with the unit, a service receptacle and a data connection to provide.
+    #[test]
+    fn a_submittals_notes_say_what_its_wiring_and_connections_need() {
+        let rule = equip_rule();
+        let mut e = EquipmentElectrical::default();
+        text_notes(
+            &mut e,
+            "Unit Main Input 74.6 Amps MCA \u{2022} 80 Amps MOP \u{2022} 208 V \u{2022} 4 AWG Wire Min.\n\
+             4. CONNECTION FROM BREAKER TO UNITS SAFETY DISCONNECT SWITCH TO BE COPPER WIRE ONLY.\n\
+             GFCI 15 amp Convenience Outlet. 120V power supply by others.\n",
+            &rule,
+        );
+        assert!(e.copper_only && e.needs_receptacle && !e.needs_data && !e.unit_disconnect, "{e:?}");
+        assert_eq!(e.min_wire, "4");
+        let mut f = EquipmentElectrical::default();
+        text_notes(&mut f, "Plug type disconnect - Adjustable mounting brackets\nMin. wire size #10\nBMS data connection (RJ45) by others", &rule);
+        assert!(f.unit_disconnect && f.needs_data && !f.copper_only, "{f:?}");
+        assert_eq!(f.min_wire, "10");
+        let mut g = EquipmentElectrical::default();
+        text_notes(&mut g, "Copper fins, aluminium casing. Disconnect by others.", &rule);
+        assert!(!g.copper_only && !g.unit_disconnect && g.min_wire.is_empty(), "{g:?}");
+    }
+
+    /// Q6646: a breaker under its MCA, aluminium where copper only is asked, conductors under the
+    /// least size: each a conflict with both documents' words, and corrected.
+    #[test]
+    fn under_mca_copper_only_and_least_wire_are_conflicts_and_corrected() {
+        let rule = equip_rule();
+        let e = EquipmentElectrical {
+            tag: "HP-9".into(),
+            source_panel: "QP".into(),
+            drawing_ocpd: "15A/2P".into(),
+            mca: Some(19.0),
+            max_ocpd_a: Some(30.0),
+            phase: Some(1),
+            source: "submittal Split Systems.pdf".into(),
+            ..Default::default()
+        };
+        let c = check(&e, Some(("12", "cu")), None, &rule);
+        let under = c.iter().find(|c| c.check == "protection_min").expect("under its MCA");
+        assert!(under.message.contains("19") && under.fix.contains("20 A"), "{under:?}");
+        assert!(under.drawings.starts_with("panel QP schedule: 15A/2P") && under.submittal.contains("minimum circuit ampacity 19"), "{under:?}");
+        let mut fixed = e.clone();
+        correct(&mut fixed, Some(("12", "cu")), &rule);
+        assert_eq!(fixed.corrected_ocpd, "20A/2P", "{fixed:?}");
+        // Copper only, fed in aluminium; and a least size the drawings' conductors are under.
+        let f = EquipmentElectrical {
+            tag: "RTU-7".into(),
+            source_panel: "DPX".into(),
+            drawing_ocpd: "80A/3P".into(),
+            mca: Some(74.6),
+            max_ocpd_a: Some(80.0),
+            copper_only: true,
+            min_wire: "2".into(),
+            source: "submittal Rooftop Unit.pdf".into(),
+            ..Default::default()
+        };
+        let c = check(&f, Some(("2", "al")), None, &rule);
+        let checks: Vec<&str> = c.iter().map(|c| c.check).collect();
+        assert!(checks.contains(&"conductor_material") && checks.contains(&"conductor_min"), "{checks:?}");
+        let mut fixed = f.clone();
+        correct(&mut fixed, Some(("2", "al")), &rule);
+        assert!(fixed.corrected_conductors.ends_with(" cu") && fixed.corrected_conductors.starts_with("3 #"), "{fixed:?}");
+        assert!(fixed.correction_reason.contains("copper only"), "{fixed:?}");
+        // Copper, of the least size and more: nothing.
+        assert!(check(&f, Some(("1", "cu")), None, &rule).iter().all(|c| c.check != "conductor_material" && c.check != "conductor_min"));
+    }
+
+    fn roof_spec(tags: serde_json::Value) -> cadaddy_walk3d::BuildingSpec {
+        let v = serde_json::json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "Roof", "elevation_ft": 30, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+            "mep": {"equipment": [
+                {"tag": "HP-9", "kind": "heat_pump", "level": "Roof", "min": [600, 240], "max": [636, 276], "height_ft": 3},
+                {"tag": "HP-9 STAND", "kind": "equipment_stand", "level": "Roof", "min": [600, 240], "max": [636, 276], "height_ft": 1, "properties": {"UNIT": "HP-9"}},
+                {"tag": "HP-8", "kind": "heat_pump", "level": "Roof", "min": [672, 240], "max": [708, 276], "height_ft": 3}
+            ]},
+            "tags": tags
+        });
+        cadaddy_walk3d::BuildingSpec::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Q6646: a unit's disconnect within sight is one drawn for it (its own, not its neighbour's
+    /// beside it); its submittal saying it brings its own is enough; a service receptacle within
+    /// reach where its submittal asks for one. What is missing is built beside it, once.
+    #[test]
+    fn a_units_disconnect_is_its_own_within_sight() {
+        let rule = equip_rule();
+        let disc = super::super::equipdisc::Rule::read();
+        let e = EquipmentElectrical { tag: "HP-9".into(), mca: Some(19.0), source: "submittal Split Systems.pdf".into(), ..Default::default() };
+        // HP-8's disconnect beside HP-8 (6 ft from HP-9: within 50 ft, but HP-8's).
+        let neighbours = serde_json::json!([{"id": "device:Roof:60.0,21.5", "kind": "equipment_connection", "level": "Roof", "at_ft": [60.0, 21.5],
+            "fields": {"type": {"value": "DISC", "source": "plan"}, "device_type": {"value": "disconnect", "source": "plan"}}}]);
+        let sp = roof_spec(neighbours.clone());
+        let lacks = lacking(&sp, &e, &rule, &disc);
+        assert_eq!(lacks.iter().map(|l| l.check).collect::<Vec<_>>(), vec!["disconnect"], "{lacks:?}");
+        // One drawn naming HP-9 a few feet off it: met.
+        let mut own = neighbours.as_array().cloned().unwrap_or_default();
+        own.push(serde_json::json!({"id": "device:Roof:49.0,21.5", "kind": "equipment_connection", "level": "Roof", "at_ft": [49.0, 21.5],
+            "fields": {"equipment": {"value": "HP-9", "source": "plan"}}}));
+        assert!(lacking(&roof_spec(serde_json::Value::Array(own)), &e, &rule, &disc).is_empty());
+        // Its own disconnect said by its submittal: met; a receptacle asked for and none near: lacking.
+        let f = EquipmentElectrical { unit_disconnect: true, needs_receptacle: true, ..e.clone() };
+        let l = lacking(&sp, &f, &rule, &disc);
+        assert_eq!(l.iter().map(|l| l.check).collect::<Vec<_>>(), vec!["receptacle"]);
+        // The conflicts say both documents; the objects are built beside it, once.
+        let c = lack_conflicts(&e, &lacks, &rule);
+        assert_eq!(c.len(), 1);
+        assert!(c[0].message.contains("no disconnect within sight") && c[0].message.contains("440.14"), "{c:?}");
+        let mut sp2 = sp.clone();
+        let built = build_lacking(&mut sp2, &e, &lacks, Some("QP-10,12"), &rule);
+        assert_eq!(built.len(), 1, "{built:?}");
+        let t = sp2.tags.last().expect("built");
+        assert_eq!(t.fields["circuit"].value, "QP-10,12");
+        assert_eq!(t.fields["design_value"].value, "not on the drawings");
+        assert!(t.at_ft[0] > 53.0 && t.at_ft[0] < 55.0, "beside HP-9's east side: {:?}", t.at_ft);
+        assert!(build_lacking(&mut sp2, &e, &lacks, None, &rule).is_empty(), "not built twice");
+        assert!(lacking(&sp2, &e, &rule, &disc).is_empty(), "the built one meets it");
+    }
 
     /// Where its submittal differs, what is built stands beside what the drawings say.
     #[test]

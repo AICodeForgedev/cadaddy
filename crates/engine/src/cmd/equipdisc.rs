@@ -135,7 +135,7 @@ impl Rule {
 
     /// Whether a device of `kind` is a connection (an equipment connection, a disconnect, a
     /// junction box at a motor).
-    fn is_connection(&self, kind: &str) -> bool {
+    pub(crate) fn is_connection(&self, kind: &str) -> bool {
         has_any(kind, &self.connection_kinds)
     }
 

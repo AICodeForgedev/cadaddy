@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rfi.list", "RFI List", run_list)
             .params(
-                "{level?: name, kind?: untagged_wall|unknown_tag|sheet_conflict|height_vs_ceiling|rated_to_ceiling|double_ceiling_short_wall|head_unspecified|ceiling_unspecified|soffit_no_detail|detail_missing|detail_unused|sleeve_no_route|sleeve_no_fit|room_unnumbered|requirement (an object the documents leave incomplete), severity?: high|medium|low, status?: open|sent|answered|closed|approved|rejected} → {items: [{id, kind, title, severity, before (the build step it must be answered before: underground, rough_in, trim), before_label, level, at, extent?, sheets, about, issue, assumed, proposed?, status, answer?}], total, bySeverity, byKind, byStep, csv}: where the prints are silent or disagree and what was assumed meanwhile, ordered by the build step it blocks then severity — the readers' items in the spec (with their sheets), the objects the build could not complete by their requirements, and the spec's own gaps (guessed wall and ceiling types, rated walls stopping at a ceiling, heads of wall not given…)",
+                "{level?: name, kind?: untagged_wall|unknown_tag|sheet_conflict|height_vs_ceiling|rated_to_ceiling|double_ceiling_short_wall|head_unspecified|ceiling_unspecified|soffit_no_detail|detail_missing|detail_unused|sleeve_no_route|sleeve_no_fit|room_unnumbered|requirement (an object the documents leave incomplete), severity?: high|medium|low, status?: open|sent|answered|closed|approved|rejected} → {items: [{id, kind, title, severity, before (the build step it must be answered before: underground, rough_in, trim), before_label, level, at, extent?, sheets, about, issue, assumed, proposed?, status, answer?, answered_by? (an item a later fact answers is closed with it: a type set on the built wall, the legend's head key, the RCP's hatch)}], total, bySeverity, byKind, byStep, open: {questions, high, spec_gaps, closed_by_answers}, headline (the open questions for the design team; the spec's own gaps the build filled counted apart), csv}: where the prints are silent or disagree and what was assumed meanwhile, ordered by the build step it blocks then severity — the readers' items in the spec (with their sheets), the objects the build could not complete by their requirements, and the spec's own gaps (guessed wall and ceiling types, rated walls stopping at a ceiling, heads of wall not given…)",
             )
             .noundo(),
         CommandSpec::new("rfi.zoom", "Zoom to RFI", run_zoom).params("{id} → {id, level, window}: the plan view on the item (its extent, or 20' round it)").noundo(),
@@ -41,6 +41,89 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
     ]
+}
+
+/// Built walls looked at for a type set on them at most.
+const MAX_TYPED_WALLS: usize = 200_000;
+
+/// The spec as the model holds it now (Q6652): each wall mark a built wall stands on takes the
+/// wall type set on that wall's element (`bim.props.set type`, by a person, or by a reading: any
+/// source but an assumption or the model's own), with the element and who set it as its source.
+/// None when no built wall carries a type of the spec's own that differs from its mark.
+pub(crate) fn facts(d: &Drawing, sp: &BuildingSpec) -> Option<BuildingSpec> {
+    use cadaddy_doc::props::SourceKind;
+    let mut out: Option<BuildingSpec> = None;
+    let mut seen = 0usize;
+    for e in d.model.iter() {
+        if seen >= MAX_TYPED_WALLS {
+            break;
+        }
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        if super::elemprops::element_kind(e).as_deref() != Some("wall") {
+            continue;
+        }
+        seen += 1;
+        let store = cadaddy_doc::props::read(&e.common.xdata);
+        let Some(p) = store.get("type").filter(|p| p.has_value() && !p.source.kind.is_assumed() && p.source.kind != SourceKind::Computed) else {
+            continue;
+        };
+        let typed = p.text();
+        let Some(name) = sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(typed.trim())).map(|t| t.name.clone()) else { continue };
+        let Some(level) = super::elemprops::level_of(e) else { continue };
+        // The wall's footprint: its faces looking up, on the plan.
+        let tops: Vec<[Vec2; 3]> = m
+            .triangles()
+            .into_iter()
+            .take(20_000)
+            .filter(|t| {
+                let n = (t[1] - t[0]).cross(t[2] - t[0]);
+                n.is_finite() && n.len() > 0.0 && (n.z / n.len()).abs() > 0.7
+            })
+            .map(|t| t.map(|v| Vec2::new(v.x, v.y)))
+            .collect();
+        if tops.is_empty() {
+            continue;
+        }
+        let on = |q: Vec2| {
+            tops.iter().any(|t| {
+                let c = |a: Vec2, b: Vec2| (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
+                let (s0, s1, s2) = (c(t[0], t[1]), c(t[1], t[2]), c(t[2], t[0]));
+                let eps = 1e-9 * (1.0 + q.x.abs() + q.y.abs());
+                (s0 >= -eps && s1 >= -eps && s2 >= -eps) || (s0 <= eps && s1 <= eps && s2 <= eps)
+            })
+        };
+        let who = if p.source.kind == SourceKind::User { "a person".to_string() } else { p.source.kind.as_str().to_string() };
+        let spec = out.get_or_insert_with(|| sp.clone());
+        for mk in spec.walls.iter_mut().filter(|w| w.level.eq_ignore_ascii_case(&level)) {
+            let mid = Vec2::new((mk.a[0] + mk.b[0]) / 2.0, (mk.a[1] + mk.b[1]) / 2.0);
+            if (mk.wall_type == name && mk.guess.is_none()) || !mid.x.is_finite() || !mid.y.is_finite() || !on(mid) {
+                continue;
+            }
+            mk.wall_type = name.clone();
+            mk.guess = None;
+            mk.status = None;
+            mk.source = format!("type {name} set on the built wall {} by {who}", e.handle.hex());
+        }
+    }
+    out.filter(|f| f.walls != sp.walls)
+}
+
+/// The RFI list over the model's facts ([`facts`], [`cadaddy_walk3d::rfi::list_with`]): an item
+/// a type set on a built wall answers is closed, with its source.
+pub(crate) fn listed(d: Option<&Drawing>, sp: &BuildingSpec) -> Vec<Rfi> {
+    match d.and_then(|d| facts(d, sp)) {
+        Some(f) => cadaddy_walk3d::rfi::list_with(sp, &f),
+        None => cadaddy_walk3d::rfi::list(sp),
+    }
+}
+
+/// The open items told apart: the questions for the design team, how many of them are high,
+/// and the spec's own gaps the build filled itself ([`Rfi::is_spec_gap`]).
+pub(crate) fn open_counts(list: &[Rfi]) -> (usize, usize, usize) {
+    let open = list.iter().filter(|r| r.status == RfiStatus::Open);
+    let gaps = open.clone().filter(|r| r.is_spec_gap()).count();
+    let questions: Vec<&Rfi> = open.filter(|r| !r.is_spec_gap()).collect();
+    (questions.len(), questions.iter().filter(|r| r.severity == Severity::High).count(), gaps)
 }
 
 /// The list, filtered by the usual parameters.
@@ -59,7 +142,7 @@ fn items(s: &Session, cmd: &str, p: &Value) -> Result<(BuildingSpec, Vec<Rfi>)> 
         None => None,
     };
     let level = str_param(p, "level");
-    let mut list = cadaddy_walk3d::rfi::list(&sp);
+    let mut list = listed(s.doc().ok(), &sp);
     list.retain(|r| {
         kind.is_none_or(|k| r.kind == Some(k))
             && severity.is_none_or(|k| r.severity == k)
@@ -82,6 +165,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         by_kind.insert(r.kind_name().into(), json!(n));
     }
     let count = |k: Severity| list.iter().filter(|r| r.severity == k).count();
+    let (questions, high, gaps) = open_counts(&list);
     let rules = super::requirements::rules();
     let by_step: serde_json::Map<String, Value> =
         rules.steps.iter().map(|st| (st.id.clone(), json!(list.iter().filter(|r| rules.step_of(r) == st.id).count()))).collect();
@@ -91,6 +175,9 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         "bySeverity": {"high": count(Severity::High), "medium": count(Severity::Medium), "low": count(Severity::Low)},
         "byKind": by_kind,
         "byStep": by_step,
+        "open": {"questions": questions, "high": high, "spec_gaps": gaps,
+            "closed_by_answers": list.iter().filter(|r| !r.answered_by.is_empty()).count()},
+        "headline": super::requirements::headline_with_gaps(questions, high, gaps),
         "csv": cadaddy_walk3d::rfi::csv(&list),
     }))
 }
@@ -98,10 +185,8 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
 fn find(s: &Session, cmd: &str, p: &Value) -> Result<(BuildingSpec, Rfi)> {
     let id = str_param(p, "id").ok_or_else(|| bad(cmd, "`id` is required"))?;
     let (sp, _) = current(s, cmd)?;
-    let item = cadaddy_walk3d::rfi::list(&sp)
-        .into_iter()
-        .find(|r| r.id.eq_ignore_ascii_case(id.trim()))
-        .ok_or_else(|| bad(cmd, format!("there is no {id}")))?;
+    let item =
+        listed(s.doc().ok(), &sp).into_iter().find(|r| r.id.eq_ignore_ascii_case(id.trim())).ok_or_else(|| bad(cmd, format!("there is no {id}")))?;
     Ok((sp, item))
 }
 
@@ -134,7 +219,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         let answer = p.get("answer").and_then(Value::as_str).unwrap_or_default().chars().take(MAX_ANSWER).collect::<String>();
         let v = super::valueeng::decide(s, &r.id, r.status.name(), "", &answer, "rfi.set")?;
         let (sp, _) = current(s, "rfi.set")?;
-        let item = cadaddy_walk3d::rfi::list(&sp).into_iter().find(|x| x.id == r.id).unwrap_or(r);
+        let item = listed(s.doc().ok(), &sp).into_iter().find(|x| x.id == r.id).unwrap_or(r);
         return Ok(json!({ "item": item_json(&item), "value_engineering": v }));
     }
     if let Some(sv) = str_param(p, "severity") {
