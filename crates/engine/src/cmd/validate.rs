@@ -1301,6 +1301,10 @@ pub(crate) fn placed_prints_from_job(s: &Session, frame: &Frame) -> Option<Print
     let upf = frame.upf();
     let shifts_of = |sheet: &str| -> Vec<[f64; 2]> {
         let Some(b) = &buildings else { return vec![[0.0, 0.0]] };
+        // A site sheet's contents stand once, where it puts them (Q6643).
+        if b.is_site_sheet(sheet) {
+            return vec![[0.0, 0.0]];
+        }
         let at = |n: &str| b.list.iter().find(|x| x.name == n).map_or([0.0, 0.0], |x| x.offset_ft);
         let first = b.list.first().map_or([0.0, 0.0], |x| x.offset_ft);
         let named: Vec<&str> = b

@@ -7626,11 +7626,13 @@ fn buildings_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> R
     let labels = bl::site_labels(&site_lines, &set.names);
     let list = bl::place(&set, bl::footprint_ft(s.doc()?, &sp), &labels);
     sp.buildings = bl::to_spec(&set, list);
+    // The site's sheets (Q6643): what is built from one is placed once, never copied with a building.
+    sp.buildings.site_sheets = regions.iter().filter(|r| site(r)).map(|r| r.number.clone()).collect();
     let done = bl::apply(s.doc_mut()?, &mut sp);
     s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let report = done.to_json(&sp);
     progress_line(&format!(
-        "  buildings: {} from one set of plans ({}): {} elements copied, {} moved to their own building, {} stand for every building; sheets naming buildings {}",
+        "  buildings: {} from one set of plans ({}): {} elements copied, {} moved to their own building, {} stand for every building, {} the site's (placed once); sheets naming buildings {}; site sheets {}",
         sp.buildings.list.len(),
         sp.buildings
             .list
@@ -7641,7 +7643,9 @@ fn buildings_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> R
         done.copied,
         done.moved,
         done.shared,
-        json!(sp.buildings.sheets)
+        done.site,
+        json!(sp.buildings.sheets),
+        json!(sp.buildings.site_sheets)
     ));
     let unnamed: Vec<String> = regions
         .iter()
