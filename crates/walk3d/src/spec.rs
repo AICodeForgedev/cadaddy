@@ -241,11 +241,21 @@ pub struct Buildings {
     /// first, so they are taken off again before the buildings are placed anew.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub added_shells: BTreeMap<String, Vec<[f64; 4]>>,
+    /// The sheets of the site (a civil sheet, a trade's plan of the site built as site work): what
+    /// is built from one is placed once, where the site plan puts it, never copied with a building
+    /// (Q6643).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub site_sheets: Vec<String>,
 }
 
 impl Buildings {
     pub fn is_empty(&self) -> bool {
-        self.list.is_empty() && self.sheets.is_empty() && self.added_shells.is_empty()
+        self.list.is_empty() && self.sheets.is_empty() && self.added_shells.is_empty() && self.site_sheets.is_empty()
+    }
+    /// Whether `sheet` is one of the site's (its contents stand once, not per building).
+    pub fn is_site_sheet(&self, sheet: &str) -> bool {
+        let sheet = sheet.trim();
+        !sheet.is_empty() && self.site_sheets.iter().any(|s| s.trim().eq_ignore_ascii_case(sheet))
     }
     /// Whether there is more than one building to build.
     pub fn several(&self) -> bool {
