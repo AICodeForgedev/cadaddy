@@ -255,11 +255,12 @@ impl Ctx {
                     r3(wa.thick / self.inch)
                 )));
             }
-            // In the wall but deeper than its stud cavity: the studs and the far face's board are
-            // where its back is.
-            if let Some(why) = self.cav.too_deep(wall.handle, wa.thick / self.inch, (hi - lo) / self.inch) {
+            // In the wall but deeper than the wall holds behind its face: its back is in the far
+            // face's board. Not a through-wall unit's sleeve, whose opening goes through the wall.
+            let why = self.cav.too_deep(wall.handle, wa.thick / self.inch, (hi - lo) / self.inch);
+            if let Some(why) = why.filter(|_| !says(&rules().through_wall_words)) {
                 return Some(Verdict::Conflict(format!(
-                    "recessed: {why}, so its back is in the far face's framing and board (mounted on the face, or the wall framed deeper) ({})",
+                    "recessed: {why}, so its back is in the far face (mounted on the face, or the wall framed deeper) ({})",
                     crate::cmd::recess::RULE
                 )));
             }

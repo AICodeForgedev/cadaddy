@@ -1296,9 +1296,9 @@ fn a_recessed_room_panel_is_built_in_its_wall() {
     assert!(panel.common.xdata.iter().any(|t| t.value.starts_with("prop:HOST_WALL=")), "{:?}", panel.common.xdata);
 }
 
-/// Q6560: a load center recessed by its schedule whose can is deeper than its wall's cavity (a
-/// wall type with no layers: the built 6" less a board on each face) goes on the wall's face,
-/// its back on the room face, the design mounting kept beside the installed one.
+/// Q6560: a load center recessed by its schedule whose can is deeper than its wall holds (a wall
+/// type with no layers: the built 6" less a board on its far face) goes on the wall's face, its
+/// back on the room face, the design mounting kept beside the installed one.
 #[test]
 fn a_recessed_room_panel_its_wall_cant_hold_is_built_on_the_face() {
     let _g = serial();
@@ -1306,22 +1306,22 @@ fn a_recessed_room_panel_its_wall_cant_hold_is_built_on_the_face() {
     let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
     if let Some(eq) = spec["mep"]["equipment"].as_array_mut() {
         eq.push(
-            json!({"tag": "G-101", "kind": "panel", "level": "L1", "min": [100.0, 17.0], "max": [114.0, 22.0], "bottom_ft": 4.5, "height_ft": 2.0,
+            json!({"tag": "LC-7", "kind": "panel", "level": "L1", "min": [100.0, 16.0], "max": [114.0, 22.0], "bottom_ft": 4.5, "height_ft": 2.0,
                        "properties": {"MOUNTING": "recessed, front flush with the wall"}}),
         );
     }
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
     s.execute("model.build", &json!({})).expect("build");
     let d = s.doc().expect("doc");
-    let panel = tagged(d, "G-101");
+    let panel = tagged(d, "LC-7");
     let b = cadaddy_engine::doc::entity_bounds(d, panel, 0);
-    // 5" deep: out from the wall's room face (y 6") into the room, not into the wall (0..6").
-    assert!((b.min.y - 6.0).abs() < 0.01 && (b.max.y - 11.0).abs() < 0.01, "on the face: {b:?}");
+    // 6" deep: out from the wall's room face (y 6") into the room, not into the wall (0..6").
+    assert!((b.min.y - 6.0).abs() < 0.01 && (b.max.y - 12.0).abs() < 0.01, "on the face: {b:?}");
     assert!(prop_of(panel, "MOUNTING").is_some_and(|m| m.contains("surface")), "{:?}", prop_of(panel, "MOUNTING"));
     let ps = cadaddy_engine::doc::props::read(&panel.common.xdata);
     assert_eq!(ps.get("design:MOUNTING").map(|p| p.text()).as_deref(), Some("recessed, front flush with the wall"));
     let why = ps.get("correction:MOUNTING").map(|p| p.text()).unwrap_or_default();
-    assert!(why.contains("E-RECESS-CAVITY") && why.contains("4.75\""), "{why}");
+    assert!(why.contains("E-RECESS-CAVITY") && why.contains("holds 5.38\""), "{why}");
 }
 
 /// The built element tagged `tag`.
