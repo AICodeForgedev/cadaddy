@@ -6359,11 +6359,11 @@ fn tag_box_piece(inst: &SymbolInstance, pieces: &[Piece], strokes: &[Stroke]) ->
 /// lost the run, its poles fed by nothing (Q6673). Its symbol is measured by its
 /// own outline: the box round its tag's letters, else the outline nearest the tag (closed, about
 /// as wide as tall, no smaller than its letters), else a square [`LONE_SYMBOL_LETTERS`] letters
-/// wide on the tag. A piece whose middle stands farther than [`FOREIGN_STROKE_OVER`] times that
-/// size from it, or that is bigger than that while no other copy of its type draws its shape
-/// (wherever it lies), is not the symbol's and stays loose where printed, as for copies that
-/// share an outline ([`release_foreign_strokes`]); a shape the type's other copies draw too (the
-/// line between a mark and its circuit) stays the symbol's. None left: the copy is its tag
+/// wide on the tag. A piece no other copy of its type draws (by shape, wherever it lies) that is
+/// more than [`FOREIGN_STROKE_OVER`] times that size, or whose middle stands farther than that
+/// from it, is not the symbol's and stays loose where printed, as for copies that share an
+/// outline ([`release_foreign_strokes`]); a shape the type's other copies draw too (the line
+/// between a mark and its circuit) stays the symbol's, as it was. None left: the copy is its tag
 /// alone. A copy with no tag height to measure by keeps its cluster.
 fn lone_symbol(
     mut inst: SymbolInstance,
@@ -6402,16 +6402,15 @@ fn lone_symbol(
         [c.0 - half, c.1 - half, c.0 + half, c.1 + half]
     });
     let reach = FOREIGN_STROKE_OVER * extent(symbol);
-    // a piece whose middle stands within reach of the symbol, no bigger than the reach unless a
-    // shape another copy of its type draws too (the line between a mark and its circuit, drawn
-    // at every copy): a hatch or dotted line passing farther off is never the symbol's
-    let near = |b: [f64; 4]| {
+    // a piece the symbol's size: its middle within reach of it, no bigger than the reach
+    let within = |b: [f64; 4]| {
         let c = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
-        c.0 >= symbol[0] - reach && c.0 <= symbol[2] + reach && c.1 >= symbol[1] - reach && c.1 <= symbol[3] + reach
+        extent(b) <= reach && c.0 >= symbol[0] - reach && c.0 <= symbol[2] + reach && c.1 >= symbol[1] - reach && c.1 <= symbol[3] + reach
     };
+    // or a shape another copy of its type draws too (the line between a mark and its circuit,
+    // drawn at every copy): the type's, as the copies' shared drawing is elsewhere
     let shared = |p: &Piece| drawn_by.get(&(p.fill, p.key.clone())).copied().unwrap_or(0) >= SHARED_STROKE_MIN;
-    let keep: Vec<usize> =
-        pieces.iter().enumerate().filter(|(_, p)| box_of(p).is_some_and(|b| near(b) && (extent(b) <= reach || shared(p)))).map(|(k, _)| k).collect();
+    let keep: Vec<usize> = pieces.iter().enumerate().filter(|(_, p)| shared(p) || box_of(p).is_some_and(within)).map(|(k, _)| k).collect();
     if keep.len() == pieces.len() {
         return keep_pieces(inst, pieces, &[], (0.0, 0.0), strokes, fills);
     }
