@@ -934,6 +934,40 @@ fn is_site_reason(why: &str) -> bool {
     why == "site/civil" || why == super::sitework::SITE_WORK
 }
 
+/// Why a life safety, occupancy load or code plan is never built (Q6559): it is a reference
+/// sheet drawn over the floor plans for review; its symbols (pull stations, extinguishers, exit
+/// lights, card readers) are the trades' own plans' to place.
+pub const REFERENCE_SHEET: &str = "reference sheet (life safety, occupancy or code plan)";
+
+/// Whether sheet `number` titled `title` is a reference sheet ([`REFERENCE_SHEET`]), by the part
+/// of its title that types it ([`cadaddy_mepfix::printset::reference_title`]): `EQUIPMENT/ LIFE
+/// SAFETY` is the floor's equipment plan, which also prints its life safety.
+pub(crate) fn reference_sheet(number: &str, title: &str) -> bool {
+    cadaddy_mepfix::printset::reference_title(number, title)
+}
+
+/// A loaded sheet's region levels: its level, the levels it covers and why it is never built
+/// ([`not_built_reason`]). A trade's plan of the site reads on the site datum: no storey's stage
+/// takes its objects (the site work step builds them). A life safety or code plan is a reference
+/// sheet ([`REFERENCE_SHEET`]): no storey of its own, even when its views are titled by floor.
+pub(crate) fn region_levels(
+    number: &str,
+    discipline: &str,
+    title: &str,
+    level: String,
+    levels: Vec<String>,
+    level_source: &str,
+) -> (String, Vec<String>, &'static str) {
+    let not_built = not_built_reason(discipline, title, &level, level_source);
+    if not_built == super::sitework::SITE_WORK {
+        (super::sitework::SITE_LEVEL.to_string(), levels, not_built)
+    } else if !is_site_reason(not_built) && reference_sheet(number, title) {
+        (String::new(), Vec::new(), REFERENCE_SHEET)
+    } else {
+        (level, levels, not_built)
+    }
+}
+
 fn in_rect(r: &[f64; 4], at: [f64; 2]) -> bool {
     at[0] >= r[0].min(r[2]) && at[0] <= r[0].max(r[2]) && at[1] >= r[1].min(r[3]) && at[1] <= r[1].max(r[3])
 }
@@ -960,7 +994,9 @@ pub fn not_built_reason(discipline: &str, title: &str, level: &str, level_source
 /// several levels is split even when its views carry no title the readers find (by its blocks
 /// of linework), so no floor-specific plan feeds two levels.
 pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetRegion>, typical: &[bool]) -> Vec<SheetRegion> {
-    let candidate = |r: &SheetRegion| matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.view.is_none();
+    // A reference sheet stays whole and off every storey: its views titled by floor (`LIFE
+    // SAFETY PLAN - LEVEL 1`) don't make it that floor's plan (Q6559).
+    let candidate = |r: &SheetRegion| matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.view.is_none() && r.not_built != REFERENCE_SHEET;
     let sheets: Vec<Option<([f64; 4], [f64; 4], Vec<String>)>> = regions
         .iter()
         .enumerate()
@@ -987,14 +1023,18 @@ pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetReg
             continue;
         }
         for v in found {
-            let not_built = if is_site_reason(&r.not_built) { r.not_built.clone() } else { String::new() };
-            out.push(SheetRegion {
-                level: v.level,
-                levels: v.levels,
-                not_built,
-                view: Some(SheetView { title: v.title, rect: v.rect }),
-                ..r.clone()
-            });
+            // A view that is itself a life safety or code plan (beside the floor's plans) is
+            // reference: on no storey.
+            let reference = !is_site_reason(&r.not_built) && cadaddy_mepfix::sheet_facts::is_reference_sheet(&v.title);
+            let not_built = if is_site_reason(&r.not_built) {
+                r.not_built.clone()
+            } else if reference {
+                REFERENCE_SHEET.to_string()
+            } else {
+                String::new()
+            };
+            let (level, levels) = if reference { (String::new(), Vec::new()) } else { (v.level, v.levels) };
+            out.push(SheetRegion { level, levels, not_built, view: Some(SheetView { title: v.title, rect: v.rect }), ..r.clone() });
         }
     }
     out
@@ -3043,15 +3083,12 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                     let level = level_of(sh);
                     let field =
                         |k: &str| index_entry(base).and_then(|x| x.get(k)).or_else(|| sh.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
-                    let not_built = not_built_reason(&discipline, &field("title"), &level, &field("level_source"));
-                    // A trade's plan of the site reads on the site datum: no storey's stage
-                    // takes its objects (the site work step builds them).
-                    let level = if not_built == super::sitework::SITE_WORK { super::sitework::SITE_LEVEL.to_string() } else { level };
                     let levels: Vec<String> = sh
                         .get("levels")
                         .and_then(Value::as_array)
                         .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                         .unwrap_or_default();
+                    let (level, levels, not_built) = region_levels(base, &discipline, &field("title"), level, levels, &field("level_source"));
                     typical.push(cadaddy_mepfix::sheet_reader::says_typical(&field("title")));
                     regions.push(SheetRegion {
                         number: base.to_string(),
@@ -3068,8 +3105,8 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
                         rect,
                         area: None,
                         title_block: None,
-                        not_built: not_built.to_string(),
                         levels,
+                        not_built: not_built.to_string(),
                         view: None,
                     });
                 }
@@ -34390,8 +34427,9 @@ fn set_sheet_fact(job: &mut GuidedJob, number: &str, key: &str, value: &str) {
             "level" if r.view.is_none() => {
                 r.level = value.to_string();
                 r.levels.clear();
-                // The answer is the plan's level: it is built (unless it is a site plan).
-                if r.not_built == "no level" {
+                // The answer is the plan's level: it is built (unless it is a site plan; a
+                // reference sheet answered onto a level is that level's plan).
+                if r.not_built == "no level" || r.not_built == REFERENCE_SHEET {
                     r.not_built.clear();
                 }
             }
@@ -47455,6 +47493,99 @@ mod tests {
         let typical = SheetRegion { levels: vec!["2".into(), "3".into()], ..region("M-201", "2", "M", "plan", 600.0) };
         let kept = split_view_regions(&cadaddy_doc::Drawing::new_imperial(), vec![typical.clone()], &[true]);
         assert_eq!(kept, vec![typical]);
+    }
+
+    /// Q6559: a life safety plan prints each floor as a view titled by its floor, with a LIFE
+    /// SAFETY LEGEND of its own (pull stations, card readers). It is a reference sheet: it stays
+    /// whole on no storey and none of its symbols is built; a view titled as a life safety plan
+    /// beside a floor's plan is reference too. The electrical plan's same marks are its devices.
+    #[test]
+    fn a_life_safety_plans_symbols_build_nothing() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let life = "LIFE SAFETY PLAN - 1ST AND 2ND FLOOR";
+        job.sheets = Some(json!({"sheets": [
+            {"number": "QG-1", "title": life, "discipline": "G", "type": "plan"},
+            {"number": "QA-1", "title": "FLOOR PLANS", "discipline": "A", "type": "plan"},
+            {"number": "QE-1", "title": "POWER PLAN", "discipline": "E", "type": "plan"}
+        ]}));
+        job.sheets_loaded = true;
+        // Each sheet 2016 x 1440, its views 300 square titled under them, its legend at its right.
+        let legend: Vec<(&str, f64, f64, f64)> = vec![
+            ("LIFE SAFETY LEGEND", 1500.0, 1200.0, 8.0),
+            ("DPS", 1505.0, 1185.0, 5.0),
+            ("DOUBLE ACTION PULL STATION", 1530.0, 1185.0, 5.0),
+            ("ACR", 1505.0, 1173.0, 5.0),
+            ("ACCESS CONTROL READER", 1530.0, 1173.0, 5.0),
+        ];
+        let sheet = |s: &mut crate::Session,
+                     job: &mut GuidedJob,
+                     n: &str,
+                     x0: f64,
+                     views: &[(f64, &str)],
+                     texts: &[(&str, f64, f64, f64)],
+                     syms: &[(&str, f64, f64)]| {
+            let lo = s.doc().map_or(0, |d| d.handseed);
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            // Its border.
+            for w in [[0.0, 0.0], [2016.0, 0.0], [2016.0, 1440.0], [0.0, 1440.0], [0.0, 0.0]].windows(2) {
+                if let [a, b] = w {
+                    let l = cadaddy_doc::Line {
+                        a: cadaddy_doc::geom::Vec3::new(x0 + a[0], a[1], 0.0),
+                        b: cadaddy_doc::geom::Vec3::new(x0 + b[0], b[1], 0.0),
+                    };
+                    let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(l));
+                }
+            }
+            for (x, title) in views {
+                drawn_view(d, *x, 100.0, Some(title));
+            }
+            add_sheet(s, texts, syms);
+            let hi = s.doc().map_or(0, |d| d.handseed);
+            job.sheet_spans.push(SheetSpan { sheet: n.into(), lo, hi });
+        };
+        let views = [(100.0, "LIFE SAFETY PLAN - 1ST FLOOR"), (700.0, "LIFE SAFETY PLAN - 2ND FLOOR")];
+        sheet(
+            &mut s,
+            &mut job,
+            "QG-1",
+            0.0,
+            &views,
+            &legend,
+            &[("DPS", 150.0, 150.0), ("ACR", 250.0, 250.0), ("DPS", 750.0, 150.0), ("ACR", 850.0, 250.0)],
+        );
+        let views = [(3100.0, "1ST FLOOR PLAN"), (3700.0, "LIFE SAFETY PLAN - 2ND FLOOR")];
+        sheet(&mut s, &mut job, "QA-1", 3000.0, &views, &[], &[]);
+        sheet(&mut s, &mut job, "QE-1", 6000.0, &[], &[], &[("DPS", 6150.0, 150.0)]);
+        // The regions as the job loads them (the classify step left the reference sheet's level
+        // and the floor plans sheet's empty), then split by their views.
+        let region_of = |n: &str, d: &str, title: &str, level: &str, x: f64| {
+            let (level, levels, not_built) = region_levels(n, d, title, level.to_string(), Vec::new(), "title");
+            SheetRegion { rect: [x, 0.0, x + 2016.0, 1440.0], levels, not_built: not_built.to_string(), ..region(n, &level, d, "plan", x) }
+        };
+        let regions = vec![
+            region_of("QG-1", "G", life, "", 0.0),
+            region_of("QA-1", "A", "FLOOR PLANS", "", 3000.0),
+            region_of("QE-1", "E", "POWER PLAN", "1", 6000.0),
+        ];
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        job.sheet_regions = split_view_regions(d, regions, &[false, false, false]);
+        let of = |n: &str| -> Vec<(String, String)> {
+            job.sheet_regions.iter().filter(|r| r.number == n).map(|r| (r.level.clone(), r.not_built.clone())).collect()
+        };
+        assert_eq!(of("QG-1"), [(String::new(), REFERENCE_SHEET.to_string())], "a reference sheet stays whole, on no storey");
+        assert_eq!(
+            of("QA-1"),
+            [("1".to_string(), String::new()), (String::new(), REFERENCE_SHEET.to_string())],
+            "its floor plan view is level 1's, its life safety view reference"
+        );
+        assert!(job.level_at([250.0, 250.0]).is_some_and(|r| !super::super::printmep::building_level(&r.level)));
+        assert!(job.level_at([3800.0, 250.0]).is_some_and(|r| !super::super::printmep::building_level(&r.level)));
+        assert!(job.level_at([3200.0, 250.0]).is_some_and(|r| r.level == "1"));
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let on = |sheet: &str| -> Vec<String> { job.devices.iter().filter(|d| d.sheet == sheet).map(|d| d.tag.clone()).collect() };
+        assert!(on("QG-1").is_empty(), "a life safety plan's symbols build nothing: {:?}", on("QG-1"));
+        assert_eq!(on("QE-1"), vec!["DPS".to_string()], "the electrical plan's pull station is its device");
     }
 
     #[test]

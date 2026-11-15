@@ -663,7 +663,7 @@ pub fn title_views(number: &str, title: &str) -> Vec<String> {
 /// level, [`sheet_facts::is_reference_sheet`]). A title listing parts is one by the part that
 /// types it: `EQUIPMENT/ LIFE SAFETY` is the floor's equipment plan, which also prints its
 /// life safety.
-fn reference_title(number: &str, title: &str) -> bool {
+pub fn reference_title(number: &str, title: &str) -> bool {
     match title_lead(number, title) {
         Some(lead) => title_parts(title).get(lead.index).is_some_and(|p| sheet_facts::is_reference_sheet(p)),
         None => sheet_facts::is_reference_sheet(title),
