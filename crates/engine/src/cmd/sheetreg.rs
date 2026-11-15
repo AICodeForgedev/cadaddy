@@ -197,6 +197,15 @@ impl SheetLines {
         }
     }
 
+    /// How many of sheet `i`'s linework points lie inside `region` (all of them with none).
+    pub(crate) fn count(&self, i: usize, region: Option<&[f64; 4]>) -> usize {
+        let Some(all) = self.pts.get(i) else { return 0 };
+        match region {
+            Some(r) => all.iter().filter(|p| inside(r, **p)).count(),
+            None => all.len(),
+        }
+    }
+
     /// Whether sheet `i`'s template was left out of its linework.
     pub(crate) fn stripped(&self, i: usize) -> bool {
         self.stripped.get(i).copied().unwrap_or(false)
@@ -261,6 +270,38 @@ impl SheetLines {
     /// to say why). The plan's linework is made ready once for them all; `stats` counts the fits.
     pub(crate) fn fit_why(&self, i: usize, tgt: &[Vec2], ratio: f64, stats: &mut super::grids::FitStats) -> Result<LineworkFit, String> {
         let (Some(src), true) = (self.pts.get(i), self.stripped(i)) else { return Err("its template could not be told from its drawing".into()) };
+        self.fit_points_why(src, tgt, ratio, stats)
+    }
+
+    /// [`Self::fit_why`] for one of sheet `i`'s views: `view`, the part of its linework the view
+    /// holds, alone (Q6640: a sheet of two plan views side by side is twice its plan's size, and
+    /// neither view lies on the plan with the other beside it).
+    pub(crate) fn fit_view_why(
+        &self,
+        i: usize,
+        view: &[Vec2],
+        tgt: &[Vec2],
+        ratio: f64,
+        stats: &mut super::grids::FitStats,
+    ) -> Result<LineworkFit, String> {
+        if !self.stripped(i) {
+            return Err("its template could not be told from its drawing".into());
+        }
+        self.fit_points_why(view, tgt, ratio, stats)
+    }
+
+    /// The blocks of sheet `i`'s linework that may be views (Q6640), each its rectangle: groups of
+    /// 4' cells that touch, at least [`MIN_POINTS`] points and [`VIEW_BLOCK_SHARE`] of the largest
+    /// (a key plan, a legend's box or a stamp is smaller), largest first.
+    pub(crate) fn view_blocks(&self, i: usize) -> Vec<[f64; 4]> {
+        let Some(pts) = self.pts.get(i) else { return Vec::new() };
+        let blocks = blocks(pts, 48.0 * self.k_in);
+        let most = blocks.first().map_or(0, |b| b.0);
+        blocks.into_iter().filter(|(n, _)| *n >= MIN_POINTS && *n as f64 >= VIEW_BLOCK_SHARE * most as f64).map(|(_, r)| r).collect()
+    }
+
+    /// [`Self::fit_why`] of the points `src` (a sheet's, or one view's).
+    fn fit_points_why(&self, src: &[Vec2], tgt: &[Vec2], ratio: f64, stats: &mut super::grids::FitStats) -> Result<LineworkFit, String> {
         if src.len() < MIN_POINTS || tgt.len() < MIN_POINTS {
             return Err(format!("{} sheet points, {} plan points", src.len(), tgt.len()));
         }
@@ -274,7 +315,7 @@ impl SheetLines {
             Some((f, _)) => Ok(self.off_scale(&plan, src, r, stats).ok().filter(|o| o.score >= f.score).unwrap_or(f)),
             None => self.off_scale(&plan, src, r, stats).map_err(|why| {
                 let at = best.map_or_else(
-                    || "nothing to weigh".to_string(),
+                    || nothing_to_weigh(src, tgt, r, self.k_in),
                     |(s, _, score, margin)| {
                         format!("best scale {s:.3}, {:.0}% on the plan, {:.0} points over the next", score * 100.0, margin * 100.0)
                     },
@@ -296,9 +337,20 @@ impl SheetLines {
         if r * span(src) <= MAX_SHEET_OVER_PLAN * span(tgt) {
             return Err(why);
         }
+        // A few stray lines past the drawing (a rule along a row of views, a match line, a long
+        // leader) leave it wider than its plan however alike the rest (Q6640): weighed without
+        // its outermost points.
+        let trimmed = without_strays(src);
+        if trimmed.len() >= MIN_POINTS
+            && trimmed.len() < src.len()
+            && r * span(&trimmed) <= MAX_SHEET_OVER_PLAN * span(tgt)
+            && let (Some((f, _)), _) = self.fit_points_at(&plan, &trimmed, r, stats)
+        {
+            return Ok(f);
+        }
         // A schedule's table can outweigh the plan: the biggest few are each tried, and only a
         // plan passes the fit.
-        let mut rest = src.clone();
+        let mut rest = src.to_vec();
         for _ in 0..MAX_BLOCKS_TRIED {
             let block = super::grids::largest_block(&rest, 48.0 * self.k_in);
             if block.len() < MIN_POINTS || block.len() >= src.len() {
@@ -402,6 +454,85 @@ impl SheetLines {
         }
         Ok(LineworkFit { sim, score, margin, off_scale: Some(s / r) })
     }
+}
+
+/// A block of a sheet's linework is one of its views when it holds this share of its largest
+/// block's points (as the job's views of a sheet of several levels' plans).
+const VIEW_BLOCK_SHARE: f64 = 0.4;
+
+/// Why a fit of `src` onto `tgt` at the ratio `r` had nothing to weigh: at every scale tried it
+/// is more than [`MAX_SHEET_OVER_PLAN`] times the plan's size (a whole sheet against one view, or
+/// a sheet of two views against a plan of one), with each side's points and size, for the log.
+fn nothing_to_weigh(src: &[Vec2], tgt: &[Vec2], r: f64, k_in: f64) -> String {
+    let span = |p: &[Vec2]| {
+        let b = cadaddy_geom::Bounds2::from_points(p.iter().copied());
+        if b.is_empty() { 0.0 } else { b.width().max(b.height()) }
+    };
+    let ft = 12.0 * k_in;
+    format!(
+        "nothing to weigh: {} sheet points {:.0}' across at the ratio, {} plan points {:.0}' across",
+        src.len(),
+        r * span(src) / ft,
+        tgt.len(),
+        span(tgt) / ft
+    )
+}
+
+/// The share of a drawing's points at each end of each axis taken for strays past it.
+const STRAY_SHARE: f64 = 0.02;
+
+/// `pts` inside the box of their [`STRAY_SHARE`] and 1 - [`STRAY_SHARE`] quantiles each way.
+fn without_strays(pts: &[Vec2]) -> Vec<Vec2> {
+    let band = |mut v: Vec<f64>| -> Option<(f64, f64)> {
+        v.retain(|x| x.is_finite());
+        v.sort_by(f64::total_cmp);
+        let k = (STRAY_SHARE * v.len() as f64).floor() as usize;
+        Some((*v.get(k)?, *v.get(v.len().checked_sub(k + 1)?)?))
+    };
+    let (Some((x0, x1)), Some((y0, y1))) = (band(pts.iter().map(|p| p.x).collect()), band(pts.iter().map(|p| p.y).collect())) else {
+        return Vec::new();
+    };
+    pts.iter().copied().filter(|p| p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1).collect()
+}
+
+/// The blocks of `pts` (groups of `cell`-sized grid cells that touch), each its points and
+/// rectangle, most points first.
+fn blocks(pts: &[Vec2], cell: f64) -> Vec<(usize, [f64; 4])> {
+    if !(cell.is_finite() && cell > 0.0) || pts.is_empty() {
+        return Vec::new();
+    }
+    let key = |p: &Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut cells: std::collections::BTreeMap<(i64, i64), (usize, [f64; 4])> = std::collections::BTreeMap::new();
+    for p in pts.iter().filter(|p| p.x.is_finite() && p.y.is_finite()) {
+        let c = cells.entry(key(p)).or_insert((0, [p.x, p.y, p.x, p.y]));
+        c.0 += 1;
+        c.1 = [c.1[0].min(p.x), c.1[1].min(p.y), c.1[2].max(p.x), c.1[3].max(p.y)];
+    }
+    let mut seen: HashSet<(i64, i64)> = HashSet::new();
+    let mut out = Vec::new();
+    for &start in cells.keys() {
+        if !seen.insert(start) {
+            continue;
+        }
+        let (mut n, mut r, mut stack) = (0usize, [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], vec![start]);
+        while let Some((x, y)) = stack.pop() {
+            if let Some((k, b)) = cells.get(&(x, y)) {
+                n += k;
+                r = [r[0].min(b[0]), r[1].min(b[1]), r[2].max(b[2]), r[3].max(b[3])];
+            }
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let c = (x + dx, y + dy);
+                    if cells.contains_key(&c) && seen.insert(c) {
+                        stack.push(c);
+                    }
+                }
+            }
+        }
+        out.push((n, r));
+    }
+    out.sort_by_key(|b| std::cmp::Reverse(b.0));
+    out
 }
 
 /// The ratios of printed scales a fit is tried at (a sheet a fiftieth of its plan's size, or fifty
@@ -728,6 +859,51 @@ mod tests {
         assert!((m.scale() - 0.5).abs() < 1e-9);
         let q = m.apply([10200.0, 100.0]);
         assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+    }
+
+    /// Q6640: a view whose drawing a stray rule overruns (a rule along a row of views, past
+    /// both ends of this one) is weighed without it; a sheet twice its plan's size says why it
+    /// has nothing to weigh, with each side's points and size; a sheet of two plans apart and a
+    /// key plan is two views by its blocks.
+    #[test]
+    fn a_view_overrun_by_a_stray_rule_is_fitted_and_nothing_to_weigh_says_both_sides() {
+        let plan = floor(1.0, [100.0, 50.0]);
+        let mut view = floor(1.0, [5200.0, 100.0]);
+        // The rule 30 over the floor's top wall, every 15 (as the walls), 350 past its left end
+        // and 250 past its right: the view is a third wider than its floor.
+        view.extend((0..=160).map(|k| Vec2::new(4850.0 + 15.0 * f64::from(k), 1330.0)));
+        let lines = SheetLines {
+            rects: vec![[0.0, 0.0, 2000.0, 1400.0], [4000.0, 0.0, 9000.0, 2800.0]],
+            pts: vec![plan.clone(), view],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        };
+        let f = lines.fit_why(1, &plan, 1.0, &mut Default::default()).unwrap_or_else(|why| panic!("no fit: {why}"));
+        let q = f.sim.apply([5200.0, 100.0]);
+        assert!((q[0] - 100.0).abs() <= 18.0 && (q[1] - 50.0).abs() <= 18.0, "{q:?}");
+        // Twice the plan's size at one to one: nothing to weigh, and why.
+        let twice = SheetLines {
+            rects: vec![[0.0, 0.0, 2000.0, 1400.0], [5000.0, 0.0, 9000.0, 2800.0]],
+            pts: vec![plan.clone(), floor(2.0, [5200.0, 100.0])],
+            stripped: vec![true, true],
+            k_in: 1.0,
+        };
+        let why = twice.fit_why(1, &plan, 1.0, &mut Default::default()).err().unwrap_or_default();
+        let (n, m) = (twice.count(1, None), plan.len());
+        assert!(why.starts_with(&format!("nothing to weigh: {n} sheet points 300' across at the ratio, {m} plan points 150' across")), "{why}");
+        // The same through one view of it: its own points.
+        let half = [5000.0, 0.0, 7000.0, 2800.0];
+        let mine = twice.points(1, Some(&half));
+        assert!(!mine.is_empty() && mine.len() < n && twice.count(1, Some(&half)) == mine.len());
+        assert!(twice.fit_view_why(1, &mine, &plan, 1.0, &mut Default::default()).is_err());
+        // Two floors apart and a key plan: two views.
+        let mut two = floor(1.0, [5200.0, 100.0]);
+        two.extend(floor(1.0, [7400.0, 100.0]));
+        two.extend(floor(0.1, [9600.0, 1500.0]).into_iter().step_by(5));
+        let blocks = SheetLines { rects: vec![[5000.0, 0.0, 9500.0, 2800.0]], pts: vec![two], stripped: vec![true], k_in: 1.0 }.view_blocks(0);
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert!(blocks.iter().any(|r| (r[0] - 5200.0).abs() < 1.0 && (r[2] - 7000.0).abs() < 1.0), "{blocks:?}");
+        assert!(blocks.iter().any(|r| (r[0] - 7400.0).abs() < 1.0 && (r[2] - 9200.0).abs() < 1.0), "{blocks:?}");
     }
 
     #[test]
