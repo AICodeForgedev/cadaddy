@@ -7044,6 +7044,79 @@ fn requirements_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     job.requirements = Some(measured);
 }
 
+/// The documents checked against each other on the built model (Q6648): the job's sheets in the
+/// drawing, its sections, details and notes read again from its PDFs and the fire protection
+/// shop drawings among its submittals ([`super::doccheck`]); each conflict goes into the spec as
+/// an RFI with the corrected value the field would build, the measure into the stage's result.
+fn documents_step(s: &mut Session, job: &GuidedJob, result: &mut Value) {
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return };
+    let Ok(d) = s.doc() else { return };
+    let mut pages = super::doccheck::drawing_pages(d, &sp);
+    let held = pages.len();
+    let ra = &super::doccheck::rules().read_again;
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let field = |number: &str, k: &str| -> String {
+        classified
+            .iter()
+            .find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| x.trim().eq_ignore_ascii_case(number)))
+            .and_then(|c| c.get(k).and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    };
+    // The set's sections, details and notes (no plan sheet holds them), read again.
+    let have: BTreeSet<String> = pages.iter().map(|p| p.sheet.clone()).collect();
+    let rank = |_: &str, _: &str, kind: &str, title: &str| {
+        let up = title.to_ascii_uppercase();
+        (ra.kinds.iter().any(|k| kind.contains(k.as_str())) || ra.title_words.iter().any(|w| up.contains(w.as_str()))).then_some(0u8)
+    };
+    for (number, pd) in sheet_pages_ranked(job, &rank, false, ra.max_pages, &have) {
+        let disc =
+            Some(field(&number, "discipline")).filter(|x| !x.is_empty()).unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&number));
+        pages.push(super::doccheck::file_page(&number, &disc, &field(&number, "title"), &pd, &sp));
+    }
+    let again = pages.len() - held;
+    // The fire protection shop drawings among the submittals: the sprinkler design's own pages.
+    let mut shop = 0usize;
+    if let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) {
+        for f in super::printfp::shop_drawing_files(&job.submittals, &job.pdfs_path) {
+            if shop >= ra.max_shop_drawing_pages {
+                break;
+            }
+            let Ok(bytes) = crate::readfile::read(&f) else { continue };
+            let name: String =
+                std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string()).chars().take(60).collect();
+            let mut count = 1usize;
+            let mut n = 1usize;
+            while n <= count && shop < ra.max_shop_drawing_pages {
+                let Ok((pd, rep)) = read_pdf(&bytes, &json!({"page": n, "text": true, "images": false, "layout": false, "markups": false})) else {
+                    break;
+                };
+                if n == 1 {
+                    count = rep.get("pages").and_then(Value::as_u64).map_or(1, |p| usize::try_from(p).unwrap_or(1));
+                }
+                pages.push(super::doccheck::file_page(&format!("{name} p.{n}"), "FP", "", &pd, &sp));
+                shop += 1;
+                n += 1;
+            }
+        }
+    }
+    let rooms = s.doc().map(|d| super::doccheck::model_rooms(d, &sp)).unwrap_or_default();
+    let rep = super::doccheck::check(&pages, &rooms, &sp);
+    let mut v = rep.json();
+    v["pages_in_drawing"] = json!(held);
+    v["pages_read_again"] = json!(again);
+    v["shop_drawing_pages"] = json!(shop);
+    match super::doccheck::apply(s, &rep) {
+        Ok(n) => v["written"] = json!(n),
+        Err(e) => v["error"] = json!(e.to_string()),
+    }
+    progress_line(&format!(
+        "  documents against each other: {} pages ({held} in the drawing, {again} read again, {shop} shop drawing), {} of {} checks ran, {} conflicts",
+        rep.pages, v["ran"], v["checks"], v["findings"]
+    ));
+    result["documents"] = v;
+}
+
 /// What the fire protection read leaves to say (Q6497): no source at all (the trade is missing,
 /// not silently empty), shop-drawing pages no floor plan could take, and head tables the heads
 /// counted on their page don't agree with.
@@ -10400,6 +10473,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     requirements_step(s, job, &mut result);
     bim_step(s, job, "requirements", t);
+    // The documents checked against each other (Q6648): each conflict an RFI with its correction.
+    let t = web_time::Instant::now();
+    documents_step(s, job, &mut result);
+    bim_step(s, job, "documents against each other", t);
     super::bspec::recount_built(s.doc()?, &mut result);
     progress_line(&format!("  the model as built: {} walls, {} doors, {} windows", result["walls"], result["doors"], result["windows"]));
     // A level whose walls total a few feet inside a few square feet is a plan at the wrong

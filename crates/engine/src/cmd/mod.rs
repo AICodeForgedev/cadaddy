@@ -43,6 +43,7 @@ mod dash_styles;
 pub mod dimcheck;
 pub(crate) mod dimreader;
 mod doc_objects;
+pub(crate) mod doccheck;
 pub mod docsource;
 mod draw;
 mod draw2;
