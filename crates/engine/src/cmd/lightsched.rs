@@ -161,6 +161,9 @@ pub(crate) fn fixture_types(t: &GridTable, plan_tags: &BTreeSet<String>) -> (Vec
         return (Vec::new(), false);
     }
     let qty = t.column(&["QTY"]).or_else(|| t.column(&["QUANTITY"]));
+    // A column a key heading names (`PLAN MARK`, `TYPE`) may number its types (`1`, `2`): a bare
+    // number there is a mark, not a voltage (fix-schedule-plan-mark-header-unread).
+    let keyed = tag.and_then(|c| t.headers.get(c)).is_some_and(|h| super::gridtable::key_heading(h));
     let mut out = Vec::new();
     let mut no_subs = false;
     for r in &t.rows {
@@ -169,8 +172,10 @@ pub(crate) fn fixture_types(t: &GridTable, plan_tags: &BTreeSet<String>) -> (Vec
             no_subs = true;
         }
         let tg = t.cell(r, tag);
-        // A type is short (`A`, `F1`, `XA`); a note row's text isn't, nor is a voltage.
-        if tg.is_empty() || tg.len() > MAX_MARK || tg.contains(' ') || voltage_shaped(tg) {
+        // A type is short (`A`, `F1`, `XA`, or numbered under a key heading); a note row's text
+        // isn't, nor is a voltage.
+        let numbered = keyed && (1..=MAX_NUMBERED_MARK).contains(&tg.len()) && tg.chars().all(|c| c.is_ascii_digit());
+        if tg.is_empty() || tg.len() > MAX_MARK || tg.contains(' ') || (voltage_shaped(tg) && !numbered) {
             continue;
         }
         let lamp_text = t.cell(r, lamp).to_string();
@@ -212,6 +217,9 @@ pub(crate) fn fixture_types(t: &GridTable, plan_tags: &BTreeSet<String>) -> (Vec
     }
     (out, no_subs)
 }
+
+/// A numbered type mark's most digits (`12`; a three-digit number there is a voltage).
+const MAX_NUMBERED_MARK: usize = 2;
 
 /// Types read from one schedule, at most.
 const MAX_TYPES: usize = 400;

@@ -29526,6 +29526,9 @@ pub(crate) fn fixture_doc_sizes(
 
 /// Most plumbing fixtures read from a set's plans.
 const MAX_FIXTURES: usize = 20_000;
+/// Lettered numbers (a numbered schedule's tags on the plans) checked against the plans' grid
+/// bubbles, at most: each check looks at the whole drawing once.
+const MAX_NUMBERED_BUBBLE_CHECKS: usize = 400;
 
 /// Rooms listed by name in a report where nothing furnishes them, at most.
 const MAX_ALONE_LISTED: usize = 20;
@@ -29576,6 +29579,8 @@ fn plumbing_fixtures(
             && view_numbers.iter().any(|(p, s)| *s == sheet && (p.x - t.insert.x).abs() <= 3.0 * h && p.y > t.insert.y && p.y - t.insert.y <= 4.0 * h)
     };
     let mut found: Vec<(String, [f64; 2], f64, String, cadaddy_doc::Handle)> = Vec::new();
+    // The lettered numbers among them (a numbered schedule's tags), by index.
+    let mut numbered: Vec<usize> = Vec::new();
     for e in d.model.iter() {
         // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
         let (lettered, symbol): (Vec<&cadaddy_doc::Text>, bool) = match &e.kind {
@@ -29596,9 +29601,27 @@ fn plumbing_fixtures(
                 continue;
             }
             found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string(), e.handle));
+            if !symbol && cadaddy_mepfix::fixture_schedule::is_numbered_tag(value) {
+                numbered.push(found.len() - 1);
+            }
         }
         if found.len() >= MAX_FIXTURES {
             break;
+        }
+    }
+    // A schedule that numbers its fixtures (`1`, `2`): a number lettered at a grid bubble of that
+    // label is the plan's grid, not a fixture's tag (fix-schedule-plan-mark-header-unread).
+    if !numbered.is_empty() {
+        let points: Vec<(cadaddy_geom::Vec2, String)> = numbered
+            .iter()
+            .take(MAX_NUMBERED_BUBBLE_CHECKS)
+            .filter_map(|i| found.get(*i))
+            .map(|f| (cadaddy_geom::Vec2::new(f.1[0], f.1[1]), f.0.clone()))
+            .collect();
+        let at_bubble = super::grids::at_grid_bubbles(d, &points, super::elemprops::units_per_foot(d) / 12.0);
+        let grids: BTreeSet<usize> = numbered.iter().take(MAX_NUMBERED_BUBBLE_CHECKS).zip(&at_bubble).filter(|(_, b)| **b).map(|(i, _)| *i).collect();
+        if !grids.is_empty() {
+            found = found.into_iter().enumerate().filter(|(i, _)| !grids.contains(i)).map(|(_, f)| f).collect();
         }
     }
     let mut heights: Vec<f64> = found.iter().map(|f| f.2).collect();
