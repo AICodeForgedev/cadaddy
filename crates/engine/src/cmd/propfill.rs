@@ -354,6 +354,9 @@ pub(crate) struct DeviceBuild {
     pub at_equipment: usize,
     pub moved_to_equipment: usize,
     pub off_equipment: Vec<Value>,
+    /// Wall devices of a gang drawn together that their own seats put on another wall, set
+    /// beside the rest of their gang on one face (Q6561).
+    pub gang_faced: usize,
 }
 
 impl DeviceBuild {
@@ -378,6 +381,7 @@ impl DeviceBuild {
             "connections_at_equipment": self.at_equipment,
             "connections_moved_to_equipment": self.moved_to_equipment,
             "connections_off_equipment": self.off_equipment,
+            "gang_set_on_one_face": self.gang_faced,
         })
     }
 }
@@ -834,6 +838,7 @@ fn across<'a>(pieces: &'a [HostPiece], level: &str, p: Vec2, z: f64, reach: f64,
 /// Where a wall device sits: in `wall`, its box's middle (sheet units), the wall's direction, the
 /// face's outward direction (toward the room it serves), how far its face is from where it was
 /// read, how its side was chosen, and whether it was further than [`HOST_SNAP_FT`] from a wall.
+#[derive(Clone, Copy)]
 struct Seat {
     wall: Handle,
     centre: Vec2,
@@ -1003,6 +1008,336 @@ fn seat(
     Some(Seat { wall: a.piece.wall, centre, along: a.u, out, moved: face_at.dist(p), side_why, far })
 }
 
+/// A wall device set in a wall face, as [`gang_on_one_face`] sees it: its element, level, gang
+/// family (rules `gang.families`), where its symbol was read (sheet units, on its level's plan),
+/// its box's bottom, middle and top (drawing units), its seat, the space its face serves and the
+/// key a gang keynote gave it (empty: none).
+struct Seated {
+    handle: Handle,
+    level: String,
+    family: String,
+    read: Vec2,
+    z: [f64; 3],
+    seat: Seat,
+    serves: Option<String>,
+    key: String,
+    /// Standing as it was (not seated by this pass): its gang comes to its face, it never moves.
+    fixed: bool,
+}
+
+impl Seated {
+    /// The wall device `handle` just seated, when its kind gangs (rules `gang.families`): what
+    /// [`gang_on_one_face`] needs of it.
+    #[allow(clippy::too_many_arguments)]
+    fn of(handle: Handle, level: &str, kind: &str, read: Vec2, z0: f64, z1: f64, seat: &Seat, sides: &Sides, key: &str, upf: f64) -> Option<Self> {
+        let rules = &super::mepatoms::rules().gang;
+        let family = super::mepatoms::build::box_kind(kind, "").and_then(|bk| rules.families.get(bk))?.clone();
+        let (w, probe) = (BOX_IN[0] * upf / 12.0, FACE_PROBE_FT * upf);
+        let face = seat.centre + seat.out * (w / 2.0);
+        let serves = sides.at(level, face + seat.out * probe).map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+        let ok = [read.x, read.y, z0, z1].iter().all(|v| v.is_finite());
+        ok.then(|| Seated {
+            handle,
+            level: level.to_ascii_lowercase(),
+            family,
+            read,
+            z: [z0, (z0 + z1) / 2.0, z1],
+            seat: *seat,
+            serves,
+            key: key.trim().to_string(),
+            fixed: false,
+        })
+    }
+
+    /// Its face: its wall and which way the face looks (rounded, so one face compares equal).
+    fn face(&self) -> (Handle, i64, i64) {
+        (self.seat.wall, (self.seat.out.x * 100.0).round() as i64, (self.seat.out.y * 100.0).round() as i64)
+    }
+}
+
+/// Most wall devices [`gang_on_one_face`] pairs up (hostile specs).
+const MAX_GANG_PAIRS: usize = 4_000_000;
+
+/// The union-find root of `i` (path halving, bounded).
+fn uf_root(parent: &mut [usize], mut i: usize) -> usize {
+    for _ in 0..64 {
+        let Some(&p) = parent.get(i) else { break };
+        if p == i {
+            break;
+        }
+        let gp = parent.get(p).copied().unwrap_or(p);
+        if let Some(x) = parent.get_mut(i) {
+            *x = gp;
+        }
+        i = gp;
+    }
+    i
+}
+
+/// The drawn gangs among `seated`: groups (indices) of two or more wall devices of one level and
+/// one gang family whose symbols were read within the rules' gang reach of a neighbour (a plan
+/// symbol is about that wide: symbols drawn together are ganged), at mounting heights within the
+/// rules' gang height, whose faces serve one space (or no traced room at either); and the devices one gang keynote points at
+/// (sharing a `key`) of families that may share a box. Each group up to the rules' `max`.
+fn drawn_gangs(seated: &[Seated], upf: f64) -> Vec<Vec<usize>> {
+    let rules = &super::mepatoms::rules().gang;
+    let inch = upf / 12.0;
+    let (reach, height) = (rules.reach_in * inch, rules.height_in * inch);
+    if !(reach.is_finite() && reach > 0.0 && height.is_finite()) || rules.max < 2 {
+        return Vec::new();
+    }
+    let mut parent: Vec<usize> = (0..seated.len()).collect();
+    let join = |parent: &mut [usize], a: usize, b: usize| {
+        let (ra, rb) = (uf_root(parent, a), uf_root(parent, b));
+        if ra != rb
+            && let Some(x) = parent.get_mut(ra.max(rb))
+        {
+            *x = ra.min(rb);
+        }
+    };
+    let mut buckets: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
+    for (i, s) in seated.iter().enumerate() {
+        buckets.entry((s.level.as_str(), s.family.as_str())).or_default().push(i);
+    }
+    let x_of = |i: &usize| seated.get(*i).map_or(0.0, |s| s.read.x);
+    let mut pairs = 0usize;
+    for list in buckets.values_mut() {
+        list.sort_by(|a, b| x_of(a).total_cmp(&x_of(b)));
+        for (k, &i) in list.iter().enumerate() {
+            let Some(a) = seated.get(i) else { continue };
+            for &j in list.iter().skip(k + 1) {
+                let Some(b) = seated.get(j) else { continue };
+                if b.read.x - a.read.x > reach || pairs >= MAX_GANG_PAIRS {
+                    break;
+                }
+                pairs += 1;
+                // Their faces serve one space (no room traced at either: nothing says otherwise).
+                let one_space = a.serves == b.serves;
+                if one_space && a.read.dist(b.read) <= reach && (a.z[1] - b.z[1]).abs() <= height {
+                    join(&mut parent, i, j);
+                }
+            }
+        }
+    }
+    // A gang keynote's devices: one box however they were drawn (power never with low voltage).
+    let mixes = |a: &str, b: &str| a == b || (rules.power_families.iter().any(|p| p == a) && rules.power_families.iter().any(|p| p == b));
+    let mut by_key: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
+    for (i, s) in seated.iter().enumerate().filter(|(_, s)| !s.key.is_empty()) {
+        by_key.entry((s.level.as_str(), s.key.as_str())).or_default().push(i);
+    }
+    for list in by_key.values() {
+        let Some((&first, rest)) = list.split_first() else { continue };
+        for &j in rest {
+            let fam = |i: usize| seated.get(i).map_or("", |s| s.family.as_str());
+            if mixes(fam(first), fam(j)) {
+                join(&mut parent, first, j);
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..seated.len() {
+        let r = uf_root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    groups.into_values().filter(|g| g.len() >= 2 && g.len() <= rules.max).collect()
+}
+
+/// The piece of `wall` on `level` there at height `z` whose face looks `out`, nearest `p`: the
+/// piece, how far along it `p`'s foot is (clamped onto it), its direction and the side (+1 its
+/// left) the face is on.
+fn piece_of_face<'a>(
+    pieces: &'a [HostPiece],
+    level: &str,
+    wall: Handle,
+    out: Vec2,
+    p: Vec2,
+    z: f64,
+    slack: f64,
+) -> Option<(&'a HostPiece, f64, Vec2, f64)> {
+    let mut best: Option<(f64, (&'a HostPiece, f64, Vec2, f64))> = None;
+    for w in pieces.iter().filter(|w| w.wall == wall && w.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level))) {
+        if z < w.z0 - slack || z > w.z1 + slack {
+            continue;
+        }
+        let ab = w.b - w.a;
+        let len = ab.len();
+        if len.is_nan() || len <= 1e-9 {
+            continue;
+        }
+        let u = ab * (1.0 / len);
+        let n = Vec2::new(-u.y, u.x);
+        let facing = n.dot(out);
+        if facing.abs() < 0.9 {
+            continue;
+        }
+        let t_raw = (p - w.a).dot(u);
+        let off = off_body(t_raw, len, (p - w.a).dot(n), w.half);
+        if !off.is_finite() || best.as_ref().is_some_and(|(o, _)| *o <= off) {
+            continue;
+        }
+        best = Some((off, (w, t_raw.clamp(0.0, len), u, facing.signum())));
+    }
+    best.map(|(_, x)| x)
+}
+
+/// Devices drawn as one gang go in one box on one wall face (Q6561): each [`drawn_gangs`] group
+/// [`seat`] put on two or more walls (each symbol seated alone took the wall nearest it: two
+/// symbols drawn together at a corner went one on each wall) is set on one face, the face most
+/// of its devices are on (a tie: the face of the one whose symbol was read nearest its face,
+/// the surest of where the gang is). Its devices there keep their spots; each other one is set
+/// beside them on that face, in the order they were drawn, the box's per-gang width apart (rules
+/// data `box.per_gang_in`), its box within the wall. Opposite faces of one wall are never a split
+/// gang (boxes back to back). Each moved device's mesh, seat and placement say so. How many moved.
+fn gang_on_one_face(d: &mut Drawing, pieces: &[HostPiece], seated: &[Seated], upf: f64) -> usize {
+    let (w, l) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0);
+    let step = super::walllayout::box_per_gang_in() / 12.0 * upf;
+    let slack = PIECE_SLACK_IN / 12.0 * upf;
+    let mut moved = 0usize;
+    for g in drawn_gangs(seated, upf) {
+        let members: Vec<&Seated> = g.iter().filter_map(|i| seated.get(*i)).collect();
+        let walls: BTreeSet<Handle> = members.iter().map(|m| m.seat.wall).collect();
+        if walls.len() < 2 {
+            continue;
+        }
+        // The face its devices that stay put are on, else the face most are on; a tie, the face
+        // of the one read nearest its face.
+        let mut faces: BTreeMap<(Handle, i64, i64), (usize, usize, f64)> = BTreeMap::new();
+        for m in &members {
+            let f = faces.entry(m.face()).or_insert((0, 0, f64::INFINITY));
+            f.0 += usize::from(m.fixed);
+            f.1 += 1;
+            f.2 = f.2.min(m.seat.moved);
+        }
+        let Some(face) = faces.iter().max_by(|a, b| a.1.0.cmp(&b.1.0).then(a.1.1.cmp(&b.1.1)).then(b.1.2.total_cmp(&a.1.2))).map(|(k, _)| *k) else {
+            continue;
+        };
+        let Some(anchor) = members.iter().filter(|m| m.face() == face).min_by(|a, b| a.seat.moved.total_cmp(&b.seat.moved)).copied() else {
+            continue;
+        };
+        let along = anchor.seat.along;
+        let others = members.len() - 1;
+        // In the order drawn along the face; the ones on it hold their spots.
+        let mut order: Vec<&Seated> = members.clone();
+        order.sort_by(|a, b| a.read.dot(along).total_cmp(&b.read.dot(along)));
+        let Some(anchor_rank) = order.iter().position(|m| m.handle == anchor.handle) else { continue };
+        let mut taken: Vec<Vec2> = members.iter().filter(|m| m.face() == face).map(|m| m.seat.centre).collect();
+        for (rank, m) in order.iter().enumerate().filter(|(_, m)| m.face() != face && !m.fixed) {
+            let dir = if rank < anchor_rank { -1.0 } else { 1.0 };
+            let mut k = (rank as f64 - anchor_rank as f64).abs().max(1.0);
+            let mut target = anchor.seat.centre + along * (dir * k * step);
+            for _ in 0..rules_max_slots() {
+                if !taken.iter().any(|c| c.dist(target) < step * 0.5) {
+                    break;
+                }
+                k += 1.0;
+                target = anchor.seat.centre + along * (dir * k * step);
+            }
+            let Some((piece, _, u, side)) = piece_of_face(pieces, &anchor.level, anchor.seat.wall, anchor.seat.out, target, m.z[1], slack) else {
+                continue;
+            };
+            let len = piece.a.dist(piece.b);
+            let t = (target - piece.a).dot(u);
+            let t = if len >= l { t.clamp(l / 2.0, len - l / 2.0) } else { len / 2.0 };
+            let out = Vec2::new(-u.y, u.x) * side;
+            let face_at = piece.a + u * t + out * piece.half;
+            let centre = face_at - out * (w / 2.0);
+            let from = face_at.dist(m.read);
+            // Not where its symbol was drawn after all (too far, or behind that face): left as
+            // seated.
+            let behind = (m.read - face_at).dot(out) < -piece.half * 2.0;
+            if !from.is_finite() || from > HOST_SNAP_FT * upf || behind || taken.iter().any(|c| c.dist(centre) < step * 0.5) {
+                continue;
+            }
+            let Some(e) = d.model.get(m.handle) else { continue };
+            let off = super::bspec::stacked_by(e);
+            let mut mesh = super::wallgen::empty_mesh();
+            let c = centre + off;
+            super::wallgen::add_box(&mut mesh, c - u * (l / 2.0), c + u * (l / 2.0), w, m.z[0], m.z[2]);
+            if mesh.faces.is_empty() {
+                continue;
+            }
+            let st = Seat { wall: piece.wall, centre, along: u, out, moved: from, side_why: anchor.seat.side_why, far: false };
+            let mut store = props::read(&e.common.xdata);
+            st.store(&mut store, upf);
+            store.set(
+                "placement",
+                Prop::new(
+                    format!(
+                        "in its wall, its face flush with the wall's face, set beside the {others} other device(s) drawn with it in one box on one face ({} from where its symbol was read; its symbol alone was nearer another wall): {}",
+                        super::walltypes::frac(from / upf * 12.0),
+                        GANG_FACE_RULE
+                    ),
+                    Source::from_doc(SourceKind::Rule, GANG_FACE_DOC),
+                ),
+            );
+            store.set("location", location_prop(centre.x, centre.y, m.z[1], upf));
+            let xdata = props::write(&e.common.xdata, &store);
+            let _ = d.modify_entity(m.handle, |x| {
+                x.kind = EntityKind::Mesh(mesh);
+                x.common.xdata = xdata.into();
+            });
+            taken.push(centre);
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// The wall devices already standing in a wall face the build chose (its `host_wall` note), as
+/// [`gang_on_one_face`] sees them, all `fixed`, but those in `skip`: each one's seat from its
+/// element (its box's middle where its level's plan is drawn, its face's direction), where its
+/// symbol was read from its tag. A fixture's body is not a box: left out.
+fn seated_of_built(d: &Drawing, sp: &BuildingSpec, sides: &Sides, skip: &BTreeSet<Handle>, upf: f64) -> Vec<Seated> {
+    let tags: HashMap<String, &cadaddy_walk3d::tags::ElementTag> =
+        sp.tags.iter().filter(|t| read_device(t)).take(MAX_DEVICES).map(|t| (t.id.chars().take(MAX_DEVID).collect(), t)).collect();
+    let w = BOX_IN[0] * upf / 12.0;
+    let mut out = Vec::new();
+    for e in d.model.iter().filter(|e| !skip.contains(&e.handle) && super::wallgen::made_as(e).as_deref() == Some("device")).take(MAX_DEVICES) {
+        let store = props::read(&e.common.xdata);
+        let Some(wall) = store.get("host_wall").filter(|p| p.note.as_deref() == Some(HOST_NOTE)).and_then(|p| Handle::parse_hex(p.text().trim()))
+        else {
+            continue;
+        };
+        if body_size(&store).is_some() || store.get("body_provenance").is_some_and(|p| p.text() == "drawn") {
+            continue;
+        }
+        let Some(out_dir) = store.get("face_normal").and_then(|p| {
+            let t = p.text();
+            let (x, y) = t.split_once(',')?;
+            let v = Vec2::new(x.trim().parse().ok()?, y.trim().parse().ok()?);
+            (v.is_finite() && v.len() > 0.5).then(|| v * (1.0 / v.len()))
+        }) else {
+            continue;
+        };
+        let Some(t) = made(e, DEVID).and_then(|id| tags.get(&id).copied()) else { continue };
+        let Some(level) = sp.level(&t.level) else { continue };
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let b = Bounds2::from_points(m.vertices.iter().map(|v| Vec2::new(v.x, v.y)));
+        let (z0, z1) = m.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v.z), b.max(v.z)));
+        let centre = Vec2::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0) - super::bspec::stacked_by(e);
+        let sheet = t.fields.get("sheet").map(|f| f.value.trim().to_string()).unwrap_or_default();
+        let (read, _) = register(sp, &sheet, level, Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf));
+        let face = centre + out_dir * (w / 2.0);
+        let seat = Seat { wall, centre, along: out_dir.perp(), out: out_dir, moved: face.dist(read), side_why: "symbol", far: false };
+        let kind = store.get("kind").map(Prop::text).unwrap_or_default().replace('_', " ");
+        let key = store.get("gang_with").map(Prop::text).unwrap_or_default();
+        if let Some(mut s) = Seated::of(e.handle, &level.name, &kind, read, z0, z1, &seat, sides, &key, upf) {
+            s.fixed = true;
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// Most slots past its gang's devices a moved device looks along the face for a free one.
+fn rules_max_slots() -> usize {
+    super::mepatoms::rules().gang.max.clamp(2, 16)
+}
+
+/// Why a drawn gang's devices stand on one face.
+const GANG_FACE_RULE: &str = "devices drawn as one gang (symbols of one family drawn together, within the rules' gang reach) stand in one box on one wall face; seated alone each took the wall nearest its own symbol";
+const GANG_FACE_DOC: &str = "rules data: mepatoms.json gang (reach_in, families), layout_rules.json box.per_gang_in";
+
 /// How deep (inches) another wall must reach into a box's place before the box moves off it: walls
 /// that only touch at a face, or meet within drafting noise, don't push it.
 const BURIED_EPS_IN: f64 = 0.5;
@@ -1147,6 +1482,9 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
     let devices: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| read_device(t)).take(MAX_DEVICES).collect();
     let by_circuit = circuit_points(sp, &devices);
     let mut moved = 0;
+    // The reseated ones, for keeping a drawn gang on one face (Q6561).
+    let mut seated: Vec<Seated> = Vec::new();
+    let orphan_set: BTreeSet<Handle> = orphans.iter().copied().collect();
     for h in orphans {
         let Some(e) = d.model.get(h) else { continue };
         let Some(t) = made(e, DEVID).and_then(|id| devices.iter().find(|t| t.id == id).copied()) else { continue };
@@ -1189,14 +1527,20 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
                 if mesh.faces.is_empty() {
                     continue;
                 }
+                let plain_box = !drawn && body_size(&store).is_none();
                 st.store(&mut store, upf);
                 store.set("location", location_prop(st.centre.x, st.centre.y, (z0 + z1) / 2.0, upf));
+                let kind = store.get("kind").map(Prop::text).unwrap_or_default().replace('_', " ");
+                let key = store.get("gang_with").map(Prop::text).unwrap_or_default();
                 let xdata = props::write(&e.common.xdata, &store);
                 let _ = d.modify_entity(h, |x| {
                     x.kind = EntityKind::Mesh(mesh);
                     x.common.xdata = xdata.into();
                 });
                 moved += 1;
+                if plain_box {
+                    seated.extend(Seated::of(h, &level.name, &kind, p, z0, z1, &st, &sides, &key, upf));
+                }
             }
             None => {
                 store.remove("host_wall");
@@ -1210,6 +1554,13 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
                 let _ = d.modify_entity(h, |x| x.common.xdata = xdata.into());
             }
         }
+    }
+    // A drawn gang reseated one device at a time stays on one face (Q6561): its devices still
+    // standing hold the face.
+    if !seated.is_empty() {
+        let mut all = seated_of_built(d, sp, &sides, &orphan_set, upf);
+        all.extend(seated);
+        gang_on_one_face(d, &pieces, &all, upf);
     }
     moved
 }
@@ -1572,6 +1923,8 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
     // whether a mark is a grid bubble's label).
     let mut sheet_outside: HashMap<(String, String), (usize, usize, usize)> = HashMap::new();
     let mut held: Vec<Held> = Vec::new();
+    // The wall devices seated, for setting a drawn gang on one face (Q6561).
+    let mut seated: Vec<Seated> = Vec::new();
     for t in devices {
         if only.is_some_and(|f| !f(t)) {
             continue;
@@ -2311,8 +2664,15 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             });
             continue;
         }
-        if d.add(&Space::Model, common, EntityKind::Mesh(m)).is_ok() {
+        if let Ok(h) = d.add(&Space::Model, common, EntityKind::Mesh(m)) {
             report.built += 1;
+            // A box in a wall face (not a fixture's body, not a connection at its equipment).
+            if let Some(st) = placed_on.as_ref().filter(|_| fixture_body.is_none() && at_equipment.is_none())
+                && seated.len() < MAX_DEVICES
+            {
+                let key = field(t, "gang_with").unwrap_or_default();
+                seated.extend(Seated::of(h, &level.name, &what, p, z0, z1, st, &sides, &key, upf));
+            }
         }
     }
     // The held devices. Where most of a sheet's devices on a level stand beyond the building's
@@ -2357,6 +2717,8 @@ pub(crate) fn build_devices_where(d: &mut Drawing, sp: &BuildingSpec, only: Devi
             report.misplaced.push(if report.misplaced.len() < MAX_LISTED { h.misplaced.unwrap_or(Value::Null) } else { Value::Null });
         }
     }
+    // Devices drawn as one gang that their own seats split onto two walls: on one face (Q6561).
+    report.gang_faced = gang_on_one_face(d, &pieces, &seated, upf);
     for ((sheet, level), (n, near, far)) in views {
         let (all, _, _) = sheet_outside.get(&(sheet.clone(), level.clone())).copied().unwrap_or_default();
         let view = if sheet.is_empty() { "a sheet with no number".to_string() } else { format!("sheet {sheet}") };
@@ -5677,6 +6039,143 @@ mod tests {
         let touching = vec![thick(1, (0.0, 0.0), (120.0, 0.0), 3.0), thick(3, (60.0, 3.0 + 0.2), (60.0, 60.0), 3.0)];
         let host = touching.first().expect("host");
         assert!(buried(&touching, host, "L1", 18.0, 1.0, &[2.9, 1.1], eps).is_empty());
+    }
+
+    /// A built wall for the device tests (inches): a box from `a` to `b`, `thick` wide, floor to
+    /// 9 ft, on level L1.
+    fn built_wall(d: &mut Drawing, a: (f64, f64), b: (f64, f64), thick: f64) -> Handle {
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(a.0, a.1), Vec2::new(b.0, b.1), thick, 0.0, 108.0);
+        let xdata = super::super::wallgen::tag(cadaddy_walk3d::Part::Wall, "L1", Handle(0));
+        let common = Common { layer: "3D-Walls".into(), xdata: xdata.into(), ..Common::default() };
+        d.add(&Space::Model, common, EntityKind::Mesh(m)).expect("wall")
+    }
+
+    /// Two switches drawn together at an outside corner (Q6561), as the corner of a room that
+    /// wraps round the end of one wall: wall A runs east on y = 0 (6" thick), wall B north on
+    /// x = 1.75 (3.5" thick, its west face on x = 0, flush with A's south face at its south
+    /// end); A starts 0.6" east of B's west face. The room is west of B and south of A. The
+    /// dimmer is drawn 2" in front of A's south face; the three-way 19" west of it, off the
+    /// corner, a hair nearer B's body than A's.
+    fn corner_pair() -> (Drawing, BuildingSpec, Handle, Handle) {
+        let v = |x: &str| json!({"value": x, "source": "print"});
+        let dev = |id: &str, mark: &str, at: [f64; 2]| json!({"id": id, "kind": "switch", "level": "L1", "at_ft": at, "fields": {"symbol": v("1"), "type": v(mark), "sheet": v("X-9")}});
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "L1", "elevation_ft": 0.0, "height_ft": 10.0, "ceiling_ft": 9.0}],
+            "tags": [dev("device:L1:a", "SD", [14.0 / 12.0, -5.0 / 12.0]), dev("device:L1:b", "S3", [-5.0 / 12.0, -8.0 / 12.0])],
+        }))
+        .unwrap();
+        let mut d = Drawing::new_imperial();
+        let a = built_wall(&mut d, (0.6, 0.0), (120.0, 0.0), 6.0);
+        let b = built_wall(&mut d, (1.75, -3.0), (1.75, 120.0), 3.5);
+        (d, sp, a, b)
+    }
+
+    /// Each built switch by its mark: its host wall, face direction, box middle (plan) and
+    /// placement.
+    fn switches(d: &Drawing) -> BTreeMap<String, (String, String, Vec2, String)> {
+        d.model
+            .iter()
+            .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("device"))
+            .filter_map(|e| {
+                let ps = props::read(&e.common.xdata);
+                let (b, _, _) = extent(d, e)?;
+                let txt = |k: &str| ps.get(k).map(|p| p.text()).unwrap_or_default();
+                Some((txt("type_mark"), (txt("host_wall"), txt("face_normal").replace("-0.000", "0.000"), b.center(), txt("placement"))))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn switches_drawn_together_at_a_corner_stand_in_one_box_on_one_face() {
+        let (mut d, sp, a, b) = corner_pair();
+        // Each alone takes the wall nearest its own symbol: the dimmer A, the three-way B.
+        let pieces = host_pieces(&d, 12.0);
+        assert_eq!(seat(&pieces, "L1", Vec2::new(14.0, -5.0), 46.0, &[], 12.0, true, None).map(|s| s.wall), Some(a));
+        assert_eq!(seat(&pieces, "L1", Vec2::new(-5.0, -8.0), 46.0, &[], 12.0, true, None).map(|s| s.wall), Some(b));
+        let r = build_devices(&mut d, &sp);
+        assert_eq!((r.built, r.in_wall), (2, 2), "{:#}", r.to_json());
+        let sw = switches(&d);
+        let (sd, s3) = (sw.get("SD").expect("SD built"), sw.get("S3").expect("S3 built"));
+        // One wall, one face: A's south face, where the one drawn on a wall line is.
+        assert_eq!(sd.0, a.hex());
+        assert_eq!((s3.0.as_str(), s3.1.as_str()), (sd.0.as_str(), sd.1.as_str()), "{sw:#?}");
+        assert_eq!(sd.1, "0.000,-1.000");
+        // Side by side as the field gangs them: the three-way on the west, drawn west of the
+        // dimmer, one gang's width (rules data box.per_gang_in) from it; both boxes' middles 1"
+        // in from the face.
+        let step = super::super::walllayout::box_per_gang_in();
+        assert!((sd.2.x - 14.0).abs() < 1e-6 && (sd.2.y + 2.0).abs() < 1e-6, "{sd:?}");
+        assert!((s3.2.x - (14.0 - step)).abs() < 1e-6 && (s3.2.y + 2.0).abs() < 1e-6, "{s3:?}");
+        assert!(s3.3.contains("drawn with it in one box on one face") && s3.3.contains("nearer another wall"), "{}", s3.3);
+        assert!(!sd.3.contains("drawn with it"), "the one on its face keeps its spot: {}", sd.3);
+        assert_eq!(r.gang_faced, 1);
+    }
+
+    #[test]
+    fn a_drawn_gang_reseated_after_its_wall_was_merged_stays_on_one_face() {
+        let (mut d, sp, a, b) = corner_pair();
+        build_devices(&mut d, &sp);
+        // Wall A merged into a new wall (a new handle, the same place): both switches are
+        // orphans; each reseated alone would put the three-way on B again.
+        d.model.remove(a);
+        let a2 = built_wall(&mut d, (0.6, 0.0), (120.0, 0.0), 6.0);
+        assert_eq!(rehost_devices(&mut d, &sp), 2);
+        let sw = switches(&d);
+        let (sd, s3) = (sw.get("SD").expect("SD"), sw.get("S3").expect("S3"));
+        assert_eq!((sd.0.as_str(), s3.0.as_str()), (a2.hex().as_str(), a2.hex().as_str()), "{sw:#?}");
+        assert_ne!(s3.0, b.hex());
+        assert_eq!(s3.1, sd.1);
+        assert!((sd.2.dist(s3.2) - super::super::walllayout::box_per_gang_in()).abs() < 1e-6, "{sw:#?}");
+    }
+
+    #[test]
+    fn only_devices_drawn_together_of_one_family_serving_one_space_are_a_drawn_gang() {
+        let seat_at = |wall: u64, out: (f64, f64), c: (f64, f64)| Seat {
+            wall: Handle(wall),
+            centre: Vec2::new(c.0, c.1),
+            along: Vec2::new(-out.1, out.0),
+            out: Vec2::new(out.0, out.1),
+            moved: 2.0,
+            side_why: "symbol",
+            far: false,
+        };
+        let one = |h: u64, family: &str, read: (f64, f64), z: f64, serves: Option<&str>, key: &str| Seated {
+            handle: Handle(h),
+            level: "l1".into(),
+            family: family.into(),
+            read: Vec2::new(read.0, read.1),
+            z: [z - 2.0, z, z + 2.0],
+            seat: seat_at(h, (0.0, -1.0), read),
+            serves: serves.map(str::to_string),
+            key: key.into(),
+            fixed: false,
+        };
+        let groups = |s: &[Seated]| drawn_gangs(s, 12.0);
+        // Drawn together, one family, one space: one gang.
+        assert_eq!(groups(&[one(1, "switch", (0.0, 0.0), 46.0, Some("r1"), ""), one(2, "switch", (19.0, 3.0), 46.0, Some("r1"), "")]), [vec![0, 1]]);
+        // A receptacle beside a switch, devices serving two rooms (a corner of a corridor and a
+        // room), more than the rules' reach apart, or heights farther apart than its gang
+        // height: none.
+        assert!(groups(&[one(1, "switch", (0.0, 0.0), 46.0, None, ""), one(2, "receptacle", (6.0, 0.0), 46.0, None, "")]).is_empty());
+        assert!(groups(&[one(1, "switch", (0.0, 0.0), 46.0, Some("r1"), ""), one(2, "switch", (6.0, 0.0), 46.0, Some("hall"), "")]).is_empty());
+        assert!(groups(&[one(1, "switch", (0.0, 0.0), 46.0, None, ""), one(2, "switch", (25.0, 0.0), 46.0, None, "")]).is_empty());
+        assert!(groups(&[one(1, "switch", (0.0, 0.0), 46.0, None, ""), one(2, "switch", (6.0, 0.0), 18.0, None, "")]).is_empty());
+        // One gang keynote's switch and receptacle (both power) however far apart: one; a low
+        // voltage outlet with them: never.
+        let keyed = [
+            one(1, "switch", (0.0, 0.0), 46.0, None, "k"),
+            one(2, "receptacle", (60.0, 0.0), 46.0, None, "k"),
+            one(3, "low voltage", (70.0, 0.0), 46.0, None, "k"),
+        ];
+        assert_eq!(groups(&keyed), [vec![0, 1]]);
+        // Two on opposite faces of one wall are boxes back to back, never a split gang: nothing
+        // moves (and nothing is touched in a drawing without them).
+        let mut d = Drawing::new_imperial();
+        let mut back = one(2, "switch", (0.0, 7.0), 46.0, None, "");
+        back.seat = Seat { wall: Handle(1), ..seat_at(1, (0.0, 1.0), (0.0, 7.0)) };
+        assert_eq!(gang_on_one_face(&mut d, &[], &[one(1, "switch", (0.0, 0.0), 46.0, None, ""), back], 12.0), 0);
     }
 
     #[test]
