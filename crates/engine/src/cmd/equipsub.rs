@@ -431,8 +431,8 @@ pub(crate) fn names_tag(page: &str, tag: &str) -> bool {
     };
     // A number's end: no letter or digit next, nor a decimal or a fraction (`1.5`, `1/4`).
     let word_end = |i: usize| {
-        !b.get(i).is_some_and(|c| c.is_ascii_alphanumeric())
-            && !(b.get(i).is_some_and(|c| *c == b'.' || *c == b'/') && b.get(i + 1).is_some_and(u8::is_ascii_digit))
+        !(b.get(i).is_some_and(|c| c.is_ascii_alphanumeric())
+            || (b.get(i).is_some_and(|c| *c == b'.' || *c == b'/') && b.get(i + 1).is_some_and(u8::is_ascii_digit)))
     };
     let num = |s: usize, e: usize| up.get(s..e).map(|n| format!("{prefix}-{n}"));
     for (at, _) in up.match_indices(&head).take(10_000) {

@@ -41201,7 +41201,7 @@ mod tests {
             "sheets": [{"number": "A-101", "discipline": "A", "level": "Level 1", "rect": [0, 0, 2600, 1800]}]
         }))
         .unwrap_or_else(|e| panic!("{e}"));
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let logged = || log.lock().map(|l| l.clone()).unwrap_or_default();
         // A light in the ceiling plan's fourth room: in that room on the floor plan (to the
         // linework's resolution: its lines are compared a few inches apart).
@@ -41323,7 +41323,7 @@ mod tests {
                 line([x0 + a[0], a[1]], [x0 + b[0], b[1]]);
             }
         }
-        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A");
+        let (place, log) = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new(), &[], "A", &SheetViews::default());
         let l = || log.lock().map(|l| l.clone()).unwrap_or_default();
         // A fixture drawn in a room on the plumbing plan lands in that room, by the frame exactly.
         let p = place([8500.0, 400.0], "Level 1").map(|m| m.apply([8500.0, 400.0])).unwrap_or_else(|| panic!("P-101 not placed: {:#?}", l()));
