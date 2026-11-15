@@ -229,8 +229,10 @@ fn a_planted_set_raises_one_rfi_per_open_requirement_and_space() {
     let conn = check(&r, "E-CONN-CIRCUIT");
     assert_eq!((conn["ran"].as_bool(), conn["objects"].as_u64()), (Some(false), Some(0)));
     assert!(conn["status"].as_str().unwrap().starts_with("did not run"), "{conn}");
-    // Nor did the breakers' requirements: no panel schedule built.
-    assert_eq!(r["requirements"]["did_not_run"], 4, "{}", r["requirements"]);
+    // Nor did the breakers' requirements (no panel schedule built), nor the fire alarm outputs'
+    // (no sequence read, no damper circuit: Q6647).
+    assert_eq!(r["requirements"]["did_not_run"], 6, "{}", r["requirements"]);
+    assert_eq!(check(&r, "FA-OUTPUT-DEVICE")["ran"], false);
     assert_eq!(check(&r, "E-CIRCUIT-SCHEDULED")["status"], "did not run: no circuit on the plans in the model");
 
     // The RFIs, written like a contractor's: where, what each document shows, the question, the

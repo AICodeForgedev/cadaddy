@@ -554,6 +554,138 @@ fn from_build(rules: &Rules, r: &Requirement, report: Option<&super::breakers::R
     ev.outcomes.push(out);
 }
 
+/// The model's handles of equipment tags (an RFI names its objects).
+fn handles_of<'t>(m: &Model, tags: impl Iterator<Item = &'t String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in tags {
+        if let Some(h) = m.resolve(t).and_then(|i| m.get(i)).map(|el| el.handle().hex())
+            && !out.contains(&h)
+        {
+            out.push(h);
+        }
+        if out.len() >= cadaddy_walk3d::rfi::MAX_RFI_ELEMENTS {
+            break;
+        }
+    }
+    out
+}
+
+/// The fire alarm's outputs against the model (Q6647, [`super::famatrix`]): each output of the
+/// sequence of operations (and each schedule note tying equipment to the fire alarm) whose objects
+/// the drawings give no device or relay (or a shunt trip no control power) is one RFI, with what the
+/// build set meanwhile; and each circuit feeding damper actuators whose schedule row doesn't carry
+/// their load.
+fn fa_outputs(rules: &Rules, r: &Requirement, sp: Option<&BuildingSpec>, m: &Model, ev: &mut Evaluation) {
+    let mut out = Outcome { id: r.id.clone(), object: r.object.clone(), trade: r.trade.clone(), ..Outcome::default() };
+    let Some(sp) = sp else {
+        ev.outcomes.push(out);
+        return;
+    };
+    let kinds = lower(&r.build_kinds);
+    let step = if rules.steps.iter().any(|s| s.id == r.step) { r.step.clone() } else { rules.default_step.clone() };
+    let basis_doc = |b: &str| b.split(':').next().unwrap_or("").trim().to_string();
+    if kinds.iter().any(|k| k == "device") {
+        for f in super::famatrix::check(sp) {
+            out.objects += f.objects();
+            let (by_rule, missing) = f.open_counts();
+            out.by_rule += by_rule;
+            out.missing += missing;
+            if by_rule + missing == 0 {
+                continue;
+            }
+            if ev.rfis.len() >= MAX_RAISED {
+                ev.not_raised += 1;
+                continue;
+            }
+            let c = f.class;
+            let sheets = if f.sheets.is_empty() { "the schedules".to_string() } else { f.sheets.join(", ") };
+            let level = f.open.first().map(|o| o.1.clone()).or_else(|| f.targets.first().map(|t| t.1.clone())).unwrap_or_default();
+            let named = |v: Vec<&String>| {
+                let more = v.len().saturating_sub(MAX_NAMED);
+                let list: Vec<&str> = v.iter().take(MAX_NAMED).map(|s| s.as_str()).collect();
+                if more > 0 { format!("{} and {more} more", list.join(", ")) } else { list.join(", ") }
+            };
+            let lacking = if f.no_target {
+                format!("the model has nothing it acts on (no {} on any sheet), and no device or relay for it", c.name)
+            } else if f.open.is_empty() {
+                format!("{} performs it, but no circuit gives its control power", f.devices.join("; "))
+            } else {
+                let what = if c.device == "shunt" {
+                    "no breaker or switch the schedules mark shunt trip, and no relay,"
+                } else {
+                    "no relay or control module"
+                };
+                format!("{what} on the drawings performs it for {}", named(f.open.iter().map(|o| &o.0).collect()))
+            };
+            let issue = format!("The fire alarm sequence on {sheets} calls for \"{}\" ({}); {lacking}.", f.text, c.name);
+            let built: Vec<&String> = f.open.iter().filter_map(|o| o.2.as_ref()).collect();
+            let assumed = if built.is_empty() {
+                format!("Proposed meanwhile: {}.", c.proposal)
+            } else {
+                format!("Proposed meanwhile (unsure, built so the takeoff carries it: {}): {}.", named(built), c.proposal)
+            };
+            let mut rfi = Rfi::new(RfiKind::Requirement, &level, [0.0, 0.0], format!("fire alarm output: {}", f.text), issue, assumed);
+            rfi.id = stable_id(&r.id, "", &format!("{}|{}", c.id, f.text.trim().to_ascii_uppercase()));
+            rfi.severity = Severity::parse(&c.severity).unwrap_or_else(|| r.severity());
+            rfi.topic = format!("requirement: {} ({})", r.id, r.object);
+            rfi.proposed = Some(format!("{} Proposed: {}.", c.ask, c.proposal));
+            rfi.sheets = f.sheets.clone();
+            rfi.sides = vec![
+                RfiSide { document: sheets.clone(), says: format!("calls for {}: {}", c.name, f.text) },
+                RfiSide { document: "the drawings".to_string(), says: lacking.clone() },
+                RfiSide { document: basis_doc(&c.basis), says: c.basis.clone() },
+            ];
+            rfi.elements = handles_of(m, f.open.iter().map(|o| &o.0).chain(f.open.iter().filter_map(|o| o.2.as_ref())));
+            rfi.before = step.clone();
+            ev.rfis.push(rfi);
+        }
+    }
+    if kinds.iter().any(|k| k == "actuator_load") {
+        let (looked, found) = super::famatrix::actuator_loads(sp);
+        out.objects += looked;
+        out.missing += found.len().min(looked);
+        for f in found {
+            if ev.rfis.len() >= MAX_RAISED {
+                ev.not_raised += 1;
+                continue;
+            }
+            let carried = f.row_va.map_or_else(|| "no load".to_string(), |v| format!("{v:.0} VA"));
+            let needs = f.need_va.map_or_else(String::new, |v| format!(" (their data give {v:.0} VA)"));
+            let issue = format!(
+                "Panel {} circuit {} feeds {} damper actuator(s){needs}, but its schedule row carries {carried}: {}.",
+                f.panel,
+                f.circuit,
+                f.actuators.len(),
+                f.actuators.iter().take(MAX_NAMED).cloned().collect::<Vec<_>>().join(", ")
+            );
+            let mut rfi = Rfi::new(
+                RfiKind::Requirement,
+                &f.level,
+                [0.0, 0.0],
+                format!("panel {} circuit {}", f.panel, f.circuit),
+                issue.clone(),
+                "Built on the circuit as the documents name it; its load left as the schedule prints it".to_string(),
+            );
+            rfi.id = stable_id(&r.id, &f.level, &format!("{}|{}", f.panel, f.circuit));
+            rfi.severity = r.severity();
+            rfi.topic = format!("requirement: {} ({})", r.id, r.object);
+            rfi.proposed = Some(r.ask.clone());
+            if !f.sheet.is_empty() {
+                rfi.sheets = vec![f.sheet.clone()];
+            }
+            rfi.sides = vec![
+                RfiSide { document: if f.sheet.is_empty() { "the panel schedules".to_string() } else { f.sheet.clone() }, says: issue },
+                RfiSide { document: basis_doc(&r.basis), says: r.basis.clone() },
+            ];
+            rfi.elements = handles_of(m, f.actuators.iter());
+            rfi.before = step.clone();
+            ev.rfis.push(rfi);
+        }
+    }
+    out.documented = out.objects.saturating_sub(out.by_rule + out.missing);
+    ev.outcomes.push(out);
+}
+
 /// Every requirement over the model's objects: the measure, the RFIs (one per requirement and
 /// space) and the proposals.
 pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
@@ -569,6 +701,10 @@ pub(crate) fn evaluate(d: &Drawing, sp: Option<&BuildingSpec>) -> Evaluation {
     };
     let breakers = super::breakers::stored(d);
     for r in &rules.requirements {
+        if r.from_build == "fa_outputs" {
+            fa_outputs(rules, r, sp, &m, &mut ev);
+            continue;
+        }
         if !r.from_build.is_empty() {
             from_build(rules, r, breakers.as_ref(), &mut ev);
             continue;

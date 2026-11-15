@@ -60,6 +60,7 @@ pub mod exhaustrisers;
 mod express;
 mod express4;
 pub mod exterior;
+mod famatrix;
 pub(crate) mod fashop;
 pub mod fidelity;
 mod field;

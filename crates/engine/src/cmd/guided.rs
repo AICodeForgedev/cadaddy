@@ -9778,6 +9778,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     bim_step(s, job, "dampers", t);
     site_then_documented_objects(s, job, &pages, placer.as_deref(), &mut result);
+    // What the fire alarm's sequence calls for, completed where the drawings show no relay (Q6647).
+    let t = web_time::Instant::now();
+    if let Err(e) = fa_outputs_step(s, &mut result) {
+        result["fa_outputs_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "fire alarm outputs", t);
     // Everything the sheets place is placed: the placer and the sheet linework it fits go.
     drop(placer);
     // The feeders' conduit, gear to gear (proposed).
@@ -22869,6 +22875,33 @@ fn scoped_keynotes_step(s: &mut Session, pages: &[(String, cadaddy_doc::Drawing)
 /// branch conduit) and fire alarm modules (per the sequence of operations), and the code check of
 /// the ducts through rated walls with no damper. Review findings and RFIs for what the documents
 /// leave open. After the build: `place` puts a sheet point onto its level's plan.
+/// The fire alarm's outputs (read by [`dampers_step`] off the sequence pages) and the schedule
+/// notes tying equipment to the fire alarm, against the model as built (Q6647): a fire alarm
+/// control (relay) module set beside each object with none on the drawings, inferred with its
+/// basis, so the takeoff carries it; the requirements raise what stays open as RFIs.
+fn fa_outputs_step(s: &mut Session, result: &mut Value) -> crate::Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let read = sp.mep.fa_outputs.len();
+    let done = super::famatrix::complete(&mut sp);
+    let findings = super::famatrix::check(&sp);
+    let open = findings.iter().filter(|f| f.is_open()).count();
+    let new: BTreeSet<String> = done.modules.iter().map(|t| t.to_ascii_uppercase()).collect();
+    let made = build_new_mep(s, sp, Vec::new(), &new)?;
+    progress_line(&format!(
+        "  fire alarm outputs: {read} read off the sequence, {} with schedule ties measured, {open} with no device on the drawings; {} relay modules set (inferred), {} acting on nothing in the model",
+        findings.len(),
+        done.modules.len(),
+        done.unplaced.len()
+    ));
+    result["fa_outputs"] = json!({
+        "read": read, "measured": findings.len(), "open": open, "modules_inferred": done.modules, "elements": made.len(),
+        "acting_on_nothing": done.unplaced,
+        "outputs": findings.iter().take(100).map(|f| json!({"class": f.class.id, "text": f.text, "sheets": f.sheets,
+            "objects": f.targets.len(), "devices": f.devices, "open": f.open.iter().map(|o| &o.0).collect::<Vec<_>>(), "no_power": f.no_power})).collect::<Vec<_>>(),
+    });
+    Ok(())
+}
+
 fn dampers_step(
     s: &mut Session,
     job: &mut GuidedJob,
@@ -23332,6 +23365,9 @@ fn dampers_step(
         fa_pages.push((number.clone(), cadaddy_mepfix::sheet_facts::texts(sub)));
     }
     let fa = dampers::fa_actions(&fa_pages);
+    // Every output the sequence calls for (Q6647): measured against the model's devices once the
+    // build has set them (`fa_outputs_step`, the requirements).
+    sp.mep.fa_outputs = super::famatrix::outputs(&fa_pages);
     drop(fa_pages);
     // Whose work the dampers are: the mechanical trade's unless the scope split says ours.
     let ours = result["scope"]["decisions"]
