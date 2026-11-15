@@ -481,15 +481,18 @@ struct DuctPair {
 /// When true, segments on any layer are considered, with auto-scaled thresholds.
 /// When `pdf_filter` is true and `all_layers` is true, only PDF-BLACK-* layers are used
 /// (filtering out gray architecture background from PDF imports).
-fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool) -> Vec<DuctPair> {
+/// `bg`: the print draws its work over a screened background, whose lines (the architecture's
+/// wall faces) are no duct sides. `outlines`: the units' boxes, whose sides are no duct sides.
+fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool, bg: bool, outlines: &[(Vec2, Vec2)]) -> Vec<DuctPair> {
     use std::f64::consts::PI;
 
     let duct_segs: Vec<&LineSeg> = if all_layers && pdf_filter {
         segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
-        // Content-mode imports (no PDF-BLACK layers): exclude architecture and decoration layers
-        // that produce false-positive parallel pairs (wall faces, fills, title-block borders).
-        segs.iter().filter(|s| !is_content_exclude(&s.layer)).collect()
+        // Content-mode imports (no PDF-BLACK layers): exclude decoration layers that produce
+        // false-positive parallel pairs (fills, lettering, title-block borders), and the
+        // screened background's wall faces.
+        segs.iter().filter(|s| !(is_content_exclude(&s.layer) || (bg && s.screened) || on_outline(s, outlines))).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DUCT")).collect()
     };
@@ -528,6 +531,11 @@ fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool) 
                     continue;
                 }
                 let (s1, s2) = (duct_segs[g[x].1], duct_segs[g[y].1]);
+                // A duct's two sides are drawn in one pen: a screened wall face beside a unit's
+                // heavy outline, or a thin line beside a heavy one, is no duct.
+                if s1.layer != s2.layer || s1.screened != s2.screened {
+                    continue;
+                }
                 let d1 = s1.b - s1.a;
                 let d2 = s2.b - s2.a;
                 let l1 = d1.len();
@@ -552,6 +560,26 @@ fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool) 
                 let mid_n = (n.dot(s1.a) + n.dot(s2.a)) / 2.0;
                 let lo = a0.max(b0);
                 let hi = a1.min(b1);
+                // A duct's two sides have nothing of their pen between them along the duct (a
+                // dashed centreline's short pieces aside): two lines with another one running
+                // between them are a wall's face and a duct's side, or a corridor's two walls
+                // with the duct down its middle.
+                if all_layers {
+                    let between = g.get(x + 1..y).unwrap_or(&[]).iter().filter_map(|(_, k)| duct_segs.get(*k)).any(|m| {
+                        if m.layer != s1.layer || m.screened != s1.screened {
+                            return false;
+                        }
+                        // The duct's own centreline, drawn in its pen, is midway between.
+                        if (n.dot(m.a) - mid_n).abs() <= (0.02 * half).max(0.25 * scale.min(1.0)) {
+                            return false;
+                        }
+                        let (m0, m1) = minmax(u.dot(m.a), u.dot(m.b));
+                        m1.min(hi) - m0.max(lo) >= 0.5 * (hi - lo)
+                    });
+                    if between {
+                        continue;
+                    }
+                }
                 out.push(DuctPair { c0: u * lo + n * mid_n, c1: u * hi + n * mid_n, half_w: half });
                 if out.len() >= MAX_PAIRS {
                     return out;
@@ -560,6 +588,18 @@ fn duct_pairs(segs: &[LineSeg], all_layers: bool, scale: f64, pdf_filter: bool) 
         }
     }
     out
+}
+
+/// Whether `s` runs along a side of one of the `boxes` (a unit's outline), within its length.
+fn on_outline(s: &LineSeg, boxes: &[(Vec2, Vec2)]) -> bool {
+    boxes.iter().any(|(lo, hi)| {
+        let tol = 0.02 * (hi.x - lo.x).max(hi.y - lo.y);
+        let level = |y: f64| (s.a.y - y).abs() <= tol && (s.b.y - y).abs() <= tol;
+        let plumb = |x: f64| (s.a.x - x).abs() <= tol && (s.b.x - x).abs() <= tol;
+        let within_x = [s.a.x, s.b.x].iter().all(|x| *x >= lo.x - tol && *x <= hi.x + tol);
+        let within_y = [s.a.y, s.b.y].iter().all(|y| *y >= lo.y - tol && *y <= hi.y + tol);
+        ((level(lo.y) || level(hi.y)) && within_x) || ((plumb(lo.x) || plumb(hi.x)) && within_y)
+    })
 }
 
 // ---- Run chaining ----------------------------------------------------------
@@ -581,11 +621,15 @@ pub struct DuctOptions {
     /// When true, filter to PDF-BLACK-* layers only (exclude gray background architecture
     /// from PDF imports).  Effective only when `all_layers` is also true.
     pub pdf_mep_filter: bool,
+    /// `scale` is the sheet's own (its printed plan scale), not a guess from its size: a pair's
+    /// gap over it is the duct's width in inches, which a size tag must agree with to be the
+    /// pair's. A drawing at building scale (`scale` 1.0, not guessed) measures as well.
+    pub scale_known: bool,
 }
 
 impl Default for DuctOptions {
     fn default() -> Self {
-        Self { all_pairs: false, all_layers: false, scale: 1.0, pdf_mep_filter: false }
+        Self { all_pairs: false, all_layers: false, scale: 1.0, pdf_mep_filter: false, scale_known: false }
     }
 }
 
@@ -598,10 +642,17 @@ fn is_pdf_mep_line(layer: &str) -> bool {
 }
 
 /// Returns true if `layer` is known to carry non-MEP geometry on content-mode PDF imports
-/// (architecture walls, fill patterns, text, title-block borders, masks).
+/// (fill patterns, text and the strokes lettering was read from, title-block borders, masks).
+///
+/// Not the import's wall layer: a print without PDF layers puts every heavy black stroke on it,
+/// and a mechanical plan draws its ductwork, air devices and units in that heavy pen over the
+/// architecture (screened, or plotted thin). Its walls are left out by what they are instead: the
+/// screened background (see [`screened_background`]), and duct pairs a size tag of their width
+/// has to confirm (see [`attach_tags`]).
 fn is_content_exclude(layer: &str) -> bool {
     let up = layer.to_ascii_uppercase();
-    matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+    matches!(up.as_str(), "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+        || up.eq_ignore_ascii_case(cadaddy_io::pdf_read::SHX_SOURCE_LAYER)
 }
 
 /// Chain parallel pairs that share an endpoint into continuous runs.
@@ -611,6 +662,19 @@ fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
     }
 
     let tol = 2.0 * o.scale; // model inches tolerance for endpoint matching (scaled for paper)
+    // On a sheet of any layer, the longest pairs first: a duct's whole side paired with the
+    // other is the duct, and the pieces inside it (a dashed centreline paired with a side, a
+    // fitting's short lines) then lie along it and are no runs of their own.
+    let sorted: Vec<DuctPair>;
+    let sorted_pairs = o.all_pairs && o.all_layers;
+    let pairs = if sorted_pairs {
+        let mut v = pairs.to_vec();
+        v.sort_by(|a, b| b.c0.dist(b.c1).total_cmp(&a.c0.dist(a.c1)));
+        sorted = v;
+        sorted.as_slice()
+    } else {
+        pairs
+    };
     let mut used = vec![false; pairs.len()];
     let mut runs = Vec::new();
 
@@ -685,8 +749,29 @@ fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
                 })
             })
         };
+        // Longest first (a sheet of any layer), a narrower pair inside a run already found is
+        // the same duct again only when one of its sides is that run's side (a dashed centreline
+        // paired with a side): a duct down a corridor between its walls is a duct of its own.
+        let shares_side = |q: Vec2| {
+            runs.iter().any(|r: &DuctRun| {
+                let old_half = r.width_in / 2.0;
+                let half = width / 2.0;
+                r.points.windows(2).any(|w| match (w.first(), w.get(1)) {
+                    (Some(a), Some(b)) => {
+                        let d = seg_dist(q, *a, *b);
+                        d < old_half && ((d + half - old_half).abs() <= tol || (d - half + old_half).abs() <= tol)
+                    }
+                    _ => false,
+                })
+            })
+        };
         let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { continue };
-        if o.all_pairs && covered(first) && covered(last) && covered((first + last) * 0.5) {
+        let mid = (first + last) * 0.5;
+        if sorted_pairs {
+            if shares_side(first) && shares_side(last) && shares_side(mid) {
+                continue;
+            }
+        } else if o.all_pairs && covered(first) && covered(last) && covered(mid) {
             continue;
         }
 
@@ -710,13 +795,31 @@ fn chain_runs(pairs: &[DuctPair], o: &DuctOptions) -> Vec<DuctRun> {
 
 /// Parse a duct size from text: `24x12` → [24, 12]; `10"Ø` → [10, 0]; etc.
 fn parse_size(t: &str) -> Option<[f64; 2]> {
-    let up = t.to_ascii_uppercase().replace('×', "X");
-    // Rectangular: `24x12`, `24"x12"`.
+    parse_size_as(t, false)
+}
+
+/// [`parse_size`] for a print read from any layer (`strict`): a feet-and-inches height
+/// (`TOD @ 12'-5"`) or a fraction (`SCALE: 1/8"`) is no round size there. (The DUCT-layer
+/// sheets keep the looser reading their tuned readers were built on.)
+fn parse_size_as(t: &str, strict: bool) -> Option<[f64; 2]> {
+    // A diameter sign in any of its forms (`ø`, `⌀`) reads as `Ø`.
+    let up = t.to_ascii_uppercase().replace('×', "X").replace(['ø', '⌀'], "Ø");
+    // Rectangular: `24x12`, `24"x12"`; `24/12` (width over depth, as some offices print it:
+    // both numbers duct sizes, so a fraction such as `1/8"` or `3/4` and a date are not).
     for w in up.split_whitespace() {
         if let Some((a, b)) = w.split_once('X') {
             let a = a.trim().trim_end_matches('"').parse::<f64>().ok().filter(|v| *v > 0.0)?;
             let b = b.trim().trim_end_matches('"').parse::<f64>().ok().filter(|v| *v > 0.0)?;
             return Some([a, b]);
+        }
+        if let Some((a, b)) = w.split_once('/')
+            && !b.contains('/')
+            && !w.contains('\'')
+        {
+            let num = |v: &str| v.trim().trim_end_matches('"').parse::<f64>().ok().filter(|v| (4.0..=120.0).contains(v));
+            if let (Some(a), Some(b)) = (num(a), num(b)) {
+                return Some([a, b]);
+            }
         }
     }
     // Round: `10"Ø`, `10" DIA`, `12Ø`, `10" RD`.
@@ -727,6 +830,10 @@ fn parse_size(t: &str) -> Option<[f64; 2]> {
             || words.get(i + 1).is_some_and(|n| n.starts_with("DIA") || n.starts_with('Ø') || n.starts_with("RD"));
         let inch = w.contains('"');
         if !(round || inch) {
+            continue;
+        }
+        // Feet and inches (`12'-5"`, a height) and a fraction (`1/8"`, a scale) are no size.
+        if strict && !round && (w.contains('\'') || w.contains('/')) {
             continue;
         }
         let digits: String = w.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
@@ -1564,19 +1671,47 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     // The screened background's words are the architecture's (room names): no unit's tag. Its
     // boxes may be units the trade tags (an exhaust fan the architecture draws).
     let bg = all_layers && screened_background(d);
-    let equip_rects = if all_layers && pdf_filter {
+    let mut equip_rects = if all_layers && pdf_filter {
         rectangles_filtered(d, &|e| is_pdf_mep_line(&e.common.layer))
     } else if all_layers {
         rectangles_filtered(d, &|e| !is_content_exclude(&e.common.layer))
     } else {
         rectangles(d, "EQUIP")
     };
+    if all_layers {
+        // A print's box is often a path drawn back to its start without being closed.
+        for e in d.model.iter() {
+            let EntityKind::LwPolyline(p) = &e.kind else { continue };
+            let wanted = if pdf_filter { is_pdf_mep_line(&e.common.layer) } else { !is_content_exclude(&e.common.layer) };
+            if !wanted || p.closed || p.vertices.len() != 5 || equip_rects.len() >= MAX_INSERTS {
+                continue;
+            }
+            let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+            if let Some((lo, hi)) = as_box(&pts, false) {
+                equip_rects.push((lo, hi, e.common.layer.to_string()));
+            }
+        }
+    }
     let texts = pen_texts(d, bg);
 
+    // A unit is a small part of its sheet: a box over a third of the drawing across is a frame,
+    // a room or a view's border, whatever lettering is in it.
+    let ext = d.extents(&cadaddy_doc::Space::Model);
+    let sheet_span = (ext.max.x - ext.min.x).max(ext.max.y - ext.min.y);
+    // Each box taken for a unit: its tag (index in `texts`), how far the tag is from the box (0
+    // inside it), its area.
+    let mut named: Vec<(usize, f64, f64)> = Vec::new();
     for (min, max, _) in &equip_rects {
         let w = max.x - min.x;
         let h = max.y - min.y;
         if w < 2.0 || h < 2.0 {
+            continue;
+        }
+        if all_layers && sheet_span.is_finite() && sheet_span > 0.0 && w.max(h) > sheet_span / 3.0 {
+            continue;
+        }
+        // Nor is a long strip: a duct drawn as a closed outline is many times longer than wide.
+        if all_layers && w.max(h) > UNIT_ASPECT_MAX * w.min(h) {
             continue;
         }
 
@@ -1588,7 +1723,10 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             .iter()
             .enumerate()
             .filter(|(j, (t, at, layer, _))| {
-                (layer.eq_ignore_ascii_case("TEXT") || layer.eq_ignore_ascii_case("EQUIP"))
+                // A print's own layers name its lettering as they like (`M-ANNO-TEXT`): on a
+                // sheet of any layer every word of the pen that names a unit is a candidate (the
+                // nearest word may be a duct's size tag).
+                (layer.eq_ignore_ascii_case("TEXT") || layer.eq_ignore_ascii_case("EQUIP") || (all_layers && names_a_unit(t)))
                     && at.dist(center) < reach
                     && !t.split_whitespace().any(|w| w.eq_ignore_ascii_case("ROOM"))
                     && !names_a_room(&texts, *j)
@@ -1622,7 +1760,29 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             None => continue,
         };
 
+        let tag_at = tag.map(|(_, (_, at, _, _))| *at).unwrap_or(center);
+        named.push((tag.map_or(usize::MAX, |(j, _)| j), box_gap(tag_at, *min, *max), w * h));
         equipment.push(DetectedEquipment { kind, tag: tag_text, min: *min, max: *max, confidence: 0.7 });
+    }
+    // On a sheet of any layer one tag names one unit: the box it is in, else the nearest (the
+    // smallest of those). The rooms and the outlines around a unit are no units of its tag.
+    if all_layers {
+        let keep: Vec<bool> = named
+            .iter()
+            .enumerate()
+            .map(|(i, (j, gap, area))| {
+                !named
+                    .iter()
+                    .enumerate()
+                    .any(|(k, (j2, gap2, area2))| k != i && j2 == j && (gap2 < gap || (gap2 == gap && (area2 < area || (area2 == area && k < i)))))
+            })
+            .collect();
+        let mut i = 0;
+        equipment.retain(|_| {
+            let k = keep.get(i).copied().unwrap_or(true);
+            i += 1;
+            k
+        });
     }
 
     // In all_layers mode, also detect equipment from text tags alone (no rectangle required).
@@ -1639,6 +1799,13 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         let usual = heights.get(heights.len() / 2).copied().unwrap_or(f64::INFINITY);
         for (i, (text, at, _, height)) in texts.iter().enumerate() {
             if *height > TAG_HEIGHT_MAX * usual {
+                continue;
+            }
+            // A unit's mark is numbered (`RTU-2`, `EF 1`): a legend's line naming the kind
+            // (`VAV TERMINAL UNIT`) or defining the abbreviation (`AHU = AIR HANDLING UNIT`) is
+            // no unit on the plan.
+            let marked = text.chars().any(|c| c.is_ascii_digit()) && !text.contains('=') && text.split_whitespace().count() <= 3;
+            if !marked && stacked_number(&texts, i).is_none() {
                 continue;
             }
             if let Some((kind, tag)) = equip_re(text) {
@@ -1674,6 +1841,9 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
 
 /// The tallest a unit's tag is, in the sheet's usual lettering heights.
 const TAG_HEIGHT_MAX: f64 = 4.0;
+/// A unit's outline is at most this many times longer than wide (a rooftop unit, an air handler,
+/// a fan); a longer box is a duct's outline.
+const UNIT_ASPECT_MAX: f64 = 6.0;
 
 /// Whether the text `i` (a unit's tag) names the unit a control is for: a control's mark after
 /// the tag in the same text (`FCU-7 T`), or a text that is only a control's mark on its line,
@@ -1795,18 +1965,33 @@ fn read_legend(d: &Drawing) -> (Vec<DetectedLegend>, BTreeMap<String, String>) {
 
 /// Attach size/height/system tags to the nearest duct run.
 /// `scale` is the paper-scale factor (1.0 for building-scale, < 0.5 for paper-scale).
-fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, String>, all_layers: bool, scale: f64) -> Vec<DetectedTag> {
+/// `measured`: model units per building inch when a pair's gap is its duct's width (the sheet's
+/// own scale, or building scale). On a sheet of any layer a size tag then names only a run as
+/// wide as it says (either of its numbers, or its diameter): the nearest pair of lines may be a
+/// wall's faces, a unit's outline or the strokes of the tag's own lettering.
+fn attach_tags(
+    runs: &mut [DuctRun],
+    d: &Drawing,
+    abbr_map: &BTreeMap<String, String>,
+    all_layers: bool,
+    scale: f64,
+    measured: Option<f64>,
+) -> Vec<DetectedTag> {
     let texts = text_entities(d);
+    // Each run's drawn width in building inches, and its half width in drawing units, before
+    // any tag sets its size.
+    let drawn_in: Vec<Option<f64>> = runs.iter().map(|r| measured.filter(|_| all_layers).map(|k| r.width_in / k)).collect();
+    let half_drawn: Vec<f64> = runs.iter().map(|r| r.width_in / 2.0).collect();
     let segs = line_segments(d);
     let text_lines: Vec<&LineSeg> =
         if all_layers { segs.iter().collect() } else { segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("TEXT")).collect() };
     let mut detected_tags = Vec::new();
 
-    for (text, at, layer, _h) in &texts {
+    for (text, at, layer, text_h) in &texts {
         if !all_layers && !layer.eq_ignore_ascii_case("TEXT") {
             continue;
         }
-        let size = parse_size(text);
+        let size = parse_size_as(text, all_layers);
         let system = extract_system(text, abbr_map);
         if size.is_none() && system.is_none() {
             // Check for height tag.
@@ -1817,38 +2002,52 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
             }
         }
 
-        // Check for leader line to a run.
-        let has_leader = text_lines.iter().any(|l| l.a.dist(*at) < 5.0 || l.b.dist(*at) < 5.0);
+        // Check for leader line to a run. On a sheet of any layer, never a stroke of lettering
+        // (its own glyphs start at its insertion point): a line on a lettering layer, or no
+        // longer than two letters, leads nowhere.
+        let leader_min = if all_layers && text_h.is_finite() && *text_h > 0.0 { 2.0 * text_h } else { 0.0 };
+        let leads = |l: &&&LineSeg| {
+            (l.a.dist(*at) < 5.0 || l.b.dist(*at) < 5.0) && (!all_layers || (!is_content_exclude(&l.layer) && l.a.dist(l.b) > leader_min))
+        };
+        let has_leader = text_lines.iter().any(|l| leads(&l));
 
         detected_tags.push(DetectedTag { text: text.clone(), at: *at, size_in: size, system: system.clone(), has_leader });
 
         // Find the nearest run.
-        let leader_target = if has_leader {
-            text_lines
-                .iter()
-                .filter(|l| l.a.dist(*at) < 5.0 || l.b.dist(*at) < 5.0)
-                .map(|l| if l.a.dist(*at) < l.b.dist(*at) { l.b } else { l.a })
-                .next()
-        } else {
-            None
-        };
+        let leader_target =
+            if has_leader { text_lines.iter().filter(leads).map(|l| if l.a.dist(*at) < l.b.dist(*at) { l.b } else { l.a }).next() } else { None };
 
         let target = leader_target.unwrap_or(*at);
 
-        // Find the nearest run by distance to its segments.
-        let mut best_run: Option<usize> = None;
-        let mut best_dist = f64::INFINITY;
-        for (i, run) in runs.iter().enumerate() {
-            for w in run.points.windows(2) {
-                if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
-                    let d = seg_dist(target, *a, *b);
-                    if d < best_dist {
-                        best_dist = d;
-                        best_run = Some(i);
+        // Find the nearest run by distance to its segments (to its sides, when its width is
+        // measured: a wide duct's tag sits beside its side, far from its centreline).
+        let by_side = size.is_some() && drawn_in.iter().any(Option::is_some);
+        // A size tag a run as wide as it says is the only one near: within a few lines of
+        // lettering of the duct's side (the tag's own height says how large the plan prints).
+        let side_reach = if by_side && text_h.is_finite() && *text_h > 0.0 { 4.0 * text_h } else { 0.0 };
+        // The plan shows a duct's width, the tag's first number: a run that wide first, one as
+        // wide as its second number (a duct drawn on its side) only when none is.
+        let nearest = |which: Option<usize>| {
+            let mut best: (Option<usize>, f64, f64) = (None, f64::INFINITY, f64::INFINITY);
+            for (i, run) in runs.iter().enumerate() {
+                if let (Some(sz), Some(Some(drawn)), Some(k)) = (size, drawn_in.get(i), which) {
+                    let want = if k == 0 { [sz[0], 0.0] } else { [0.0, sz[1]] };
+                    if !width_agrees(*drawn, want) {
+                        continue;
+                    }
+                }
+                let half = if by_side { half_drawn.get(i).copied().unwrap_or(0.0) } else { 0.0 };
+                for w in run.points.windows(2) {
+                    if let (Some(a), Some(b)) = (w.first(), w.get(1)) {
+                        let d = seg_dist(target, *a, *b);
+                        if d - half < best.2 {
+                            best = (Some(i), d, d - half);
+                        }
                     }
                 }
             }
-        }
+            best
+        };
 
         // In paper-scale mode the model units are paper inches; a tag next to a duct is
         // about 1-3 paper inches away.  At building scale, tags sit within 2-3 feet (24-36").
@@ -1860,7 +2059,12 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
         } else {
             60.0 // standard layers: 5 feet (more generous since layers already filter)
         };
-        if let Some(ri) = best_run.filter(|_| best_dist < reach) {
+        let within = |b: &(Option<usize>, f64, f64)| b.0.is_some() && (b.1 < reach || b.2 < side_reach);
+        let (best_run, _, _) = match (size, by_side) {
+            (Some(_), true) => Some(nearest(Some(0))).filter(within).or_else(|| Some(nearest(Some(1))).filter(within)).unwrap_or((None, 0.0, 0.0)),
+            _ => Some(nearest(None)).filter(within).unwrap_or((None, 0.0, 0.0)),
+        };
+        if let Some(ri) = best_run {
             let run = match runs.get_mut(ri) {
                 Some(r) => r,
                 None => continue,
@@ -1899,6 +2103,14 @@ fn attach_tags(runs: &mut [DuctRun], d: &Drawing, abbr_map: &BTreeMap<String, St
     }
 
     detected_tags
+}
+
+/// Whether a pair `drawn` inches apart is a duct of tag size `size` (`[w, h]`, or `[d, 0]`
+/// round): one of its numbers, give or take the lining or insulation a print may draw outside it
+/// (3", or 30% of a large duct).
+fn width_agrees(drawn: f64, size: [f64; 2]) -> bool {
+    let near = |v: f64| v > 0.0 && (drawn - v).abs() <= (0.3 * v).max(3.0);
+    drawn.is_finite() && (near(size[0]) || near(size[1]))
 }
 
 // ---- System inference from pipe labels in breaks ---------------------------
@@ -2112,6 +2324,16 @@ fn add_centreline_runs(runs: &mut Vec<DuctRun>, segs: &[LineSeg], all_layers: bo
 
 /// Check if `text` contains `word` as a standalone equipment tag (word-boundary match).
 /// E.g., `is_equip_word("EF-1", "EF")` → true; `is_equip_word("SHELF", "EF")` → false.
+/// Whether `text` names a unit by the equipment tag words (`equipment.tag_kind`).
+fn names_a_unit(text: &str) -> bool {
+    let up = text.to_ascii_uppercase();
+    crate::wordrules::first_rule("equipment.tag_kind", |w| match w.strip_prefix("word:") {
+        Some(word) => is_equip_word(&up, word),
+        None => up.contains(w),
+    })
+    .is_some()
+}
+
 fn is_equip_word(text: &str, word: &str) -> bool {
     for (i, _) in text.match_indices(word) {
         // Check left boundary: start of string, or preceding char is not alphanumeric.
@@ -2199,13 +2421,11 @@ fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], 
         if contextual[i] {
             continue;
         }
-        // Also mark runs adjacent to equipment (even without tags) — equipment anchors ducts.
-        for eq in equip {
-            let center = (eq.min + eq.max) * 0.5;
-            if runs[i].points.iter().any(|p| p.dist(center) < equip_reach + (eq.max - eq.min).len() * 0.5) {
-                contextual[i] = true;
-                break;
-            }
+        // Also mark runs that connect to equipment (even without tags) — equipment anchors
+        // ducts: a run whose end goes into a unit's face (a wall's faces beside a unit only pass
+        // by it).
+        if equip.iter().any(|eq| runs.get(i).is_some_and(|r| ends_in_unit(r, eq, tol.max(12.0 * scale.min(1.0))))) {
+            contextual[i] = true;
         }
     }
 
@@ -2225,6 +2445,26 @@ fn filter_runs_by_context(runs: &mut Vec<DuctRun>, equip: &[DetectedEquipment], 
         keep.push(run);
     }
     *runs = keep;
+}
+
+/// Whether one of `run`'s ends goes into `eq`'s box: the end within `reach` of the box, on
+/// a line along the run that meets it (the run carried on from its end enters the unit).
+fn ends_in_unit(run: &DuctRun, eq: &DetectedEquipment, reach: f64) -> bool {
+    let ends = [(run.points.first(), run.points.get(1)), (run.points.last(), run.points.len().checked_sub(2).and_then(|k| run.points.get(k)))];
+    ends.iter().any(|(end, prev)| {
+        let (Some(p), Some(q)) = (end.copied(), prev.copied()) else { return false };
+        let along = p - q;
+        let len = along.len();
+        if len < 1e-9 {
+            return false;
+        }
+        let u = along * (1.0 / len);
+        // Step from the end toward the unit, a little at a time, up to `reach`.
+        (0..=8).any(|k| {
+            let at = p + u * (reach * f64::from(k) / 8.0);
+            at.x >= eq.min.x && at.x <= eq.max.x && at.y >= eq.min.y && at.y <= eq.max.y
+        })
+    })
 }
 
 // ---- Height tag as estimated-route -----------------------------------------
@@ -2253,13 +2493,25 @@ pub fn read_ducts(d: &Drawing, sh: &Sheet) -> DuctNetwork {
 pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork {
     let al = o.all_layers;
     let pf = o.pdf_mep_filter;
-    let scale = if al && o.scale == 1.0 { detect_paper_scale(d).max(0.001) } else { o.scale };
+    let guessed = al && o.scale == 1.0 && !o.scale_known;
+    let scale = if guessed { detect_paper_scale(d).max(0.001) } else { o.scale };
     let mut opts = *o;
     opts.scale = scale;
+    // A pair's gap is the duct's width (model units per inch of building) when the scale is
+    // the sheet's own, or the drawing is at building scale.
+    let measured = (al && (o.scale_known || scale == 1.0) && scale.is_finite() && scale > 0.0).then_some(scale);
+    // A print drawing its work over a screened background: the background is the architecture.
+    let bg = al && !pf && screened_background(d);
+
+    // 0. The units (on a sheet of any layer, before the ducts: a unit's outline is no duct's
+    // side, though its sides pair up like one, and with a duct's side beside it).
+    let equipment = detect_equipment(d, al, pf);
+    let outlines: Vec<(Vec2, Vec2)> =
+        if al { equipment.iter().filter(|e| e.confidence >= 0.7).map(|e| (e.min, e.max)).collect() } else { Vec::new() };
 
     // 1. Find parallel line pairs (DUCT layer, or all layers).
     let segs = line_segments(d);
-    let pairs = duct_pairs(&segs, al, scale, pf);
+    let pairs = duct_pairs(&segs, al, scale, pf, bg, &outlines);
 
     // 2. Chain pairs into runs.
     let mut runs = chain_runs(&pairs, &opts);
@@ -2272,7 +2524,7 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
 
     // 4. Attach size/height/system tags (with scale-adjusted reach for paper-scale).
     // Tags are read from ALL layers (including text layers) — no PDF filter here.
-    let tags = attach_tags(&mut runs, d, &abbr_map, al, scale);
+    let tags = attach_tags(&mut runs, d, &abbr_map, al, scale, measured);
 
     // 5. Infer systems from labels in run breaks.
     infer_systems_from_labels(&mut runs, d, &abbr_map, al);
@@ -2282,7 +2534,6 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
 
     // 7. Detect fittings, terminals, equipment.
     let terminals = detect_terminals(d, al, pf);
-    let equipment = detect_equipment(d, al, pf);
 
     // 7b. In all-layers mode, filter out runs that have no tag/system/equipment evidence.
     // This removes false positives from wall/grid/border line pairs.
@@ -2309,7 +2560,24 @@ pub fn read_ducts_with(d: &Drawing, _sh: &Sheet, o: &DuctOptions) -> DuctNetwork
 /// Sizes: tag-sourced sizes are building-scale (correct); measured widths from
 /// paper-scale pairs are replaced with a default if they look unreasonably small.
 pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
-    let paper_scale = detect_paper_scale(d);
+    read_ducts_any_layer_at(d, None)
+}
+
+/// [`read_ducts_any_layer`] on a sheet whose drawing units per building foot are known
+/// (`units_per_ft`: a sheet left at paper size, at its printed plan scale; 12 at building scale
+/// in inches). With it a pair's gap is a duct width a size tag can agree with, and wide ducts at a
+/// large scale (a 60" duct at 1/4" = 1'-0") are in range; without it the scale is guessed from
+/// the drawing's size.
+pub fn read_ducts_any_layer_at(d: &Drawing, units_per_ft: Option<f64>) -> DuctNetwork {
+    let known = units_per_ft.filter(|u| u.is_finite() && *u > 0.0).map(|u| u / 12.0);
+    // A sheet at another scale (left at paper size): read in building inches, where every reach
+    // and size the reader weighs is one of the building, then put back in the sheet's units.
+    if let Some(k) = known
+        && (k - 1.0).abs() > 1e-9
+    {
+        return read_scaled(d, 1.0 / k);
+    }
+    let paper_scale = known.unwrap_or_else(|| detect_paper_scale(d));
     let sh = Sheet::default();
 
     // On pen-mode PDF imports (recognised by PDF-BLACK-* layer names), filter to black layers
@@ -2320,7 +2588,7 @@ pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
 
     if paper_scale < 0.5 {
         // Paper-scale drawing: scale detection thresholds down to paper units.
-        let opts = DuctOptions { all_pairs: true, all_layers: true, scale: paper_scale.max(0.001), pdf_mep_filter: pdf_filter };
+        let opts = DuctOptions { all_pairs: true, all_layers: true, scale: paper_scale.max(0.001), pdf_mep_filter: pdf_filter, scale_known: false };
         let mut net = read_ducts_with(d, &sh, &opts);
         // Runs whose sizes came from tags (confidence >= 0.85) are already in building inches.
         // Untagged runs have paper-scale widths — replace with a reasonable building-scale default.
@@ -2333,19 +2601,66 @@ pub fn read_ducts_any_layer(d: &Drawing) -> DuctNetwork {
         }
         net
     } else {
-        let mut net = read_ducts_with(d, &sh, &DuctOptions { all_pairs: true, all_layers: true, pdf_mep_filter: pdf_filter, ..Default::default() });
+        let mut net = read_ducts_with(
+            d,
+            &sh,
+            &DuctOptions { all_pairs: true, all_layers: true, pdf_mep_filter: pdf_filter, scale: known.unwrap_or(1.0), scale_known: known.is_some() },
+        );
         // On content-mode imports (no PDF-BLACK layers), wall pairs that survived the context
         // filter can still inflate duct footage.  Drop short untagged runs (< 5 ft building).
         if !pdf_filter {
+            let five_ft = 60.0 * known.unwrap_or(1.0);
             net.runs.retain(|r| {
                 r.confidence >= 0.85 || {
                     let len: f64 = r.points.windows(2).map(|w| w[0].dist(w[1])).sum();
-                    len >= 60.0 // 5 feet in building inches
+                    len >= five_ft
                 }
             });
         }
         net
     }
+}
+
+/// [`read_ducts_any_layer_at`] for a drawing `up` times smaller than building inches: read on a
+/// copy scaled up to building inches, the network's places scaled back down (its sizes are the
+/// building's, from the tags or measured at building scale).
+fn read_scaled(d: &Drawing, up: f64) -> DuctNetwork {
+    let m = cadaddy_geom::Mat3::scale(up, up);
+    let mut big = d.clone();
+    let mut store = cadaddy_doc::EntityStore::new();
+    store.push_many(
+        d.model
+            .iter()
+            .take(MAX_SEGS * 4)
+            .map(|e| {
+                let mut e = (**e).clone();
+                e.kind.transform(&m);
+                e
+            })
+            .collect(),
+    );
+    big.model = store;
+    let mut net = read_ducts_any_layer_at(&big, Some(12.0));
+    let down = |p: Vec2| p * (1.0 / up);
+    for r in &mut net.runs {
+        for p in &mut r.points {
+            *p = down(*p);
+        }
+    }
+    for f in &mut net.fittings {
+        f.at = down(f.at);
+    }
+    for t in &mut net.terminals {
+        t.at = down(t.at);
+    }
+    for e in &mut net.equipment {
+        e.min = down(e.min);
+        e.max = down(e.max);
+    }
+    for t in &mut net.tags {
+        t.at = down(t.at);
+    }
+    net
 }
 
 /// Detect whether this is a paper-scale drawing (small extents, like a PDF import).
@@ -2437,6 +2752,59 @@ mod tests {
         assert_eq!(parse_size("10\"Ø"), Some([10.0, 0.0]));
         assert_eq!(parse_size("12\" DIA"), Some([12.0, 0.0]));
         assert_eq!(parse_size("8\"Ø"), Some([8.0, 0.0]));
+    }
+
+    #[test]
+    fn parse_size_print_forms() {
+        // A diameter sign as a print's text gives it (lower case, the technical sign).
+        assert_eq!(parse_size("12\"\u{f8}"), Some([12.0, 0.0]));
+        assert_eq!(parse_size("14\u{f8}"), Some([14.0, 0.0]));
+        assert_eq!(parse_size("20\u{2300}"), Some([20.0, 0.0]));
+        // Width over depth.
+        assert_eq!(parse_size("24/12"), Some([24.0, 12.0]));
+        assert_eq!(parse_size("60/18 TOD @ 12'-0\""), Some([60.0, 18.0]));
+        // On a print read from any layer a height, a scale, a fraction and a date are no size.
+        assert_eq!(parse_size_as("TOD @ 12'-5\"", true), None);
+        assert_eq!(parse_size_as("SCALE: 1/8\" = 1'-0\"", true), None);
+        assert_eq!(parse_size_as("3/4\"", true), None);
+        assert_eq!(parse_size_as("11/15/2026", true), None);
+        assert_eq!(parse_size_as("12\"\u{f8}", true), Some([12.0, 0.0]));
+    }
+
+    #[test]
+    fn a_tag_names_a_pair_as_wide_as_it_says() {
+        assert!(width_agrees(24.0, [24.0, 12.0]));
+        assert!(width_agrees(26.0, [24.0, 12.0]), "lining drawn outside the duct");
+        assert!(width_agrees(12.0, [24.0, 12.0]), "drawn on its side");
+        assert!(!width_agrees(36.0, [24.0, 12.0]), "a unit's outline beside it");
+        assert!(!width_agrees(3.0, [12.0, 0.0]), "the tag's own lettering");
+        assert!(width_agrees(12.5, [12.0, 0.0]));
+        assert!(!width_agrees(f64::NAN, [12.0, 0.0]));
+    }
+
+    #[test]
+    fn a_units_outline_is_no_duct_side() {
+        let seg = |a: (f64, f64), b: (f64, f64)| LineSeg { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), layer: "A-WALL".into(), screened: false };
+        let unit = [(Vec2::new(0.0, 0.0), Vec2::new(96.0, 60.0))];
+        assert!(on_outline(&seg((0.0, 60.0), (96.0, 60.0)), &unit));
+        assert!(on_outline(&seg((96.0, 0.0), (96.0, 60.0)), &unit));
+        // A duct leaving the unit: across its side, or running on past it.
+        assert!(!on_outline(&seg((96.0, 24.0), (400.0, 24.0)), &unit));
+        assert!(!on_outline(&seg((0.0, 60.0), (300.0, 60.0)), &unit));
+    }
+
+    #[test]
+    fn a_ducts_two_sides_are_one_pen() {
+        // A heavy duct side 30" from a screened wall face, and from a thin line: no pairs. Its
+        // own other side, 12" away in the same pen: a duct.
+        let seg = |y: f64, layer: &str, screened: bool| LineSeg { a: Vec2::new(0.0, y), b: Vec2::new(240.0, y), layer: layer.into(), screened };
+        let segs = [seg(0.0, "A-WALL", false), seg(30.0, "A-WALL", true), seg(-30.0, "PDF-GEOMETRY", false), seg(12.0, "A-WALL", false)];
+        let pairs = duct_pairs(&segs, true, 1.0, false, false, &[]);
+        assert_eq!(pairs.len(), 1, "{pairs:?}");
+        assert!(pairs.iter().all(|p| (p.half_w - 6.0).abs() < 1e-9));
+        // Lettering strokes are no duct sides.
+        let glyphs = [seg(0.0, cadaddy_io::pdf_read::SHX_SOURCE_LAYER, false), seg(3.0, cadaddy_io::pdf_read::SHX_SOURCE_LAYER, false)];
+        assert!(duct_pairs(&glyphs, true, 1.0, false, false, &[]).is_empty());
     }
 
     #[test]

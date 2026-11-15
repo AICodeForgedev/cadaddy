@@ -82,6 +82,19 @@ fn write_two_view_as(dir: &std::path::Path, lower: &str, upper: &str, number: &s
     std::fs::write(dir.join(format!("{number}.pdf")), pdf).expect("write two-view sheet");
 }
 
+/// Feet of horizontal duct the made-up hotel draws on level `code` (`1`).
+fn drawn_duct_ft(code: &str) -> f64 {
+    let (t, _) = cadaddy_mepfix::hotel_planned(SEED, HotelSize::Small);
+    t.segments
+        .iter()
+        .filter(|g| g.kind == "duct" && g.level == code && !g.vertical)
+        .map(|g| {
+            let [a, b] = g.path_ft;
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum()
+}
+
 fn job_state(s: &Session) -> Value {
     serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state")
 }
@@ -153,9 +166,13 @@ fn a_sheet_with_two_plans_gives_each_level_only_its_own_plan() {
         assert!((l1 + l2 - whole).abs() < 0.1 * whole, "{trade}: the levels add up to the sheet: {b:?} vs {whole}");
         assert!(l1 < 0.85 * whole && l2 < 0.85 * whole, "{trade}: no level takes the full sheet: {b:?} vs {whole}");
     }
-    // Different duct lengths: each level gets its own.
+    // Each level its own plan's ducts, as drawn (Q6669: the plans' ducts, not the pairs of other
+    // lines that once made level 1 read twice level 2's).
     let duct = per_level(&read, "duct");
-    assert!(duct[0].2 > 1.3 * duct[1].2, "level 1's plan has more duct than level 2's: {duct:?}");
+    for (i, code) in ["1", "2"].iter().enumerate() {
+        let want = drawn_duct_ft(code);
+        assert!((duct[i].2 - want).abs() <= 0.15 * want, "level {code}'s plan reads its {want:.0} ft of duct: {duct:?}");
+    }
     // The model's totals are the plans' (not doubled), put onto the architecture: both levels'
     // views are laid on their own plans; a run that can't be is left out with a finding.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
@@ -231,10 +248,24 @@ fn a_two_plan_sheet_whose_views_carry_no_titles_still_gives_each_level_its_own_p
     let (l1, l2) = (b[0].2, b[1].2);
     assert!(l1 > 10.0 && l2 > 10.0, "each level reads its own plan: {b:?}");
     assert!((l1 + l2 - whole).abs() < 0.1 * whole, "the levels add up to the sheet, read once: {b:?} vs {whole}");
-    assert!(l1 > 1.3 * l2, "the bottom plan (level 1's, more duct) is level 1's: {b:?}");
+    for (got, code) in [(l1, "1"), (l2, "2")] {
+        let want = drawn_duct_ft(code);
+        assert!((got - want).abs() <= 0.15 * want, "level {code}'s plan reads its {want:.0} ft of duct: {b:?}");
+    }
     let job = job_state(&s);
     let views: Vec<&Value> = job["guided_job"]["sheet_regions"].as_array().expect("regions").iter().filter(|r| r["number"] == "M-1A").collect();
     assert_eq!(views.len(), 2, "one region per plan: {views:?}");
+    // The first plan on the sheet (the lower or left block of linework) is level 1's.
+    let corner = |code: &str| {
+        views
+            .iter()
+            .find(|r| r["level"].as_str().is_some_and(|l| l.trim_start_matches("Level ") == code))
+            .and_then(|r| Some((r["view"]["rect"][0].as_f64()?, r["view"]["rect"][1].as_f64()?)))
+    };
+    assert!(
+        matches!((corner("1"), corner("2")), (Some(a), Some(b)) if a.0 < b.0 || a.1 < b.1),
+        "the first plan on the sheet is level 1's: {views:?}"
+    );
     assert!(views.iter().all(|r| r["view"].is_object() && r["levels"].is_null()), "{views:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

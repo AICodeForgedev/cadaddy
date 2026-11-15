@@ -838,7 +838,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/mepfix/src/duct_reader.rs",
-        "A-WALL | HATCH",
+        "HATCH | TEXT",
         "CAD layer-name parts (NCS codes such as IDEN, DIMS, POWR, A-WALL): drafting convention of layer naming",
     ),
     (

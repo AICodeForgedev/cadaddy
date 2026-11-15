@@ -447,6 +447,14 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
     // Read from the current drawing using all-layers mode (handles PDF-imported M sheets
     // where entities are on pen layers, not standard MEP layer names).
     let net = read_mech_from_drawing(s)?;
+    // No double-line ductwork: a drawing whose ducts are single centrelines on duct layers
+    // (`M-DUCT-SUPP`) is read by those layers, as `mep.read` reads it. (Its centrelines were
+    // never pairs of their own: only beside a grid line or a wall face of another layer.)
+    if net.runs.is_empty()
+        && let Some(v) = duct_layer_runs(s, &net, level_filter.as_deref(), apply)?
+    {
+        return Ok(v);
+    }
 
     let total_runs = net.runs.len();
     // Get units_per_foot from the building spec for correct length conversion.
@@ -521,6 +529,49 @@ fn run_duct_read(s: &mut Session, p: &Value) -> Result<Value> {
         "clashes": clash_count,
         "systems": systems_found,
     }))
+}
+
+/// `ducts.read` on a drawing whose ducts are single lines on duct layers: the duct runs
+/// `mep.read` finds, with the units and air devices of `net` (the drawing's read, its runs
+/// none), applied into the spec with `apply`; none when it finds no duct runs.
+fn duct_layer_runs(s: &mut Session, net: &DuctNetwork, level: Option<&str>, apply: bool) -> Result<Option<Value>> {
+    let Ok((sp, _)) = super::bspec::current(s, "ducts.read") else { return Ok(None) };
+    let Ok((systems, runs)) = super::mep::read(s, &sp, level) else { return Ok(None) };
+    let ducts: Vec<&MepSystem> = systems.iter().filter(|sy| sy.kind == MepKind::Duct).collect();
+    let duct_runs: Vec<&MepRun> = runs.iter().filter(|r| ducts.iter().any(|sy| sy.name == r.system)).collect();
+    if duct_runs.is_empty() {
+        return Ok(None);
+    }
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let length_ft: f64 =
+        duct_runs.iter().flat_map(|r| r.points.windows(2)).map(|w| if let [a, b] = w { (b[0] - a[0]).hypot(b[1] - a[1]) } else { 0.0 }).sum::<f64>()
+            / upf;
+    let mut systems_found: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &duct_runs {
+        *systems_found.entry(r.system.clone()).or_default() += 1;
+    }
+    if apply {
+        // The units and air devices first; then the duct layers' runs (onto the level).
+        apply_duct_network(s, net, level)?;
+        let mut q = json!({"apply": true});
+        if let Some(l) = level {
+            q["level"] = json!(l);
+        }
+        s.execute("mep.read", &q)?;
+    }
+    Ok(Some(json!({
+        "runs": duct_runs.len(),
+        "length_ft": (length_ft * 10.0).round() / 10.0,
+        "terminals": net.terminals.len(),
+        "equipment": net.equipment.len(),
+        "fittings": 0,
+        "applied": apply,
+        "warnings": ["no double-line ductwork: the duct layers' single-line runs read instead"],
+        "trade_summary": format!("Found {} duct run(s) on the drawing's duct layers", duct_runs.len()),
+        "clashes": 0,
+        "systems": systems_found,
+        "source": "duct layers",
+    })))
 }
 
 /// Read mechanical (duct) data from the current drawing using the geometry-based reader.

@@ -486,7 +486,10 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, trade: MepKind, upf: f64) -> (Mep, She
     let mut mep = match trade {
         MepKind::Duct => {
             let plain = cadaddy_mepfix::duct_reader::read_ducts(&sub, &cadaddy_mepfix::truth::Sheet::default());
-            let net = if plain.runs.is_empty() { cadaddy_mepfix::duct_reader::read_ducts_any_layer(&sub) } else { plain };
+            // A print without a DUCT layer: its ductwork read from any layer at the sheet's own
+            // scale (its printed plan scale when left at paper size), so a pair's gap is a duct
+            // width its size tag can confirm.
+            let net = if plain.runs.is_empty() { cadaddy_mepfix::duct_reader::read_ducts_any_layer_at(&sub, Some(sheet_upf)) } else { plain };
             super::readers::duct_mep(&net, &level, &sh.number, &spec)
         }
         _ => {
