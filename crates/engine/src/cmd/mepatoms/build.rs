@@ -1078,6 +1078,14 @@ pub(crate) fn mep_tags(level: &str, source: Handle, system: &str, kind: &str, si
 
 /// The atoms of the spec's electrical runs and its devices' boxes, into the model; the counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
+    build_named(d, sp, &[])
+}
+
+/// [`build`] of a spec whose runs were moved out of the frame the spec stores them in (each
+/// level's stacking move): `names` holds each run's name as the spec has it (its
+/// [`super::super::mep::run_base`] before the move, by index), so its pieces carry the name every
+/// report and edit finds the run by. A run past the list is named by its own points.
+pub(crate) fn build_named(d: &mut Drawing, sp: &BuildingSpec, names: &[String]) -> Value {
     let started = web_time::Instant::now();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let rl = rules();
@@ -1765,6 +1773,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             circuits: String::new(),
             panel: ps.get("panel").map(Prop::text).unwrap_or_default(),
             run: String::new(),
+            feeder: String::new(),
             estimated: false,
             source: *h,
             body: Some((centre, along, bw, across, bh)),
@@ -2278,6 +2287,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let col_clear = |b: &DevBox, at: Vec3, top: f64| frame_cols.get_or_init(|| FrameCols::of(dr, sp, &moves, upf)).clear(&b.level, at, top, drop_r);
     let mut planned = plan_knockouts(&paths, &boxes, &gear, &moves, routed_touch, spacing, keep, upf, &col_clear, &mut knocked);
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    // The run names given so far (each chain's pieces carry their own).
+    let mut run_names: BTreeSet<String> = BTreeSet::new();
     let mut over_bends = 0usize;
     // Buried raceway that comes up into the raceway above the floor: the project's wiring method
     // there, else the default.
@@ -2383,6 +2394,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         circuits: m.circuits.clone(),
                         panel: m.panel.clone(),
                         run: String::new(),
+                        feeder: String::new(),
                         estimated: m.estimated,
                         source: Handle(0),
                         body: Some((at, Vec2::new(1.0, 0.0), bw, bh, bd)),
@@ -2579,7 +2591,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     *land = Some(Land::Gear(g.handle));
                 }
             }
-            let run_id = format!("{}#{}", c.runs.first().and_then(|i| sp.mep.runs.get(*i)).map_or_else(String::new, super::super::mep::run_base), ci);
+            // Its name: the spec's name of its first run (in the frame the spec stores it) and
+            // its place among the group's chains, the next free place where another group's
+            // chain from the same spot took it (two feeder legs out of one panel): one name, one
+            // run.
+            let base = c
+                .runs
+                .first()
+                .and_then(|i| names.get(*i).filter(|n| !n.is_empty()).cloned().or_else(|| sp.mep.runs.get(*i).map(super::super::mep::run_base)))
+                .unwrap_or_default();
+            let run_id = (ci..ci.saturating_add(MAX_ATOMS))
+                .map(|k| format!("{base}#{k}"))
+                .find(|n| !run_names.contains(n))
+                .unwrap_or_else(|| format!("{base}#{ci}"));
+            run_names.insert(run_id.clone());
             let source = c
                 .runs
                 .first()
@@ -2625,6 +2650,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 circuits: m.circuits.clone(),
                 panel: m.panel.clone(),
                 run: run_id.clone(),
+                // The leg its first run is of (also one that matches no schedule row: a route
+                // laid against the feed data still says which leg it is).
+                feeder: c
+                    .runs
+                    .first()
+                    .and_then(|i| sp.mep.runs.get(*i))
+                    .filter(|r| super::super::ugplan::is_feeder_run(r) && r.source_sheet.starts_with("feeder "))
+                    .map(|r| r.source_sheet.clone())
+                    .unwrap_or_default(),
                 estimated: m.estimated,
                 source,
                 body: None,
@@ -2797,6 +2831,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             a.extra.push(("junction", near.len().to_string(), "computed: the runs that meet there (a homerun joining a shared raceway)".into()));
             let mut jctx = ctx.clone();
             jctx.run = String::new();
+            jctx.feeder = String::new();
             jctx.source = Handle(0);
             jctx.body = Some((p, Vec2::new(1.0, 0.0), bw, bh, bd));
             jctx.src = rule_source(&br.source);
@@ -2912,6 +2947,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             circuits: String::new(),
             panel: f.from.clone(),
             run: format!("feeder:{}@{}", st.feeder, st.gear),
+            feeder: String::new(),
             estimated: false,
             source: Handle(0),
             body: None,
@@ -3115,6 +3151,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         if !ctx.run.is_empty() {
             ps.set("run", Prop::new(ctx.run.clone(), computed()));
+        }
+        if !ctx.feeder.is_empty() {
+            ps.set("feeder", Prop::new(ctx.feeder.clone(), computed()).with_note("the feeder leg it is part of, as the routing names it"));
         }
         if !ctx.circuit.is_empty() {
             ps.set("circuit", Prop::new(ctx.circuit.clone(), computed()));
@@ -3438,6 +3477,7 @@ fn support_atoms(sp: &BuildingSpec, atoms: &mut Vec<(Atom, AtomCtx)>, upf: f64, 
         let Some(mut ctx) = atoms.get(p.ctx_of).map(|x| x.1.clone()) else { continue };
         if p.shared {
             ctx.run = String::new();
+            ctx.feeder = String::new();
             ctx.circuit = String::new();
             ctx.circuits = String::new();
             ctx.source = Handle(0);
@@ -3715,6 +3755,7 @@ fn fa_atoms(sp: &BuildingSpec, upf: f64, boxes: &[DevBox], atoms: &mut Vec<(Atom
                     circuits: String::new(),
                     panel: source_tag.clone(),
                     run: r.id.clone(),
+                    feeder: String::new(),
                     estimated: false,
                     source: Handle(0),
                     body: None,
@@ -3878,6 +3919,9 @@ struct AtomCtx {
     circuits: String,
     panel: String,
     run: String,
+    /// The feeder leg it is the raceway or conductors of (`feeder <tag> <from>→<to>`, as the
+    /// routing names its runs); empty off a feeder.
+    feeder: String,
     estimated: bool,
     /// The plan object (or device) it was made for.
     source: Handle,
