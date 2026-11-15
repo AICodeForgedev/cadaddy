@@ -218,7 +218,9 @@ pub(crate) fn save_look(s: &mut Session, look: &Look) -> Result<usize> {
 fn save(s: &mut Session, look: &Look) -> Result<usize> {
     let d = s.doc()?;
     let mut spec: Value = d.building_spec.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(json!({}));
-    let val = serde_json::to_value(look).unwrap_or(Value::Null);
+    // The look at its defaults is no look kept: asking for it (`bim.look {}`) writes nothing
+    // (Q6575: it rewrote the spec and marked an unchanged drawing modified).
+    let val = if *look == Look::default() { Value::Null } else { serde_json::to_value(look).unwrap_or(Value::Null) };
     let val = if val.as_object().is_some_and(|o| o.is_empty()) { Value::Null } else { val };
     if spec.get(KEY).cloned().unwrap_or(Value::Null) != val {
         if let Some(o) = spec.as_object_mut() {

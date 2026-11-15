@@ -899,3 +899,119 @@ fn zoom_extents_in_3d_frames_the_built_model_not_the_sheets() {
     let all = s.view_extents().unwrap();
     assert!(all.max.x - all.min.x > 100_000.0 || all.max.y - all.min.y > 100_000.0, "everything: {all:?}");
 }
+
+/// Whether the active drawing reads as having unsaved changes (the title's `*`, the close
+/// prompt, an agent's quit held for the person).
+fn modified(s: &Session) -> bool {
+    s.state().unwrap().is_dirty()
+}
+
+/// The file formats, as the apps install them (a .cdy saves and opens).
+fn file_hooks() {
+    use cadaddy_engine::cmd::file::{CdyHooks, CdyState, CdyWrite, IoHooks, set_cdy_hooks, set_io};
+    set_io(IoHooks {
+        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
+        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
+    set_cdy_hooks(CdyHooks {
+        save: |d, prev| {
+            let prev = prev.and_then(|p| p.as_ref().downcast_ref::<cadaddy_io::cdy::SaveState>());
+            let (out, state) = cadaddy_io::cdy::save(d, prev, &|| None)?;
+            let out = match out {
+                cadaddy_io::cdy::Output::Full(bytes) => CdyWrite::Full(bytes),
+                cadaddy_io::cdy::Output::Append { from, bytes, index_at } => CdyWrite::Append { from, bytes, index_at },
+            };
+            Ok((out, std::sync::Arc::new(state)))
+        },
+        seed: |d, bytes| cadaddy_io::cdy::seed(d, bytes).map(|s| std::sync::Arc::new(s) as CdyState),
+    });
+}
+
+/// The built building, saved and opened again: a drawing with nothing unsaved.
+fn opened_clean(tag: &str) -> (Session, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("cadaddy-bimlook-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    file_hooks();
+    let p = dir.join("Sample Building.cdy");
+    let mut b = building();
+    b.execute("saveas", &json!({"path": p.to_string_lossy()})).unwrap();
+    let mut s = Session::new();
+    s.execute("open", &json!({"path": p.to_string_lossy()})).unwrap();
+    assert!(!modified(&s), "a drawing just opened has nothing unsaved");
+    (s, p)
+}
+
+/// Q6575: looking at the built model is not an edit. The BIM look, its trades, ghosting, the
+/// level shown, the view, the visual style and the fidelity tier leave a saved drawing
+/// unmodified (as zoom and pan do), undoing and redoing them too; the look is still kept with
+/// the drawing when it is next saved; a real edit still counts.
+#[test]
+fn looking_at_the_model_leaves_a_saved_drawing_unmodified() {
+    let (mut s, p) = opened_clean("look");
+    let steps: Vec<(&str, Value)> = vec![
+        ("bim.look", json!({})),
+        ("view.bim3d", json!({})),
+        ("bim.look", json!({"on": true})),
+        ("bim.look", json!({"ghost": false})),
+        ("bim.look", json!({"ghost": "auto", "ghost_opacity": 0.4})),
+        ("bim.look", json!({"level": "Level 2"})),
+        ("bim.look", json!({"level": null})),
+        ("bim.look", json!({"apart": true, "presentation": true})),
+        ("bim.look", json!({"style": "realistic"})),
+        ("bim.trades", json!({"visible": {"pipe": false}})),
+        ("bim.trades", json!({"colors": {"duct": "#ff0000"}})),
+        ("bim.tree", json!({"path": ["Level 1"], "visible": false})),
+        ("bim.view", json!({"view": "architectural"})),
+        ("view.fidelity", json!({"level": "floor"})),
+    ];
+    for (cmd, p) in &steps {
+        s.execute(cmd, p).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"));
+        assert!(!modified(&s), "{cmd} {p} marked an unchanged drawing modified");
+    }
+    // What was set is what the view shows.
+    let look = Look::of(s.doc().unwrap());
+    assert!(look.hidden.contains("pipe") && look.apart && look.colors.get("duct") == Some(&[255, 0, 0]), "{look:?}");
+    // Stepping back and forth through the view changes leaves it unmodified too.
+    for _ in 0..3 {
+        s.execute("u", &json!({})).unwrap();
+        assert!(!modified(&s), "undoing a view change marked the drawing modified");
+    }
+    s.execute("redo", &json!({})).unwrap();
+    assert!(!modified(&s), "redoing a view change marked the drawing modified");
+
+    // A real edit still counts, the view changes around it don't hide it, and undoing it is
+    // clean again.
+    s.execute("line", &json!({"points": [[0, -120], [120, -120]]})).unwrap();
+    assert!(modified(&s), "a drawn line is an unsaved change");
+    s.execute("bim.look", &json!({"ghost": true})).unwrap();
+    assert!(modified(&s), "a view change after an edit keeps the edit unsaved");
+    s.execute("u", &json!({})).unwrap();
+    assert!(modified(&s), "undoing the view change leaves the edit unsaved");
+    s.execute("u", &json!({})).unwrap();
+    assert!(!modified(&s), "undoing the edit is the drawing as saved");
+
+    // The look is kept with the drawing when it is saved.
+    s.execute("bim.trades", &json!({"visible": {"conduit": false}})).unwrap();
+    assert!(!modified(&s));
+    s.execute("qsave", &json!({})).unwrap();
+    let mut t = Session::new();
+    t.execute("open", &json!({"path": p.to_string_lossy()})).unwrap();
+    assert!(Look::of(t.doc().unwrap()).hidden.contains("conduit"), "the saved look comes back with the drawing");
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+/// The view's settings at their defaults are no setting at all: asking for the look writes
+/// nothing into the drawing and leaves no undo step.
+#[test]
+fn asking_for_the_look_writes_nothing() {
+    let mut s = building();
+    let before: Option<String> = s.doc().unwrap().building_spec.as_deref().map(str::to_string);
+    let steps = s.state().unwrap().undo.len();
+    s.execute("bim.look", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().building_spec.as_deref().map(str::to_string), before, "bim.look {{}} wrote into the building spec");
+    assert_eq!(s.state().unwrap().undo.len(), steps, "bim.look {{}} left an undo step");
+}

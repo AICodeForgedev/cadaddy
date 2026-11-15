@@ -55,6 +55,7 @@ pub mod sysvars;
 pub mod ucs;
 pub mod undoctl;
 pub mod units;
+mod viewstate;
 pub mod workflows;
 pub mod writefile;
 
@@ -498,6 +499,18 @@ impl DocState {
     /// saved into its block.
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(self.drawing(), &self.saved) || self.block_unsaved()
+    }
+    /// After the drawing went from `before` to the one now held: when `before` was the drawing as
+    /// saved and only how the model is looked at changed ([`viewstate`]), the new drawing is the
+    /// saved one (Q6575). Never in the Block Editor (its drawing is the block's).
+    fn keep_saved_through_view_change(&mut self, before: &Arc<Drawing>) {
+        if self.block_edit.is_none()
+            && Arc::ptr_eq(&self.saved, before)
+            && !Arc::ptr_eq(before, &self.doc)
+            && viewstate::only_view_differs(before, &self.doc)
+        {
+            self.saved = Arc::clone(&self.doc);
+        }
     }
     /// After undo/redo replaced the drawing (`before` is the one shown until then): if the current
     /// layout no longer exists, follow it to its other name when it was renamed (same tab order,
@@ -3009,6 +3022,14 @@ impl Session {
                 st.saved = Arc::clone(doc);
             }
         }
+        // A change to how the model is looked at and nothing else (the BIM look kept in the
+        // drawing: Q6575) leaves a drawing with nothing unsaved with nothing unsaved, as zoom and
+        // pan do; it is written with the drawing at its next save.
+        if let Some((doc, _, uid)) = &before
+            && let Some(st) = self.docs.iter_mut().find(|d| d.uid == *uid)
+        {
+            st.keep_saved_through_view_change(doc);
+        }
         let grouped = self.lisp_groups_undo() || self.one_undo_step > 0;
         if spec.undoable
             && let Some((doc, sel, uid)) = before
@@ -4119,6 +4140,8 @@ impl Session {
             st.set_model_look(l);
         }
         st.doc = snap.doc;
+        // Stepping over a change to how the model is looked at keeps a saved drawing saved.
+        st.keep_saved_through_view_change(&cur.doc);
         st.follow_layout(&cur.doc);
         // Views aren't all part of the drawing's undo: the untiled twist record follows the
         // live model view again.
@@ -4137,6 +4160,8 @@ impl Session {
             st.set_model_look(l);
         }
         st.doc = snap.doc;
+        // Stepping over a change to how the model is looked at keeps a saved drawing saved.
+        st.keep_saved_through_view_change(&cur.doc);
         st.follow_layout(&cur.doc);
         // Views aren't all part of the drawing's undo: the untiled twist record follows the
         // live model view again.
