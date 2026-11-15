@@ -43,6 +43,10 @@ pub struct Prints {
     pub symbols: Vec<Symbol>,
     /// Schedule rows (panel, fixture, equipment, device schedules).
     pub schedule: Vec<ScheduleRow>,
+    /// The type marks a legend defines (its row's words: `REC  DUPLEX RECEPTACLE`): documented
+    /// types like a schedule's, with no quantity or fields (Q6645).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub legend: Vec<ScheduleRow>,
     /// Dimension strings on the architectural sheets.
     pub dimensions: Vec<DimString>,
     /// Rooms with their outlines (for counts per room and unit type, ceilings and exterior).
@@ -51,8 +55,28 @@ pub struct Prints {
     pub submittals: Vec<Submittal>,
     /// Termination points (panelboards, switchboards, disconnects) and their lugs.
     pub terminations: Vec<Termination>,
+    /// The sheets whose symbols can't be checked where they stand (Q6645): no registration
+    /// puts the sheet onto its level's plan, so its symbols' plan points aren't known. Each is
+    /// one finding, never one missing element per symbol at the sheet's own position.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unchecked: Vec<UncheckedSheet>,
     pub rules: RulesFile,
     pub settings: Settings,
+}
+
+/// A sheet whose symbols the overlay can't place (Q6645): how many and why.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UncheckedSheet {
+    pub sheet: String,
+    pub level: String,
+    /// Its symbols left unchecked, and their kinds: an element of one of these kinds on its
+    /// level may be one of them, so it is not called "not on the print".
+    pub symbols: usize,
+    pub kinds: Vec<String>,
+    /// Why they have no plan point (no registration holds, a typical room's plan stamped into
+    /// its rooms...).
+    pub why: String,
 }
 
 /// One sheet of the set and what it shows.
@@ -269,6 +293,7 @@ impl Prints {
         self.symbols.retain(|s| fin2(s.at));
         self.symbols.truncate(MAX_ITEMS);
         self.schedule.truncate(MAX_ITEMS);
+        self.legend.truncate(MAX_ITEMS);
         self.dimensions.retain(|d| fin2(d.a) && fin2(d.b) && d.value_ft.is_finite());
         self.dimensions.truncate(MAX_ITEMS);
         for r in &mut self.rooms {
@@ -279,6 +304,7 @@ impl Prints {
         self.sheets.truncate(MAX_ITEMS);
         self.submittals.truncate(MAX_ITEMS);
         self.terminations.truncate(MAX_ITEMS);
+        self.unchecked.truncate(MAX_ITEMS);
         self.rules.heights.retain(|h| h.mounting_in.is_finite());
         self.rules.heights.truncate(MAX_ITEMS);
         self.rules.spec.truncate(MAX_ITEMS);
@@ -304,10 +330,12 @@ impl Prints {
     pub fn is_empty(&self) -> bool {
         self.symbols.is_empty()
             && self.schedule.is_empty()
+            && self.legend.is_empty()
             && self.dimensions.is_empty()
             && self.rooms.is_empty()
             && self.submittals.is_empty()
             && self.terminations.is_empty()
+            && self.unchecked.is_empty()
             && self.rules.heights.is_empty()
             && self.rules.spec.is_empty()
     }
@@ -1019,7 +1047,9 @@ impl Ctx<'_> {
         self.model.levels.iter().find(|l| same(&l.name, level)).map(|l| l.height_ft).filter(|h| h.is_finite() && *h > 0.0)
     }
     fn known_mark(&self, mark: &str) -> bool {
-        self.model.types.keys().any(|k| same(k, mark)) || self.prints.schedule.iter().any(|r| same(&r.mark, mark))
+        self.model.types.keys().any(|k| same(k, mark))
+            || self.prints.schedule.iter().any(|r| same(&r.mark, mark))
+            || self.prints.legend.iter().any(|r| same(&r.mark, mark))
     }
 }
 
@@ -1284,6 +1314,17 @@ fn overlay(cx: &mut Ctx) {
         if !on_prints {
             continue;
         }
+        // A sheet showing its kind on its level has symbols with no plan point: it may be one of
+        // them (Q6645; the sheet's finding says they weren't checked).
+        // So may one built from such a sheet (a typical room's plan stamps its rooms on every
+        // floor): its source names the sheet.
+        let from = e.source.as_deref().and_then(|t| t.split(|c: char| c.is_whitespace() || c == '@').find(|w| !w.is_empty()));
+        if p.unchecked
+            .iter()
+            .any(|u| (same(&u.level, &e.level) && u.kinds.iter().any(|k| same(k, &e.kind))) || from.is_some_and(|f| same(f, &u.sheet)))
+        {
+            continue;
+        }
         n += 1;
         if matches!(e.status, Some(Status::FieldVerified | Status::Override)) {
             continue;
@@ -1299,6 +1340,26 @@ fn overlay(cx: &mut Ctx) {
             Source { sheet: sheet_for(p, &e.level, &e.kind), at: Some(e.at), ..Source::default() },
             Severity::Medium,
             "Delete it, or record why it is there (an override or a field-verified place).".into(),
+        ));
+    }
+    // A sheet whose symbols have no plan point: one finding for the sheet, in scope when its
+    // level is (it has no place to scope by).
+    for u in p.unchecked.iter().filter(|u| u.symbols > 0) {
+        if cx.reach.scope.spatial() || !cx.reach.level(&u.level) {
+            continue;
+        }
+        n += 1;
+        out.push(failure(
+            Check::Overlay,
+            "sheet_not_registered",
+            None,
+            &u.level,
+            None,
+            format!("{} laid onto its level's plan, so its symbols can be checked", u.sheet),
+            format!("sheet not registered: {} symbols not checked ({})", u.symbols, u.why),
+            Source { sheet: Some(u.sheet.clone()), ..Source::default() },
+            Severity::Low,
+            format!("Register {} onto its level's plan (shared grids, tags or linework), then validate again.", u.sheet),
         ));
     }
     cx.count(Check::Overlay, n);
@@ -1661,9 +1722,11 @@ fn tags(cx: &mut Ctx) {
         }
         n += 1;
         let sym = sym_of.get(&ei).copied();
-        // The tag resolves in the catalog or a schedule.
+        // The tag resolves in the catalog or a schedule. An element with its symbol's mark took
+        // what the print shows: the symbol's finding says it once (Q6645).
         if let Some(mark) = e.mark.as_deref().filter(|m| !m.is_empty())
             && !cx.known_mark(mark)
+            && !sym.is_some_and(|s| s.mark.as_deref().is_some_and(|sm| same(sm, mark)))
         {
             out.push(failure(
                 Check::Tags,
@@ -2464,6 +2527,63 @@ mod tests {
         // …unless the rules file comes first.
         p.rules.source_order = vec!["rule".into(), "note".into()];
         assert!(validate(&p, &m, &Scope::all()).failures.iter().any(|f| f.rule == "wrong_height"));
+    }
+
+    /// Q6645: a sheet with no registration is one finding for its symbols, never one missing
+    /// element per symbol; an element of a kind it holds isn't called "not on the print".
+    #[test]
+    fn an_unregistered_sheet_is_one_finding_and_hides_no_element() {
+        let (mut p, mut m) = base();
+        m.elements.push(el("E2", "luminaire", "L1", [5.0, 5.0], 96.0));
+        p.symbols.push(sym("luminaire", "L1", [5.0, 5.0]));
+        p.schedule.push(ScheduleRow { sheet: "E-601".into(), schedule: "luminaire".into(), mark: "L1".into(), ..ScheduleRow::default() });
+        assert!(validate(&p, &m, &Scope::all()).failures.iter().all(|f| f.check != Check::Overlay));
+        // The luminaire's sheet couldn't be placed: its symbol isn't where the element is (the
+        // sheet still shows luminaires on the level).
+        p.symbols.retain(|s| s.kind != "luminaire");
+        p.sheets.push(PrintSheet { number: "E-901".into(), level: Some("1".into()), kinds: vec!["luminaire".into()], ..PrintSheet::default() });
+        let r = validate(&p, &m, &Scope::all());
+        assert!(r.failures.iter().any(|f| f.rule == "not_on_print"), "without the sheet's note it is not on the print: {:#?}", r.failures);
+        p.unchecked.push(UncheckedSheet {
+            sheet: "E-901".into(),
+            level: "1".into(),
+            symbols: 12,
+            kinds: vec!["luminaire".into()],
+            why: "no registration holds".into(),
+        });
+        let r = validate(&p, &m, &Scope::all());
+        let ov: Vec<&Failure> = r.failures.iter().filter(|f| f.check == Check::Overlay).collect();
+        assert_eq!(ov.len(), 1, "{ov:#?}");
+        assert_eq!((ov[0].rule.as_str(), ov[0].severity, ov[0].at), ("sheet_not_registered", Severity::Low, None));
+        assert!(ov[0].found.contains("12 symbols not checked"), "{}", ov[0].found);
+        // An element built from the sheet on another floor (a typical room's plan stamps every
+        // floor) may be one of its symbols too.
+        let mut up = el("E3", "switch", "S3", [6.0, 6.0], 48.0);
+        up.level = "2".into();
+        up.source = Some("E-901".into());
+        m.levels.push(ModelLevel { name: "2".into(), height_ft: 12.0 });
+        m.elements.push(up);
+        p.symbols.push(Symbol { level: "2".into(), ..sym("switch", "S3", [-30.0, -30.0]) });
+        let r = validate(&p, &m, &Scope::all());
+        assert!(r.failures.iter().all(|f| f.rule != "not_on_print"), "{:#?}", r.failures);
+        // A scope of another level, or of an area, leaves it out.
+        let other = Scope { levels: vec!["2".into()], ..Scope::all() };
+        assert!(validate(&p, &m, &other).failures.iter().all(|f| f.rule != "sheet_not_registered"));
+    }
+
+    /// Q6645: a legend's mark is a documented type; an element with its symbol's unknown mark is
+    /// said once, on the symbol.
+    #[test]
+    fn a_legend_mark_is_known_and_an_unknown_one_is_said_once() {
+        let (mut p, mut m) = base();
+        m.elements.push(el("E2", "switch", "S3", [-5.0, 0.25], 48.0));
+        p.symbols.push(sym("switch", "S3", [-5.0, 0.25]));
+        p.rules.heights.push(HeightRule { kind: Some("switch".into()), mounting_in: 48.0, source: "rules 1".into(), ..HeightRule::default() });
+        let r = validate(&p, &m, &Scope::all());
+        let rules: Vec<&str> = r.failures.iter().filter(|f| f.check == Check::Tags).map(|f| f.rule.as_str()).collect();
+        assert_eq!(rules, ["tag_not_scheduled"], "the print's mark, said once: {:#?}", r.failures);
+        p.legend.push(ScheduleRow { sheet: "E-002".into(), schedule: "legend".into(), mark: "S3".into(), ..ScheduleRow::default() });
+        assert!(validate(&p, &m, &Scope::all()).failures.iter().all(|f| f.check != Check::Tags));
     }
 
     #[test]
