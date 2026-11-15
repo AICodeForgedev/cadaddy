@@ -365,6 +365,8 @@ fn met(rules: &Rules, r: &Requirement, el: &El, fed: &BTreeSet<String>, facts: &
 const MAX_LOADS_NAMED: usize = 6;
 /// Circuits one label carries at most (`A-1,3,5`).
 const MAX_LABEL_PARTS: usize = 12;
+/// A control's mark is this long at most (`S`, `OS2`, `D3W`).
+const MAX_MARK: usize = 8;
 
 /// A load the model ties to a switch leg (a luminaire, a fan on the leg).
 #[derive(Clone, Debug)]
@@ -391,15 +393,23 @@ pub(crate) struct ModelFacts {
     control_legs: BTreeSet<(String, String, String)>,
     /// A control's handle (upper case) → the loads naming it (`controlled_by`, `control`).
     named: HashMap<String, Vec<(String, bool)>>,
+    /// (level, room) → the loads there whose control names a control by its mark: the words of
+    /// their control (as written), label, documented.
+    by_mark: BTreeMap<(String, String), Vec<(BTreeSet<String>, String, bool)>>,
     /// (panel, circuit number) → whether a document gives an element carrying it.
     circuits: BTreeMap<(String, u32), bool>,
     /// (panel, circuit number) → why it is the emergency system's.
     emergency: BTreeMap<(String, u32), String>,
 }
 
+/// A control's words as written (`switch S leg a` → `switch`, `S`, `leg`, `a`).
+fn control_words(text: &str) -> Vec<&str> {
+    text.split(|c: char| c.is_whitespace() || matches!(c, ':' | ',' | ';' | '(' | ')')).filter(|w| !w.is_empty()).take(200).collect()
+}
+
 /// A switch leg letter in a control's words (`switch leg a: S 1A2`, `switch S leg a`).
 fn leg_in(text: &str) -> Option<String> {
-    let words: Vec<&str> = text.split(|c: char| c.is_whitespace() || matches!(c, ':' | ',' | ';' | '(' | ')')).filter(|w| !w.is_empty()).collect();
+    let words = control_words(text);
     let at = words.iter().position(|w| w.eq_ignore_ascii_case("leg"))?;
     let leg = words.get(at + 1)?.to_ascii_lowercase();
     (leg.len() <= 3 && leg.chars().all(|c| c.is_ascii_alphanumeric())).then_some(leg)
@@ -454,7 +464,11 @@ impl ModelFacts {
                     .filter(|(l, _)| !l.is_empty() && !rules.empty(l))
                     .or_else(|| control.and_then(|p| leg_in(&p.text()).map(|l| (l, documented(p)))));
                 if let Some((leg, doc)) = leg {
-                    f.legs.push(LegLoad { level, room, leg, at: plan_at(el), label: el.label(), documented: doc });
+                    f.legs.push(LegLoad { level: level.clone(), room: room.clone(), leg, at: plan_at(el), label: el.label(), documented: doc });
+                }
+                if let Some(p) = control.filter(|_| !room.is_empty()) {
+                    let words = control_words(&p.text()).into_iter().map(str::to_string).collect();
+                    f.by_mark.entry((level.clone(), room.clone())).or_default().push((words, el.label(), documented(p)));
                 }
                 for p in [el.get("controlled_by"), control].into_iter().flatten() {
                     for h in handles_in(&p.text()) {
@@ -504,7 +518,9 @@ impl ModelFacts {
     }
 
     /// A control's load: the loads naming it, else those carrying its leg in its room, else
-    /// within reach in a room with no control of that leg of its own.
+    /// within reach in a room with no control of that leg of its own; a control with no leg
+    /// letter, the loads of its room whose control names its mark (a stamped unit's lights
+    /// naming the typical room's switch).
     fn controlled(&self, el: &El, reach: f64) -> Option<(bool, String)> {
         let say = |loads: &[(String, bool)], how: &str| {
             let names: Vec<&str> = loads.iter().take(MAX_LOADS_NAMED).map(|(l, _)| l.as_str()).collect();
@@ -515,8 +531,20 @@ impl ModelFacts {
         if let Some(loads) = self.named.get(&el.handle().hex()).filter(|l| !l.is_empty()) {
             return Some(say(loads, "that name it as their control"));
         }
-        let leg = el.first(&["switch_leg", "leg"])?.to_ascii_lowercase();
         let (level, room) = (el.level().to_ascii_uppercase(), el.text("room").unwrap_or_default().to_ascii_uppercase());
+        let Some(leg) = el.first(&["switch_leg", "leg"]).map(|l| l.to_ascii_lowercase()) else {
+            // Its mark as written (`S`, `OS2`): one word, never a description.
+            let mark = el.first(&["type_mark", "tag", "type"]).filter(|m| m.len() <= MAX_MARK && !m.contains(char::is_whitespace))?;
+            let loads: Vec<(String, bool)> = self
+                .by_mark
+                .get(&(level, room))
+                .into_iter()
+                .flatten()
+                .filter(|(words, _, _)| words.contains(&mark))
+                .map(|(_, label, d)| (label.clone(), *d))
+                .collect();
+            return (!loads.is_empty()).then(|| say(&loads, &format!("in its room whose control names {mark}")));
+        };
         let mine = |l: &&LegLoad| l.leg == leg && (l.level.is_empty() || level.is_empty() || l.level == level);
         let in_room: Vec<(String, bool)> =
             self.legs.iter().filter(mine).filter(|l| !room.is_empty() && l.room == room).map(|l| (l.label.clone(), l.documented)).collect();

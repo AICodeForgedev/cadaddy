@@ -344,6 +344,10 @@ fn the_requirements_read_the_model_as_it_stands() {
     // Room 302: a dimmer with no letter; its light names it.
     let dimmer = device(&mut d, "L1", "dimmer", "302", 21.0, 9.0, &[]);
     lum(&mut d, "302", 24.0, &[p("controlled_by", &dimmer.hex())]);
+    // Room 305, a stamped copy of a typical room: its switch S has no letter, and its light's
+    // control names the typical room's switch S (another handle).
+    device(&mut d, "L1", "switch", "305", 81.0, 9.0, &[p("type_mark", "S")]);
+    lum(&mut d, "305", 84.0, &[p("control", "switch leg a: S 9FFFF0")]);
     // Room 303: a switch on a leg no luminaire carries: still open.
     let idle = device(&mut d, "L1", "switch", "303", 41.0, 9.0, &[p("switch_leg", "b")]);
     // A stair light on the emergency system's circuit, no control drawn; a room's light with none.
@@ -399,11 +403,11 @@ fn the_requirements_read_the_model_as_it_stands() {
     let sw = check(&r, "E-SW-LOAD");
     assert_eq!(
         (sw["objects"].as_u64(), sw["met_by_documents"].as_u64(), sw["findings"].as_u64()),
-        (Some(3), Some(2), Some(1)),
+        (Some(4), Some(3), Some(1)),
         "only the leg-b switch: {sw}"
     );
     let lc = check(&r, "E-LUM-CONTROL");
-    assert_eq!((lc["objects"].as_u64(), lc["open_objects"].as_u64()), (Some(5), Some(1)), "only room 304's light: {lc}");
+    assert_eq!((lc["objects"].as_u64(), lc["open_objects"].as_u64()), (Some(6), Some(1)), "only room 304's light: {lc}");
     let bl = check(&r, "E-BREAKER-LOAD");
     assert_eq!((bl["objects"].as_u64(), bl["missing"].as_u64(), bl["findings"].as_u64()), (Some(5), Some(1), Some(1)), "only LP1-44: {bl}");
     assert_eq!(r["closed_by_model"], 2, "{r}");

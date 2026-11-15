@@ -1631,23 +1631,21 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
         let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
         let by_leg = leg_controls(l, ctrls, lums);
         let circuit_codes = docs.codes.get(&l.circuit).cloned().unwrap_or_default();
-        let em = docs.emergency.get(&l.mark).cloned().or_else(|| {
-            circuit_codes
-                .iter()
-                .any(|c| c == "EM")
-                .then(|| Emergency { why: format!("panel {} circuit {}: EM", l.circuit.0, l.circuit.1), switched: false })
-        });
-        // A light on the emergency system's circuit stays on whatever its type (NEC 700.21).
-        let em = em.or_else(|| {
-            docs.emergency_circuits
-                .get(&(l.circuit.0.clone(), l.circuit.1.trim().to_string()))
-                .map(|why| Emergency { why: why.clone(), switched: false })
-        });
+        // The emergency system's circuit: its `EM` code, or its row naming an emergency load.
+        let em_circuit = circuit_codes
+            .iter()
+            .any(|c| c == "EM")
+            .then(|| format!("panel {} circuit {}: EM", l.circuit.0, l.circuit.1))
+            .or_else(|| docs.emergency_circuits.get(&(l.circuit.0.clone(), l.circuit.1.trim().to_string())).cloned());
+        let em = docs.emergency.get(&l.mark).cloned().or_else(|| em_circuit.clone().map(|why| Emergency { why, switched: false }));
         if let Some(e) = &em {
             out.emergency.insert(l.h.clone(), e.why.clone());
         }
         // One that stays on by design: no control needed.
         let emergency = em.filter(|e| !e.switched).map(|e| e.why);
+        // With no leg or contactor of its own, a light on the emergency system's circuit stays on
+        // too, whatever its type (a battery unit's included: NEC 700.21).
+        let stays_on = emergency.clone().or(em_circuit);
         let list = |cs: &[&Dev]| cs.iter().map(|c| format!("{} {}", c.mark, c.h)).collect::<Vec<_>>().join(", ");
         let (control, kind, doc, how): (String, SourceKind, String, &'static str) = if !by_leg.is_empty() {
             (format!("switch leg {}: {}", l.leg, list(&by_leg)), SourceKind::Print, "switch leg letters on the plans".into(), "leg")
@@ -1664,7 +1662,7 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
                 "panel schedule codes".into(),
                 "contactor",
             )
-        } else if let Some(why) = &emergency {
+        } else if let Some(why) = &stays_on {
             out.unswitched.insert(l.h.clone(), why.clone());
             ("unswitched: emergency / exit".to_string(), SourceKind::Schedule, why.clone(), "emergency")
         } else if !in_room.is_empty() && l.leg.is_empty() {
@@ -2445,13 +2443,21 @@ mod tests {
         stair.circuit = ("P".into(), "9".into());
         let mut plain = dev("p17", "luminaire", "Q1", "S2", "", [500.0, 0.0]);
         plain.circuit = ("P".into(), "17".into());
-        let none = BTreeMap::new();
+        // A stair light with a battery in it (its type switched like the others) on the EM-coded
+        // circuit 13: it stays on too, its type still its emergency reason.
+        let mut battery = dev("b13", "luminaire", "Q9", "S3", "", [900.0, 0.0]);
+        battery.circuit = ("P".into(), "13".into());
+        let mut types = BTreeMap::new();
+        types.insert("Q9".to_string(), Emergency { why: "E-9 type Q9: STAIR LIGHT WITH EMERGENCY BATTERY".into(), switched: true });
         let links = link_controls(
-            &[stair, plain],
+            &[stair, plain, battery],
             &[],
             &[],
-            &ControlDocs { codes: &BTreeMap::new(), emergency: &none, emergency_circuits: &em, plans: "the plans" },
+            &ControlDocs { codes: &BTreeMap::new(), emergency: &types, emergency_circuits: &em, plans: "the plans" },
         );
+        assert_eq!(links.control["b13"].3, "emergency");
+        assert!(links.unswitched["b13"].contains("circuit 13"), "{:?}", links.unswitched);
+        assert!(links.emergency["b13"].contains("BATTERY"), "{:?}", links.emergency);
         assert_eq!(links.control["e9"].3, "emergency");
         assert!(links.unswitched["e9"].contains("EM LTG"), "{:?}", links.unswitched);
         // An ordinary circuit's light with no control is still a conflict.
