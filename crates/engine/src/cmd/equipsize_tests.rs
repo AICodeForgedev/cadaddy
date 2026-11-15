@@ -75,8 +75,8 @@ fn tags_are_matched_as_pages_write_them() {
     assert_eq!(canon("HP9").as_deref(), Some("HP-9"));
     assert_eq!(canon("MAU-4A").as_deref(), Some("MAU-4A"));
     assert_eq!(canon("12"), None);
-    let t = tags_named("Unit Tags:   CU/AHU-6\nTag #: QH 9, ERV-2\nMOTOR: 3/4 HP 1 PH", &vocab().not_tag);
-    assert!(!t.contains("HP-1") && !t.contains("PH-1"), "a horsepower is no tag: {t:?}");
+    let t = tags_named("Unit Tags:   CU/AHU-6\nTag #: QH 9, ERV-2\nMOTOR: 3/4 HP 7 PH", &vocab().not_tag);
+    assert!(!t.contains("HP-7") && !t.contains("PH-7"), "a horsepower is no tag: {t:?}");
     for want in ["CU-6", "AHU-6", "QH-9", "ERV-2"] {
         assert!(t.contains(want), "{want}: {t:?}");
     }
@@ -298,8 +298,8 @@ fn a_through_wall_units_sheet_its_overall_size_and_not_its_cut_out_or_carton() {
     let got = from_text(&format!("--- page 1 of 1 ---\nPLAN DESIGNATION   QX-1\n{text}"), "a.pdf", &[unit("QX-1", &[])], &vocab());
     assert_eq!(got.get("QX-1").and_then(|s| s.size_in), Some([15.0, 40.0, 20.5]), "the largest: the unit with its front");
     // A list of a tag's numbers.
-    let t = tags_named("Unit Tags: QF-1, 2, 3, RH-1, 2", &vocab().not_tag);
-    for want in ["QF-1", "QF-2", "QF-3", "RH-1", "RH-2"] {
+    let t = tags_named("Unit Tags: QF-1, 2, 3, RV-1, 2", &vocab().not_tag);
+    for want in ["QF-1", "QF-2", "QF-3", "RV-1", "RV-2"] {
         assert!(t.contains(want), "{want}: {t:?}");
     }
 }
@@ -321,4 +321,32 @@ fn a_submittal_giving_only_the_curb_sets_the_curb_and_keeps_the_unit() {
     assert!(close(eq[0].max[0] - eq[0].min[0], 96.0) && close(eq[0].height_ft, 4.5), "the unit as it was: {:?}", eq[0]);
     assert!(close(eq[0].bottom_ft, 2.5) && close(eq[1].height_ft, 2.5), "{eq:?}");
     assert!(close(eq[1].max[0] - eq[1].min[0], 75.0) && close(eq[1].max[1] - eq[1].min[1], 49.5), "the curb's own plan size: {:?}", eq[1]);
+}
+
+#[test]
+fn a_size_far_off_the_box_is_another_products_and_not_taken() {
+    // A page naming the tag gives a part's size (a breaker's, 7 in tall) for a 30 x 26 x 36 in unit.
+    let mut eq = vec![equipment("QR-1", "range", [0.0, 0.0], [30.0, 26.0], 3.0, "rules data: its kind's usual box", "rules data")];
+    let mut got = BTreeMap::new();
+    got.insert("QR-1".to_string(), Submitted { size_in: Some([7.39, 4.18, 3.86]), curb: None, source: "submittal x.pdf p.67".into() });
+    let a = apply(&mut eq, &got, 12.0);
+    assert_eq!((a.resized.len(), a.refused.len(), a.changed.len()), (0, 1, 0), "{a:?}");
+    assert!(a.refused[0].source.contains("not taken"), "{a:?}");
+    assert!(close(eq[0].max[0] - eq[0].min[0], 30.0) && close(eq[0].height_ft, 3.0), "{:?}", eq[0]);
+}
+
+#[test]
+fn a_page_labelled_for_other_units_is_not_the_unit_befores() {
+    let text = [
+        "--- page 1 of 3 ---\nX NO EXCEPTIONS TAKEN\nUnit Tags: QF-1, 2, RV-1, 2",
+        "--- page 2 of 3 ---\nMark: QF-1, 2\nHeight 14 Width 15 Depth 16",
+        "--- page 3 of 3 ---\nMark: RV-1, 2\nHood Height 16 Width 28 Length 36",
+    ]
+    .join("\n");
+    let got = from_text(&text, "a.pdf", &[unit("QF-1", &[]), unit("QF-2", &[])], &vocab());
+    assert_eq!(got.get("QF-1").and_then(|s| s.size_in), Some([14.0, 15.0, 16.0]), "{got:?}");
+    assert_eq!(got.get("QF-2").and_then(|s| s.size_in), Some([14.0, 15.0, 16.0]), "{got:?}");
+    let l = labelled_tags("Job: Project A\nMark: RV-1, 2\nTag #:", &vocab().not_tag).unwrap();
+    assert!(l.contains("RV-1") && l.contains("RV-2") && l.len() == 2, "{l:?}");
+    assert_eq!(labelled_tags("Tag #:\nMarket data 12", &vocab().not_tag), None);
 }

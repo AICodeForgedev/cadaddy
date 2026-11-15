@@ -9,7 +9,7 @@
 //! page and the rule (`M-EQUIP-SUBMITTAL-SIZE`). A submittal sent back (revise and resubmit,
 //! rejected) is not built from.
 //!
-//! A unit's pages are the pages naming its tag (`HP-9`, `HP 9`; `AH/AHP-1` names AH-1 and AHP-1)
+//! A unit's pages are the pages naming its tag (`HP-9`, `HP 9`; `QC/QCP-4` names QC-4 and QCP-4)
 //! or its schedule's model number. The pages after such a page that name no unit belong to it
 //! too: a unit's cover sheet comes first, then its data sheets. Its size is the labelled height,
 //! width and depth on those pages, in any of these forms:
@@ -479,8 +479,7 @@ fn bind(toks: &[Tok], order_before: Option<&[Axis]>, mode: Mode, vocab: &Vocab) 
         // (value inches?, its letter or word label) per part.
         let mut parts: Vec<(f64, Option<Len>, Option<Axis>)> = Vec::new();
         let mut j = i;
-        loop {
-            let Some(Tok::Num(v, u)) = toks.get(j) else { break };
+        while let Some(Tok::Num(v, u)) = toks.get(j) {
             let mut k = j + 1;
             let mut unit = *u;
             if let Some(Tok::Unit(u2)) = toks.get(k) {
@@ -749,7 +748,7 @@ pub(crate) fn canon(tag: &str) -> Option<String> {
 
 /// The tags a page's words could be: each word's (`HP-9`, `HP9`), a letters word with the number
 /// after it (`QH 9`; not a measure's: `HP 1` is a horsepower, `not_tag`), and a shared number
-/// (`AH/AHP-1` → `AH-1`, `AHP-1`).
+/// (`QC/QCP-4` → `QC-4`, `QCP-4`).
 fn tags_named(page: &str, not_tag: &BTreeSet<String>) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let words: Vec<String> = page
@@ -782,7 +781,7 @@ fn tags_named(page: &str, not_tag: &BTreeSet<String>) -> BTreeSet<String> {
             continue;
         }
         if let Some(c) = canon(w) {
-            // A list after it shares its letters (`EF-1, 2, 3`).
+            // A list after it shares its letters (`QF-1, 2, 3`).
             let letters = c.split('-').next().unwrap_or_default().to_string();
             for next in words.iter().skip(i + 1).take(12).take_while(|n| n.chars().all(|ch| ch.is_ascii_digit())) {
                 if let Some(t) = canon(&format!("{letters}-{next}")) {
@@ -800,6 +799,28 @@ fn tags_named(page: &str, not_tag: &BTreeSet<String>) -> BTreeSet<String> {
         }
     }
     out
+}
+
+/// The tags a page's own label names (`Tag: QF-5`, `Mark: RV-1, 2`, `Unit Tags: …`); none when
+/// no labelled line names one (a blank `Tag #:`).
+fn labelled_tags(page: &str, not_tag: &BTreeSet<String>) -> Option<BTreeSet<String>> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for line in page.lines().take(MAX_LINES) {
+        let up = line.to_ascii_uppercase();
+        let at = ["TAGS", "TAG", "MARKS", "MARK"].iter().find_map(|w| {
+            up.match_indices(w)
+                .find(|(i, _)| {
+                    let before = i.checked_sub(1).and_then(|p| up.as_bytes().get(p)).is_none_or(|c| !c.is_ascii_alphanumeric());
+                    let after = up.as_bytes().get(i + w.len()).is_none_or(|c| matches!(c, b':' | b'#' | b' ' | b'.'));
+                    before && after
+                })
+                .map(|(i, _)| i + w.len())
+        });
+        if let Some(rest) = at.and_then(|i| up.get(i..)) {
+            out.extend(tags_named(rest, not_tag));
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// A unit the submittals are read for: its tag (as [`canon`] gives it), the words its kind,
@@ -919,7 +940,7 @@ fn has_word(ctx: &str, w: &str) -> bool {
 fn score(d: &Dims, u: &Unit, known: &BTreeSet<&str>, heading: &str, vocab: &Vocab) -> Option<i64> {
     // Its tag alone next to it (a line naming two units is both's heading).
     let named: Vec<String> = tags_named(&d.context, &vocab.not_tag).into_iter().filter(|t| known.contains(t.as_str())).collect();
-    let tag_hit = named.len() == 1 && named.iter().any(|t| *t == u.tag);
+    let tag_hit = named.len() == 1 && named.contains(&u.tag);
     let ctx_words: BTreeSet<String> = alpha_words(&d.context).collect();
     let word_hits = u.words.iter().filter(|w| ctx_words.contains(*w)).count().min(5) as i64;
     let accessory = vocab.accessory.iter().any(|a| has_word(&d.context, a));
@@ -971,6 +992,12 @@ pub(crate) fn from_text(text: &str, file: &str, units: &[Unit], vocab: &Vocab) -
     let mut prev: BTreeSet<&str> = BTreeSet::new();
     for (n, page) in pages {
         let squeezed: String = page.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect();
+        // A page whose own label names only other units is theirs (a relief hood's in a fan
+        // submittal), not the unit before it.
+        if labelled_tags(page, &vocab.not_tag).is_some_and(|l| !l.iter().any(|t| known.contains(t.as_str()))) {
+            prev.clear();
+            continue;
+        }
         let mut tags: BTreeSet<&str> = tags_named(page, &vocab.not_tag).iter().filter_map(|t| known.get(t.as_str()).copied()).collect();
         for (m, t) in &models {
             if squeezed.contains(*m) {
@@ -1249,6 +1276,8 @@ pub(crate) struct Applied {
     pub curbs: usize,
     /// The spec's places of every box changed (the units and their supports).
     pub changed: Vec<usize>,
+    /// Sizes not taken: far off the box's (another product's on a page naming the tag), with why.
+    pub refused: Vec<Resized>,
 }
 
 /// Each unit an approved submittal sizes takes that size: its centre stays (a box drawn against
@@ -1263,6 +1292,8 @@ pub(crate) fn apply(eq: &mut [MepEquipment], got: &BTreeMap<String, Submitted>, 
     }
     let inch = upf / 12.0;
     let rule = super::provenance::rule(RULE);
+    let max_ratio =
+        super::provenance::rule_data(RULE).get("max_size_ratio").and_then(Value::as_f64).filter(|r| r.is_finite() && *r > 1.0).unwrap_or(15.0);
     // (level, tag) of each unit resized → its new plan box and the curb its submittal gives.
     let mut placed: BTreeMap<(String, String), ([f64; 2], [f64; 2], Option<Curb>, String)> = BTreeMap::new();
     for (k, e) in eq.iter_mut().enumerate().take(MAX_UNITS) {
@@ -1282,6 +1313,20 @@ pub(crate) fn apply(eq: &mut [MepEquipment], got: &BTreeMap<String, Submitted>, 
         }
         let (wx, wy) = if dx >= dy { (w * inch, dp * inch) } else { (dp * inch, w * inch) };
         let was_in = (dx.max(dy) / inch, dx.min(dy) / inch, e.height_ft * 12.0);
+        // A size far off the box's (by volume) is another product's that names the same tag.
+        let (was_vol, now_vol) = (was_in.0 * was_in.1 * was_in.2, w * dp * h);
+        if was_vol > 0.0 && (now_vol > was_vol * max_ratio || now_vol * max_ratio < was_vol) {
+            if out.refused.len() < MAX_LISTED {
+                out.refused.push(Resized {
+                    tag: e.tag.clone(),
+                    was: size_text(was_in.0, was_in.1, was_in.2),
+                    now: size_text(w, dp, h),
+                    source: format!("{}: more than {max_ratio} times off the box's volume, not taken", sub.source),
+                    curb_in: None,
+                });
+            }
+            continue;
+        }
         let basis = size_basis(e);
         let same = (was_in.0 - w).abs() <= SAME_IN && (was_in.1 - dp).abs() <= SAME_IN && (was_in.2 - h).abs() <= SAME_IN;
         let was_text = size_text(was_in.0, was_in.1, was_in.2);
@@ -1408,7 +1453,15 @@ pub(crate) fn size_spec(sp: &mut BuildingSpec, submittals: &[String]) -> Option<
         return None;
     }
     let vocab = Vocab::load();
-    let units = units(&sp.mep.equipment, &vocab);
+    // The mechanical and plumbing equipment (the gear takes its submittal's box in its own step).
+    let theirs: Vec<MepEquipment> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| matches!(super::mep::equipment_trade(sp, e), super::elemtrade::MECHANICAL | super::elemtrade::PLUMBING))
+        .cloned()
+        .collect();
+    let units = units(&theirs, &vocab);
     let files = pdfs_under(submittals);
     let reading = read(&files, &units, &vocab);
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -1436,6 +1489,7 @@ pub(crate) fn report(a: &Applied, r: &Reading, before: &BTreeMap<&'static str, u
     json!({
         "files_read": r.read.len(), "sent_back": r.sent_back, "unread": r.unread.iter().take(MAX_LISTED).collect::<Vec<_>>(),
         "units": r.got.len(), "resized": listed(a), "resized_count": a.resized.len(), "confirmed": a.confirmed, "curbs": a.curbs,
+        "refused": a.refused.iter().take(MAX_LISTED).map(|x| json!({"tag": x.tag, "was": x.was, "now": x.now, "why": x.source})).collect::<Vec<_>>(),
         "sized_before": before, "sized_after": after,
     })
 }
