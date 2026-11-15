@@ -134,6 +134,16 @@ pub(crate) fn pairs_and_squat(segs: &[Seg], lim: &Limits, squat_min: Option<f64>
     use std::f64::consts::PI;
     let squat_min = squat_min.filter(|m| m.is_finite() && *m > 0.0 && *m < lim.min_len);
     let mut squat = Vec::new();
+    // Two faces pair only when they overlap along their direction by at least this (a squat
+    // pair's least, else a wall's), and neither overlaps another by more than its own length: a
+    // shorter line pairs with nothing. A print set's hatching, text strokes and symbol ticks are
+    // most of a large plan's lines; left in, each was weighed against every line a wall's
+    // thickness from it (Q6667: 520,000 half-inch lines took the wall build past its budget).
+    let need = squat_min.unwrap_or(lim.min_len);
+    let too_short = |s: &Seg| {
+        let mag = s.a.x.abs().max(s.a.y.abs()).max(s.b.x.abs()).max(s.b.y.abs());
+        need.is_finite() && need > 0.0 && s.a.dist(s.b) < need * (1.0 - 1e-6) - 1e-12 * mag
+    };
     // Group by direction (half-degree buckets over [0°, 180°): a face drawn right to left is the
     // same direction). Faces within half a degree are in one bucket or two neighbouring ones.
     let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
@@ -142,6 +152,9 @@ pub(crate) fn pairs_and_squat(segs: &[Seg], lim: &Limits, squat_min: Option<f64>
         let d = s.b - s.a;
         let ang = d.y.atan2(d.x).rem_euclid(PI);
         angs.push(ang);
+        if too_short(s) {
+            continue;
+        }
         let key = ((ang.to_degrees() * 2.0).floor() as i64).rem_euclid(BUCKETS);
         groups.entry(key).or_default().push(i);
     }
@@ -4167,6 +4180,52 @@ mod tests {
     /// past it: the even row of long faces has the short ones between them), and a room's wall
     /// faces drawn as lines where its grid lands on them 2' from the last grid line (each face's
     /// other face just outside it).
+    /// Q6667: lines shorter than any pair's least overlap (a print's hatching, text strokes,
+    /// symbol ticks) change nothing: the same walls and squat pairs, faces and all, with or
+    /// without 6,000 half-inch lines among the faces; a squat pair exactly the least long stays.
+    #[test]
+    fn lines_too_short_to_pair_change_no_pairs() {
+        // Inches: a 20' x 12' room's 6" walls, a 4" partition, a jamb's faces 3" long, and two
+        // faces exactly 1" long 4" apart (the least a squat pair overlaps).
+        let mut faces = rect_sides(0.0, 0.0, 240.0, 144.0);
+        faces.extend(rect_sides(6.0, 6.0, 234.0, 138.0));
+        faces.extend([
+            seg((118.0, 6.0), (118.0, 138.0), f64::INFINITY),
+            seg((122.0, 6.0), (122.0, 138.0), f64::INFINITY),
+            seg((60.0, 40.0), (63.0, 40.0), f64::INFINITY),
+            seg((60.0, 44.0), (63.0, 44.0), f64::INFINITY),
+            seg((80.0, 60.0), (81.0, 60.0), f64::INFINITY),
+            seg((80.0, 64.0), (81.0, 64.0), f64::INFINITY),
+        ]);
+        // Half-inch lines everywhere, in both directions and on the faces' lines, mixed in.
+        let mut mixed: Vec<Seg> = Vec::new();
+        let mut at: Vec<usize> = Vec::new();
+        for (n, f) in faces.iter().enumerate() {
+            for i in 0..500 {
+                let (x, y) = (f64::from(i % 50) * 4.7 + n as f64, f64::from(i / 50) * 13.1 + 0.5);
+                mixed.push(if i % 2 == 0 { seg((x, y), (x + 0.5, y), f64::INFINITY) } else { seg((x, y), (x, y + 0.5), f64::INFINITY) });
+            }
+            at.push(mixed.len());
+            mixed.push(f.clone());
+        }
+        let lim = wall_limits();
+        let key = |p: &Pair, map: &dyn Fn(usize) -> usize| {
+            let r = |v: f64| (v * 1e6).round() as i64;
+            (map(p.faces[0]), map(p.faces[1]), r(p.c0.x), r(p.c0.y), r(p.c1.x), r(p.c1.y), r(p.thickness), r(p.length))
+        };
+        let (walls, squat) = pairs_and_squat(&faces, &lim, Some(1.0));
+        let (mwalls, msquat) = pairs_and_squat(&mixed, &lim, Some(1.0));
+        let own = |i: usize| i;
+        let back = |i: usize| at.iter().position(|&j| j == i).unwrap_or(usize::MAX);
+        assert!(walls.len() >= 5 && squat.len() >= 2, "{} walls, {} squat", walls.len(), squat.len());
+        assert!(squat.iter().any(|p| (p.length - 1.0).abs() < 1e-9), "the 1\" pair");
+        let ks = |ps: &[Pair], m: &dyn Fn(usize) -> usize| ps.iter().map(|p| key(p, m)).collect::<Vec<_>>();
+        assert_eq!(ks(&walls, &own), ks(&mwalls, &back));
+        assert_eq!(ks(&squat, &own), ks(&msquat, &back));
+        // Walls only (no squat pairs): a wall's 12" is the least.
+        assert_eq!(ks(&pairs_and_squat(&faces, &lim, None).0, &own), ks(&pairs_and_squat(&mixed, &lim, None).0, &back));
+    }
+
     #[test]
     fn walls_in_a_row_are_no_grid() {
         let mut closets: Vec<Seg> = Vec::new();
