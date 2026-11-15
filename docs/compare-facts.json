@@ -1447,7 +1447,7 @@
     "registeredCommands": 1175
   },
   "signedUpdates": true,
-  "version": "0.7.10",
+  "version": "0.7.11",
   "versions": {
     "dwg": {
       "bridge": {
