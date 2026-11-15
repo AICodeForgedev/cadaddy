@@ -229,6 +229,7 @@ pub mod readers;
 pub mod redline;
 pub mod relevel;
 pub(crate) mod requirements;
+pub(crate) mod revcurrency;
 pub mod revise3d;
 pub(crate) mod rhai_cmd;
 pub(crate) mod risercut;
